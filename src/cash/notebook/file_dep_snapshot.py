@@ -112,7 +112,7 @@ _HASH_READ_CHUNK = 1024 * 1024                # 1 MiB streaming chunk
 
 
 #: Digests already computed this process, keyed by the file's identity AND its
-#: stat fields: ``(path, size, mtime_ns, ctime_ns)``.
+#: stat fields: ``(path, st_dev, st_ino, size, mtime_ns, ctime_ns)``.
 #:
 #: Freshness is checked once per cached call, and file dependencies PROPAGATE --
 #: an aggregate that calls ten cached functions inherits their inputs -- so a
@@ -149,7 +149,7 @@ _HASH_READ_CHUNK = 1024 * 1024                # 1 MiB streaming chunk
 #: not refreshed on use, so a window shorter than the pass itself expires
 #: entries mid-pass and re-hashes them. Measured with a one-second window, a
 #: 50-file 400 MiB pass fell back to 151 ms from 49 ms.
-_HASH_MEMO: dict[tuple[str, int, int, int], tuple[float, str]] = {}
+_HASH_MEMO: dict[tuple[str, int, int, int, int, int], tuple[float, str]] = {}
 _HASH_MEMO_MAX = 4096
 _HASH_MEMO_TTL_SECONDS = 5.0
 _HASH_MEMO_MIN_AGE_SECONDS = 10.0
@@ -187,7 +187,12 @@ def file_content_hash(
             size = st.st_size
         memoizable = (time.time() - st.st_mtime) > _HASH_MEMO_MIN_AGE_SECONDS
         if memoizable:
-            memo_key = (path, size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0))
+            # st_dev/st_ino: the FILE's identity, not only the path's. A path
+            # through a re-pointed junction names a different file with the same
+            # path, and two release copies laid down by one deploy can share
+            # size and timestamps exactly (CAS-108's reproduction did).
+            memo_key = (path, st.st_dev, st.st_ino, size, st.st_mtime_ns,
+                        getattr(st, "st_ctime_ns", 0))
             cached = _HASH_MEMO.get(memo_key)
             if cached is not None and (
                 time.monotonic() - cached[0]
@@ -515,3 +520,92 @@ def file_dep_is_fresh(
     if abs(st.st_mtime - stored_mtime) > _LEGACY_TIMESTAMP_TOLERANCE_SECONDS:
         return False, "mtime"
     return True, None
+
+
+# ---------------------------------------------------------------------------
+# Files that belong to the code, not to the data
+# ---------------------------------------------------------------------------
+#
+# A file a function reads from beside ITS OWN CODE -- package data through
+# ``importlib.resources``, ``Path(__file__).parent / "ref.csv"``, a release's
+# own config -- is part of that install, not a fixed location on disk. Two
+# installs of one tool on one machine (a checkout and a wheel), or two releases
+# of one job side by side, run byte-identical code, so they share cache keys;
+# and the entry's file dependency was recorded at the WRITER's path. The other
+# install's lookup validated the writer's file, found it unchanged, and served
+# the writer's answer. Round 17 measured both: a tool served another install's
+# exchange rates, and a rollback served the newer release's report (CAS-108).
+#
+# So such a dependency is also recorded relative to the code's root, and each
+# process checks it against ITS OWN copy. Same bytes in both installs: a hit,
+# as before. Different: a miss. Missing: a miss, and the call raises as it
+# should instead of being served a value it could never have computed.
+
+_CODE_REL = "code_rel"
+_CODE_MOD = "code_mod"
+
+
+def code_root_of(module_name: str | None) -> str | None:
+    """The directory holding the top-level package of *module_name*, resolved.
+
+    ``fxpkg.core`` -> ``…/fxpkg``; a script run as ``__main__`` -> its own
+    directory. None when the module is not loaded or has no file.
+    """
+    import sys
+
+    if not module_name:
+        return None
+    mod = sys.modules.get(module_name)
+    path = getattr(mod, "__file__", None)
+    if not path:
+        return None
+    try:
+        root = os.path.dirname(os.path.realpath(path))
+    except (OSError, ValueError):
+        return None
+    depth = module_name.count(".")
+    if os.path.basename(path) != "__init__.py":
+        depth = max(depth - 1, 0)
+    for _ in range(depth):
+        root = os.path.dirname(root)
+    return root
+
+
+def attach_code_relative(snapshot: dict[str, dict[str, Any]] | None,
+                         module_name: str | None) -> dict[str, dict[str, Any]] | None:
+    """Mark the snapshot entries that live under the writer's code root."""
+    if not snapshot or not module_name:
+        return snapshot
+    root = code_root_of(module_name)
+    if not root:
+        return snapshot
+    root_key = os.path.normcase(os.path.normpath(root)).rstrip(os.sep) + os.sep
+    for path, entry in snapshot.items():
+        if not isinstance(entry, dict) or entry.get(_REMOTE_MARKER):
+            continue
+        if not os.path.isabs(path):
+            continue                      # relative twins already re-resolve
+        native = os.path.normcase(os.path.normpath(path))
+        if not native.startswith(root_key):
+            continue
+        entry[_CODE_REL] = os.path.relpath(os.path.normpath(path), root).replace(os.sep, "/")
+        entry[_CODE_MOD] = module_name
+    return snapshot
+
+
+def dep_path_for_this_process(path: str, recorded: Any) -> str:
+    """Where THIS process would find the file *recorded* describes.
+
+    For a dependency that lives beside the code, that is the same relative
+    location under this process's own copy of the code; for everything else,
+    the recorded path.
+    """
+    if not isinstance(recorded, dict):
+        return path
+    rel = recorded.get(_CODE_REL)
+    if not rel:
+        return path
+    root = code_root_of(recorded.get(_CODE_MOD))
+    if not root:
+        return path
+    return os.path.join(root, *rel.split("/")).replace(os.sep, "/")

@@ -86,7 +86,7 @@ it differs between the two caching paths:
 | What you cached | Hits on another machine? |
 |---|---|
 | `@cash.cache` function, pure compute | **Yes** — source and arguments are hashed by content |
-| `@cash.cache` function that reads files | **If the paths line up** — freshness is re-checked by content rather than timestamp, but against the file paths recorded when the entry was written (the absolute path among them). Identical layouts — a container image, a shared mount, CI — hit; a checkout under a different home directory can't resolve the recorded path, revalidates as stale, and recomputes |
+| `@cash.cache` function that reads files | **If the paths line up** — freshness is re-checked by content rather than timestamp, against the file paths recorded when the entry was written. Identical layouts — a container image, a shared mount, CI — hit; a checkout under a different home directory can't resolve the recorded path, revalidates as stale, and recomputes. The exception is a file beside the function's own code (package data, a script's neighbour): that is checked at *this* install's copy, so it shares when the copies match and recomputes when they don't |
 | `@cash.cache` function that reads **object storage** | **Yes** — the recorded dependency is the object's ETag/version, a fact about the object rather than about one filesystem, so there are no paths to line up |
 | Notebook statement, pure compute | **Yes** — the statement key carries no notebook path or cell id, *provided* none of its inputs descend from a file-reading statement (the file component rides down the lineage chain) |
 | Notebook statement that **reads a file** | **No** — the file's path, mtime and size are folded into the statement's lineage, and a fresh checkout has different timestamps. Every statement downstream inherits that through its inputs |
@@ -94,7 +94,7 @@ it differs between the two caching paths:
 The last row is the one to plan around, and no backend can fix it: the two runs
 compute *different keys*, so they never look at the same entry.
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_content_hash @d0e0c875, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_content_hash @6dd07760, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864 -->
 !!! note "Large files carry an extra condition"
     Files over 64 MiB are hash-**sampled** rather than read end to end, so their
     freshness check also consults the mtime. A fresh clone of a big parquet

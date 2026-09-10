@@ -297,7 +297,7 @@ A matching size *and* a matching content hash is fresh, **regardless of the mtim
 
 ### Large files are sampled, not fully hashed
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @6c0592fa, cash/notebook/file_dep_snapshot.py:file_content_hash @d0e0c875, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @6c0592fa, cash/notebook/file_dep_snapshot.py:file_content_hash @6dd07760, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
 Hashing a multi-GB parquet on every lookup would defeat the point of caching, so the hash is size-bounded (`file_content_hash`), at a threshold you can move (`file_hash_full_max_bytes`):
 
 - Files **≤ 64 MiB** (`_HASH_FULL_MAX_BYTES`) are hashed **in full**.
@@ -322,9 +322,17 @@ Race condition to be aware of: if a file is rewritten *while* a cached function 
 
 ## Caveats
 
-### Symlinks are followed
+### Symlinks and junctions are checked as they point now
 
-`_track_path` resolves the path through `os.path.realpath` before storing it. If you read a symlink, Cash records and checks the *target*, and the resolution is frozen at track time. Editing the symlink target's contents invalidates the cache. Repointing the symlink at a different file does **not** — Cash goes on checking the original target, which hasn't changed. This matches what most users expect ("the data file changed"), but if you genuinely care about the symlink identity itself, use `file_depends_on=` with the link path explicitly.
+A path read through a symlink or a directory junction records **two** dependencies: the resolved target (`os.path.realpath`), and the path as you wrote it. Both must be fresh for a hit. Editing the target's contents invalidates, through the first. **Re-pointing the link** at a different file invalidates too, through the second — it is checked through the link *as it points now*, so a `current` release pointer switched to a new release, or back to an old one, gets that release's answer.
+
+It used to record the resolved target only, frozen at write time: re-pointing a link was invisible, and a rollback through a `current` junction returned the *newer* release's report.
+
+### Files beside your code belong to that copy of the code
+
+A file your function reads from its **own** code's directory — package data through `importlib.resources`, `Path(__file__).parent / "ref.csv"`, a release's bundled config — is also recorded relative to that code, and every process checks **its own copy**. Two installs of one tool (a checkout and a wheel), or two releases of one job laid out side by side, run byte-identical code and so share cache keys; with the same data they share entries, and with different data each gets its own answer. A copy that is *missing* the file is a miss, and the call raises as it should rather than being served a value it could never have computed.
+
+"Your own code's directory" means the top-level package that defines the cached function, or the script's directory for a function defined in the script you run.
 
 ### Relative paths re-resolve against the live cwd
 

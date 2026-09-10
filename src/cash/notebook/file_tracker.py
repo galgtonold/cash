@@ -727,8 +727,21 @@ class FileAccessTracker:
                 rel = normalize_path(raw)
                 if rel != abs_path:
                     self._add_tracked(rel)
-        except (TypeError, ValueError):
-            logger.debug("[TRACKER] Could not record relative path for %r", path)
+            elif raw:
+                # An ABSOLUTE path through a junction or symlink gets the same
+                # treatment: its unresolved form is recorded too. The realpath
+                # above resolved the link at WRITE time, so after the link is
+                # re-pointed every check stats the old target -- which still
+                # exists and has not changed. Round 17 lost eleven nightly
+                # reports to that, including a rollback that returned the NEWER
+                # release's answer (CAS-108). Checked through the link as it
+                # points NOW, the switch is seen; the realpath entry keeps
+                # catching an edit to the target itself.
+                link = normalize_path(os.path.abspath(raw))
+                if os.path.normcase(link) != os.path.normcase(abs_path):
+                    self._add_tracked(link)
+        except (TypeError, ValueError, OSError):
+            logger.debug("[TRACKER] Could not record unresolved path for %r", path)
 
     def _add_tracked(self, abs_path: str) -> None:
         """Record *abs_path* on this tracker and, when propagation is enabled,

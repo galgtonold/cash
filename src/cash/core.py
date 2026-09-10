@@ -2096,10 +2096,12 @@ class Cash:
                 'remote-unresolved': 'remote object could not be checked',
             }
             stale: dict[str, str] = {}
+            from cash.notebook.file_dep_snapshot import dep_path_for_this_process
             for path, recorded in snap.items():
-                is_fresh, reason = file_dep_is_fresh(path, recorded)
+                here = dep_path_for_this_process(path, recorded)
+                is_fresh, reason = file_dep_is_fresh(here, recorded)
                 if not is_fresh:
-                    stale[path] = _REASON_TEXT.get(reason or '', 'changed')
+                    stale[here] = _REASON_TEXT.get(reason or '', 'changed')
             if stale:
                 return CacheExplanation(
                     would_hit=False,
@@ -2253,7 +2255,8 @@ class Cash:
         return _CACHE_MISS
 
     @staticmethod
-    def _snapshot_tracked_deps(tracker: Any) -> dict[str, dict[str, Any]] | None:
+    def _snapshot_tracked_deps(tracker: Any,
+                               code_module: str | None = None) -> dict[str, dict[str, Any]] | None:
         """Snapshot everything *tracker* saw this call read - local and remote.
 
         Both land in one dict: they answer the same question ("did what this
@@ -2263,13 +2266,19 @@ class Cash:
         price of the read being tracked at all, and it is small against the
         download the entry exists to avoid.
         """
-        from cash.notebook.file_dep_snapshot import snapshot_dependencies
+        from cash.notebook.file_dep_snapshot import (
+            attach_code_relative,
+            snapshot_dependencies,
+        )
         deps = snapshot_dependencies(
             tracker.get_accessed_files(),
             tracker.get_accessed_remote_urls(),
             tracker.get_absent_files(),
         )
-        return deps or None
+        # A file beside the function's own code is part of this INSTALL, not a
+        # fixed location: record where it sits relative to the code, so another
+        # install or release checks its own copy (CAS-108).
+        return attach_code_relative(deps, code_module) or None
 
     @staticmethod
     def _propagate_file_deps_to_active_tracker(metadata: CacheMetadata) -> None:
@@ -2294,7 +2303,10 @@ class Cash:
             if isinstance(recorded, dict) and recorded.get("remote"):
                 tracker._add_tracked_remote(path)
             else:
-                tracker._add_tracked(path)
+                # The file THIS process would read -- another install's copy
+                # would give the enclosing entry the writer's path (CAS-108).
+                from cash.notebook.file_dep_snapshot import dep_path_for_this_process
+                tracker._add_tracked(dep_path_for_this_process(path, recorded))
 
     def _auto_file_deps_fresh(self, metadata: CacheMetadata) -> bool:
         """Return True if every file recorded in ``metadata.auto_file_deps``
@@ -2320,6 +2332,7 @@ class Cash:
             return True  # nothing to check
         from cash.notebook.file_dep_snapshot import (
             _full_hash_max_bytes,
+            dep_path_for_this_process,
             file_dep_is_fresh,
         )
         from cash.remote_source import measured_validation
@@ -2348,7 +2361,8 @@ class Cash:
             for path, recorded in snap.items():
                 is_remote = isinstance(recorded, dict) and recorded.get("remote")
                 started = time.perf_counter()
-                is_fresh, reason = file_dep_is_fresh(path, recorded, full_hash_max)
+                is_fresh, reason = file_dep_is_fresh(
+                    dep_path_for_this_process(path, recorded), recorded, full_hash_max)
                 if not is_remote:
                     local_seconds += time.perf_counter() - started
                     local_count += 1
@@ -2598,12 +2612,13 @@ class Cash:
                         current_state_hash=current_state_hash, ttl=ttl,
                         cache_if=cache_if, chunk_max_items=chunk_max_items,
                         chunk_max_bytes=chunk_max_bytes,
+                        code_module=func.__module__,
                     ))
 
                 self._check_argument_mutation(
                     func_name, args, kwargs, args_hash, observer)
                 self._report_observed_effects(func_name, observer)
-                auto_file_deps = self._snapshot_tracked_deps(tracker)
+                auto_file_deps = self._snapshot_tracked_deps(tracker, func.__module__)
 
                 # Non-iterator return: existing single-blob path.
                 execution_time = time.perf_counter() - call_start
@@ -2797,12 +2812,13 @@ class Cash:
                         current_state_hash=current_state_hash, ttl=ttl,
                         cache_if=cache_if, chunk_max_items=chunk_max_items,
                         chunk_max_bytes=chunk_max_bytes,
+                        code_module=func.__module__,
                     ))
 
                 self._check_argument_mutation(
                     func_name, args, kwargs, args_hash, observer)
                 self._report_observed_effects(func_name, observer)
-                auto_file_deps = self._snapshot_tracked_deps(tracker)
+                auto_file_deps = self._snapshot_tracked_deps(tracker, func.__module__)
 
                 # Non-iterator return: single-blob path (unchanged).
                 execution_time = time.perf_counter() - call_start
@@ -6361,7 +6377,7 @@ class Cash:
     def _stream_and_store(
         self, source, *, cache_key, func_name, metadata, tracker, observer,
         rng_new, args, kwargs, args_hash, current_state_hash, ttl, cache_if,
-        chunk_max_items, chunk_max_bytes,
+        chunk_max_items, chunk_max_bytes, code_module=None,
     ):
         """Yield the producer's items as they come, and cache once it ends.
 
@@ -6434,7 +6450,7 @@ class Cash:
 
             self._check_argument_mutation(func_name, args, kwargs, args_hash, observer)
             self._report_observed_effects(func_name, observer)
-            auto_file_deps = self._snapshot_tracked_deps(tracker)
+            auto_file_deps = self._snapshot_tracked_deps(tracker, code_module)
 
             if chunk_index == 0:
                 # Everything fit in one chunk, so cache_if can still see the
