@@ -842,6 +842,10 @@ class Cash:
         # id-reuse). Mutable defaults are deliberately absent: they must be
         # re-hashed per call to stay correct.
         self._defaults_pins: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+        # id(helper) -> (helper, __defaults__, __kwdefaults__, identity); see
+        # `_hash_helper_identity`. Holding the helper keeps its id from being
+        # recycled while the entry lives.
+        self._helper_defaults_memo: dict[int, tuple[Any, Any, Any, str]] = {}
         # In-process async single-flight registry: cache_key -> (event_loop,
         # asyncio.Event). When use_locking is set, concurrent awaits of the
         # same key coalesce - one coroutine computes, the rest wait on the
@@ -920,7 +924,7 @@ class Cash:
             source_hashes=self.source_hashes,
             purity_reports=self._purity_reports,
             graph=self.graph,
-            helper_resolver=SysModulesHelperResolver(self._hash_callable_source),
+            helper_resolver=SysModulesHelperResolver(self._hash_helper_identity),
             declared_dep_snapshots=self._declared_dep_snapshots,
             declared_dep_resolver=self._resolve_declared_dep_hash,
         )
@@ -3476,6 +3480,53 @@ class Cash:
         if not clo:
             return state_hash
         return hashlib.sha256(f"{state_hash}:closure:{clo}".encode()).hexdigest()
+
+    def _hash_helper_identity(self, fn: Callable) -> str:
+        """A helper's identity for the key: its code, AND its parameter defaults.
+
+        A default is evaluated once, at ``def`` time, and lives on the function
+        object -- so ``def shrink(v, alpha=ALPHA)`` reads the same after
+        ``ALPHA`` changes, the source digest does not move, and global folding
+        never sees the name (it is not read in the body). Round 17 served 8
+        wrong answers in 8 from a service whose ridge penalty was a helper's
+        default (CAS-112). The cached function's own defaults were already
+        folded (``_fold_defaults``); now every followed helper's are, by value,
+        through the same payload hasher and the same callable fallback.
+
+        Not inside ``_hash_callable_source``'s memo: that is keyed per CODE
+        object, and two closures from one factory share a code object while
+        holding different defaults. A helper with no defaults returns exactly
+        the old digest, so entries already on disk keep hitting.
+        """
+        source = self._hash_callable_source(fn)
+        defaults = getattr(fn, "__defaults__", None)
+        kwdefaults = getattr(fn, "__kwdefaults__", None)
+        wrapped = getattr(fn, "__wrapped__", None)
+        if not defaults and not kwdefaults and wrapped is None:
+            return source
+        memo_key = id(fn)
+        cached = self._helper_defaults_memo.get(memo_key)
+        if (cached is not None and cached[0] is fn and cached[1] is defaults
+                and cached[2] is kwdefaults):
+            return cached[3]
+        pos, kwd = self._defaults_of(fn)
+        if not pos and not kwd:
+            return source
+        try:
+            digest = self._hash_arg_payload(pos, kwd)
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
+            try:
+                digest = self._hash_arg_payload(
+                    tuple(self._fingerprint_default(v) for v in pos),
+                    {k: self._fingerprint_default(v) for k, v in kwd.items()},
+                )
+            except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
+                return source           # as before: this helper's defaults stay unfolded
+        identity = f"{source}:defaults:{digest}"
+        if len(self._helper_defaults_memo) >= 4096:
+            self._helper_defaults_memo.clear()
+        self._helper_defaults_memo[memo_key] = (fn, defaults, kwdefaults, identity)
+        return identity
 
     @staticmethod
     def _defaults_of(func: Callable) -> tuple[tuple, dict]:

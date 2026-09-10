@@ -41,6 +41,7 @@ import logging
 import re
 import sys
 import textwrap
+import weakref
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -176,6 +177,12 @@ class PurityReport:
     issues: tuple[PurityIssue, ...] = ()
     helper_source_hashes: dict[str, str] = field(default_factory=dict)
     helper_resolution_paths: dict[str, tuple[str, tuple[str, ...]]] = field(default_factory=dict)
+    #: ``qualname -> weakref`` for walked helpers that have NO resolution path
+    #: -- a closure from a factory (``_make.<locals>.scaled``) cannot be looked
+    #: up by qualname, so it used to be keyed by the analysis-time snapshot
+    #: forever, which never sees its parameter defaults (CAS-112). Holding a
+    #: weak reference lets the per-call rehash reach the live object.
+    helper_objects: dict[str, Any] = field(default_factory=dict)
     opaque_callees: tuple[str, ...] = ()
 
     @property
@@ -1000,6 +1007,7 @@ class PurityAnalyzer:
         all_issues: list[PurityIssue] = []
         helper_hashes: dict[str, str] = {}
         helper_paths: dict[str, tuple[str, tuple[str, ...]]] = {}
+        helper_objects: dict[str, Any] = {}
         opaque: list[str] = []
         visited: set[str] = set()
 
@@ -1024,6 +1032,11 @@ class PurityAnalyzer:
                     helper_module,
                     tuple(helper_inner_qualname.split(".")),
                 )
+            elif func is not root_func:
+                try:
+                    helper_objects[qualname] = weakref.ref(func)
+                except TypeError:                  # not weak-referenceable
+                    pass
 
         # The third element is HASH_ONLY: fold this callable's code into the
         # cache key, but do not analyze it for purity. Set for classes reached
@@ -1229,6 +1242,7 @@ class PurityAnalyzer:
         return PurityReport(
             issues=all_issues_sorted,
             helper_source_hashes=helper_hashes,
+            helper_objects=helper_objects,
             helper_resolution_paths=helper_paths,
             opaque_callees=tuple(sorted(set(opaque))),
         )

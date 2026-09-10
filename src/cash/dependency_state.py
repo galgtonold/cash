@@ -80,6 +80,18 @@ class SysModulesHelperResolver:
                 current[qual] = self._hash_callable(obj)
             except (OSError, TypeError, AttributeError):
                 continue
+        # Helpers with no path to re-resolve by (closures from a factory) are
+        # hashed from the live object when it is still alive.
+        for qual, ref in getattr(report, "helper_objects", {}).items():
+            if qual in current:
+                continue
+            obj = ref()
+            if obj is None or not callable(obj):
+                continue
+            try:
+                current[qual] = self._hash_callable(obj)
+            except (OSError, TypeError, AttributeError):
+                continue
         return current
 
 

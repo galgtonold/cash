@@ -204,6 +204,7 @@ change:
 | The **arguments** | Hashed by *content* — so DataFrames and arrays work, and two equal-but-distinct objects share one entry |
 | The **function's own source** | Edit the body and old entries stop matching |
 | The source of a **helper it calls** | Followed **transitively**, across your own modules and your own installed package — other people's libraries are where it stops |
+| A helper's **parameter defaults** | Folded by value: `def shrink(v, alpha=ALPHA)` invalidates when `ALPHA` changes, though the helper's source reads the same — including a closure's defaults set by a factory |
 | A **file it reads** | `pd.read_csv`, `open()`, `np.load`, `joblib.load`, … are intercepted |
 | A **module global it reads** | A config constant, a threshold, a dispatch dict — including one read by a **helper**, or by another cached function it calls, rather than by itself |
 | A **class its code reaches** | Followed transitively, so editing a class that a folded class constructs invalidates too |
