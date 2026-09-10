@@ -163,7 +163,7 @@ the caching.
 
 ## CACHE-DIR-MOVED {#cache-dir-moved}
 
-<!-- claim: cash/config.py:project_anchor @cfea99ac, cash/config.py:_anchor_cache_dir @7f3408d4 -->
+<!-- claim: cash/config.py:project_anchor @c7c2a516, cash/config.py:_anchor_cache_dir @7f3408d4 -->
 **What happened.** Cash resolves its default cache directory next to the code
 being run -- the project the running script belongs to -- rather than next to
 wherever the process was launched from. This run found a cache in the current

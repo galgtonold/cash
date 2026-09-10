@@ -631,6 +631,13 @@ def _running_script_dir() -> Path | None:
         path = Path(raw).resolve()
     except OSError:
         return None
+    if _is_installed_path(path):
+        return None
+    return path.parent
+
+
+def _is_installed_path(path: Path) -> bool:
+    """Does *path* live inside the interpreter's own installation?"""
     installed_roots = [Path(sys.prefix), Path(sys.base_prefix)]
     installed_roots += [Path(p) for p in site.getsitepackages()] if hasattr(site, "getsitepackages") else []
     user_site = getattr(site, "getusersitepackages", None)
@@ -642,10 +649,51 @@ def _running_script_dir() -> Path | None:
     for root in installed_roots:
         try:
             if path.is_relative_to(root):
-                return None
+                return True
         except (OSError, ValueError):
             continue
-    return path.parent
+    return False
+
+
+def _running_installed_module() -> bool:
+    """``python -m <module installed in site-packages>`` -- ``python -m pytest``."""
+    main = sys.modules.get("__main__")
+    if getattr(main, "__spec__", None) is None:
+        return False
+    raw = getattr(main, "__file__", None)
+    if not raw:
+        return False
+    try:
+        return _is_installed_path(Path(raw).resolve())
+    except OSError:
+        return False
+
+
+def _running_installed_code() -> bool:
+    """Is the program itself installed code -- a console script or ``-m`` module?
+
+    Then the code being cached is the user's project code it runs, and the
+    project the user is standing in is the best anchor there is. Not true of a
+    notebook, a REPL or ``python -c``, which keep the cwd.
+    """
+    if _interactive_shell_is_running():
+        return False
+    return _running_console_script() is not None or _running_installed_module()
+
+
+def _cwd_project_root() -> Path | None:
+    """The first directory at or above the cwd holding a project marker."""
+    try:
+        here = Path.cwd()
+    except OSError:
+        return None
+    for d in [here, *here.parents]:
+        try:
+            if any((d / marker).exists() for marker in _PROJECT_MARKERS):
+                return d
+        except OSError:
+            continue
+    return None
 
 
 def project_anchor() -> Path:
@@ -669,9 +717,21 @@ def project_anchor() -> Path:
     Without a script (a notebook, a REPL) or without a project marker above it,
     the answer is the cwd or the script's own directory respectively -- both
     stable for the case they describe.
+
+    When the program itself is INSTALLED code -- ``pytest``, ``cash``, a
+    ``python -m`` module in site-packages -- there is no script of the user's to
+    anchor to, but there is usually a project the user is standing in, and the
+    code being cached is that project's. So it walks up from the cwd instead.
+    That puts a test suite's cache beside its project whichever way ``pytest``
+    was typed and from whichever subdirectory, where round 17 found one
+    per-user cache shared by every project on the machine.
     """
     start = _running_script_dir()
     if start is None:
+        if _running_installed_code():
+            root = _cwd_project_root()
+            if root is not None:
+                return root
         return Path.cwd()
     for d in [start, *start.parents]:
         if any((d / marker).exists() for marker in _PROJECT_MARKERS):
@@ -698,6 +758,10 @@ def _running_console_script() -> str | None:
     developer standing in a project far more often than it is an installed
     tool -- ``python -m pytest`` most of all. That shape keeps today's
     behaviour.
+
+    Generic on purpose: it names ANY launcher in the script directory,
+    ``pytest`` and ``cash`` included. Deciding what that means is
+    ``_installed_entry_point_cache_dir``'s job.
     """
     argv0 = sys.argv[0] if sys.argv else None
     if not argv0:
@@ -741,9 +805,25 @@ def _installed_entry_point_cache_dir() -> Path | None:
     ``[tool.cash] cache_dir`` still caches beside that project's code. The
     per-user location is the answer for "nothing here claims this run", not a
     blanket override.
+
+    Two refinements from round 17, where every tester hit the first:
+
+    * **Never for ``cash`` itself.** cash's own CLI is an installed console
+      script too, so it resolved a per-user ``…/cash/cash`` that nothing writes
+      to -- ``cash inspect`` found nothing and ``cash clear --all`` "succeeded"
+      while the real cache kept serving. The CLI resolves like the context it
+      is run in; ``--tool NAME`` reaches an installed tool's cache.
+    * **Not inside a project.** ``pytest`` is a console script as well, and
+      took every project's test suite into one shared per-user cache. Any
+      launcher run inside a project anchors to that project instead (see
+      ``project_anchor``); the per-user location is for a tool run from
+      somewhere no project claims -- a home directory, a scratch directory, a
+      drive root.
     """
     name = _running_console_script()
-    if name is None:
+    if name is None or name.lower() == "cash":
+        return None
+    if _cwd_project_root() is not None:
         return None
     try:
         return _per_user_cache_root() / name

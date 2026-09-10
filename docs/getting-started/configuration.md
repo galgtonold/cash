@@ -18,7 +18,7 @@ most convenient — explicit code for one-off scripts, `pyproject.toml`
 for team defaults, env vars for deployment overrides, the XDG file for
 personal cross-project defaults.
 
-<!-- claim: cash/config.py:project_anchor @cfea99ac, cash/config.py:_anchor_cache_dir @7f3408d4 -->
+<!-- claim: cash/config.py:project_anchor @c7c2a516, cash/config.py:_anchor_cache_dir @7f3408d4 -->
 ### What paths are relative to
 
 Where a relative `cache_dir` points depends on who wrote it, and the rule is
@@ -29,7 +29,8 @@ the same one you would guess for each:
 | `Cash(cache_dir="…")` or `CASH_CACHE_DIR` | your current working directory — you typed it here, so it means here |
 | `pyproject.toml` / the XDG user config | that file's own directory, as paths in config files normally are |
 | nothing (the `.cash` default) | the **project anchor**: the first directory above the running script holding a `pyproject.toml`, `setup.py`, `setup.cfg` or `.git` |
-| nothing, from an **installed console script** | a per-user directory named after the tool — `%LOCALAPPDATA%\cash\<tool>`, `~/Library/Caches/cash/<tool>`, or `$XDG_CACHE_HOME/cash/<tool>` |
+| nothing, from **installed code** — `pytest`, `cash`, a `python -m` module in site-packages, your own installed tool — run **inside a project** | that project's root: the first directory above your current directory holding a project marker |
+| nothing, from an **installed console script run outside any project** | a per-user directory named after the tool — `%LOCALAPPDATA%\cash\<tool>`, `~/Library/Caches/cash/<tool>`, or `$XDG_CACHE_HOME/cash/<tool>` |
 
 The project anchor is also where `pyproject.toml` itself is looked for. Both
 used to be resolved from the current working directory, which made the cache a
@@ -38,24 +39,32 @@ script run from two directories built two caches, silently, and the documented
 fix (`[tool.cash] cache_dir`) was discovered the same way, so it was ignored in
 exactly that case.
 
-With no script to anchor to — an interactive interpreter, a Jupyter kernel,
-`python -c`, `python -m sometool` — the current directory is still the answer,
-which is why a notebook's cache stays exactly where it was.
+With no program to anchor to at all — an interactive interpreter, a Jupyter
+kernel, `python -c` — the current directory is still the answer, which is why a
+notebook's cache stays exactly where it was. A *local* package run with
+`python -m pkg` is not in that group: its `__main__.py` is a file of yours, so
+it anchors to its project like any script.
 
-An **installed console script** (a `[project.scripts]` entry point) is the one
-case that gets neither. Its `__main__` lives in the virtualenv's `bin` /
-`Scripts` directory, so there is no project above it to anchor to — and
-anchoring inside the virtualenv would be worse, since the cache would then be
-shared by every project using that environment and wiped by a reinstall. Left
-on the current directory it dropped a fresh `.cash` wherever you happened to
-run it and never reused one. So it caches per user, per tool, in the platform's
-own cache location.
+**Installed code** is the case in between. When the program itself lives in
+the virtualenv — `pytest`, `cash`, `python -m` of an installed module, or a
+console script (`[project.scripts]`) you installed — there is no script of
+yours to anchor to, and anchoring inside the virtualenv would be worse: the
+cache would be shared by every project using that environment and wiped by a
+reinstall. So:
 
-Two things still override that, in this order: any explicit setting
-(`CASH_CACHE_DIR`, `cache_dir=`, the XDG user config), and a `pyproject.toml`
-with a `[tool.cash]` section found by walking up from your current directory.
-So a tool run inside a project that has an opinion follows the project; the
-per-user location is the answer when nothing about the run claims it.
+* **Inside a project** it walks up from your current directory to the project
+  root. That is what puts a test suite's cache beside its project, however
+  `pytest` was typed and from whichever subdirectory, and what lets
+  `cash inspect` find the cache your code is using.
+* **Outside any project** — your home directory, a scratch directory, a drive
+  root — an installed console script caches per user, per tool, in the
+  platform's cache location. Left on the current directory it would drop a
+  fresh `.cash` wherever you happened to run it and never reuse one. `cash`
+  itself never does this; `cash info` lists these caches, and
+  `cash inspect --tool NAME` / `cash clear --tool NAME` reach one.
+
+Any explicit setting (`CASH_CACHE_DIR`, `cache_dir=`, the XDG user config, a
+`[tool.cash] cache_dir`) overrides all of this.
 
 ## Quick reference
 

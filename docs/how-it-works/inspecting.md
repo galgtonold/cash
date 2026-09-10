@@ -298,7 +298,7 @@ and entry counts it points you at `cash info` in a terminal.
 Anything that requires touching the cache directory itself lives in the CLI, not
 in a magic. These five subcommands are the whole surface:
 
-<!-- claim: cash/__main__.py:main @5b1fa8a2, cash/__main__.py:cmd_info @1799ead3, cash/__main__.py:_inspect_cache_dir @24ec3843 -->
+<!-- claim: cash/__main__.py:main @e7075a02, cash/__main__.py:cmd_info @eb48d766, cash/__main__.py:_inspect_cache_dir @24ec3843 -->
 ```bash
 cash version            # installed version
 cash info               # resolved config + where it came from
@@ -307,13 +307,15 @@ cash clear [path]       # delete a cache directory (see below)
 cash autoload on|off    # load cash in every new kernel via an IPython startup hook
 ```
 
-<!-- claim: cash/__main__.py:cmd_clear @9a154a1c -->
+<!-- claim: cash/__main__.py:cmd_clear @3527ba39 -->
 !!! warning "`cash clear` deletes a whole directory"
     `cash clear` is directory-granular, not notebook-granular. Pointing it at a
     notebook (`cash clear analysis.ipynb`) removes the entire `.cash/` folder
     sitting next to that notebook — including the entries belonging to every
     *other* notebook in the same folder, since they all share it. `--all` does
-    the same to `./.cash` in the current working directory. There is still no
+    the same to the cache in use — the directory `cash info` reports, which
+    follows the project you are standing in rather than being `./.cash` — and
+    `--tool NAME` to an installed tool's per-user cache. There is still no
     per-notebook or per-variable clear.
 
     `--function NAME` is the one exception: it deletes just that function's

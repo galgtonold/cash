@@ -10,15 +10,15 @@ canonical reference.
 as `cash = "cash.__main__:main"` in `pyproject.toml`). Running `cash` with no
 subcommand prints help and exits 0.
 
-<!-- claim: cash/__main__.py:main @5b1fa8a2 broad="the quick-reference table is a claim about the whole subcommand set" -->
+<!-- claim: cash/__main__.py:main @e7075a02 broad="the quick-reference table is a claim about the whole subcommand set" -->
 ## Quick reference
 
 | Subcommand | Purpose | Destructive? |
 |---|---|---|
 | [`cash version`](#cash-version) | Print the installed cash version. | No |
 | [`cash info`](#cash-info) | Show the effective merged configuration. | No |
-| [`cash inspect [path] [--function NAME]`](#cash-inspect-path) | Summarise a cache directory or notebook; drill into one function. | No |
-| [`cash clear [path] [--all] [--function NAME] [--entry ID]`](#cash-clear-path-all) | Delete a cache directory, one function's entries, or a single entry. | **Yes** — no confirmation prompt |
+| [`cash inspect [path] [--function NAME] [--tool NAME]`](#cash-inspect-path) | Summarise a cache directory or notebook; drill into one function. | No |
+| [`cash clear [path] [--all] [--function NAME] [--entry ID] [--tool NAME]`](#cash-clear-path-all) | Delete a cache directory, one function's entries, or a single entry. | **Yes** — no confirmation prompt |
 | [`cash autoload on`](#cash-autoload-on) | Install the IPython startup hook. | No (refuses to clobber by default) |
 | [`cash autoload off`](#cash-autoload-off) | Remove the startup hook. | Yes (deletes one file) |
 
@@ -169,6 +169,10 @@ Print the effective merged configuration.
   list; lists each tier's type in order.
 - `Source` — which layers contributed to the resolved config (e.g.
   `project:./pyproject.toml,env`, or `defaults` when nothing was set).
+- `Tool caches` — present when installed console scripts have cached
+  anything per user: one line per tool with its entry count, size and
+  directory. An installed tool run from outside any project caches there,
+  where the plain commands cannot see it; `--tool NAME` reaches it.
 
 **Examples:**
 
@@ -194,7 +198,7 @@ cash info
   `[tool.cash]` and XDG user config — see
   [Configuration](getting-started/configuration.md#file-locations)).
 
-<!-- claim: cash/__main__.py:cmd_inspect @e86c72e6, cash/__main__.py:_inspect_cache_dir @24ec3843, cash/__main__.py:_inspect_notebook @06ba3efe -->
+<!-- claim: cash/__main__.py:cmd_inspect @426ecc1d, cash/__main__.py:_inspect_cache_dir @24ec3843, cash/__main__.py:_inspect_notebook @06ba3efe -->
 ### `cash inspect [path] [--function NAME]` { #cash-inspect-path }
 
 Summarise a cache directory, or report on a notebook and its sibling `.cash`
@@ -233,6 +237,9 @@ cash inspect /tmp/some-cache-dir
   `statements`) selects the `(notebook statements)` group without its
   brackets. An ambiguous name prints the candidates and exits 1; an unknown
   one prints the functions that *are* cached.
+- `--tool NAME` — *Optional.* Inspect the per-user cache of the installed
+  console script `NAME` instead of the cache in use. `cash info` lists the
+  names. Cannot be combined with a path.
 
   Each row says what the entry is **worth**, not just how big it is:
 
@@ -295,7 +302,7 @@ REPL, `python -c`, or a notebook kernel.
 
 ## Clearing caches
 
-<!-- claim: cash/__main__.py:cmd_clear @9a154a1c -->
+<!-- claim: cash/__main__.py:cmd_clear @3527ba39 -->
 ### `cash clear [path] [--all] [--function NAME]` { #cash-clear-path-all }
 
 Delete a cache directory, or just one function's entries.
@@ -334,6 +341,10 @@ Delete a cache directory, or just one function's entries.
   `cash inspect --function NAME`. Any unambiguous prefix works, like a short
   commit hash; an ambiguous one lists the matches and deletes nothing. Takes
   precedence over `--function`.
+- `--tool NAME` — *Optional.* Act on the per-user cache of the installed
+  console script `NAME` instead of the cache in use. On its own it clears
+  that tool's whole cache; with `--function` or `--entry`, only those
+  entries. Cannot be combined with a path.
 
 **Examples:**
 
@@ -358,7 +369,7 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 ---
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @1799ead3 -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @eb48d766 -->
 ## Exit codes
 
 | Code | When |

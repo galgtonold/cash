@@ -93,20 +93,20 @@ slow_square(1000)      # cache hit, from ./my_app_cache
 
 ### Where the cache lives
 
-<!-- claim: cash/config.py:project_anchor @cfea99ac, cash/config.py:_anchor_cache_dir @7f3408d4 -->
+<!-- claim: cash/config.py:project_anchor @c7c2a516, cash/config.py:_anchor_cache_dir @7f3408d4 -->
 `.cash` sits next to **your project**, not next to whoever launched the job.
 Cash finds the running script, walks up to the first directory holding a
 `pyproject.toml`, `setup.py`, `setup.cfg` or `.git`, and puts the cache there —
 so `python /srv/etl/run.py` uses the same cache whether it was started by you,
 by cron from `/`, or by a CI step in a checkout directory. A script with no
 project above it caches beside itself; an interactive session or a notebook,
-which has no script at all, caches in the current directory. An installed
-console script — a `[project.scripts]` entry point, whose `__main__` sits in
-the virtualenv rather than in anyone's project — caches per user, per tool, in
-the platform's cache location (`%LOCALAPPDATA%\cash\<tool>`,
-`~/Library/Caches/cash/<tool>`, `$XDG_CACHE_HOME/cash/<tool>`), unless the
-directory you run it from belongs to a project whose `pyproject.toml` has a
-`[tool.cash]` section — then it follows that project.
+which has no script at all, caches in the current directory. Installed
+code — `pytest`, a `python -m` module in site-packages, a `[project.scripts]`
+tool you installed — anchors to the project you run it from; run from outside
+any project, an installed tool caches per user, per tool, in the platform's
+cache location (`%LOCALAPPDATA%\cash\<tool>`, `~/Library/Caches/cash/<tool>`,
+`$XDG_CACHE_HOME/cash/<tool>`). See
+[what paths are relative to](getting-started/configuration.md#what-paths-are-relative-to).
 
 That matters most for exactly the case that cannot see it. A scheduled job runs
 from whatever directory the scheduler picked, and a cwd-relative cache meant a

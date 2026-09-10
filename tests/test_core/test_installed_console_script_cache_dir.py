@@ -43,10 +43,22 @@ def _write_distribution(root):
     (src / "cli.py").write_text(textwrap.dedent("""
         import json
         import sys
+        import time
+
+        import cash
         from cash.config import get_config
 
 
+        @cash.cache
+        def slow(n):
+            time.sleep(0.3)          # over the persistence floor
+            return n * 2
+
+
         def main():
+            if sys.argv[1:] == ["compute"]:
+                print(json.dumps({"value": slow(21)}))
+                return
             print(json.dumps({
                 "cache_dir": str(get_config().cache_dir),
                 "argv0": sys.argv[0],
@@ -184,3 +196,76 @@ def test_a_plain_script_is_unaffected(installed_tool, tmp_path):
     assert out.returncode == 0, out.stderr
 
     assert out.stdout.strip() == os.path.normpath(str(project / ".cash")), out.stdout
+
+
+def _private_user_cache(tmp_path):
+    """Point the platform cache root somewhere private for this test."""
+    root = tmp_path / "usercache"
+    root.mkdir()
+    return root, {
+        "LOCALAPPDATA": str(root),        # Windows
+        "XDG_CACHE_HOME": str(root),      # Linux
+        "HOME": str(root),                # macOS: ~/Library/Caches
+    }
+
+
+def _cash_cli(base, *argv, cwd, env):
+    """The INSTALLED `cash` console script -- the shape round 17 found broken."""
+    bindir = base / "venv" / ("Scripts" if os.name == "nt" else "bin")
+    exe = bindir / ("cash.exe" if os.name == "nt" else "cash")
+    environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
+    environ.update(env)
+    return subprocess.run([str(exe), *argv], cwd=str(cwd), capture_output=True,
+                          text=True, env=environ)
+
+
+def test_the_installed_cash_cli_agrees_with_python_m_cash(installed_tool, tmp_path):
+    """Round 17, all five testers: `cash info` said `…/cash/cash`."""
+    base, _ = installed_tool
+    project = tmp_path / "project"
+    (project / "sub").mkdir(parents=True)
+    (project / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "0"\n',
+                                            encoding="utf-8")
+    _, env = _private_user_cache(tmp_path)
+    python = base / "venv" / ("Scripts" if os.name == "nt" else "bin") / (
+        "python.exe" if os.name == "nt" else "python")
+
+    via_script = _cash_cli(base, "info", cwd=project / "sub", env=env)
+    environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
+    environ.update(env)
+    via_module = subprocess.run([str(python), "-m", "cash", "info"], cwd=str(project / "sub"),
+                                capture_output=True, text=True, env=environ)
+
+    def cache_line(out):
+        return [ln for ln in out.stdout.splitlines() if "Cache dir" in ln][0].split(":", 1)[1].strip()
+
+    assert via_script.returncode == 0, via_script.stderr
+    assert cache_line(via_script) == os.path.normpath(str(project / ".cash"))
+    assert cache_line(via_module) == cache_line(via_script)
+
+
+def test_the_cli_reaches_a_tools_per_user_cache_by_name(installed_tool, tmp_path):
+    """`--tool NAME` is how an operator gets at a cache the CLI cannot infer."""
+    base, exe = installed_tool
+    nowhere = tmp_path / "nowhere"
+    nowhere.mkdir()
+    root, env = _private_user_cache(tmp_path)
+
+    environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
+    environ.update(env)
+    ran = subprocess.run([str(exe), "compute"], cwd=str(nowhere), capture_output=True,
+                         text=True, env=environ)
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    tool_dir = next(root.rglob(_PKG), None)
+    assert tool_dir is not None and tool_dir.is_dir(), "the tool cached nowhere private"
+
+    info = _cash_cli(base, "info", cwd=nowhere, env=env)
+    assert _PKG in info.stdout, info.stdout
+
+    inspect = _cash_cli(base, "inspect", "--tool", _PKG, cwd=nowhere, env=env)
+    assert inspect.returncode == 0, inspect.stdout + inspect.stderr
+    assert "slow" in inspect.stdout, inspect.stdout
+
+    cleared = _cash_cli(base, "clear", "--tool", _PKG, cwd=nowhere, env=env)
+    assert cleared.returncode == 0, cleared.stdout + cleared.stderr
+    assert not tool_dir.exists()

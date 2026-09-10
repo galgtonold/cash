@@ -48,6 +48,46 @@ def resolved_cache_dir() -> str:
         return ".cash"
 
 
+def tool_cache_dir(name: str) -> str:
+    """The per-user cache an installed console script named *name* uses.
+
+    An installed tool run from outside any project caches under the
+    platform's cache root, one directory per tool. The CLI cannot infer which
+    tool you mean -- it is itself a different console script -- so ``--tool``
+    names it.
+    """
+    from cash.config import _per_user_cache_root
+    return str(_per_user_cache_root() / name)
+
+
+def _target_dir(args: argparse.Namespace) -> str:
+    """The directory a subcommand acts on when no path was given."""
+    tool = getattr(args, "tool", None)
+    return tool_cache_dir(tool) if tool else resolved_cache_dir()
+
+
+def _per_user_tool_caches() -> list[tuple[str, str, int, int]]:
+    """``(tool, path, entries, bytes)`` for every per-user tool cache."""
+    try:
+        from cash.config import _per_user_cache_root
+        root = _per_user_cache_root()
+        children = sorted(p for p in root.iterdir() if p.is_dir())
+    except (OSError, RuntimeError):
+        return []
+    found = []
+    for child in children:
+        entries = size = 0
+        try:
+            for f in child.iterdir():
+                if f.name.endswith(ENTRY_SUFFIX):
+                    entries += 1
+                    size += f.stat().st_size
+        except OSError:
+            continue
+        found.append((child.name, str(child), entries, size))
+    return found
+
+
 def cmd_version(args: argparse.Namespace) -> None:
     """Show cash version."""
     print(f"cash {get_version()}")
@@ -89,6 +129,15 @@ def cmd_info(args: argparse.Namespace) -> None:
     if config.tiers:
         print(f"  Tiers:      {', '.join(t.type for t in config.tiers)}")
     print(f"  Source:     {config._source}")
+    # Installed tools run from outside a project cache per user, per tool --
+    # somewhere this command cannot reach by default, because it is a
+    # different console script. Say where they are, so an operator does not
+    # have to know the platform's cache root to find them.
+    tools = _per_user_tool_caches()
+    if tools:
+        print("  Tool caches (reach one with --tool NAME):")
+        for name, path, entries, size in tools:
+            print(f"    {name:<20} {entries:>5} entries  {_format_bytes(size):>10}  {path}")
 
 
 def _format_bytes(size_bytes: int) -> str:
@@ -238,6 +287,9 @@ def cmd_inspect(args: argparse.Namespace) -> None:
     # getattr, not attribute access: a flag added here must not break a
     # caller that builds its own Namespace without it.
     only_function = getattr(args, "function", None)
+    if target and getattr(args, "tool", None):
+        print("cash inspect: --tool and a path are mutually exclusive.")
+        sys.exit(2)
 
     if target and os.path.isfile(target) and target.endswith('.ipynb'):
         if only_function:
@@ -246,7 +298,7 @@ def cmd_inspect(args: argparse.Namespace) -> None:
         _inspect_notebook(target)
         return
 
-    cache_dir = target if (target and os.path.isdir(target)) else resolved_cache_dir()
+    cache_dir = target if (target and os.path.isdir(target)) else _target_dir(args)
     if not os.path.isdir(cache_dir):
         print(f"No cache found at {os.path.abspath(cache_dir)}.")
         print("Specify a notebook or cache directory, or set CASH_CACHE_DIR.")
@@ -459,20 +511,25 @@ def cmd_clear(args: argparse.Namespace) -> None:
               f"  ({os.path.abspath(resolved_cache_dir())})")
         sys.exit(2)
 
+    tool = getattr(args, "tool", None)
+    if tool and args.path:
+        print("cash clear: --tool and a path are mutually exclusive.")
+        sys.exit(2)
+
     only_entry = getattr(args, "entry", None)
     if only_entry:
-        target = args.path if (args.path and os.path.isdir(args.path)) else resolved_cache_dir()
+        target = args.path if (args.path and os.path.isdir(args.path)) else _target_dir(args)
         _clear_entry(target, only_entry)
         return
 
     only_function = getattr(args, "function", None)
     if only_function:
-        target = args.path if (args.path and os.path.isdir(args.path)) else resolved_cache_dir()
+        target = args.path if (args.path and os.path.isdir(args.path)) else _target_dir(args)
         _clear_function(target, only_function)
         return
 
-    if args.all:
-        cache_dir = resolved_cache_dir()
+    if args.all or tool:
+        cache_dir = _target_dir(args)
         if os.path.isdir(cache_dir):
             _rmtree_cache(cache_dir)
         else:
@@ -631,6 +688,9 @@ def main() -> None:
     sub_inspect.add_argument('--function', default=None, metavar='NAME',
                              help="List one function's entries, with what each one saves. An unambiguous "
                                   'trailing segment is enough ("work" finds "__main__.work").')
+    sub_inspect.add_argument('--tool', default=None, metavar='NAME',
+                             help='Inspect the per-user cache of the installed console '
+                                  'script NAME (listed by `cash info`).')
     sub_inspect.set_defaults(func=cmd_inspect)
 
     # clear
@@ -648,6 +708,11 @@ def main() -> None:
                            help='Clear one entry by id, as listed by '
                                 '`cash inspect --function NAME`. Any unambiguous '
                                 'prefix works. Takes precedence over --function.')
+    sub_clear.add_argument('--tool', default=None, metavar='NAME',
+                           help='Act on the per-user cache of the installed console '
+                                'script NAME instead of the cache in use. On its own it '
+                                'clears that whole cache; with --function or --entry, '
+                                'just those entries.')
     sub_clear.set_defaults(func=cmd_clear, clear_parser=sub_clear)
 
     # autoload on|off
