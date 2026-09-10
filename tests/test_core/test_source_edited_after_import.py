@@ -135,3 +135,126 @@ def test_an_unedited_helper_is_silent(tmp_path):
     assert first.stdout.strip() == second.stdout.strip() == "2"
     assert "COMPUTE" not in second.stderr
     assert "KEY-SOURCE-CHANGED" not in first.stderr + second.stderr
+
+
+# ---------------------------------------------------------------------------
+# The decorated function's OWN body (round 18: r18s4's deploy race, r18s1's
+# "start the run, keep editing"). The helper fix above did not reach it: the
+# root's identity was pinned at its FIRST CALL, from the text on disk, so an
+# edit between import and that call keyed the old code's result by the new
+# text. Now the pin is taken when the decorator runs, from the text the import
+# compiled. The body sleeps past the 0.1 s persistence floor: a call that
+# never reaches disk cannot show a cross-process stale entry, which is how the
+# tester's "no network" control passed while the bug was still there.
+# ---------------------------------------------------------------------------
+
+OWN_OLD = textwrap.dedent('''
+    import sys, time
+    import cash
+
+    @cash.cache
+    def compute(x):
+        print("COMPUTE", file=sys.stderr, flush=True)  # @cash:assume-safe
+        time.sleep(0.25)  # @cash:assume-safe
+        return x * 14
+
+    def unrelated():
+        return 1
+''')
+OWN_NEW = OWN_OLD.replace("x * 14", "x * 3")
+OWN_ELSEWHERE = OWN_OLD.replace("return 1", "return 2")
+
+OWN_MAIN = textwrap.dedent('''
+    import os, sys, time
+    from app import compute
+
+    if len(sys.argv) > 1 and sys.argv[1] == "wait":
+        open("ready", "w").close()
+        for _ in range(400):
+            if os.path.exists("go"):
+                break
+            time.sleep(0.025)
+    print(compute(3))
+''')
+
+# The same shape with the decorated function in the script itself.
+SCRIPT_OLD = OWN_OLD + textwrap.dedent('''
+    if __name__ == "__main__":
+        import os
+        if len(sys.argv) > 1 and sys.argv[1] == "wait":
+            open("ready", "w").close()
+            for _ in range(400):
+                if os.path.exists("go"):
+                    break
+                time.sleep(0.025)
+        print(compute(3))
+''')
+
+
+def _own_project(tmp_path, layout):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    if layout == "module":
+        (proj / "app.py").write_text(OWN_OLD, encoding="utf-8")
+        (proj / "main.py").write_text(OWN_MAIN, encoding="utf-8")
+        return proj, proj / "app.py"
+    (proj / "main.py").write_text(SCRIPT_OLD, encoding="utf-8")
+    return proj, proj / "main.py"
+
+
+def _edit_under_a(proj, env, edited, new_text):
+    """Start A, let it import, edit *edited* on disk, then let A make its first call."""
+    a = subprocess.Popen([sys.executable, "main.py", "wait"], cwd=str(proj),
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    for _ in range(400):
+        if (proj / "ready").exists():
+            break
+        time.sleep(0.025)
+    assert (proj / "ready").exists(), "process A never reached its first call"
+    _edit(edited, new_text)
+    (proj / "go").write_text("", encoding="utf-8")
+    return a.communicate(timeout=60)
+
+
+@pytest.mark.parametrize("layout", ["module", "script"])
+def test_an_edit_to_the_cached_function_itself_is_not_served_to_the_restart(tmp_path, layout):
+    """THE BUG (round 18): the restart got 42, the OLD body's answer; 9 is right."""
+    proj, edited = _own_project(tmp_path, layout)
+    env = _env(tmp_path)
+    new_text = edited.read_text(encoding="utf-8").replace("x * 14", "x * 3")
+
+    a_out, a_err = _edit_under_a(proj, env, edited, new_text)
+    assert a_out.strip() == "42", "A runs the code it imported"
+
+    b = _run(proj, env)
+    assert b.stdout.strip() == "9", "the restarted process was served the old body's answer"
+    assert "COMPUTE" in b.stderr
+    assert "KEY-SOURCE-CHANGED" in a_err, "nothing said the file changed under A"
+
+
+def test_an_edit_elsewhere_in_the_same_file_still_hits_after_the_restart(tmp_path):
+    """Control: the cached function did not change, so its entry stays valid and
+    nothing is said. Guards against "fixing" this by refusing anything stored
+    after its file moved."""
+    proj, edited = _own_project(tmp_path, "module")
+    env = _env(tmp_path)
+
+    a_out, a_err = _edit_under_a(proj, env, edited, OWN_ELSEWHERE)
+    assert a_out.strip() == "42"
+    assert "KEY-SOURCE-CHANGED" not in a_err
+
+    b = _run(proj, env)
+    assert b.stdout.strip() == "42"
+    assert "COMPUTE" not in b.stderr, "an unchanged function stopped hitting"
+
+
+def test_an_unedited_cached_function_hits_across_processes(tmp_path):
+    """Control: decoration-time pinning keeps the key byte-stable run to run."""
+    proj, _ = _own_project(tmp_path, "module")
+    env = _env(tmp_path)
+
+    first = _run(proj, env)
+    second = _run(proj, env)
+    assert first.stdout.strip() == second.stdout.strip() == "42"
+    assert "COMPUTE" not in second.stderr
+    assert "KEY-SOURCE-CHANGED" not in first.stderr + second.stderr

@@ -948,6 +948,9 @@ class Cash:
         # wrapper closure keeps *func* alive, so the id stays valid for the
         # wrapper's lifetime (same contract as _func_key_cache).
         self._own_pins: dict[int, str] = {}
+        # Pins taken at decoration whose file has not yet been compared with
+        # the loaded code; the first call does it once (see _pin_own_source).
+        self._own_pins_unverified: set[int] = set()
         # code object -> frozenset of free vars with capture-unsafe uses
         self._capture_use_cache: dict = {}
         # code object -> tuple of global names it reads (global folding)
@@ -1847,7 +1850,8 @@ class Cash:
             )
 
         func_name = self._register_func(func, depends_on, file_depends_on)
-        self._purity_modes[func_name] = ("strict" if strict else "silent" if assume_safe else "warn")
+        self._pin_own_source(func, self.source_hashes[func_name])
+        self._purity_modes[func_name] =("strict" if strict else "silent" if assume_safe else "warn")
         # Record the declared TTL so a downstream that depends on this function
         # can inherit it (effective TTL = min over the dependency closure).
         self._func_ttls[func_name] = ttl
@@ -1915,7 +1919,7 @@ class Cash:
             self._register_static_dependencies(func_name, file_deps)
         return func_name
 
-    def _pin_own_source(self, func: Callable) -> str:
+    def _pin_own_source(self, func: Callable, source_hash: str | None = None) -> str:
         """Identity of *func* itself, pinned per function object.
 
         The state hash's root component must describe the function the
@@ -1929,11 +1933,33 @@ class Cash:
         so persisted entries keep hitting). Lambdas additionally fold the
         code fingerprint: two lambdas defined on the SAME source line share
         their source text, and only ``co_code``/consts tell them apart.
+
+        Taken when the decorator runs (*source_hash* is the hash registration
+        just computed), because that is when the text on disk is the text the
+        import compiled. It used to be taken at the FIRST CALL, and a deploy
+        that landed new files between import and that call keyed the old
+        body's result by the new body's text; every restarted process then
+        served it as an ordinary hit (round 18, two testers independently).
+        The first call still compares the loaded code with the file once, to
+        say so. A pin not taken at decoration (the table is full) falls back to
+        the same loaded-vs-disk check helpers get.
         """
-        pin = self._own_pins.get(id(func))
+        key = id(func)
+        pin = self._own_pins.get(key)
         if pin is not None:
+            if self._own_pins_unverified and key in self._own_pins_unverified:
+                self._own_pins_unverified.discard(key)
+                if not loaded_code_matches_disk(func):
+                    _warn_source_changed_since_load(func)
             return pin
-        pin = CodeAnalyzer.get_source_hash(func)
+        at_decoration = source_hash is not None
+        if source_hash is None:
+            if loaded_code_matches_disk(func):
+                source_hash = CodeAnalyzer.get_source_hash(func)
+            else:
+                source_hash = bytecode_identity(func) or CodeAnalyzer.get_source_hash(func)
+                _warn_source_changed_since_load(func)
+        pin = source_hash
         if getattr(func, '__name__', '') == '<lambda>':
             code = getattr(func, '__code__', None)
             if code is not None:
@@ -1947,7 +1973,9 @@ class Cash:
                     f"{pin}:{code.co_code.hex()}:{consts!r}".encode('utf-8')
                 ).hexdigest()
         if len(self._own_pins) < 4096:
-            self._own_pins[id(func)] = pin
+            self._own_pins[key] = pin
+            if at_decoration:
+                self._own_pins_unverified.add(key)
         return pin
 
     def _fold_rng_epoch(self, func_name: str, state_hash: str) -> str:

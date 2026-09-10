@@ -507,6 +507,11 @@ def loaded_code_matches_disk(fn: object) -> bool:
     path = code.co_filename
     if not path or path.startswith("<"):
         return True
+    if not path.endswith((".py", ".pyw")):
+        # Code compiled from something that is not a Python file -- a doc
+        # page's fence, a template -- cannot be recompiled whole to compare,
+        # and "does not compile" would read as "edited".
+        return True
     try:
         if os.stat(path).st_mtime <= _process_start_time():
             return True

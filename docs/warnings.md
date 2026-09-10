@@ -115,7 +115,7 @@ switched off.
 
 ## CACHE-ASYNC-GENERATOR {#cache-async-generator}
 
-<!-- claim: cash/core.py:Cash.cache @60e3ce9f -->
+<!-- claim: cash/core.py:Cash.cache @fd8e83f6 -->
 **What happened.** You put `@cash.cache` on an async generator — an `async def`
 function that `yield`s. Cash does not cache those in this release, so the
 decorator handed your function straight back, unwrapped.
@@ -951,22 +951,27 @@ is exactly backwards here: a library callable would not have warned.
 
 ## KEY-SOURCE-CHANGED {#key-source-changed}
 
-<!-- claim: cash/source_norm.py:loaded_code_matches_disk @7dfe9403, cash/core.py:_warn_source_changed_since_load @02d3e452 -->
-**What happened.** A file holding a helper your cached function calls was
-edited after this process imported it. The process is still running the *old*
-code; the file now holds the *new* code. cash noticed the difference the first
-time it needed that helper's identity.
+<!-- claim: cash/source_norm.py:loaded_code_matches_disk @c9f1ae94, cash/core.py:_warn_source_changed_since_load @02d3e452 -->
+**What happened.** A file holding your cached function, or a helper it calls,
+was edited after this process imported it. The process is still running the
+*old* code; the file now holds the *new* code. cash noticed the difference the
+first time the function was called.
 
-**Why it matters.** cash identifies a helper by its source, read from disk the
-first time a call needs it. Read after the edit, that source describes code the
-process is not running — and a result computed by the old code would have been
-stored under the new code's identity, then served to the restarted process as a
-hit. Measured in round 17: a service answered 0.500504 where the new code
-computes 0.530876, and kept answering it after the restart.
+**Why it matters.** cash identifies code by its source. Read after the edit,
+that source describes code the process is not running — and a result computed
+by the old code would have been stored under the new code's identity, then
+served to the restarted process as a hit. Measured in round 17 on a helper: a
+service answered 0.500504 where the new code computes 0.530876, and kept
+answering it after the restart. Round 18 found the same for the cached function
+itself, in a worker that imported the old code and made its first call after
+the deploy landed.
 
-So cash keys that helper by the code **actually running** instead. Results in
-this process are correct for the code it is running, and they are not reused
-once the process restarts on the new code.
+<!-- claim: cash/core.py:Cash._pin_own_source @54026f75 -->
+So cash keys that code by what is **actually running** instead: a cached
+function by the source it was imported with (its identity is taken when the
+decorator runs, not at its first call), and a helper by its loaded bytecode.
+Results in this process are correct for the code it is running, and they are
+not reused once the process restarts on the new code.
 
 **What to do.** Restart the process to run the new code. This fires in the
 window a deploy opens when it puts new files on disk before restarting the
