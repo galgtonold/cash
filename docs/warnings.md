@@ -371,8 +371,17 @@ speaks up once the loss has accumulated past a couple of real seconds *and* its
 per-call overhead exceeds even the largest body time it has seen, so a function
 that is usually fast but occasionally very slow will not be flagged.
 
-**What to do.** The first move is to keep the caching and make the key cheap,
-by registering a hasher for the expensive argument's type:
+**What to do.** The message names the costliest argument. If a cached function
+produced it and nothing modifies it afterwards — a trained model, a lookup
+table — declare that on the producer, and the argument is keyed by the call
+that made it instead of being hashed
+([passing large objects](decorator.md#passing-large-objects-between-cached-functions)):
+
+    @cash.cache(frozen=True)
+    def train(data): ...
+
+Otherwise keep the caching and make the key cheap, by registering a hasher for
+the expensive argument's type:
 
     cash.register_hasher(pd.DataFrame, lambda df: df.attrs["version"], override=True)
 
@@ -383,8 +392,10 @@ own content hasher runs first, and a plain registration for one of those types
 is rejected outright rather than silently ignored. Whatever your hasher returns
 becomes the entire identity of that value, so return something that genuinely
 changes when the data changes: a version, a content id, an immutable
-fingerprint. If there is no such handle to be had, remove the decorator from
-this function. It is not the right tool for this shape of work.
+fingerprint. For a pandas frame, pandas 3 (copy-on-write) lets cash check the
+frame for changes instead of re-hashing it, so this warning usually goes away
+with the upgrade. If there is no such handle to be had, remove the decorator
+from this function. It is not the right tool for this shape of work.
 
 **When it is safe to ignore.** When speed is not why the decorator is there.
 Caching to avoid a metered API call, to hold a result steady across a session,
@@ -615,7 +626,7 @@ it is rarely what you want.
 
 ## IMPURE-SIDE-EFFECTS {#impure-side-effects}
 
-<!-- claim: cash/core.py:Cash._surface_purity @44c13b02 -->
+<!-- claim: cash/core.py:Cash._surface_purity @86786923 -->
 **What happened.** Before the first call, Cash reads the source of your function
 and of the helpers it calls, looking for shapes that make a cached result
 questionable. It found some. The message lists each one with its line number and
@@ -677,6 +688,13 @@ to it later* — audit the function today, add a `session.post(...)` next month,
 and nothing says a word. A comment written next to the statement cannot do that:
 new code arrives unannotated and is reported, and the scope of the exemption is
 visible in the diff that granted it.
+
+A line that **changes an argument in place** is the one to fix rather than
+annotate: the message says "changes the argument '…' in place". On a miss the
+caller's object is changed; on a hit the stored result comes back and the
+object is not, so whatever the caller does next sees two different objects
+depending on whether the call hit. Return a modified copy instead
+(`feats = feats.copy(); feats["x"] = ...; return feats`).
 
 **When it is safe to ignore.** When every line it names is a `print`, a
 `logging` call or a progress bar. That is far and away the commonest reason this
@@ -769,7 +787,7 @@ somewhere it did not anticipate. The message names the exception and, where it
 can identify one, the argument type most likely responsible. Your call ran and
 returned its real result; only the caching was skipped.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @691debf2 -->
+<!-- claim: cash/core.py:Cash._resolve_cache_key @4adf0746 -->
 **Why it matters.** That call did not cache. Correctness is not at risk — with
 no key, nothing is written and nothing is read, so this cannot produce a stale
 answer — but you are paying full compute every time it happens.
@@ -1015,7 +1033,7 @@ type when it can identify one; when the offending value is nested inside a
 container it says so instead, because it cannot see which element is to blame.
 The call ran and returned normally.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @691debf2 -->
+<!-- claim: cash/core.py:Cash._resolve_cache_key @4adf0746 -->
 **Why it matters.** That call did not cache, and calls like it will not cache
 either — this is not first-call warm-up. Every call passing that argument pays
 full compute. Nothing can go stale, because nothing is being stored.

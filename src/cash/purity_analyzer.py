@@ -810,7 +810,8 @@ class _PurityVisitor(ast.NodeVisitor):
             base_str = f"{base}." if base else ""
             self.issues.append(PurityIssue(
                 kind=ISSUE_SCOPE_MUTATION,
-                description=f"{base_str}{target.attr} = ... - attribute mutation",
+                description=f"{base_str}{target.attr} = ... - "
+                            + self._mutation_kind(base, "attribute"),
                 where=self._qualname,
                 line=line,
             ))
@@ -819,10 +820,22 @@ class _PurityVisitor(ast.NodeVisitor):
             base_str = f"{base}[...]" if base else "[...]"
             self.issues.append(PurityIssue(
                 kind=ISSUE_SCOPE_MUTATION,
-                description=f"{base_str} = ... - subscript mutation",
+                description=f"{base_str} = ... - " + self._mutation_kind(base, "subscript"),
                 where=self._qualname,
                 line=line,
             ))
+
+    def _mutation_kind(self, base: str | None, kind: str) -> str:
+        """Name what a mutation of *base* does. For a PARAMETER that is not
+        "a scope mutation": it changes the CALLER's object, on a miss only -- a
+        hit returns the stored result and the caller's object stays as it was,
+        so everything downstream of the call sees two different objects
+        depending on whether it hit (round 18: 31 of 64 values wrong)."""
+        root = (base or "").split(".")[0].split("[")[0]
+        if root and root in self._param_names:
+            return (f"{kind} mutation that changes the argument '{root}' in place; "
+                    f"a cache hit returns the stored result without making that change")
+        return f"{kind} mutation"
 
 
 def _defining_module(obj: Any) -> Any:

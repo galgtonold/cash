@@ -844,6 +844,12 @@ _FROZEN_AUDIT_EVERY = 64
 
 _COW_PANDAS: bool | None = None
 
+#: The costliest argument of the key most recently hashed on this thread:
+#: ``(label, seconds, type name, producer, pandas without copy-on-write)``.
+#: A description, never the value: a reference here would keep a large
+#: argument alive after its caller dropped it.
+_ARG_COST = threading.local()
+
 
 def _is_cow_pandas(value: Any) -> bool:
     """Is *value* a pandas DataFrame/Series under copy-on-write?
@@ -1022,6 +1028,9 @@ class Cash:
         self._frozen_arrays: dict[int, list] = {}
         # id(obj) -> [weakref, uses, audit baseline or None], see `_audit_frozen`.
         self._frozen_uses: dict[int, list] = {}
+        # func_name -> (parameter, type, seconds, producer, pandas without
+        # copy-on-write): the costliest argument to hash, for CACHE-NET-LOSS.
+        self._arg_costs: dict[str, tuple] = {}
         # Running account of what caching cost vs what it saved, per function.
         # The decorator always caches by design -- this only ever informs.
         from cash.effectiveness import EffectivenessLedger
@@ -2321,6 +2330,7 @@ class Cash:
                 *normalized_args, current_state_hash, func_name=func_name)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._serialize_args(func_name, args, kwargs, normalized=normalized_args)
+            self._note_arg_cost(func_name)
             if args_hash is None:
                 arg_type_name = self._first_unhashable_arg_type(args, kwargs)
                 if arg_type_name == "<unknown>":
@@ -6282,8 +6292,28 @@ class Cash:
                     return f"{src_hash}:{hasher_fn(arg)}"
             return arg
 
-        hashed_args = tuple(get_arg_hash(a) for a in args)
-        hashed_kwargs = {k: get_arg_hash(v) for k, v in kwargs.items()}
+        # Timed per argument -- two clock reads each -- so that a
+        # CACHE-NET-LOSS verdict can name the argument that costs the time.
+        costliest: tuple | None = None
+
+        def timed(label: str, value: Any) -> Any:
+            nonlocal costliest
+            t0 = time.perf_counter()
+            digest = get_arg_hash(value)
+            seconds = time.perf_counter() - t0
+            if costliest is None or seconds > costliest[1]:
+                producer = getattr(value, "_cash_lineage_producer", None)
+                if producer is None and self._frozen_arrays and id(value) in self._frozen_arrays:
+                    producer = self._frozen_arrays[id(value)][1]
+                old_pandas = (type(value).__name__ in ("DataFrame", "Series")
+                              and (type(value).__module__ or "").startswith("pandas")
+                              and not _is_cow_pandas(value))
+                costliest = (label, seconds, type(value).__name__, producer, old_pandas)
+            return digest
+
+        hashed_args = tuple(timed(f"#{i}", a) for i, a in enumerate(args))
+        hashed_kwargs = {k: timed(k, v) for k, v in kwargs.items()}
+        _ARG_COST.last = costliest
 
         payload: Any = (hashed_args, hashed_kwargs)
         # A set/frozenset pickles in PYTHONHASHSEED-dependent iteration
@@ -6736,7 +6766,8 @@ class Cash:
             # -- unless the function was declared frozen=True.
             try:
                 result._cash_lineage_src = LINEAGE_SRC_FROZEN if frozen else LINEAGE_SRC_DECORATOR
-                if frozen:
+                if func_name is not None:
+                    # Named in CACHE-NET-LOSS and KEY-FROZEN-MUTATED.
                     result._cash_lineage_producer = func_name
             except (AttributeError, TypeError):
                 pass
@@ -7590,6 +7621,24 @@ class Cash:
         )
         return True
 
+    def _note_arg_cost(self, func_name: str) -> None:
+        """Keep the costliest argument to hash seen for *func_name*.
+
+        Only its description is kept -- parameter, type, seconds, the cached
+        function that produced it -- never the value, which may be large.
+        """
+        cost = getattr(_ARG_COST, "last", None)
+        _ARG_COST.last = None
+        if cost is None:
+            return
+        label, seconds, type_name, producer, old_pandas = cost
+        known = self._arg_costs.get(func_name)
+        if known is not None and known[2] >= seconds:
+            return
+        if known is None and len(self._arg_costs) >= 1024:
+            return
+        self._arg_costs[func_name] = (label, type_name, seconds, producer, old_pandas)
+
     def _note_effectiveness(
         self,
         func_name: str,
@@ -7615,6 +7664,7 @@ class Cash:
                 overhead_seconds=overhead_seconds,
                 body_seconds=body_seconds,
                 was_hit=was_hit,
+                culprit=self._arg_costs.get(func_name),
             )
         except Exception:  # noqa: BLE001 - accounting must never break a call
             return
@@ -8466,11 +8516,15 @@ class Cash:
             f"side effects or scope mutations, so cached results may not "
             f"reflect what the body does.\n{summary}",
             code="IMPURE-SIDE-EFFECTS",
-            fix="go down the list and put `# @cash:assume-safe` on each line "
+            fix=(("for a line that changes an argument in place, return a "
+                  "modified copy instead -- the caller keeps its object "
+                  "whether the call hits or misses. " if "changes the argument" in summary
+                  else "")
+                 + "go down the list and put `# @cash:assume-safe` on each line "
                 "you have audited, or refactor; @cash.cache(assume_safe=True) "
                 "waives the whole function instead, including anything added "
                 "to it later. The first annotation changes the function's key "
-                "once: @cash: directives are part of its source identity.",
+                "once: @cash: directives are part of its source identity."),
         )
 
     def register_file_handler(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]) -> None:

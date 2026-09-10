@@ -11,9 +11,12 @@ function that sums one column::
     key hash   389.59 ms
     the work    11.31 ms      -> 34x slower, on every call
 
-And it really is every call: the arg-hash memo is gated on
-``_cash_lineage_hash``, which only notebook-tracked objects carry, so in a
-script or library the frame is re-hashed from scratch each time.
+And it really is every call, for anything cash cannot check cheaply for
+changes: outside a notebook a cached result's lineage tag is not trusted (it
+is never updated when the object is mutated), so a numpy array, a model or a
+pandas frame without copy-on-write is re-hashed from scratch each time. The
+verdict names the costliest argument and, when a cached function produced it,
+suggests ``frozen=True`` there.
 
 When to speak up
 ----------------
@@ -96,8 +99,13 @@ class EffectivenessLedger:
         overhead_seconds: float,
         body_seconds: float | None,
         was_hit: bool,
+        culprit: tuple | None = None,
     ) -> tuple[str, str] | None:
         """Account for one call. Returns a ``(what, fix)`` pair, or ``None``.
+
+        ``culprit`` is the costliest argument to hash seen for this function:
+        ``(parameter, type name, seconds, producer or None, frame without
+        copy-on-write)``, so the message can name it instead of guessing.
 
         ``body_seconds`` is the function's OWN time, excluding everything cash
         did around it. ``None`` means unknown -- an entry written before this
@@ -137,7 +145,7 @@ class EffectivenessLedger:
             return None
 
         led.warned = True
-        return _message(func_name, led, waste, per_call_overhead, best_case_saving)
+        return _message(func_name, led, waste, per_call_overhead, best_case_saving, culprit)
 
     def reset(self) -> None:
         """Drop all accounting. For tests and ``cash.reset_session()``."""
@@ -150,6 +158,7 @@ def _message(
     waste: float,
     per_call_overhead: float,
     best_case_saving: float,
+    culprit: tuple | None = None,
 ) -> tuple[str, str]:
     """Say what it cost, and what to do about it.
 
@@ -179,10 +188,25 @@ def _message(
         f"({per_call_overhead * 1000:.0f}ms of overhead per call). This usually "
         f"means a large argument is being hashed in full on every call."
     )
-    fix = (
+    hasher = (
         "register a cheaper hasher for that argument's type "
         "(cash.register_hasher) to keep caching -- for a type cash "
         "fingerprints itself, such as a numpy array or a dataframe, that "
         "registration needs override=True -- or drop the decorator here."
     )
-    return what, fix
+    if culprit is None:
+        return what, hasher
+    param, type_name, seconds, producer, old_pandas = culprit
+    what += (f" The costliest argument is '{param}' ({type_name}), "
+             f"about {seconds * 1000:.0f}ms to hash.")
+    parts = []
+    if producer:
+        parts.append(
+            f"'{param}' comes from {producer}(): if that result is not modified "
+            f"afterwards, declare @cash.cache(frozen=True) on {producer} and it "
+            f"is keyed without being hashed")
+    if old_pandas:
+        parts.append("pandas 3 (copy-on-write) lets cash check a frame for "
+                     "changes instead of hashing it on every call")
+    parts.append(("otherwise " if parts else "") + hasher)
+    return what, "; ".join(parts)
