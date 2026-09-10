@@ -159,6 +159,82 @@ def test_a_permuted_layout_still_keys_apart(tmp_path):
     assert _key(c, a) != _key(c, permuted)
 
 
+def _order_readings(x):
+    """Everything an order-reading callee can see: `ravel` and `tobytes` in each
+    order. Two arrays may share a key only if all of these agree."""
+    return (
+        tuple(np.ravel(x, order=o).tolist() for o in "CFAK"),
+        tuple(x.tobytes(order=o) for o in "CFA"),
+    )
+
+
+def _forms():
+    rng = np.random.default_rng(0)
+    v = rng.random((6, 8))
+    vt = v.T
+    s = rng.random((4, 5, 6))
+    return {
+        "C": v,
+        "C strided": v[::2, ::2],
+        "C strided copy": v[::2, ::2].copy(),
+        "reversed": v[:, ::-1],
+        "reversed copy": v[:, ::-1].copy(),
+        "F view": vt,
+        "F view C-copy": np.ascontiguousarray(vt),
+        "F view F-copy": np.asfortranarray(vt),
+        "F-like strided": vt[::2],
+        "F-like strided C-copy": np.ascontiguousarray(vt[::2]),
+        "F-like strided F-copy": np.asfortranarray(vt[::2]),
+        "permuted": np.transpose(s, (1, 2, 0)),
+        "permuted C-copy": np.ascontiguousarray(np.transpose(s, (1, 2, 0))),
+        "permuted F-copy": np.asfortranarray(np.transpose(s, (1, 2, 0))),
+        "row": v[:1, :],
+        "row F": np.asfortranarray(v[:1, :]),
+        "col": v[:, :1],
+        "col copy": v[:, :1].copy(),
+        "broadcast": np.broadcast_to(v[0], (8, 8)),
+        "broadcast T": np.broadcast_to(v[0], (8, 8)).T,
+        "broadcast copy": np.broadcast_to(v[0], (8, 8)).copy(),
+    }
+
+
+def test_arrays_share_a_key_only_when_every_order_reading_agrees():
+    """The exact oracle for the layout part of the key, over every pair of forms
+    holding equal values (round 18, r18s2's probe_forms). A key that merges two
+    forms some callee reads differently serves one the other's result:
+    `np.ravel(x, order='A')` reads in Fortran order only for an F-CONTIGUOUS
+    array, so an F-like strided view and its F-contiguous copy -- which the
+    memory-order key of 0fd2cb5's successor merged -- returned [0, 24, ...]
+    for the copy (right answer [0, 2, ...])."""
+    forms = _forms()
+    names = sorted(forms)
+    for i, a_name in enumerate(names):
+        a = forms[a_name]
+        for b_name in names[i + 1:]:
+            b = forms[b_name]
+            if a.shape != b.shape or a.dtype != b.dtype or not np.array_equal(a, b):
+                continue
+            if Cash._try_hash_numpy(a) == Cash._try_hash_numpy(b):
+                assert _order_readings(a) == _order_readings(b), (
+                    f"{a_name} and {b_name} share a key but a callee reads them differently")
+
+
+@pytest.mark.parametrize("pair", [
+    ("C", "C strided copy", lambda f: (f["C strided"], f["C strided copy"])),
+    ("reversed", lambda f: (f["reversed"], f["reversed copy"])),
+    ("F view", lambda f: (f["F view"], f["F view F-copy"])),
+    ("column", lambda f: (f["col"], f["col copy"])),
+    ("broadcast", lambda f: (f["broadcast"], f["broadcast copy"])),
+], ids=lambda p: p[0])
+def test_forms_no_callee_can_tell_apart_still_share_a_key(pair):
+    """The other direction, which the fix above must not undo (CAS-123): a view
+    and its copy that every order reading agrees on share one entry, or a
+    function returning a view makes its caller run twice after every edit."""
+    a, b = pair[-1](_forms())
+    assert _order_readings(a) == _order_readings(b)
+    assert Cash._try_hash_numpy(a) == Cash._try_hash_numpy(b)
+
+
 def test_a_returned_view_does_not_rerun_its_caller(tmp_path):
     """r17s4's shape, across three fresh processes: 1, 0, 0 executions."""
     import os

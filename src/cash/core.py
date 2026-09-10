@@ -6068,6 +6068,15 @@ class Cash:
         ``F``; anything else spells the permutation. Stride MAGNITUDE and sign
         do not change what a memory-order read returns, so they stay out.
 
+        Except for one flag. ``order='A'`` (``ravel``, ``reshape``, ``tobytes``,
+        ``copy``) reads in Fortran order only when the array is F-CONTIGUOUS,
+        and C order otherwise -- so an F-like strided view (``a.T[::2]``) and
+        its F-contiguous copy read differently, and sharing ``F`` handed one the
+        other's result (round 18, 8/8). ``Fs`` is the F-like array that is not
+        F-contiguous. Nothing else needs the flag: with two or more axes longer
+        than 1, only an F-like layout can be F-contiguous, and ``order='A'``
+        reads everything else in C order, as ``C`` and ``K…`` already imply.
+
         One case still re-keys once: an F-like but non-contiguous view is stored
         by pickle as a C-ordered copy, and it genuinely ravels differently from
         one, so the restored value must key apart. Safe direction.
@@ -6083,7 +6092,7 @@ class Cash:
         if perm == natural:
             return "C"
         if perm == natural[::-1]:
-            return "F"
+            return "F" if value.flags.f_contiguous else "Fs"
         return "K" + ",".join(map(str, perm))
 
     @staticmethod
