@@ -416,7 +416,6 @@ def _process_start_time() -> float:
         return _PROCESS_START
     import os
     import sys
-    import time
 
     started: float | None = None
     try:
