@@ -35,12 +35,14 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import functools
 import hashlib
 import inspect
 import logging
 import re
 import sys
 import textwrap
+import types
 import weakref
 import threading
 from collections.abc import Callable
@@ -821,6 +823,131 @@ class _PurityVisitor(ast.NodeVisitor):
             ))
 
 
+def _defining_module(obj: Any) -> Any:
+    """The module *obj*'s code was written in.
+
+    For a function, its ``__globals__`` say so. ``__module__`` does not
+    always: ``functools.wraps`` copies the WRAPPED function's ``__module__``
+    onto the wrapper, so a library's wrapper (tenacity's, torch's) claimed to
+    be user code and a user's wrapper claimed to be the helper's module.
+    """
+    if isinstance(obj, types.FunctionType):
+        name = obj.__globals__.get("__name__")
+        module = sys.modules.get(name) if isinstance(name, str) else None
+        if module is not None:
+            return module
+    return inspect.getmodule(obj)
+
+
+def _own_code_is_user(obj: Any, root_module: str | None) -> bool:
+    """`_is_user_code`, for callables that may be wrappers."""
+    try:
+        return _is_user_code(obj, root_module)
+    except Exception:  # noqa: BLE001 - a probe of arbitrary objects
+        return False
+
+
+#: Upper bounds on `callable_layers`, per callable: a wrong answer is worth a
+#: few more objects visited, a cycle through a registry is not.
+_LAYER_DEPTH = 6
+_LAYER_COUNT = 32
+
+
+def _function_like(value: Any) -> bool:
+    return isinstance(value, (types.FunctionType, types.MethodType, functools.partial)) or (
+        callable(value) and not isinstance(value, (type, types.ModuleType, types.BuiltinFunctionType))
+        and hasattr(value, "__wrapped__")
+    )
+
+
+def callable_layers(obj: Any) -> list[Any]:
+    """The functions *obj* will run besides its own code, outermost first.
+
+    A decorated helper is two or more functions, and the key has to see all of
+    them: with ``functools.wraps`` only the wrapped function was followed, so
+    an edit to the wrapper's body was served stale; without it, only the
+    wrapper was, so an edit to the wrapped function was (round 18). Followed:
+
+    * ``__wrapped__`` (``functools.wraps``, ``update_wrapper``, ``lru_cache``);
+    * function-valued closure cells (a wrapper written without ``wraps``, and
+      the ``decorator`` package, which keeps the caller in a closure);
+    * a bound method's ``__func__``, a ``functools.partial``'s ``func``;
+    * a callable instance's class ``__call__`` and its function-valued
+      attributes (``np.vectorize.pyfunc``, a class-based decorator's
+      ``self.fn``, ``toolz.curry``'s partial, wrapt's ``_self_wrapper``);
+    * a function's own ``__dict__`` values and mappings of functions
+      (``functools.singledispatch``'s ``registry``).
+
+    Returns FUNCTION objects only, deduplicated, never *obj* itself; whether
+    each is user code is the caller's decision. Bounded in depth and count.
+    """
+    found: list[Any] = []
+    seen: set[int] = {id(obj)}
+
+    def add(value: Any, depth: int) -> None:
+        if len(found) >= _LAYER_COUNT or id(value) in seen:
+            return
+        seen.add(id(value))
+        if isinstance(value, types.FunctionType):
+            found.append(value)
+        expand(value, depth + 1)
+
+    def candidates(value: Any):
+        if isinstance(value, types.MethodType):
+            yield value.__func__
+            return
+        if isinstance(value, functools.partial):
+            yield value.func
+            return
+        wrapped = getattr(value, "__wrapped__", None) if not isinstance(value, type) else None
+        if wrapped is not None:
+            yield wrapped
+        # wrapt's proxies forward `__class__`, so one passes for a plain
+        # function below; the user's wrapper function sits here.
+        wrapper = getattr(value, "_self_wrapper", None) if not isinstance(value, type) else None
+        if wrapper is not None:
+            yield wrapper
+        if isinstance(value, types.FunctionType):
+            for cell in value.__closure__ or ():
+                try:
+                    inner = cell.cell_contents
+                except ValueError:
+                    continue
+                if _function_like(inner):
+                    yield inner
+            attrs = getattr(value, "__dict__", None) or {}
+        else:
+            if callable(value) and not isinstance(value, (type, types.ModuleType)):
+                call = getattr(type(value), "__call__", None)
+                if isinstance(call, types.FunctionType):
+                    yield call
+            try:
+                attrs = dict(vars(value))
+            except TypeError:
+                attrs = {}
+        for key, attr in list(attrs.items()):
+            if key == "__wrapped__":
+                continue
+            if _function_like(attr):
+                yield attr
+            elif isinstance(attr, (dict, types.MappingProxyType)):
+                for item in list(attr.values())[:_LAYER_COUNT]:
+                    if _function_like(item):
+                        yield item
+
+    def expand(value: Any, depth: int) -> None:
+        if depth > _LAYER_DEPTH:
+            return
+        try:
+            for candidate in candidates(value):
+                add(candidate, depth)
+        except Exception:  # noqa: BLE001 - arbitrary objects; best effort
+            return
+
+    expand(obj, 0)
+    return found
+
+
 def _is_user_code(callee: Any, root_module: str | None) -> bool:
     """Decide whether to recurse into *callee* during purity analysis.
 
@@ -838,7 +965,7 @@ def _is_user_code(callee: Any, root_module: str | None) -> bool:
         recurse into *callee*. False for library code we trust
         unless explicitly marked stateful.
     """
-    module = inspect.getmodule(callee)
+    module = _defining_module(callee)
     if module is None:
         return False
 
@@ -904,6 +1031,21 @@ def _resolve_callee(node: ast.AST, namespace: dict[str, Any]) -> Any | None:
                 return None
         return obj
     return None
+
+
+def own_source(func: Any) -> str:
+    """``inspect.getsource``, without following ``__wrapped__`` for a function.
+
+    ``getsource`` unwraps, so for a ``functools.wraps`` wrapper it returned
+    the WRAPPED function's text: the wrapper's own body was never read, and
+    the wrapped body was analysed in the wrapper's namespace -- the decorator
+    module's globals -- where none of its helpers resolve. Reading the code
+    object gives each half its own text; the walk reaches the other half
+    through the wrapper's closure or ``__wrapped__``.
+    """
+    if isinstance(func, types.FunctionType) and hasattr(func, "__wrapped__"):
+        return inspect.getsource(func.__code__)
+    return inspect.getsource(func)
 
 
 def _callee_chain(node: ast.AST) -> tuple[str, ...] | None:
@@ -1170,8 +1312,8 @@ class PurityAnalyzer:
         bindings: list[tuple[str, tuple[str, ...], Any]] = []
         seen_bindings: set[tuple[str, tuple[str, ...]]] = set()
         unkeyable: list[str] = []
-        # qualname -> the first call-site binding that reached it
-        caller_paths: dict[str, tuple[str, tuple[str, ...]]] = {}
+        # id(callee) -> the first call-site binding that reached it
+        caller_paths: dict[int, tuple[str, tuple[str, ...]]] = {}
 
         def _note_binding(callee: Any, path: tuple[str, tuple[str, ...]] | None) -> None:
             if path is None or path in seen_bindings:
@@ -1189,21 +1331,25 @@ class PurityAnalyzer:
             ``Klass.method`` resolve. The root function is skipped -- it is
             not a "helper" and the decorator holds its own reference.
             """
-            if func is not root_func and qualname in caller_paths:
-                helper_paths[qualname] = caller_paths[qualname]
+            path = caller_paths.get(id(func))
+            if func is not root_func and path is not None and resolve_binding(*path) is func:
+                helper_paths[qualname] = path
                 return
             helper_module = getattr(func, "__module__", None)
             helper_inner_qualname = getattr(func, "__qualname__", None)
-            if (
-                func is not root_func
-                and helper_module
-                and helper_inner_qualname
-                and "<locals>" not in helper_inner_qualname
-            ):
-                helper_paths[qualname] = (
-                    helper_module,
-                    tuple(helper_inner_qualname.split(".")),
-                )
+            home = (
+                (helper_module, tuple(helper_inner_qualname.split(".")))
+                if helper_module and helper_inner_qualname
+                and "<locals>" not in helper_inner_qualname else None
+            )
+            # The home must lead back to THIS object. A function wrapped by a
+            # decorator does not: its module name now holds the wrapper, so a
+            # per-call re-resolution hashed the wrapper in its place and the
+            # wrapped function's own edits never reached the key.
+            if home is not None and resolve_binding(*home) is not func:
+                home = None
+            if func is not root_func and home is not None:
+                helper_paths[qualname] = home
             elif func is not root_func:
                 try:
                     helper_objects[qualname] = weakref.ref(func)
@@ -1232,11 +1378,32 @@ class PurityAnalyzer:
                 stack.append((target, depth + 1, True))
 
         stack: list[tuple[Callable[..., Any], int, bool]] = [(root_func, 0, False)]
+        if (isinstance(root_func, types.FunctionType) and hasattr(root_func, "__wrapped__")
+                and not _own_code_is_user(root_func, root_module)):
+            # `@cash.cache` over a LIBRARY decorator (`@retry(...)`,
+            # `@torch.no_grad()`): the wrapper's own body is someone else's
+            # code, so start from the user functions it runs instead.
+            starts = [(layer, 0, False) for layer in callable_layers(root_func)
+                      if _own_code_is_user(layer, root_module)]
+            if starts:
+                stack = starts
+        visited_ids: set[int] = set()
         while stack:
             func, depth, hash_only = stack.pop()
-            qualname = _qualname_of(func)
-            if qualname in visited:
+            if id(func) in visited_ids:
                 continue
+            visited_ids.add(id(func))
+            qualname = _qualname_of(func)
+            # Visited by OBJECT: a library wrapper can copy the name of the
+            # function it wraps (`toolz.curry`, `np.vectorize`), and visiting
+            # by name walked only whichever of the two came first. A second
+            # object under a name already taken gets a numbered one, in walk
+            # order, which is the same in every process.
+            if qualname in visited:
+                n = 2
+                while f"{qualname}#{n}" in visited:
+                    n += 1
+                qualname = f"{qualname}#{n}"
             visited.add(qualname)
 
             # Read source. Failure -> opaque leaf for PURITY: we cannot see
@@ -1253,7 +1420,7 @@ class PurityAnalyzer:
             # the same object, so the snapshot and the per-call value agree
             # instead of disagreeing forever.
             try:
-                src = inspect.getsource(func)
+                src = own_source(func)
             except SOURCE_RETRIEVAL_ERRORS:
                 opaque.append(qualname)
                 digest = bytecode_identity(func)
@@ -1401,12 +1568,26 @@ class PurityAnalyzer:
                         line=line,
                     ))
                     return
-                if not _is_user_code(callee, root_module):
+                # The functions it runs besides its own code: the other half
+                # of a decorated helper, the user function inside a library
+                # wrapper (np.vectorize, toolz.curry, lru_cache), a
+                # singledispatch implementation. Each user-code one is walked
+                # in its own right, under its own name and namespace.
+                layers = [
+                    layer for layer in callable_layers(callee)
+                    if _own_code_is_user(layer, root_module)
+                    and not getattr(layer, "_cash_cached", False)
+                ]
+                own = _is_user_code(callee, root_module)
+                if not own and not layers:
                     return
                 _note_binding(callee, path)
-                if path is not None:
-                    caller_paths.setdefault(_qualname_of(callee), path)
-                stack.append((callee, depth + 1, False))  # noqa: B023 - same
+                if own:
+                    if path is not None:
+                        caller_paths.setdefault(id(callee), path)
+                    stack.append((callee, depth + 1, False))  # noqa: B023 - same
+                for layer in layers:
+                    stack.append((layer, depth + 1, False))  # noqa: B023 - same
 
             for call_node in visitor.called_callable_nodes:
                 _queue_helper(
@@ -1820,9 +2001,18 @@ def _qualname_of(func: Callable[..., Any]) -> str:
     runtime and has to stay ``__main__`` to resolve.
     """
     module = getattr(func, "__module__", None) or "<unknown>"
+    qualname = getattr(func, "__qualname__", None) or getattr(func, "__name__", "<callable>")
+    if isinstance(func, types.FunctionType) and hasattr(func, "__wrapped__"):
+        # `functools.wraps` copied the wrapped function's names onto this one,
+        # so both halves of a decorated helper answered to the same name and
+        # the walk, which visits each name once, followed only one of them.
+        # Name the wrapper by where its code was written. Only for wrappers:
+        # every other function's name is unchanged, and so are their keys.
+        module = func.__globals__.get("__name__") or module
+        code = func.__code__
+        qualname = getattr(code, "co_qualname", None) or f"{code.co_name}@wrapper"
     if module == "__main__":
         module = resolve_main_module(func)
-    qualname = getattr(func, "__qualname__", None) or getattr(func, "__name__", "<callable>")
     return f"{module}.{qualname}"
 
 

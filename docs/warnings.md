@@ -1045,7 +1045,7 @@ whole function's caching, not just the calls that rely on the default.
 
 ## KEY-UNHASHABLE-GLOBAL {#key-unhashable-global}
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @1168f035 -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @2f7c4ca9 -->
 **What happened.** The function reads a module-level variable — its own
 module's, or a helper's, in which case the message shows a dotted name — and
 Cash could not fingerprint that variable's value. Cash normally folds the

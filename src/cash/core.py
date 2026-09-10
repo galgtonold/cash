@@ -952,6 +952,8 @@ class Cash:
         # Pins taken at decoration whose file has not yet been compared with
         # the loaded code; the first call does it once (see _pin_own_source).
         self._own_pins_unverified: set[int] = set()
+        # code object -> global names its decorator expressions read
+        self._decorator_names_cache: dict = {}
         # code object -> frozenset of free vars with capture-unsafe uses
         self._capture_use_cache: dict = {}
         # code object -> tuple of global names it reads (global folding)
@@ -1694,7 +1696,16 @@ class Cash:
                 return digest
 
         try:
-            src = inspect.getsource(fn)
+            # A `functools.wraps` wrapper is keyed by its OWN code. Plain
+            # `getsource` unwraps, so it returned the WRAPPED function's text --
+            # memoized under the wrapper's code object, which every function
+            # that decorator wraps shares: the second helper wrapped by it was
+            # silently keyed by the first one's source (round 18). The wrapped
+            # function is followed as a helper of its own.
+            if isinstance(fn, types.FunctionType) and hasattr(fn, "__wrapped__"):
+                src = inspect.getsource(fn.__code__)
+            else:
+                src = inspect.getsource(fn)
             digest = source_identity_digest(src)
             if memo_key is not None and len(_SOURCE_HASH_MEMO) < _SOURCE_HASH_MEMO_MAX:
                 _SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
@@ -3961,6 +3972,41 @@ class Cash:
             return state_hash
         return hashlib.sha256(f"{state_hash}:closure:{clo}".encode()).hexdigest()
 
+    def _helper_capture_part(self, fn: Callable) -> str:
+        """Digest of the IMMUTABLE values a helper's closure captured, or "".
+
+        A decorator's arguments live there: ``@scale(10)`` builds a wrapper
+        whose closure holds ``k=10``, so ``@scale(100)`` -- or ``@scale(K)``
+        after ``K`` changed -- ran different code under an identical source and
+        was served stale. Immutable values only, and never a variable the
+        function reassigns (``nonlocal calls; calls += 1``): decorators often
+        keep caches, counters and registries in their closures, and folding
+        state that drifts on every call would make every call miss. Captured
+        FUNCTIONS are followed as helpers in their own right, not here.
+        """
+        closure = getattr(fn, "__closure__", None)
+        code = getattr(fn, "__code__", None)
+        if not closure or code is None:
+            return ""
+        written = self._closure_written_freevars(code)
+        captures = []
+        for name, cell in zip(code.co_freevars, closure):
+            if name in written:
+                continue
+            try:
+                value = cell.cell_contents
+            except ValueError:
+                continue
+            if callable(value) or not self._is_immutable_capture(value):
+                continue
+            captures.append((name, value))
+        if not captures:
+            return ""
+        try:
+            return self._hash_arg_payload(tuple(captures), {})
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
+            return ""
+
     def _hash_helper_identity(self, fn: Callable) -> str:
         """A helper's identity for the key: its code, AND its parameter defaults.
 
@@ -3979,6 +4025,9 @@ class Cash:
         the old digest, so entries already on disk keep hitting.
         """
         source = self._hash_callable_source(fn)
+        captured = self._helper_capture_part(fn)
+        if captured:
+            source = f"{source}:captures:{captured}"
         defaults = getattr(fn, "__defaults__", None)
         kwdefaults = getattr(fn, "__kwdefaults__", None)
         wrapped = getattr(fn, "__wrapped__", None)
@@ -5146,6 +5195,7 @@ class Cash:
         state_hash: str,
         owner_code: Any = None,
         seen: set | None = None,
+        extra_names: tuple[str, ...] = (),
     ) -> str:
         """Fold module-level DATA globals the function reads into the key.
 
@@ -5165,6 +5215,8 @@ class Cash:
         data globals warn once and are skipped.
         """
         names = self._read_global_data_names(func)
+        if extra_names:
+            names = tuple(dict.fromkeys(names + extra_names))
         g = getattr(func, "__globals__", None)
         if not isinstance(g, dict):
             return state_hash
@@ -5265,7 +5317,7 @@ class Cash:
         module's globals.
         """
         report = self._purity_reports.get(func_name)
-        if report is None or not report.helper_resolution_paths:
+        if report is None or not (report.helper_resolution_paths or report.helper_objects):
             return state_hash
         owner_code = getattr(func, "__code__", None)
         # Pre-seed with what the cached function itself already folded, so a
@@ -5311,7 +5363,54 @@ class Cash:
             state_hash = self._fold_read_globals(
                 target, func_name, state_hash, owner_code=owner_code, seen=seen
             )
+        # Helpers with no path of their own -- the function inside a decorator,
+        # a closure from a factory -- are held by reference. What THEY read
+        # counts as much: `@add1 def h(x): return x * K` computes with K, and
+        # the wrapper bound to the name `h` never mentions it.
+        for qual in sorted(report.helper_objects):
+            if qual in report.helper_resolution_paths:
+                continue
+            target = report.helper_objects[qual]()
+            if target is None or target is func or getattr(target, "__globals__", None) is None:
+                continue
+            state_hash = self._fold_read_globals(
+                target, func_name, state_hash, owner_code=owner_code, seen=seen,
+                extra_names=self._decorator_global_names(target),
+            )
         return state_hash
+
+    def _decorator_global_names(self, fn: Callable) -> tuple[str, ...]:
+        """Names the decorator expressions on *fn*'s ``def`` read from its module.
+
+        ``@np.vectorize(otypes=OT)`` is evaluated once, at import, from the
+        module's ``OT`` -- a name the function's body never mentions, so
+        changing it changed nothing the key could see. Only the function a
+        decorator wraps has these lines (its source starts at the first
+        decorator); the values are folded like any other read global, so
+        modules and callables among them are skipped there. Cached per code.
+        """
+        code = getattr(fn, "__code__", None)
+        if code is None:
+            return ()
+        cached = self._decorator_names_cache.get(code)
+        if cached is not None:
+            return cached
+        names: tuple[str, ...] = ()
+        try:
+            tree = ast.parse(textwrap.dedent(inspect.getsource(code)))
+            node = next((n for n in ast.walk(tree)
+                         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))), None)
+            if node is not None and node.decorator_list:
+                names = tuple(dict.fromkeys(
+                    n.id for deco in node.decorator_list for n in ast.walk(deco)
+                    if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                ))
+        except SOURCE_RETRIEVAL_ERRORS + (SyntaxError, ValueError):
+            names = ()
+        if len(self._decorator_names_cache) >= 4096:
+            self._decorator_names_cache.clear()
+        self._decorator_names_cache[code] = names
+        return names
 
     def _fold_dependency_read_globals(
         self, func: Callable, func_name: str, state_hash: str
@@ -5373,7 +5472,7 @@ class Cash:
                 dep_func, func_name, state_hash, owner_code=owner_code, seen=seen,
             )
             dep_report = self._purity_reports.get(dep)
-            if dep_report is not None and dep_report.helper_resolution_paths:
+            if dep_report is not None and (dep_report.helper_resolution_paths or dep_report.helper_objects):
                 state_hash = self._fold_paths_read_globals(
                     dep_report, func, func_name, state_hash,
                     owner_code=owner_code, seen=seen,

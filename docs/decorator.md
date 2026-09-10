@@ -261,7 +261,7 @@ def features(x):  return clean(x) + ...
 def pipeline(x):  return features(x)       # ...and pipeline's cache invalidates
 ```
 
-<!-- claim: cash/core.py:Cash._hash_callable_source @9a8f8979, cash/core.py:Cash._ensure_closure_analyzed @ecd28b28 -->
+<!-- claim: cash/core.py:Cash._hash_callable_source @6c6f2db6, cash/core.py:Cash._ensure_closure_analyzed @ecd28b28 -->
 The analyzer captures helper source hashes and folds them into the cache key, so
 both cross-process edits and in-process redefinitions (notebook cell rerun, REPL)
 are picked up automatically. Overhead is ~3μs *per helper*, paid once for each helper in the
@@ -275,6 +275,20 @@ rebinding that name at runtime (`monkeypatch.setattr(app, "_sieve", fake)`,
 as well, and putting the original back returns to the original entry. A binding
 to a `unittest.mock` object has no code to key, so a call that reaches one runs
 uncached. See [mocking in tests](tutorials/feature-guides/testing-your-code.md#mocking-and-monkeypatching).
+
+<!-- claim: cash/purity_analyzer.py:callable_layers @856b9999 -->
+**A decorated helper is every function it runs.** Behind `@timed def clean(x)`
+there are two: the decorator's wrapper and `clean` itself, and both are followed —
+edit either body and the entry invalidates, whether or not the decorator uses
+`functools.wraps`. The same goes for stacked decorators, a class-based decorator's
+`__call__`, the values a decorator was configured with (`@scale(10)`, or
+`@scale(K)` when `K` changes), what the wrapped function reads and calls, and the
+user function held inside a library wrapper — `functools.lru_cache`,
+`np.vectorize` (its `otypes=` included), `toolz.curry`, `wrapt`, the
+`decorator` package, a `singledispatch` implementation. The library's own
+wrapper code is treated like any other installed code: fixed for a given
+environment. `@cash.cache` stacked on top of another decorator is followed the
+same way.
 
 **The boundary is your code, not your module.** A helper imported from another
 file in your project is followed like any other — edit it and the entry
@@ -328,7 +342,7 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @1168f035, cash/core.py:Cash._fold_dependency_read_globals @959d77fa -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @2f7c4ca9, cash/core.py:Cash._fold_dependency_read_globals @fbbbd0b2 -->
 Only globals that are **read** participate — and that includes globals read
 on someone else's behalf: by a **helper**, so a helper returning a module-level
 `CONFIG` invalidates its caller when that config changes, and by another

@@ -52,12 +52,12 @@ def register_hasher(
 ) -> None: ...
 ```
 
-<!-- claim: cash/core.py:Cash._hash_callable_source @9a8f8979, cash/core.py:Cash.register_hasher @df6d03da -->
+<!-- claim: cash/core.py:Cash._hash_callable_source @6c6f2db6, cash/core.py:Cash.register_hasher @df6d03da -->
 Two things happen on registration — once it is accepted, which for a type Cash
 content-hashes itself means passing `override=True` (see
 [below](#overriding-a-built-in-content-hasher)):
 
-1. The hasher's *source* is hashed via `_hash_callable_source`. Resolution order is `inspect.getsource(fn)` first, then a digest of the compiled function, then `type(fn).__qualname__` as a last resort. The result is a stable hex digest of the hasher's identity. The compiled fallback reads `fn.__code__`, or `fn.__call__.__code__` for a callable instance, and folds the constants, names and local names in alongside `co_code` — `co_code` on its own cannot see `return "alpha"` become `return "omega"`, because a constant load's operand is an index into `co_consts` rather than the value.
+1. The hasher's *source* is hashed via `_hash_callable_source`. Resolution order is `inspect.getsource(fn)` first (for a `functools.wraps` wrapper, the source of the wrapper's own code, not of the function it wraps), then a digest of the compiled function, then `type(fn).__qualname__` as a last resort. The result is a stable hex digest of the hasher's identity. The compiled fallback reads `fn.__code__`, or `fn.__call__.__code__` for a callable instance, and folds the constants, names and local names in alongside `co_code` — `co_code` on its own cannot see `return "alpha"` become `return "omega"`, because a constant load's operand is an index into `co_consts` rather than the value.
 2. The pair `(hasher_fn, src_hash)` is stored in `self._type_hashers[type_]` — an ordinary dict keyed on the type object. With `override=True` it goes to `self._override_hashers` instead; a type lives in exactly one of the two, so re-registering it the other way replaces rather than shadows.
 
 Registering for `types.FunctionType`, `types.MethodType` or `functools.partial` is accepted but warns ([KEY-CALLABLE-HASHER](../../warnings.md#key-callable-hasher)): the hasher then covers every function passed to any cached function, and one keyed on the name gives every closure a factory makes the same cache entry. Pass what the closure captures as a plain argument instead.
