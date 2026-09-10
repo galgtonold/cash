@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @edfb13d9, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @9ad6dbab, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 The one exception is the import-time notice from `cash.experimental`: it is a
@@ -890,6 +890,34 @@ and you will be served the old answer with nothing to indicate it — the "why i
 my cache serving me the old version" problem, with this warning as the only
 notice you get. The instinct to read "it's a library callable, it can't change"
 is exactly backwards here: a library callable would not have warned.
+
+## KEY-SOURCE-CHANGED {#key-source-changed}
+
+<!-- claim: cash/source_norm.py:loaded_code_matches_disk @7dfe9403, cash/core.py:_warn_source_changed_since_load @02d3e452 -->
+**What happened.** A file holding a helper your cached function calls was
+edited after this process imported it. The process is still running the *old*
+code; the file now holds the *new* code. cash noticed the difference the first
+time it needed that helper's identity.
+
+**Why it matters.** cash identifies a helper by its source, read from disk the
+first time a call needs it. Read after the edit, that source describes code the
+process is not running — and a result computed by the old code would have been
+stored under the new code's identity, then served to the restarted process as a
+hit. Measured in round 17: a service answered 0.500504 where the new code
+computes 0.530876, and kept answering it after the restart.
+
+So cash keys that helper by the code **actually running** instead. Results in
+this process are correct for the code it is running, and they are not reused
+once the process restarts on the new code.
+
+**What to do.** Restart the process to run the new code. This fires in the
+window a deploy opens when it puts new files on disk before restarting the
+service — which is how most deploys work, and why this is a notice rather than
+something to fix.
+
+**When it is safe to ignore.** Always, as far as correctness goes. It is worth
+reading when you did *not* expect the file to change: then something rewrote
+your code under a running process.
 
 ## KEY-UNHASHABLE-ARG {#key-unhashable-arg}
 

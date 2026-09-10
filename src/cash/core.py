@@ -62,7 +62,12 @@ from .notebook.randomness import (
     describe_random_call,
 )
 from .purity_analyzer import PurityReport, get_analyzer
-from .source_norm import bytecode_identity, source_identity_digest
+from .source_norm import (
+    bytecode_identity,
+    loaded_class_identity,
+    loaded_code_matches_disk,
+    source_identity_digest,
+)
 from .utils import resolve_main_module
 
 # Configure Logging
@@ -567,6 +572,34 @@ def _is_one_shot_iterator(value: Any) -> bool:
 # object, so two Cash instances cannot legitimately disagree about it.
 _SOURCE_HASH_MEMO: dict = {}
 _SOURCE_HASH_MEMO_MAX = 4096
+
+#: Source files already reported as edited-since-load, one notice per file.
+_SOURCE_CHANGED_WARNED: set[str] = set()
+
+
+def _warn_source_changed_since_load(fn: Callable) -> None:
+    """Say, once per file, that a helper is keyed by its loaded code."""
+    code = getattr(fn, "__code__", None)
+    path = getattr(code, "co_filename", "") or ""
+    if path in _SOURCE_CHANGED_WARNED:
+        return
+    _SOURCE_CHANGED_WARNED.add(path)
+    name = getattr(fn, "__qualname__", None) or getattr(fn, "__name__", "a function")
+    try:
+        from .diagnostics import warn_diagnostic
+        warn_diagnostic(
+            CashCacheIneffectiveWarning,
+            "KEY-SOURCE-CHANGED",
+            f"{path} was edited after this process loaded it, so the code running "
+            f"{name}() is the old version while the file holds a new one. cash "
+            f"keys it by the code actually running, so results stay correct for "
+            f"this process -- but they are not the new code's results, and they "
+            f"will not be reused once the process restarts.",
+            "restart the process to run the new code. If a deploy puts new files "
+            "on disk before the restart, this is the window it opens.",
+        )
+    except Exception:  # noqa: BLE001 - a notice must never break a call
+        logger.debug("Could not emit the source-changed notice", exc_info=True)
 
 
 def _builtin_hash_family(type_name: str, module: str) -> str | None:
@@ -1394,6 +1427,21 @@ class Cash:
             # recycled id, and sidesteps CodeType's by-value equality.
             if entry is not None and entry[0] is memo_owner:
                 return entry[1]
+
+        # The source on disk may no longer be the code that is running: a file
+        # edited after this process imported it (new files land, the restart
+        # comes later) gives the NEW text for the OLD code object, and an entry
+        # keyed by the new text but computed by the old code was served to the
+        # restarted process (CAS-110). Key such a helper by what actually runs.
+        # One os.stat in the normal case; see `loaded_code_matches_disk`.
+        if not loaded_code_matches_disk(fn):
+            digest = (loaded_class_identity(fn) if isinstance(fn, type)
+                      else bytecode_identity(fn))
+            if digest is not None:
+                _warn_source_changed_since_load(fn)
+                if memo_key is not None and len(_SOURCE_HASH_MEMO) < _SOURCE_HASH_MEMO_MAX:
+                    _SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
+                return digest
 
         try:
             src = inspect.getsource(fn)

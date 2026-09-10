@@ -232,7 +232,7 @@ def features(x):  return clean(x) + ...
 def pipeline(x):  return features(x)       # ...and pipeline's cache invalidates
 ```
 
-<!-- claim: cash/core.py:Cash._hash_callable_source @f4b15959, cash/core.py:Cash._ensure_closure_analyzed @ecd28b28 -->
+<!-- claim: cash/core.py:Cash._hash_callable_source @9a8f8979, cash/core.py:Cash._ensure_closure_analyzed @ecd28b28 -->
 The analyzer captures helper source hashes and folds them into the cache key, so
 both cross-process edits and in-process redefinitions (notebook cell rerun, REPL)
 are picked up automatically. Overhead is ~3μs *per helper*, paid once for each helper in the
@@ -377,11 +377,18 @@ Two boundaries worth knowing:
   and then dropped if calling your function is observed to move the value.
   A directly *called* method's own edit is caught separately, by the
   helper-source channel.
-- **Source is assumed stable within a process.** cash reads a class's source
-  once per interpreter run. Editing a class's source *between two calls in the
-  same running process* is out of scope — that only happens with live
-  re-`exec`/reload tricks, not normal use. Re-run the process (the ordinary
-  edit-and-rerun loop) and the edit is seen. The argument channel below relaxes
+- **Source is read once per process, and checked against what is running.**
+  cash reads a helper's or class's source the first time a call needs it, and
+  keeps that digest for the rest of the run. A file edited *under* a running
+  process — new files land and the restart comes later, which is what every
+  deploy does — would make that first read describe the new text while the
+  old code is the one executing. So a file modified after the process started
+  is compiled and compared with the loaded code first; if they differ, cash
+  keys that helper by the code actually running and says so
+  ([`KEY-SOURCE-CHANGED`](warnings.md#key-source-changed)). Results stay
+  correct for the running process, and the restarted one computes afresh.
+  Editing a class *between two calls* of the same process, after its first
+  use, is still out of scope. Re-run the process and the edit is seen. The argument channel below relaxes
   this, but only for a *re-definition*: it hashes bytecode off the object it was
   handed and memoizes per object, so a re-run notebook cell — a **new** class
   object — is seen immediately, while an in-place edit of the same live class

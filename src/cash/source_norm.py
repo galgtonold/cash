@@ -379,3 +379,177 @@ def bytecode_identity(fn: object) -> str | None:
         return hashlib.sha256(_code_atoms(code).encode("utf-8")).hexdigest()
     except (AttributeError, TypeError, ValueError, RecursionError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# Is the text on disk still the code that is running?
+# ---------------------------------------------------------------------------
+#
+# A helper's digest is computed lazily, the first time a call needs it, from
+# the source on disk. If the file was edited after this process imported it --
+# new files land, the process restarts some time later: every deploy, every
+# `git pull` under a long-running worker -- that first digest describes the NEW
+# text while the code object executing is the OLD one. Key from the new text,
+# result from the old code, stored together, served to the restarted process:
+# round 17 measured 0.500504 served for 0.530876 (CAS-110).
+#
+# Recompiling just the function's text and comparing is NOT a valid check.
+# Bytecode depends on the surrounding module: inside its module the compiler
+# can see `hashlib` is an imported module and emits a different call form than
+# for the same text compiled alone. Measured: 4 of 6 unedited functions
+# "mismatched" that way. Compiling the whole FILE gives the compiler the same
+# context the import had -- 0 of 7 mismatched -- and `bytecode_identity` ignores
+# line numbers, so an edit to a neighbouring function does not read as one.
+
+import time as _time
+
+_IMPORT_TIME = _time.time()
+_MODULE_CODE_CACHE: dict[str, tuple[int, int, types.CodeType | None]] = {}
+_MODULE_CODE_CACHE_MAX = 256
+_PROCESS_START: float | None = None
+
+
+def _process_start_time() -> float:
+    """Wall-clock time this process started, best effort, cached."""
+    global _PROCESS_START
+    if _PROCESS_START is not None:
+        return _PROCESS_START
+    import os
+    import sys
+    import time
+
+    started: float | None = None
+    try:
+        import psutil  # type: ignore[import-not-found]
+        started = float(psutil.Process().create_time())
+    except Exception:  # noqa: BLE001 - optional dependency, any failure
+        started = None
+    if started is None and sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            creation, exit_, kernel, user = (wintypes.FILETIME() for _ in range(4))
+            k32.GetCurrentProcess.restype = wintypes.HANDLE
+            if k32.GetProcessTimes(k32.GetCurrentProcess(), ctypes.byref(creation),
+                                   ctypes.byref(exit_), ctypes.byref(kernel),
+                                   ctypes.byref(user)):
+                ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+                started = ticks / 1e7 - 11644473600.0     # FILETIME epoch -> Unix
+        except Exception:  # noqa: BLE001
+            started = None
+    if started is None and os.path.exists("/proc/self/stat"):
+        try:
+            with open("/proc/self/stat", encoding="ascii") as fh:
+                fields = fh.read().rsplit(")", 1)[1].split()
+            start_ticks = int(fields[19])                 # field 22 overall
+            with open("/proc/stat", encoding="ascii") as fh:
+                btime = next(int(line.split()[1]) for line in fh if line.startswith("btime"))
+            started = btime + start_ticks / os.sysconf("SC_CLK_TCK")
+        except Exception:  # noqa: BLE001
+            started = None
+    if started is None:
+        # cash's own import time. Misses only a file edited in the gap between
+        # this process starting and cash being imported -- normally the first
+        # lines of the program.
+        started = _IMPORT_TIME
+    _PROCESS_START = started
+    return started
+
+
+def _compiled_module(path: str) -> types.CodeType | None:
+    """The whole file at *path*, compiled, cached per (path, mtime, size)."""
+    import os
+
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    cached = _MODULE_CODE_CACHE.get(path)
+    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+        return cached[2]
+    try:
+        with open(path, "rb") as fh:
+            source = fh.read()
+        code: types.CodeType | None = compile(source, path, "exec", dont_inherit=True)
+    except (OSError, SyntaxError, ValueError):
+        code = None
+    if len(_MODULE_CODE_CACHE) >= _MODULE_CODE_CACHE_MAX:
+        _MODULE_CODE_CACHE.clear()
+    _MODULE_CODE_CACHE[path] = (st.st_mtime_ns, st.st_size, code)
+    return code
+
+
+def _code_objects(code: types.CodeType):
+    yield code
+    for const in code.co_consts:
+        if isinstance(const, types.CodeType):
+            yield from _code_objects(const)
+
+
+def loaded_code_matches_disk(fn: object) -> bool:
+    """False when *fn*'s source file was edited after this process loaded it.
+
+    True whenever that cannot be shown: no file (a REPL, ``exec``, a notebook
+    cell), a file untouched since the process started (the common case, one
+    ``os.stat``), or a file whose compiled form still contains this function
+    unchanged. Only a file modified after the process started is compiled.
+    """
+    import os
+
+    if isinstance(fn, type):
+        # A class has no code of its own; its methods do, and an edit to any
+        # of them is an edit to the class.
+        return all(loaded_code_matches_disk(m) for m in _class_functions(fn))
+    code = getattr(fn, "__code__", None)
+    if not isinstance(code, types.CodeType):
+        return True
+    path = code.co_filename
+    if not path or path.startswith("<"):
+        return True
+    try:
+        if os.stat(path).st_mtime <= _process_start_time():
+            return True
+    except OSError:
+        return True
+    module = _compiled_module(path)
+    if module is None:
+        return False          # the file no longer compiles: it is not what runs
+    live = bytecode_identity(fn)
+    if live is None:
+        return True
+    qualname = getattr(code, "co_qualname", None)
+    for candidate in _code_objects(module):
+        if qualname is not None:
+            if getattr(candidate, "co_qualname", None) != qualname:
+                continue
+        elif candidate.co_name != code.co_name:
+            continue
+        probe = types.FunctionType(candidate, {})
+        if bytecode_identity(probe) == live:
+            return True
+    return False
+
+
+def _class_functions(cls: type) -> list[types.FunctionType]:
+    """The plain functions defined directly in *cls*, unwrapping descriptors."""
+    found = []
+    for value in vars(cls).values():
+        func = getattr(value, "__func__", value)          # staticmethod / classmethod
+        if isinstance(value, property):
+            func = value.fget
+        if isinstance(func, types.FunctionType):
+            found.append(func)
+    return found
+
+
+def loaded_class_identity(cls: type) -> str | None:
+    """A digest of *cls* from its LOADED methods, for when disk is not them."""
+    try:
+        parts = [cls.__qualname__]
+        for func in sorted(_class_functions(cls), key=lambda f: f.__qualname__):
+            parts.append(f"{func.__qualname__}={bytecode_identity(func)}")
+        return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+    except (AttributeError, TypeError, ValueError):
+        return None

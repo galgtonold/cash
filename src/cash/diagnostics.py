@@ -135,6 +135,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
                                # falling back to its process-local identity
     "KEY-OPAQUE-CALLABLE",     # a callable reached the call but its code could
                                # not be hashed, so editing it changes nothing
+    "KEY-SOURCE-CHANGED",      # a helper's file was edited after it was
+                               # imported; keyed by the code actually running
     "KEY-UNHASHABLE-ARG",      # an argument could not be hashed; not cached
     "KEY-UNHASHABLE-DEFAULT",  # a parameter default could not be hashed
     "KEY-UNHASHABLE-GLOBAL",   # a global the function reads could not be
