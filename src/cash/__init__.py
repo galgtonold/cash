@@ -255,6 +255,14 @@ def configure(**overrides: Any) -> None:
             f"Valid keys: {sorted(valid_fields)!r}"
         )
 
+    # Checked before anything is applied, so a bad value leaves the running
+    # configuration exactly as it was -- see `config.validate_value`.
+    from .config import validate_value
+    overrides = {
+        key: (val if key == "tiers" else validate_value(key, val))
+        for key, val in overrides.items()
+    }
+
     c = _get_global_cash()
 
     # Hot vs backend-affecting fields. Anything that influences which

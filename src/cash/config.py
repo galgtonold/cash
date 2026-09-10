@@ -393,12 +393,41 @@ _TRUTHY = {"1", "true", "yes", "on"}
 _FALSY = {"0", "false", "no", "off"}
 
 
-def _coerce(field_type: Any, raw: str) -> Any:
+#: Fields that hold a number of BYTES, and so also accept ``"2GB"`` /
+#: ``"512MiB"``. People write sizes that way -- a round-15 operator set
+#: ``CASH_MAX_CACHE_SIZE=500MB`` -- and a bare integer of bytes is the one
+#: spelling nobody reads correctly at a glance.
+_SIZE_FIELDS = frozenset({"max_cache_size", "file_hash_full_max_bytes", "max_size_bytes"})
+
+_SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([kmgt]i?b|b)?\s*$", re.IGNORECASE)
+_SIZE_UNITS = {
+    "b": 1,
+    "kb": 10**3, "mb": 10**6, "gb": 10**9, "tb": 10**12,          # SI
+    "kib": 2**10, "mib": 2**20, "gib": 2**30, "tib": 2**40,       # binary
+}
+
+
+def parse_size(raw: str) -> int:
+    """``"2GB"`` -> 2_000_000_000, ``"512MiB"`` -> 536_870_912, ``"1024"`` -> 1024.
+
+    KB/MB/GB/TB are powers of 1000 and KiB/MiB/GiB/TiB powers of 1024, as the
+    units say. Case-insensitive. Raises ``ValueError`` on anything else.
+    """
+    m = _SIZE_RE.match(raw)
+    if m is None:
+        raise ValueError(f"not a size: {raw!r} (write bytes, or e.g. '2GB' / '512MiB')")
+    number, unit = m.group(1), (m.group(2) or "b").lower()
+    return int(float(number) * _SIZE_UNITS[unit])
+
+
+def _coerce(field_type: Any, raw: str, name: str | None = None) -> Any:
     """Convert a string from env vars/TOML into the field's declared type.
 
     Raises ``ValueError`` on failure so the caller can skip the value
     and log a warning rather than poison the whole config load.
     """
+    if name in _SIZE_FIELDS:
+        return parse_size(raw)
     # Handle Optional[X] / X | None — unwrap to the single non-None member.
     # typing.get_args normalises both typing.Union and PEP 604 (``int | None``)
     # unions across Python versions. The previous ``__origin__`` check missed
@@ -577,7 +606,7 @@ def _load_env_config() -> dict[str, Any]:
                 )
                 continue
             try:
-                value = _coerce(_field_type(field_name, TierConfig), raw)
+                value = _coerce(_field_type(field_name, TierConfig), raw, field_name)
             except ValueError as e:
                 logger.warning("Invalid value for %s=%r: %s", env_key, raw, e)
                 continue
@@ -591,7 +620,7 @@ def _load_env_config() -> dict[str, Any]:
             # other tools that namespace with CASH_ too.
             continue
         try:
-            value = _coerce(_field_type(key), raw)
+            value = _coerce(_field_type(key), raw, key)
         except ValueError as e:
             logger.warning("Invalid value for %s=%r: %s", env_key, raw, e)
             continue
@@ -1048,7 +1077,8 @@ def get_config(
     else:
         user_path = user_config_path
     if user_path is not None:
-        user_data = _load_toml_config(Path(user_path))
+        user_data = _validated_layer(
+            _load_toml_config(Path(user_path)), str(user_path), strict=False)
         if user_data:
             _merge(merged, user_data)
             sources.append(f"user:{user_path}")
@@ -1059,7 +1089,8 @@ def get_config(
     # Layer 2b: explicit ``Cash(config_path=...)`` override (merged on
     # top of the user-scoped layer)
     if config_path is not None:
-        override_data = _load_toml_config(Path(config_path))
+        override_data = _validated_layer(
+            _load_toml_config(Path(config_path)), str(config_path), strict=False)
         if override_data:
             _merge(merged, override_data)
             sources.append(f"file:{config_path}")
@@ -1073,7 +1104,8 @@ def get_config(
     else:
         project_path = project_config_path
     if project_path is not None:
-        project_data = _load_toml_config(Path(project_path))
+        project_data = _validated_layer(
+            _load_toml_config(Path(project_path)), str(project_path), strict=False)
         if project_data:
             _merge(merged, project_data)
             sources.append(f"project:{project_path}")
@@ -1092,6 +1124,7 @@ def get_config(
 
     # Layer 5: explicit overrides (kwargs)
     if overrides:
+        overrides = _validated_layer(overrides, "Cash(...) arguments", strict=True)
         _merge(merged, overrides)
         sources.append("kwargs")
         if "cache_dir" in overrides:
@@ -1108,6 +1141,84 @@ def get_config(
 
     # Materialise the dict into a CashConfig.
     return _build_config(merged, source=",".join(sources) if sources else "defaults")
+
+
+def validate_value(name: str, value: Any, dataclass_type: type = CashConfig) -> Any:
+    """*value* as field *name*'s declared type, or ``ValueError`` saying why.
+
+    Strings are coerced the way environment variables are (``"true"``,
+    ``"8"``, ``"2GB"`` for a size); anything else must already BE the type.
+    Nothing checked this for a constructor argument or a TOML value, so
+    ``Cash(max_cache_size="2GB")`` was stored as a string and every disk
+    write then failed comparing it with an int -- the cache silently kept
+    nothing on disk for the rest of the process.
+    """
+    field_type = _field_type(name, dataclass_type)
+    args = typing.get_args(field_type)
+    optional = type(None) in args
+    base = next((a for a in args if a is not type(None)), field_type) if args else field_type
+    if value is None:
+        if optional:
+            return None
+        raise ValueError(f"{name} cannot be None")
+    if isinstance(value, str) and base is not str:
+        try:
+            return _coerce(field_type, value, name)
+        except ValueError as exc:
+            raise ValueError(f"{name}={value!r}: {exc}") from None
+    if base is bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and value in (0, 1):
+            return bool(value)          # `debug=1` is ordinary code
+    elif base is int:
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+    elif base is float:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    elif base is str:
+        if isinstance(value, str):
+            return value
+    else:
+        return value                    # lists, nested configs: checked elsewhere
+    expected = getattr(base, "__name__", str(base))
+    hint = " (or a size string such as '2GB')" if name in _SIZE_FIELDS else ""
+    raise ValueError(
+        f"{name}={value!r} is a {type(value).__name__}; expected {expected}{hint}")
+
+
+def _validated_layer(data: dict[str, Any], label: str, *, strict: bool) -> dict[str, Any]:
+    """*data* with every known field checked by `validate_value`.
+
+    Unknown keys pass through untouched (``_build_config`` ignores them; a
+    ``pyproject.toml`` read flat holds plenty). A bad value RAISES when the
+    caller's own code supplied it (*strict*) -- that is a bug at the call site,
+    and the place to say so -- and is logged and dropped when it came from a
+    file or the environment, which must not stop a program from running.
+    """
+    valid = {f.name for f in fields(CashConfig) if not f.name.startswith("_")}
+    tier_valid = {f.name for f in fields(TierConfig)}
+    out: dict[str, Any] = {}
+    for key, value in data.items():
+        try:
+            if key == "tiers" and isinstance(value, list):
+                out[key] = [
+                    {k: (validate_value(k, v, TierConfig) if k in tier_valid else v)
+                     for k, v in t.items()} if isinstance(t, dict) else t
+                    for t in value
+                ]
+            elif key in valid:
+                out[key] = validate_value(key, value)
+            else:
+                out[key] = value
+        except ValueError as exc:
+            if strict:
+                raise ValueError(f"cash config ({label}): {exc}") from None
+            logger.warning("Ignoring invalid cash setting in %s: %s", label, exc)
+    return out
 
 
 def _merge(base: dict[str, Any], update: dict[str, Any]) -> None:

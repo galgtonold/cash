@@ -107,7 +107,7 @@ cash.configure(min_cache_savings_pct=0.10)        # promote when a hit saves >10
 cash.configure(smart_persistence=False)           # fall back to the default policy
 ```
 
-<!-- claim: cash/__init__.py:configure @e092dd34 -->
+<!-- claim: cash/__init__.py:configure @0556919d -->
 Neither `smart_persistence` nor `min_cache_savings_pct` is in the
 `BACKEND_AFFECTING` set that `cash.configure` consults, so changing either at
 runtime updates the dataclass but does not rebuild the active backend's policy

@@ -93,13 +93,23 @@ configure(debug=True, min_cache_savings_pct=0.30)
 Every field below is settable via every layer. The env-var column shows
 the `CASH_*` binding; the TOML key matches the field name.
 
+<!-- claim: cash/config.py:validate_value @236951a3, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @4f7536d2 -->
+Every value is checked against the field's type, whichever layer it comes
+from. A string is read the way an environment variable is — `"true"`, `"8"` —
+and the byte-size fields (`max_cache_size`, `file_hash_full_max_bytes`, a
+tier's `max_size_bytes`) also take a size: `"2GB"`, `"500MB"`, `"512MiB"`
+(KB/MB/GB/TB are powers of 1000, KiB/MiB/GiB/TiB powers of 1024). A bad value
+passed in code — `Cash(...)`, `cash.configure(...)` — raises `ValueError`
+naming the field; a bad value in a TOML file or an environment variable is
+logged and skipped, so the rest of the configuration still applies.
+
 ### Cache location & file-backend tuning
 
 | Field | Env var | Default | Description |
 |---|---|---|---|
 | `cache_dir` | `CASH_CACHE_DIR` | `".cash"` | Where the default `FileBackend` writes. **Add to `.gitignore`** — this is the disk cache, not the config. |
 | `compress` | `CASH_COMPRESS` | `false` | gzip data files on disk. |
-| `max_cache_size` | `CASH_MAX_CACHE_SIZE` | `null` (**auto**) | Disk-tier LRU eviction threshold, in bytes. A single value larger than the whole cap is skipped rather than written and evicted at once ([`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big) says so, and names both numbers); everything that fits is stored and evicted least-recently-used. `null` scales the cap to the machine — a fraction of free disk for the disk tier, a fraction of RAM for the memory tier — instead of a flat 1 GiB that capped every tier and thrashed persist-heavy workloads. Set an integer to pin the disk cap. |
+| `max_cache_size` | `CASH_MAX_CACHE_SIZE` | `null` (**auto**) | Disk-tier LRU eviction threshold, in bytes. A single value larger than the whole cap is skipped rather than written and evicted at once ([`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big) says so, and names both numbers); everything that fits is stored and evicted least-recently-used. `null` scales the cap to the machine — a fraction of free disk for the disk tier, a fraction of RAM for the memory tier — instead of a flat 1 GiB that capped every tier and thrashed persist-heavy workloads. Set a number of bytes, or a size such as `"5GB"`, to pin the disk cap. |
 | `max_memory_entries` | `CASH_MAX_MEMORY_ENTRIES` | `null` (no COUNT limit) | Cap on `InMemoryBackend` **entries** — LRU eviction when exceeded. `null` does not mean the memory tier is unbounded: it is bounded by bytes, adaptively (see below). |
 | `flush_interval` | `CASH_FLUSH_INTERVAL` | `5` | Seconds between `FileBackend`'s background metadata-flush cycles. |
 | `file_hash_full_max_bytes` | `CASH_FILE_HASH_FULL_MAX_BYTES` | `67108864` (64 MiB) | Largest tracked file hashed IN FULL when checking freshness. Above it, three head/middle/tail regions plus the timestamps decide — cheap on a multi-GB parquet, and blind to a same-size interior edit whose mtime is then restored (`cp -p`, `rsync -a`). Linux and macOS catch that through the inode change time; Windows does not. The default sits above the ordinary CSV or parquet so that hole does not reach one. A full hash costs about 0.72 ms per MiB, but only the FIRST check pays it: digests are memoized per process, so later looks at an unchanged file cost a `stat`. Lower it for large inputs on a slow mount read by many short-lived processes; [`CACHE-FRESHNESS-COST`](../warnings.md#cache-freshness-cost) reports when checking has become a bad trade. |
@@ -301,7 +311,7 @@ cash = Cash(config_path="./my_special_config.toml")
 Loads the named TOML as the user-level layer (so env vars and
 constructor kwargs still override it).
 
-<!-- claim: cash/__init__.py:configure @e092dd34 -->
+<!-- claim: cash/__init__.py:configure @0556919d -->
 ## Runtime mutation: `cash.configure()`
 
 Change the active configuration of the default singleton at runtime
