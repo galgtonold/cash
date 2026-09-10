@@ -455,6 +455,31 @@ def _warn_toml_unreadable(path: Path) -> None:
         logger.debug("Could not emit the unreadable-TOML notice", exc_info=True)
 
 
+_CASH_SECTION_RE = re.compile(
+    r"^\s*(\[\s*(tool\s*\.\s*)?cash\s*[\].]|tool\s*\.\s*cash\s*\.)", re.MULTILINE)
+
+
+def _may_hold_cash_settings(path: Path) -> bool:
+    """Would a parser find cash settings in *path*? Answered without one.
+
+    A ``[tool.cash]`` / ``[cash]`` table (or a ``tool.cash.`` dotted key)
+    anywhere says yes. A ``pyproject.toml`` without one says no: it belongs to
+    the project, not to cash. Any other file is a cash config file, whose flat
+    top-level keys are read too, so anything but comments counts. Unreadable
+    says yes -- the notice errs toward being given.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return True
+    if _CASH_SECTION_RE.search(text):
+        return True
+    if path.name == "pyproject.toml":
+        return False
+    return any(line.strip() and not line.lstrip().startswith("#")
+               for line in text.splitlines())
+
+
 def _load_toml_config(path: Path) -> dict[str, Any]:
     """Load configuration from a TOML file.
 
@@ -478,8 +503,12 @@ def _load_toml_config(path: Path) -> dict[str, Any]:
             # read this file. That used to be a debug line: the config existed,
             # was found, and was silently ignored -- every setting in it, on
             # the oldest Python cash supports. Reached only when a config file
-            # is actually there, so it cannot become background noise.
-            _warn_toml_unreadable(path)
+            # with cash settings in it is actually there: nearly every project
+            # has a pyproject.toml, and a notice about one with no [tool.cash]
+            # would be wrong nearly every time -- the way to teach people to
+            # filter it out before the one case it exists for.
+            if _may_hold_cash_settings(path):
+                _warn_toml_unreadable(path)
             return {}
 
     try:

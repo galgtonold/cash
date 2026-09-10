@@ -460,12 +460,16 @@ decorator is buying you nothing.
 
 ## CONFIG-TOML-UNREADABLE {#config-toml-unreadable}
 
-<!-- claim: cash/config.py:_load_toml_config @9a81ff06, cash/config.py:_warn_toml_unreadable @d0af8e40 -->
+<!-- claim: cash/config.py:_load_toml_config @d2daeca0, cash/config.py:_warn_toml_unreadable @d0af8e40 -->
 **What happened.** Cash found a config file — `pyproject.toml` with a
 `[tool.cash]` section, or the XDG user config — and has nothing that can parse
 it. A TOML parser entered the standard library in **Python 3.11** (`tomllib`);
 on 3.10 the job falls to `tomli`, and cash cannot depend on it, because cash
 has no required dependencies at all.
+
+Without a parser, cash decides whether the file holds settings by looking for
+the section header itself: a `pyproject.toml` with no `[tool.cash]` table says
+nothing, because there is nothing of cash's in it to ignore.
 
 **Why it matters.** Every setting in that file is ignored — `cache_dir` among
 them — so cash runs on the defaults the file was written to change. Nothing

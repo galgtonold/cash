@@ -94,6 +94,44 @@ def test_no_config_file_says_nothing(no_toml_parser, tmp_path):
     assert not [w for w in rec if "CONFIG-TOML-UNREADABLE" in str(w.message)]
 
 
+def _notices(path):
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        config_module._load_toml_config(path)
+    return [w for w in rec if "CONFIG-TOML-UNREADABLE" in str(w.message)]
+
+
+def test_a_pyproject_without_a_cash_section_says_nothing(no_toml_parser, tmp_path):
+    """CAS-118: nearly every project has a pyproject.toml, and this one holds
+    nothing of cash's -- "every setting in that file is being ignored" was
+    wrong, in nearly every project on a bare 3.10."""
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        '[project]\nname = "demo"\n\n[tool.ruff]\nline-length = 100\n'
+        '# [tool.cash] is not configured\n',
+        encoding="utf-8",
+    )
+    assert not _notices(path)
+
+
+@pytest.mark.parametrize("name, body", [
+    ("pyproject.toml", '[tool.cash.tiers]\nfoo = 1\n'),
+    ("pyproject.toml", '[tool]\ntool.cash.cache_dir = "x"\n'),
+    ("config.toml", '[cash]\ncache_dir = "x"\n'),
+    ("config.toml", '# a flat cash config file\ncache_dir = "x"\n'),
+], ids=["subtable", "dotted-key", "standalone-section", "standalone-flat"])
+def test_every_shape_that_holds_settings_is_reported(no_toml_parser, tmp_path, name, body):
+    path = tmp_path / name
+    path.write_text(body, encoding="utf-8")
+    assert _notices(path)
+
+
+def test_an_empty_standalone_config_says_nothing(no_toml_parser, tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text("# nothing set yet\n\n", encoding="utf-8")
+    assert not _notices(path)
+
+
 def test_with_a_parser_the_file_is_read(tmp_path):
     """The other control: the ordinary path is untouched and still silent."""
     path = _a_config(tmp_path)
