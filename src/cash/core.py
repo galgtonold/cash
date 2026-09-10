@@ -4562,6 +4562,7 @@ class Cash:
 
     def _instance_class_source_parts(
         self, value: Any, _seen: set | None = None, _depth: int = 0,
+        own_pkg: str | None = None,
     ) -> list[tuple[str, str]]:
         """``(qualname, source-hash)`` for the user classes behind an INSTANCE.
 
@@ -4588,7 +4589,7 @@ class Cash:
         _seen.add(id(value))
         parts: list[tuple[str, str]] = []
         cls = type(value)
-        if self._is_user_class(cls):
+        if self._is_user_class(cls, own_pkg):
             try:
                 parts.append((cls.__qualname__, self._user_class_source_hash(cls)))
             except SOURCE_RETRIEVAL_ERRORS:
@@ -4597,9 +4598,10 @@ class Cash:
         if isinstance(held, dict):
             for attr_val in held.values():
                 for item in self._iter_contained(attr_val):
-                    if self._is_user_class(type(item)):
+                    if self._is_user_class(type(item), own_pkg):
                         parts.extend(
-                            self._instance_class_source_parts(item, _seen, _depth + 1)
+                            self._instance_class_source_parts(
+                                item, _seen, _depth + 1, own_pkg=own_pkg)
                         )
         return parts
 
@@ -4637,6 +4639,7 @@ class Cash:
         # globals, so bailing here skipped the module-attribute channel in
         # exactly the case it exists for.
         parts: list[tuple[str, str]] = []
+        own_pkg = self._own_package(func)
         code = getattr(func, "__code__", None)
         # A missing provisional entry means "unknown", not "none" -- watch every
         # folded name rather than fold one blind (see `_read_global_data_names`).
@@ -4693,8 +4696,9 @@ class Cash:
             # pickle, so editing a method served stale. Fold the class-graph
             # source too (memoized per class; see _instance_class_source_parts).
             for item in self._iter_contained(v):
-                if self._is_user_class(type(item)):
-                    for cname, chash in self._instance_class_source_parts(item):
+                if self._is_user_class(type(item), own_pkg):
+                    for cname, chash in self._instance_class_source_parts(
+                            item, own_pkg=own_pkg):
                         parts.append((f"{name}#cls:{cname}", chash))
         self._pending_capture_watch.update(watch)
         parts.extend(self._module_attr_parts(func, func_name, g))
@@ -4843,26 +4847,58 @@ class Cash:
         return state_hash
 
     @staticmethod
-    def _is_user_class(cls: Any) -> bool:
+    def _own_package(func: Any) -> str | None:
+        """The top-level package of the module that defines *func*."""
+        top = (getattr(func, "__module__", None) or "").split(".")[0]
+        return top or None
+
+    @staticmethod
+    def _in_own_package(module_name: str | None, own_pkg: str | None) -> bool:
+        """Is *module_name* inside *own_pkg* (the cached function's package)?
+
+        ``__main__`` never counts: a script is not a package, and everything
+        it imports is judged on its own merits.
+        """
+        if not module_name or not own_pkg or own_pkg == "__main__":
+            return False
+        return module_name == own_pkg or module_name.startswith(own_pkg + ".")
+
+    @staticmethod
+    def _is_user_class(cls: Any, own_pkg: str | None = None) -> bool:
         """True for a class defined in user code (not stdlib / third-party).
 
         Used to fold ``ClassName.CONSTANT`` reads: editing a class-level config
         constant should invalidate, but ``np.float64.something`` or a library
         class's attributes should not churn the key.
+
+        *own_pkg*: the cached function's top-level package, which counts as
+        user code wherever it is installed -- see ``_is_user_module``.
         """
         import sys
+        if Cash._in_own_package(getattr(cls, "__module__", None), own_pkg):
+            return True
         mod = sys.modules.get(getattr(cls, "__module__", None) or "")
         return mod is not None and Cash._is_user_module(mod)
 
     @staticmethod
-    def _is_user_module(mod: Any) -> bool:
+    def _is_user_module(mod: Any, own_pkg: str | None = None) -> bool:
         """True for a module the user is plausibly editing between runs.
 
         Third-party and stdlib modules are excluded deliberately: their
         contents are expected to be fixed for a given environment, and folding
         e.g. ``os.environ`` or numpy's internals would churn the key on every
         call. Editing your venv is not a case worth keying on.
+
+        Except the cached function's OWN package (*own_pkg*), which is user code
+        wherever it is installed. The path test alone put a user's own tool,
+        once `pip install`ed, in the same bucket as numpy: `settings.FACTOR`
+        in the tool's own `settings.py` stopped reaching the key, and a
+        reinstall with a changed constant served the old report -- while
+        `from settings import FACTOR`, a helper in a sibling module and a
+        same-module global all still invalidated (CAS-111).
         """
+        if Cash._in_own_package(getattr(mod, "__name__", None), own_pkg):
+            return True
         path = getattr(mod, "__file__", None)
         if not path:
             return False  # builtin / namespace package - nothing to edit
@@ -5015,14 +5051,15 @@ class Cash:
         handled by the helper channel, the others carry no editable value).
         """
         parts: list[tuple[str, str]] = []
+        own_pkg = self._own_package(func)
         for mod_name, attr in self._read_module_attr_pairs(func):
             obj = g.get(mod_name)
-            is_mod = isinstance(obj, types.ModuleType) and self._is_user_module(obj)
+            is_mod = isinstance(obj, types.ModuleType) and self._is_user_module(obj, own_pkg)
             # ``Cfg.LIMIT`` -- a class constant read through the class NAME -- is
             # the same bytecode shape (LOAD_GLOBAL Cfg; LOAD_ATTR LIMIT) but was
             # skipped because ``Cfg`` is a class, not a module, so editing the
             # constant served stale. Fold user-class attributes too.
-            is_cls = isinstance(obj, type) and self._is_user_class(obj)
+            is_cls = isinstance(obj, type) and self._is_user_class(obj, own_pkg)
             if not (is_mod or is_cls):
                 continue
             try:

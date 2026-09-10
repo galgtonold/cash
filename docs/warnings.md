@@ -843,7 +843,7 @@ cache looks healthy and is silently doing nothing.
 
 ## KEY-OPAQUE-CALLABLE {#key-opaque-callable}
 
-<!-- claim: cash/core.py:Cash._is_user_code_carrier @a334d114, cash/core.py:Cash._is_user_module @4e59d954 -->
+<!-- claim: cash/core.py:Cash._is_user_code_carrier @a334d114, cash/core.py:Cash._is_user_module @1b6836eb -->
 **What happened.** A function, a class, a `functools.partial`, or an object
 whose class carries code reached a cached call — as an argument you passed, or
 as a parameter default you never typed — and Cash could not fingerprint its
@@ -974,7 +974,7 @@ whole function's caching, not just the calls that rely on the default.
 
 ## KEY-UNHASHABLE-GLOBAL {#key-unhashable-global}
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @72ffaaac -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @1168f035 -->
 **What happened.** The function reads a module-level variable — its own
 module's, or a helper's, in which case the message shows a dotted name — and
 Cash could not fingerprint that variable's value. Cash normally folds the

@@ -203,7 +203,7 @@ change:
 |---|---|
 | The **arguments** | Hashed by *content* — so DataFrames and arrays work, and two equal-but-distinct objects share one entry |
 | The **function's own source** | Edit the body and old entries stop matching |
-| The source of a **helper it calls** | Followed **transitively**, across your own modules — installed libraries are where it stops |
+| The source of a **helper it calls** | Followed **transitively**, across your own modules and your own installed package — other people's libraries are where it stops |
 | A **file it reads** | `pd.read_csv`, `open()`, `np.load`, `joblib.load`, … are intercepted |
 | A **module global it reads** | A config constant, a threshold, a dispatch dict — including one read by a **helper**, or by another cached function it calls, rather than by itself |
 | A **class its code reaches** | Followed transitively, so editing a class that a folded class constructs invalidates too |
@@ -240,12 +240,15 @@ transitive call graph on every call.
 
 **The boundary is your code, not your module.** A helper imported from another
 file in your project is followed like any other — edit it and the entry
-invalidates, verified end to end. What the analyzer stops at is *installed*
-code: anything under `site-packages` / `dist-packages` or the standard library
-is treated as fixed for a given environment, because folding numpy's internals
-into your key would churn it on every call and editing your venv is not a case
-worth keying on. If you do need a third-party function's identity in the key,
-name it with [`depends_on=`](#depends_on-explicit-dependency-graph).
+invalidates, verified end to end. What the analyzer stops at is *other people's*
+installed code: anything under `site-packages` / `dist-packages` or the standard
+library is treated as fixed for a given environment, because folding numpy's
+internals into your key would churn it on every call. **Your own package is
+followed wherever it is installed** — the top-level package that defines the
+cached function counts as your code even after `pip install .`, so a changed
+`settings.FACTOR` and a reinstall invalidates exactly as it does in an editable
+checkout. If you do need a third-party function's identity in the key, name it
+with [`depends_on=`](#depends_on-explicit-dependency-graph).
 
 ### File reads are tracked automatically
 
@@ -287,7 +290,7 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @72ffaaac, cash/core.py:Cash._fold_dependency_read_globals @959d77fa -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @1168f035, cash/core.py:Cash._fold_dependency_read_globals @959d77fa -->
 Only globals that are **read** participate — and that includes globals read
 on someone else's behalf: by a **helper**, so a helper returning a module-level
 `CONFIG` invalidates its caller when that config changes, and by another
