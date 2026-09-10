@@ -1337,7 +1337,7 @@ class Cash:
         return cls if self._is_user_code_object(cls) else None
 
     def _fold_code_args(self, args: tuple, kwargs: dict, state_hash: str,
-                        warn: bool = True) -> str:
+                        warn: bool = True, func_name: str = "?") -> str:
         """Fold user code reached through the arguments into the key.
 
         ``args_hash`` is a digest of the PICKLED arguments, and pickle
@@ -1371,6 +1371,13 @@ class Cash:
                     digest = self._code_surface_hash(carrier)
                     if digest is not None:
                         parts.append(f"{self._carrier_name(carrier)}:{digest}")
+                        # Its CODE is in the key; the globals that code reads
+                        # were not (CAS-113). A callback reading a module
+                        # constant served the old result after the constant
+                        # changed, while the same read one call level deeper,
+                        # or in the cached function itself, invalidated.
+                        if self._is_user_code_carrier(carrier):
+                            parts.extend(self._carrier_read_global_parts(carrier, func_name))
                     elif warn and self._is_user_code_carrier(carrier):
                         # User code we could not hash: a C-extension type, an
                         # exotic descriptor, a ``functools.partial`` (whose
@@ -1387,6 +1394,46 @@ class Cash:
             return state_hash
         payload = ":".join(sorted(set(parts)))
         return hashlib.sha256(f"{state_hash}:codeargs:{payload}".encode('utf-8')).hexdigest()
+
+    def _carrier_read_global_parts(self, carrier: Any, func_name: str) -> list[str]:
+        """Key parts for the module data a code carrier's functions read.
+
+        The same channel the cached function's own globals go through
+        (`_read_global_data_names` + `_safe_global_hash`, plus the
+        ``module.ATTR`` fold), applied to code that arrived as an ARGUMENT: a
+        function, a bound method's function, or a class's own methods -- which
+        is how a callable instance's ``__call__`` is reached.
+        """
+        from .source_norm import _class_functions
+
+        if isinstance(carrier, type):
+            functions = _class_functions(carrier)
+        else:
+            fn = getattr(carrier, "__func__", carrier)
+            functions = [fn] if isinstance(fn, types.FunctionType) else []
+        parts: list[str] = []
+        for fn in functions:
+            g = getattr(fn, "__globals__", None)
+            if not isinstance(g, dict):
+                continue
+            owner = getattr(fn, "__qualname__", "?")
+            try:
+                for name in self._read_global_data_names(fn):
+                    if name not in g:
+                        continue
+                    value = g[name]
+                    if isinstance(value, (types.ModuleType, type)):
+                        continue
+                    if callable(value) and not isinstance(value, (dict, list, tuple, set)):
+                        continue
+                    h = self._safe_global_hash(value, func_name, f"{owner}.{name}")
+                    if h is not None:
+                        parts.append(f"argglobal:{owner}.{name}:{h}")
+                for label, h in self._module_attr_parts(fn, func_name, g):
+                    parts.append(f"argglobal:{owner}:{label}:{h}")
+            except Exception as e:  # noqa: BLE001 - never break a call
+                logger.debug("[CORE] callback-globals fold failed for %s: %s", owner, e)
+        return parts
 
     @staticmethod
     def _hash_callable_source(fn: Callable) -> str:
@@ -1882,7 +1929,8 @@ class Cash:
             # class. Measured: 2 executions before, 1 after, with a primitive
             # default (`add(k=7)`) as the control that always was 1.
             normalized_args = self._normalize_call_args(func_name, args, kwargs)
-            current_state_hash = self._fold_code_args(*normalized_args, current_state_hash)
+            current_state_hash = self._fold_code_args(
+                *normalized_args, current_state_hash, func_name=func_name)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._serialize_args(func_name, args, kwargs, normalized=normalized_args)
             if args_hash is None:
@@ -2010,7 +2058,7 @@ class Cash:
             # and reused below, exactly as `_resolve_cache_key` does.
             normalized_args = self._normalize_call_args(func_name, args, kwargs)
             current_state_hash = self._fold_code_args(
-                *normalized_args, current_state_hash, warn=False,
+                *normalized_args, current_state_hash, warn=False, func_name=func_name,
             )
         except (TypeError, ValueError, RuntimeError) as e:
             return CacheExplanation(

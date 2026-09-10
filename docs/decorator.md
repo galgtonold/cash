@@ -416,7 +416,7 @@ def build(schema):
 build(Schema)                    # edit Schema, call again -> used to return the old answer
 ```
 
-<!-- claim: cash/core.py:Cash._fold_code_args @fb6b947e, cash/core.py:Cash._iter_code_carriers @90eef39d -->
+<!-- claim: cash/core.py:Cash._fold_code_args @c5599254, cash/core.py:Cash._iter_code_carriers @90eef39d -->
 Your code reached through the arguments now folds into `state_hash`, so editing
 it invalidates. cash finds it in a class, a function, an instance (through its
 class), any of those nested in a list/tuple/set/dict, and an instance whose
@@ -424,6 +424,13 @@ class is a subclass of `dict`/`list`/`tuple`/`set`/`str`/`int`/`float`/`bytes`,
 a namedtuple, an `Enum` member, a `__slots__` instance, or a callable object.
 Base classes count: editing a base invalidates a call that was passed the
 subclass.
+
+**What that code reads counts too.** A callback that reads a module constant —
+`def double_well(x): return x**4 - x**2 + TILT * x`, passed to a cached
+integrator — folds the constant's value as well as its own bytecode, whether it
+arrives as a function, a bound method, or a callable instance. Changing `TILT`
+invalidates the call. It used not to: the code was keyed and the data it read
+was not, so a physics-breaking edit produced a green, cached test run.
 
 This channel walks the **cached function's own bound arguments** — what the
 caller handed it, *plus any parameter default the caller left out* — and nothing
@@ -483,7 +490,7 @@ flowchart TD
     F -->|Yes| G[Return cached value]
 ```
 
-<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @fb6b947e -->
+<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @c5599254 -->
 The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
 
 - `state_hash` folds in the function's own source hash + every
@@ -931,7 +938,7 @@ dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/core.py:Cash._explain_call @b946ed81 -->
+<!-- claim: cash/core.py:Cash._explain_call @da88a105 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 
