@@ -128,6 +128,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
     "KEY-BOOL-STATE-TOKEN",    # DataSource.has_changed() returned a bool,
                                # which cannot track changes
     "KEY-BUILD-FAILED",        # key construction raised
+    "KEY-CALLABLE-HASHER",     # a hasher registered for every function /
+                               # method / partial; closures can share its value
     "KEY-DEPENDS-ON-OPAQUE",   # a declared depends_on= target has no readable
                                # source, so editing it invalidates nothing
     "KEY-DYNAMIC-DEP-FAILED",  # a dynamic_depends_on resolver raised

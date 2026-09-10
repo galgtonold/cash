@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @9ad6dbab, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @0eaac88e, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 The one exception is the import-time notice from `cash.experimental`: it is a
@@ -376,7 +376,7 @@ by registering a hasher for the expensive argument's type:
 
     cash.register_hasher(pd.DataFrame, lambda df: df.attrs["version"], override=True)
 
-<!-- claim: cash/core.py:Cash.register_hasher @5d116e94 -->
+<!-- claim: cash/core.py:Cash.register_hasher @df6d03da -->
 `override=True` is not decoration. For the types Cash fingerprints itself —
 numpy arrays, pandas / polars / PyArrow / modin frames, dask collections — its
 own content hasher runs first, and a plain registration for one of those types
@@ -748,7 +748,7 @@ somewhere it did not anticipate. The message names the exception and, where it
 can identify one, the argument type most likely responsible. Your call ran and
 returned its real result; only the caching was skipped.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @6e25d9e5 -->
+<!-- claim: cash/core.py:Cash._resolve_cache_key @fb043b17 -->
 **Why it matters.** That call did not cache. Correctness is not at risk — with
 no key, nothing is written and nothing is read, so this cannot produce a stale
 answer — but you are paying full compute every time it happens.
@@ -762,6 +762,43 @@ worth reporting as a bug with the traceback attached.
 
 **When it is safe to ignore.** When the function is cheap enough that running
 it every time is fine. Nothing on this path can hand you a wrong result.
+
+## KEY-CALLABLE-HASHER {#key-callable-hasher}
+
+**What happened.** You registered a hasher for `types.FunctionType`,
+`types.MethodType` or `functools.partial` — a type every function, bound method
+or partial passed to any cached function in the process belongs to. Cash warns
+when you register it; the registration still takes effect.
+
+<!-- claim: cash/core.py:Cash.register_hasher @df6d03da -->
+**Why it matters.** What the hasher returns becomes that argument's identity in
+the key. Cash still folds in each function's code, so two functions with
+different bodies stay apart — but closures one factory makes have the same
+body and the same name, and differ only in what they capture:
+
+<!-- test:skip reason="illustrative: shows the collision the warning is about" -->
+```python
+def make_model(omega):
+    def model(t):
+        return np.cos(omega * t)
+    return model
+
+cash.register_hasher(types.FunctionType, lambda f: f.__qualname__)
+fit(make_model(3.0), data)
+fit(make_model(5.0), data)   # make_model(3.0)'s result
+```
+
+A hasher keyed on the name gives them one cache entry, and the second call gets
+the first one's result — a wrong answer, not a slow one.
+
+**What to do.** Don't pass the closure. Pass a module-level function and give
+the captured value to the cached function as a plain argument, where the key
+sees it: `fit(model, data, omega=5.0)`. If you keep the hasher, make it return
+what the function captures as well as its name.
+
+**When it is safe to ignore.** When your hasher already returns everything that
+tells two of these values apart — the captured values, or a version you
+control.
 
 ## KEY-DEPENDS-ON-OPAQUE {#key-depends-on-opaque}
 
@@ -927,7 +964,7 @@ type when it can identify one; when the offending value is nested inside a
 container it says so instead, because it cannot see which element is to blame.
 The call ran and returned normally.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @6e25d9e5 -->
+<!-- claim: cash/core.py:Cash._resolve_cache_key @fb043b17 -->
 **Why it matters.** That call did not cache, and calls like it will not cache
 either — this is not first-call warm-up. Every call passing that argument pays
 full compute. Nothing can go stale, because nothing is being stored.
@@ -941,6 +978,14 @@ rather than the connection, the path rather than the open file handle. When
 Cash could not name the type, the culprit is nested — a list of custom objects,
 a dict holding a live handle — and the same two fixes apply once you find it.
 
+The exception is a closure, a `lambda` or a `functools.partial`, and the
+message says so instead: a hasher for `function` would cover every function in
+the process, and the obvious one — by name — gives every closure a factory
+makes the same identity ([KEY-CALLABLE-HASHER](#key-callable-hasher)). Pass a
+module-level function and hand what it captures to the cached function as a
+plain argument; see [a closure or `lambda` passed as an
+argument](known-limitations.md#a-closure-or-lambda-passed-as-an-argument-stops-the-call-caching-entirely).
+
 **When it is safe to ignore.** When you do not need that call path to be fast.
 There is no correctness risk here whatsoever: an unbuildable key means no entry
 is written and none is read. What you lose is the caching, completely, for
@@ -953,7 +998,7 @@ that is fine.
 `def` line, not something a caller passed — could not be fingerprinted, so Cash
 declined to cache the call. The message names the type.
 
-<!-- claim: cash/core.py:Cash._defaults_unhashable @56ac2c5f -->
+<!-- claim: cash/core.py:Cash._defaults_unhashable @ce13fcc1 -->
 **Why it matters.** Cash folds defaults into the key so that `build()` and
 `build(Schema)` are recognised as the same call, and so that changing a default
 invalidates. It cannot tell whether an unhashable default has changed, and it

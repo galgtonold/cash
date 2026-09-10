@@ -611,6 +611,36 @@ def _seed_parameters(src: str) -> dict[str, str]:
 #: Source files already reported as edited-since-load, one notice per file.
 _SOURCE_CHANGED_WARNED: set[str] = set()
 
+#: Values whose identity is code plus what it captures. A hasher registered for
+#: one of these types covers every such value in the process, and the obvious
+#: one -- by name -- gives every closure one factory makes the same identity.
+#: `Cash._first_unhashable_arg` found only built-in-typed arguments.
+_NO_SUSPECT = object()
+
+_CODE_VALUE_TYPES = (types.FunctionType, types.MethodType, functools.partial)
+
+#: The fix for an unhashable code value. It must NOT suggest
+#: `register_hasher(function, ...)`: following that advice is how a second
+#: closure got the first one's result.
+_CODE_ARG_FIX = (
+    "pass a module-level function in its place, and give the values it "
+    "captures to the cached function as plain arguments, where they reach the "
+    "key. Do not register a hasher for function: every closure one factory "
+    "makes shares a name, so a hasher keyed on it hands one closure's result "
+    "to another. See known-limitations.md, 'A closure or lambda passed as an "
+    "argument'."
+)
+
+
+def _unhashable_arg_fix(value: Any, type_name: str) -> str:
+    """The fix line for an argument of *type_name* that could not be hashed."""
+    if isinstance(value, _CODE_VALUE_TYPES):
+        return _CODE_ARG_FIX
+    return (
+        f"register a hasher with cash.register_hasher({type_name}, ...), or "
+        f"pass the argument by a hashable value."
+    )
+
 
 def _warn_source_changed_since_load(fn: Callable) -> None:
     """Say, once per file, that a helper is keyed by its loaded code."""
@@ -1987,11 +2017,8 @@ class Cash:
                     )
                 else:
                     which = f"an argument of type {arg_type_name} could not be hashed"
-                    suggestion = (
-                        f"register a hasher with "
-                        f"cash.register_hasher({arg_type_name}, ...), or pass the "
-                        f"argument by a hashable value."
-                    )
+                    suggestion = _unhashable_arg_fix(
+                        self._first_unhashable_arg(args, kwargs), arg_type_name)
                 self._warn_once(
                     CashCacheIneffectiveWarning,
                     func_name,
@@ -2014,6 +2041,8 @@ class Cash:
                     "the offending type; if the exception does not belong to "
                     "your code, report it as a bug with the traceback."
                 )
+            elif isinstance(self._first_unhashable_arg(args, kwargs), _CODE_VALUE_TYPES):
+                hint = _CODE_ARG_FIX
             else:
                 hint = (
                     f"register a hasher with "
@@ -2140,7 +2169,8 @@ class Cash:
                     'arg_type': arg_type_name,
                     'error': f'{type(e).__name__}: {e}',
                     'hint': (
-                        f'Register a hasher via cash.register_hasher({arg_type_name}, ...)'
+                        _unhashable_arg_fix(
+                            self._first_unhashable_arg(args, kwargs), arg_type_name)
                         if arg_type_name != '<unknown>'
                         else 'Could not identify the offending argument.'
                     ),
@@ -2156,7 +2186,8 @@ class Cash:
                 details={
                     'arg_type': arg_type_name,
                     'hint': (
-                        f'Register a hasher via cash.register_hasher({arg_type_name}, ...)'
+                        _unhashable_arg_fix(
+                            self._first_unhashable_arg(args, kwargs), arg_type_name)
                         if arg_type_name != '<unknown>'
                         else 'Could not identify the offending argument; likely a nested unpicklable value.'
                     ),
@@ -2328,14 +2359,17 @@ class Cash:
         wins; this is heuristic but matches the most common single-bad-arg
         case.
         """
+        suspect = Cash._first_unhashable_arg(args, kwargs)
+        return "<unknown>" if suspect is _NO_SUSPECT else type(suspect).__qualname__
+
+    @staticmethod
+    def _first_unhashable_arg(args: tuple, kwargs: dict) -> Any:
+        """The value `_first_unhashable_arg_type` names, or ``_NO_SUSPECT``."""
         BUILTIN_OK = (str, int, float, bool, type(None), bytes, list, dict, tuple, set, frozenset)
-        for a in args:
+        for a in (*args, *kwargs.values()):
             if not isinstance(a, BUILTIN_OK):
-                return type(a).__qualname__
-        for v in kwargs.values():
-            if not isinstance(v, BUILTIN_OK):
-                return type(v).__qualname__
-        return "<unknown>"
+                return a
+        return _NO_SUSPECT
 
     def _try_get_cached(
         self,
@@ -3778,9 +3812,12 @@ class Cash:
                 f"function does not cache for any caller rather than risk "
                 f"serving a result computed under a default that changed.",
                 code="KEY-UNHASHABLE-DEFAULT",
-                fix=f"get the value out of the signature -- build it in the body "
-                    f"or require it at the call site -- or register a hasher "
-                    f"with cash.register_hasher({bad_type}, ...).",
+                fix="get the value out of the signature -- build it in the body "
+                    "or require it at the call site"
+                    + ("." if isinstance(self._first_unhashable_arg(pos, kwd),
+                                         _CODE_VALUE_TYPES)
+                       else f" -- or register a hasher with "
+                            f"cash.register_hasher({bad_type}, ...)."),
             )
         else:
             logger.debug("defaults hash failed for %s: %s", func_name, e)
@@ -6352,6 +6389,24 @@ class Cash:
                     f"carry, and wrong for something like lambda a: a[0, 0]."
                 )
 
+        # Allowed -- a hasher that returns what the function captures is
+        # correct -- but the one people write is keyed on the name, and that
+        # hands one closure's cached result to the next.
+        if isinstance(type_, type) and issubclass(type_, _CODE_VALUE_TYPES):
+            warn_diagnostic(
+                CashCacheIneffectiveWarning,
+                "KEY-CALLABLE-HASHER",
+                f"cash.register_hasher({type_.__name__}, ...) decides the "
+                f"identity of every {type_.__name__} passed to a cached "
+                f"function in this process. Closures one factory makes share a "
+                f"name and a body, so a hasher that does not return what they "
+                f"capture gives them one cache entry, and the second gets the "
+                f"first one's result.",
+                "prefer passing the captured values to the cached function as "
+                "plain arguments, with a module-level function in the closure's "
+                "place; if you keep this hasher, make it return the captured "
+                "values too.",
+            )
         src_hash = self._hash_callable_source(hasher_fn)
         # One type, one registration: re-registering must not leave the
         # previous entry behind in the other registry, still winning.
