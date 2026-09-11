@@ -8,13 +8,12 @@ only as a count of discarded writes. The environment variable was checked
 TOML files were not checked at all.
 
 Now every layer goes through one check. Explicit code raises -- that is a bug
-at the call site -- while a file or the environment is logged and skipped, so
+at the call site -- while a file or the environment is reported and skipped, so
 a stray setting cannot stop a program. Byte-size fields also take "2GB" /
 "512MiB", since that is how people write them.
 """
 from __future__ import annotations
 
-import logging
 import time
 
 import pytest
@@ -77,17 +76,16 @@ def test_configure_refuses_and_leaves_the_config_alone():
     assert cash._get_global_cash().config.flush_interval == before
 
 
-def test_a_bad_toml_value_is_reported_and_skipped(tmp_path, caplog):
-    """From a file: say so and carry on with the default."""
+def test_a_bad_toml_value_is_reported_and_skipped(tmp_path):
+    """From a file: say so (CONFIG-INVALID) and carry on with the default."""
     project = tmp_path / "pyproject.toml"
     project.write_text('[tool.cash]\nmax_cache_size = "lots"\ncompress = true\n',
                        encoding="utf-8")
     pytest.importorskip("tomllib" if __import__("sys").version_info >= (3, 11) else "tomli")
-    with caplog.at_level(logging.WARNING, logger="cash"):
+    with pytest.warns(UserWarning, match=r"\[CONFIG-INVALID\].*max_cache_size"):
         cfg = get_config(project_config_path=str(project), user_config_path=None)
     assert cfg.max_cache_size is None, "the invalid value was stored"
     assert cfg.compress is True, "the valid setting beside it was lost"
-    assert any("max_cache_size" in r.getMessage() for r in caplog.records)
 
 
 def test_a_size_string_in_toml_is_read(tmp_path):

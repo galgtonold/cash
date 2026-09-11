@@ -33,13 +33,13 @@ class TestCLIFormatBytes:
         assert _format_bytes(500) == "500 B"
 
     def test_kilobytes(self):
-        assert _format_bytes(2048) == "2.0 KB"
+        assert _format_bytes(2048) == "2.0 KiB"
 
     def test_megabytes(self):
-        assert _format_bytes(5 * 1024 * 1024) == "5.0 MB"
+        assert _format_bytes(5 * 1024 * 1024) == "5.0 MiB"
 
     def test_gigabytes(self):
-        assert _format_bytes(2 * 1024 * 1024 * 1024) == "2.00 GB"
+        assert _format_bytes(2 * 1024 * 1024 * 1024) == "2.00 GiB"
 
 
 class TestCLIVersion:

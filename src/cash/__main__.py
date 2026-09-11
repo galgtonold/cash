@@ -98,11 +98,15 @@ def cmd_info(args: argparse.Namespace) -> None:
     from cash.config import get_config
     config = get_config()
 
+    from cash.config import format_size
+    origins = getattr(config, "_origins", {})
+
     print(f"Cash v{get_version()}")
     print(f"  Backend:    {config.backend}")
     print(f"  Cache dir:  {config.cache_dir}")
-    print(f"  Debug:      {config.debug}")
-    print(f"  Compress:   {config.compress}")
+    if config.disable:
+        print(f"  Disabled:   yes -- every cached function runs uncached "
+              f"({origins.get('disable', 'disable = true')})")
     # Resolved, not just configured. "auto (scaled per tier)" is true and
     # useless: a user asking what their cache is allowed to hold needs the two
     # numbers it actually resolves to, and the RAM one in particular appears
@@ -117,7 +121,8 @@ def cmd_info(args: argparse.Namespace) -> None:
         disk = human_bytes(resolve_disk_cap(config.cache_dir))
         print(f"  Max size:   auto -- disk {disk}, RAM {human_bytes(resolve_ram_cap())}")
     else:
-        print(f"  Max size:   {config.max_cache_size / (1024**3):.1f} GB on disk, "
+        print(f"  Max size:   {format_size(config.max_cache_size)} "
+              f"({config.max_cache_size:,} bytes) on disk, "
               f"RAM {human_bytes(resolve_ram_cap())}")
     # Report what actually decides persistence — the serialization-aware cost
     # model — rather than a raw threshold number.
@@ -128,6 +133,24 @@ def cmd_info(args: argparse.Namespace) -> None:
         print("  Persist:    cost model, conservative (1.0s compute floor)")
     if config.tiers:
         print(f"  Tiers:      {', '.join(t.type for t in config.tiers)}")
+    # Where this run looked, and what each layer set. Round 18: a nested
+    # pyproject.toml, a pytest launched from the directory above its project
+    # and a `disable = true` were each invisible here -- a Source line names
+    # the layers, not which file, nor which setting came from where.
+    from cash.config import TOML_FLAT, TOML_MISSING, TOML_NOT_CASH, TOML_SECTION
+    outcome = {TOML_SECTION: "read", TOML_FLAT: "read", TOML_MISSING: "not found",
+               TOML_NOT_CASH: "no [tool.cash] section"}
+    files = getattr(config, "_files", [])
+    if files:
+        print("  Config files:")
+        for layer, path, found in files:
+            print(f"    {layer:<12} {path}  ({outcome.get(found, 'could not be read')})")
+    if origins:
+        print("  Settings (where each came from):")
+        for key in sorted(origins):
+            print(f"    {key + ' = ' + _setting_text(config, key):<40} {origins[key]}")
+    else:
+        print("  Settings:   all defaults")
     print(f"  Source:     {config._source}")
     # Installed tools run from outside a project cache per user, per tool --
     # somewhere this command cannot reach by default, because it is a
@@ -140,14 +163,29 @@ def cmd_info(args: argparse.Namespace) -> None:
             print(f"    {name:<20} {entries:>5} entries  {_format_bytes(size):>10}  {path}")
 
 
+def _setting_text(config, key: str) -> str:
+    """One setting's effective value, as `cash info` prints it."""
+    from cash.config import _SIZE_FIELDS, format_size
+    value = getattr(config, key, None)
+    if key == "tiers":
+        return ", ".join(t.type for t in value) or "[]"
+    if key == "redis_password" and value:
+        return "***"
+    if key in _SIZE_FIELDS and isinstance(value, int):
+        return format_size(value)
+    return repr(value)
+
+
 def _format_bytes(size_bytes: int) -> str:
+    # Powers of 1024, so labelled as such: "GB" here read as a mis-parsed
+    # "2GB" setting (round 18).
     if size_bytes < 1024:
         return f"{size_bytes} B"
     if size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
+        return f"{size_bytes / 1024:.1f} KiB"
     if size_bytes < 1024 * 1024 * 1024:
-        return f"{size_bytes / (1024**2):.1f} MB"
-    return f"{size_bytes / (1024**3):.2f} GB"
+        return f"{size_bytes / (1024**2):.1f} MiB"
+    return f"{size_bytes / (1024**3):.2f} GiB"
 
 
 @dataclass

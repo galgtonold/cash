@@ -112,6 +112,10 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
                                # so the process exited without storing it
 
     # -- CONFIG: a setting cash found but could not act on ------------------
+    "CONFIG-INVALID",          # a value of the wrong type, or a config file that
+                               # is not valid TOML; ignored, defaults apply
+    "CONFIG-UNKNOWN-KEY",      # a [tool.cash] / cash config key that is not a
+                               # setting, so it does nothing (usually a typo)
     "CONFIG-TOML-UNREADABLE",  # a config file exists but nothing can parse it
                                # (Python 3.10 without `tomli`), so every
                                # setting in it is being ignored

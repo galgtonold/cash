@@ -93,7 +93,7 @@ slow_square(1000)      # cache hit, from ./my_app_cache
 
 ### Where the cache lives
 
-<!-- claim: cash/config.py:project_anchor @c7c2a516, cash/config.py:_anchor_cache_dir @7f3408d4 -->
+<!-- claim: cash/config.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @7f3408d4 -->
 `.cash` sits next to **your project**, not next to whoever launched the job.
 Cash finds the running script, walks up to the first directory holding a
 `pyproject.toml`, `setup.py`, `setup.cfg` or `.git`, and puts the cache there —
@@ -1046,6 +1046,7 @@ the next call with these args would hit or miss the cache, and why:
 ```python
 f.explain(5)
 # [MISS] __main__.f — no_entry
+#   cache_dir: /home/me/project/.cash
 #   cache_key: __main__.f:9a3c...:...
 #   entry_id: 4be1c09d7a21
 #   hint: No matching cache entry. First call with these arguments, or...
@@ -1054,6 +1055,7 @@ f.explain(5)
 f(5)  # compute
 f.explain(5)
 # [HIT] __main__.f — hit
+#   cache_dir: /home/me/project/.cash
 #   cache_key: __main__.f:9a3c...:...
 #   entry_id: 4be1c09d7a21
 #   cached_at: 1779637032.79
@@ -1075,7 +1077,8 @@ that the last result was never stored and why (`cache_if`, a file that
 changed mid-call), or that it was stored and has since been evicted. On a
 `hit` or `file_changed`, `details['file_deps']` lists every file the entry
 was computed from, with the fingerprint it is checked against. `entry_id` is
-the id `cash inspect --function NAME` lists and `cash clear --entry` takes.
+the id `cash inspect --function NAME` lists and `cash clear --entry` takes,
+and `cache_dir` the directory the answer was read from.
 See [`CacheExplanation`](api/cash.md#cash.CacheExplanation) for all of it.
 
 Does NOT call your function, mutate stats, or write to the backend.

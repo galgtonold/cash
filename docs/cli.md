@@ -154,19 +154,26 @@ Print the effective merged configuration.
 **Output fields:**
 
 - `Backend` — the configured backend type (e.g. `file`, `memory`, `tiered`).
-- `Cache dir` — the on-disk cache directory the file backend will use.
-- `Debug` — whether debug logging is enabled.
-- `Compress` — whether cache entries are compressed on disk.
+- `Cache dir` — the on-disk cache directory the file backend will use. When
+  something other than the default set it, `Settings` says what.
+- `Disabled` — present only when `disable` is on, with where it was set:
+  every cached function is running uncached.
 - `Max size` — the caps the two persistent tiers actually resolve to, not the
   configured value: `auto -- disk 16.4 GiB, RAM 4.0 GiB` when unset (the
-  default), or `<N> GB on disk, RAM <M>` when `max_cache_size` is set. The RAM
-  figure appears nowhere else, and a growing RSS is usually that cap doing its
-  job rather than a leak.
+  default), or the size in the unit you wrote it in plus the exact bytes
+  (`2 GB (2,000,000,000 bytes) on disk, RAM <M>`) when `max_cache_size` is
+  set. The RAM figure appears nowhere else, and a growing RSS is usually that
+  cap doing its job rather than a leak.
 - `Persist` — what actually decides disk persistence: the cost model
   (`0.1s compute floor, N% savings required`), or a conservative fallback when
   smart persistence is off.
 - `Tiers` — present when the active config declares an explicit tier
   list; lists each tier's type in order.
+- `Config files` — every config file looked for and what happened: `read`,
+  `not found`, `no [tool.cash] section`, or `could not be read` (a warning
+  says why).
+- `Settings` — every setting some layer set, its effective value, and the
+  layer that won: a file path, `CASH_<NAME>`, or `Cash(...)`.
 - `Source` — which layers contributed to the resolved config (e.g.
   `project:./pyproject.toml,env`, or `defaults` when nothing was set).
 - `Tool caches` — present when installed console scripts have cached
@@ -181,22 +188,24 @@ cash info
 # Cash v<!-- docnum:version -->0.10.0<!-- /docnum -->
 #   Backend:    tiered
 #   Cache dir:  /home/me/project/.cash
-#   Debug:      False
-#   Compress:   True
 #   Max size:   auto -- disk 16.4 GiB, RAM 4.0 GiB
 #   Persist:    cost model (0.1s compute floor, 20% savings required)
+#   Config files:
+#     user         /home/me/.config/cash/config.toml  (not found)
+#     project      /home/me/project/pyproject.toml  (read)
+#   Settings (where each came from):
+#     compress = True                          /home/me/project/pyproject.toml
+#     debug = True                             CASH_DEBUG
 #   Source:     project:/home/me/project/pyproject.toml,env
 ```
 
 **Behaviour notes:**
 
-- `cash info` shows a `Source:` line listing which layers contributed
-  (`defaults`, `user:<path>`, `project:<path>`, `env`, `kwargs`) but
-  does NOT show which layer was authoritative for each individual
-  field. To debug a specific override, inspect the relevant `CASH_*`
-  env vars and the relevant TOML files (project `pyproject.toml`
-  `[tool.cash]` and XDG user config — see
-  [Configuration](getting-started/configuration.md#file-locations)).
+- A setting that appears in more than one layer is listed once, with the
+  layer that won (see the precedence in
+  [Configuration](getting-started/configuration.md)). A key
+  that is not a setting, or a value cash could not use, is left out of the
+  list and reported as a warning.
 
 <!-- claim: cash/__main__.py:cmd_inspect @e3a7eb28, cash/__main__.py:_inspect_cache_dir @24d5dddf, cash/__main__.py:_inspect_notebook @06ba3efe -->
 ### `cash inspect [path] [--function NAME]` { #cash-inspect-path }
@@ -413,7 +422,7 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 ---
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @eb48d766 -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @21b98e27 -->
 ## Exit codes
 
 | Code | When |

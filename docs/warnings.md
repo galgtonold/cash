@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @17f7cb28, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @43312e7a, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 The one exception is the import-time notice from `cash.experimental`: it is a
@@ -163,7 +163,7 @@ the caching.
 
 ## CACHE-DIR-MOVED {#cache-dir-moved}
 
-<!-- claim: cash/config.py:project_anchor @c7c2a516, cash/config.py:_anchor_cache_dir @7f3408d4 -->
+<!-- claim: cash/config.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @7f3408d4 -->
 **What happened.** Cash resolves its default cache directory next to the code
 being run -- the project the running script belongs to -- rather than next to
 wherever the process was launched from. This run found a cache in the current
@@ -472,9 +472,66 @@ are getting in-process hits at all, because on default caps you usually are not.
 are not climbing, the entry is being evicted as fast as it is written and the
 decorator is buying you nothing.
 
+## CONFIG-UNKNOWN-KEY {#config-unknown-key}
+
+<!-- claim: cash/config.py:_validated_layer @758aacf4, cash/config.py:_unknown_key @62786b51 -->
+**What happened.** A `[tool.cash]` table, a `[cash]` table or a cash config
+file sets a key that is not one of cash's settings. The message names it, and
+the nearest real setting when there is one:
+
+```text
+[CONFIG-UNKNOWN-KEY] …/pyproject.toml sets `max_cache_siz`, which is not a cash
+setting, so it does nothing. Did you mean `max_cache_size`?
+```
+
+A key inside a `[[tool.cash.tiers]]` entry is checked against the tier
+settings and named by its position (`tiers[0].max_entrys`). So is a
+`CASH_TIER_<N>_<NAME>` environment variable. A plain `CASH_<NAME>` variable
+that is not a setting is not reported, because other tools use that prefix too.
+
+**Why it matters.** The setting you meant is not in effect. Until this warning
+existed the key was dropped without a word, while `cash.configure()` raised on
+the same typo.
+
+**What to do.** Rename or remove the key. `cash info` lists every setting in
+effect and the file or variable it came from, so you can check the result.
+
+**When it is safe to ignore.** Never for long. The key does nothing.
+
+## CONFIG-INVALID {#config-invalid}
+
+<!-- claim: cash/config.py:_validated_layer @758aacf4, cash/config.py:_warn_toml_malformed @a8078188 -->
+**What happened.** Cash could not use something in its configuration. One of
+two things:
+
+* **A value of the wrong type**, in a config file or a `CASH_*` environment
+  variable: `compress = "yes please"`, `max_cache_size = "lots"`. That one
+  setting is ignored and keeps its default. The rest of the file still
+  applies. (A bad value passed in code, to `Cash(...)` or `cash.configure()`,
+  raises `ValueError` instead.)
+* **A config file that is not valid TOML.** Every setting in it is ignored.
+  When the file starts with a UTF-8 byte-order mark (BOM), the message says
+  so. TOML does not allow one, no editor shows it, and the parser's own
+  complaint is an invalid statement at line 1, column 1. Windows PowerShell 5.1
+  writes a BOM for `-Encoding utf8`; PowerShell 7 does not.
+
+Each problem is reported once per process, however many times the
+configuration is resolved.
+
+**Why it matters.** The value you wrote is not the one in effect: that setting
+runs on its default, or, for a file that does not parse, every setting in the
+file does. Nothing else fails, so without this warning the only symptom is a
+cache that behaves as if the file were not there.
+
+**What to do.** Correct the value, or save the file as UTF-8 without a BOM,
+then check with `cash info`.
+
+**When it is safe to ignore.** When the default is what you wanted anyway,
+though then the line is better deleted.
+
 ## CONFIG-TOML-UNREADABLE {#config-toml-unreadable}
 
-<!-- claim: cash/config.py:_load_toml_config @d2daeca0, cash/config.py:_warn_toml_unreadable @d0af8e40 -->
+<!-- claim: cash/config.py:_load_toml_config @b8d9cdd1, cash/config.py:_warn_toml_unreadable @d0af8e40 -->
 **What happened.** Cash found a config file — `pyproject.toml` with a
 `[tool.cash]` section, or the XDG user config — and has nothing that can parse
 it. A TOML parser entered the standard library in **Python 3.11** (`tomllib`);

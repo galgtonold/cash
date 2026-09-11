@@ -375,7 +375,10 @@ class CacheExplanation:
               entry recorded, with the fingerprint it was checked against.
 
     ``entry_id`` is the id ``cash inspect --function`` lists and
-    ``cash clear --entry`` accepts.
+    ``cash clear --entry`` accepts. ``cache_dir`` is the directory the answer
+    was read from (None for a cache with no directory): a nested
+    ``pyproject.toml`` can point one project's functions at another cache,
+    and an answer that does not say which one it read cannot show that.
     """
 
     would_hit: bool
@@ -383,6 +386,7 @@ class CacheExplanation:
     func_name: str
     cache_key: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
+    cache_dir: str | None = None
 
     @property
     def entry_id(self) -> str | None:
@@ -392,6 +396,8 @@ class CacheExplanation:
     def __str__(self) -> str:
         verdict = "HIT" if self.would_hit else "MISS"
         lines = [f"[{verdict}] {self.func_name} - {self.reason}"]
+        if self.cache_dir:
+            lines.append(f"  cache_dir: {self.cache_dir}")
         if self.cache_key:
             lines.append(f"  cache_key: {self.cache_key}")
             lines.append(f"  entry_id: {self.entry_id}")
@@ -406,6 +412,15 @@ class CacheExplanation:
 
     def __repr__(self) -> str:
         return self.__str__()
+
+
+def _backend_cache_dir(backend: Any) -> str | None:
+    """The directory *backend* keeps entries in -- its disk tier's, if tiered."""
+    for tier in [backend, *getattr(backend, "backends", ())]:
+        directory = getattr(tier, "cache_dir", None)
+        if isinstance(directory, str) and directory:
+            return os.path.abspath(directory)
+    return None
 
 
 class _StreamingCachedIterator:
@@ -3899,11 +3914,13 @@ class Cash:
             """
             token = ACTIVE_CONFIG.set(self.config)
             try:
-                return self._explain_call(
+                explanation = self._explain_call(
                     func, func_name, dynamic_depends_on, ttl, args, kwargs,
                 )
             finally:
                 ACTIVE_CONFIG.reset(token)
+            return dataclasses.replace(
+                explanation, cache_dir=_backend_cache_dir(self.backend))
 
         stats_wrapper.cache_info = cache_info
         stats_wrapper.cache_clear = cache_clear

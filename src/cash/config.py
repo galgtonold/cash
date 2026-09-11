@@ -378,6 +378,13 @@ class CashConfig:
     """Internal — records which config layers contributed (e.g.
     ``"kwargs+env+project"``). Surfaced by ``python -m cash info``."""
 
+    _origins: dict[str, str] = field(default_factory=dict)
+    """Internal — for each setting a layer set, the layer that won (a file
+    path, ``CASH_<NAME>``, ``Cash(...)``). ``cash info`` lists them."""
+
+    _files: list[tuple[str, str, str]] = field(default_factory=list)
+    """Internal — every config file looked for: ``(layer, path, outcome)``."""
+
     def to_dict(self) -> dict[str, Any]:
         """Public field-value mapping (skips internal ``_source``)."""
         out: dict[str, Any] = {}
@@ -425,6 +432,23 @@ def parse_size(raw: str) -> int:
         raise ValueError(f"not a size: {raw!r} (write bytes, or e.g. '2GB' / '512MiB')")
     number, unit = m.group(1), (m.group(2) or "b").lower()
     return int(float(number) * _SIZE_UNITS[unit])
+
+
+def format_size(n: int) -> str:
+    """*n* bytes the way `parse_size` reads it back: ``2000000000`` -> ``"2 GB"``.
+
+    A size written ``"2GB"`` was shown back as ``1.9 GB`` -- parsed in powers
+    of 1000 and displayed in powers of 1024 under the decimal label, so the
+    setting looked mis-read (round 18, three testers). A whole number of a
+    decimal or a binary unit is shown in that unit; anything else in binary
+    units, labelled as such.
+    """
+    for name in ("TB", "TiB", "GB", "GiB", "MB", "MiB", "KB", "KiB"):
+        unit = _SIZE_UNITS[name.lower()]
+        if n >= unit and (n * 10) % unit == 0:
+            return f"{n / unit:g} {name}"
+    from .backends.adaptive_caps import human_bytes
+    return human_bytes(n)
 
 
 def _coerce(field_type: Any, raw: str, name: str | None = None) -> Any:
@@ -475,6 +499,31 @@ def _field_type(name: str, dataclass_type: type = CashConfig) -> Any:
 #: One notice per process. A config file is read on every ``get_config()``.
 _TOML_NOTICE_GIVEN = False
 
+#: ``(code, message)`` pairs already said in this process. A config is
+#: resolved more than once -- the module default, then each ``Cash(...)`` --
+#: and each resolution used to repeat every complaint about it (round 18: the
+#: same bad value, printed twice, as an uncoded log line).
+_CONFIG_NOTICES: set[tuple[str, str]] = set()
+
+
+def _config_notice(code: str, what: str, fix: str) -> None:
+    """Warn, once per process, about a setting cash could not use."""
+    if (code, what) in _CONFIG_NOTICES:
+        return
+    _CONFIG_NOTICES.add((code, what))
+    try:
+        from .diagnostics import warn_diagnostic
+        from .exceptions import CashCacheIneffectiveWarning
+        warn_diagnostic(CashCacheIneffectiveWarning, code, what, fix)
+    except Exception:  # noqa: BLE001 - a notice must never break a config load
+        logger.debug("Could not emit %s", code, exc_info=True)
+
+
+def _did_you_mean(key: str, valid: Any) -> str:
+    import difflib
+    match = difflib.get_close_matches(key, sorted(valid), n=1, cutoff=0.6)
+    return f" Did you mean `{match[0]}`?" if match else ""
+
 
 def _warn_toml_unreadable(path: Path) -> None:
     """Say that a config file was found and is being ignored."""
@@ -516,7 +565,8 @@ def _may_hold_cash_settings(path: Path) -> bool:
     says yes -- the notice errs toward being given.
     """
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        # -sig: a byte-order mark would hide a `[tool.cash]` on line 1.
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return True
     if _CASH_SECTION_RE.search(text):
@@ -527,18 +577,34 @@ def _may_hold_cash_settings(path: Path) -> bool:
                for line in text.splitlines())
 
 
+#: What `_load_toml_layer` found. The first two are cash's settings, so a key
+#: that is not one is a mistake worth naming; a ``pyproject.toml`` with no
+#: ``[tool.cash]`` table belongs to the project and holds none.
+TOML_SECTION = "section"
+TOML_FLAT = "flat"
+TOML_NOT_CASH = "no [tool.cash] section"
+TOML_MISSING = "not found"
+TOML_UNREADABLE = "not read"
+
+
 def _load_toml_config(path: Path) -> dict[str, Any]:
     """Load configuration from a TOML file.
 
     Recognised sections (in order):
       - ``[tool.cash]`` (pyproject.toml convention)
       - ``[cash]`` (standalone config file)
-      - flat top-level (last-resort fallback)
+      - flat top-level (last-resort fallback; never for ``pyproject.toml``,
+        whose top level is the project's, not cash's)
 
     Returns the merged dict (empty if file missing or unparseable).
     """
+    return _load_toml_layer(path)[0]
+
+
+def _load_toml_layer(path: Path) -> tuple[dict[str, Any], str]:
+    """`_load_toml_config`, plus which of the ``TOML_*`` outcomes it was."""
     if not path.exists():
-        return {}
+        return {}, TOML_MISSING
     try:
         import tomllib  # type: ignore[import-not-found]
     except ImportError:
@@ -556,21 +622,50 @@ def _load_toml_config(path: Path) -> dict[str, Any]:
             # filter it out before the one case it exists for.
             if _may_hold_cash_settings(path):
                 _warn_toml_unreadable(path)
-            return {}
+            return {}, TOML_UNREADABLE
 
     try:
         with open(path, "rb") as f:
             data = tomllib.load(f)
-    except Exception as e:  # noqa: BLE001 — malformed TOML, log and skip
-        logger.warning("Error loading config from %s: %s", path, e)
-        return {}
+    except Exception as e:  # noqa: BLE001 — malformed TOML, say so and skip
+        if _may_hold_cash_settings(path):
+            _warn_toml_malformed(path, e)
+        return {}, TOML_UNREADABLE
 
     # Try [tool.cash] first (pyproject convention), then [cash], then flat.
     if isinstance(data.get("tool"), dict) and isinstance(data["tool"].get("cash"), dict):
-        return dict(data["tool"]["cash"])
+        return dict(data["tool"]["cash"]), TOML_SECTION
     if isinstance(data.get("cash"), dict):
-        return dict(data["cash"])
-    return data
+        return dict(data["cash"]), TOML_SECTION
+    if path.name == "pyproject.toml":
+        return {}, TOML_NOT_CASH
+    return data, TOML_FLAT
+
+
+def _warn_toml_malformed(path: Path, exc: Exception) -> None:
+    """A config file that does not parse: say where, and name a BOM.
+
+    A UTF-8 byte-order mark is invisible in every editor and is what Windows
+    PowerShell 5.1 writes for ``-Encoding utf8``; TOML forbids it, and the
+    parser's own complaint -- an invalid statement at line 1, column 1 --
+    points at a character nobody can see (round 18).
+    """
+    try:
+        bom = path.read_bytes()[:3] == b"\xef\xbb\xbf"
+    except OSError:
+        bom = False
+    if bom:
+        what = (f"cash cannot read {path}: the file starts with a UTF-8 byte-order "
+                f"mark (BOM), which TOML does not allow ({exc}). Every setting in "
+                f"it is being ignored.")
+        fix = ("save it as UTF-8 without a BOM. In an editor that is \"UTF-8\" "
+               "rather than \"UTF-8 with BOM\"; Windows PowerShell 5.1 writes a "
+               "BOM for `-Encoding utf8`, and PowerShell 7 does not.")
+    else:
+        what = (f"cash cannot read {path}: it is not valid TOML ({exc}). Every "
+                f"setting in it is being ignored.")
+        fix = "correct the file at the line and column named."
+    _config_notice("CONFIG-INVALID", what, fix)
 
 
 # ---------------------------------------------------------------------------
@@ -607,15 +702,22 @@ def _load_env_config() -> dict[str, Any]:
             idx = int(m.group(1))
             field_name = m.group(2).lower()
             if field_name not in tier_field_names:
-                logger.warning(
-                    "Unknown tier field in env var %s=%r — skipping",
-                    env_key, raw,
-                )
+                _config_notice(
+                    "CONFIG-UNKNOWN-KEY",
+                    f"the environment sets {env_key}, and `{field_name}` is not a "
+                    f"tier setting, so it does nothing."
+                    f"{_did_you_mean(field_name, tier_field_names)}",
+                    "rename or unset it; the tier settings are listed under "
+                    "Configuration > Tiers in the docs.")
                 continue
             try:
                 value = _coerce(_field_type(field_name, TierConfig), raw, field_name)
             except ValueError as e:
-                logger.warning("Invalid value for %s=%r: %s", env_key, raw, e)
+                _config_notice(
+                    "CONFIG-INVALID",
+                    f"the environment sets {env_key}={raw!r}, which cash cannot "
+                    f"use: {e}. It is being ignored.",
+                    f"correct or unset {env_key}.")
                 continue
             tier_overrides.setdefault(idx, {})[field_name] = value
             continue
@@ -629,7 +731,11 @@ def _load_env_config() -> dict[str, Any]:
         try:
             value = _coerce(_field_type(key), raw, key)
         except ValueError as e:
-            logger.warning("Invalid value for %s=%r: %s", env_key, raw, e)
+            _config_notice(
+                "CONFIG-INVALID",
+                f"the environment sets {env_key}={raw!r}, which cash cannot use: "
+                f"{e}. It is being ignored.",
+                f"correct or unset {env_key}.")
             continue
         out[key] = value
 
@@ -771,19 +877,90 @@ def _running_installed_code() -> bool:
     return _running_console_script() is not None or _running_installed_module()
 
 
-def _cwd_project_root() -> Path | None:
-    """The first directory at or above the cwd holding a project marker."""
-    try:
-        here = Path.cwd()
-    except OSError:
-        return None
-    for d in [here, *here.parents]:
+def _project_root_above(start: Path) -> Path | None:
+    """The first directory at or above *start* holding a project marker."""
+    for d in [start, *start.parents]:
         try:
             if any((d / marker).exists() for marker in _PROJECT_MARKERS):
                 return d
         except OSError:
             continue
     return None
+
+
+def _cwd_project_root() -> Path | None:
+    """The first directory at or above the cwd holding a project marker."""
+    try:
+        here = Path.cwd()
+    except OSError:
+        return None
+    return _project_root_above(here)
+
+
+def _running_pytest() -> bool:
+    """Is this a pytest process -- the one that was typed, or an xdist worker?
+
+    A worker is started as ``python -c``, so nothing in its ``argv`` or
+    ``__main__`` says pytest; the variable xdist sets for it does, together
+    with that ``-c``. ``pytest`` must also be imported, which keeps out a
+    plain subprocess that merely inherited the variable from a test; and an
+    interactive shell is never pytest, whatever it has imported.
+    """
+    if "pytest" not in sys.modules or _interactive_shell_is_running():
+        return False
+    argv0 = sys.argv[0] if sys.argv else ""
+    if argv0 == "-c" and os.environ.get("PYTEST_XDIST_WORKER"):
+        return True
+    if _running_console_script() in ("pytest", "py.test"):
+        return True
+    spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+    return getattr(spec, "name", None) in ("pytest", "pytest.__main__")
+
+
+def _calling_code_project_root() -> Path | None:
+    """The project of the nearest code on the stack that is neither cash's nor
+    installed -- under pytest, the test module being collected or run."""
+    own = Path(__file__).resolve().parent
+    frame = sys._getframe(1)
+    while frame is not None:
+        name = frame.f_code.co_filename
+        frame = frame.f_back
+        if not name or name.startswith("<"):
+            continue
+        try:
+            path = Path(name).resolve()
+            if path.is_relative_to(own) or _is_installed_path(path):
+                continue
+        except (OSError, ValueError):
+            continue
+        root = _project_root_above(path.parent)
+        if root is not None:
+            return root
+    return None
+
+
+def _invocation_project_root() -> Path | None:
+    """The project an installed program -- pytest above all -- is working on.
+
+    The one the cwd is in. Failing that, under pytest, the one the tests
+    belong to: ``pytest proj/tests`` typed from the directory above used to
+    find no project, so it cached per user under ``…/cash/pytest`` and never
+    read ``proj/pyproject.toml``, while ``python -m pytest`` from the same
+    place cached in ``./.cash`` -- two caches and two configs for one command
+    (round 18).
+
+    Only a project BELOW the cwd: a test that changes into a scratch
+    directory keeps the scratch directory, as it always has.
+    """
+    root = _cwd_project_root()
+    if root is None and _running_pytest():
+        below = _calling_code_project_root()
+        try:
+            if below is not None and below.is_relative_to(Path.cwd().resolve()):
+                root = below
+        except (OSError, ValueError):
+            pass
+    return root
 
 
 def project_anchor() -> Path:
@@ -818,15 +995,15 @@ def project_anchor() -> Path:
     """
     start = _running_script_dir()
     if start is None:
-        if _running_installed_code():
-            root = _cwd_project_root()
+        # An xdist worker is ``python -c``, not installed code, and anchored
+        # to the cwd while the pytest that started it anchored to the project:
+        # one run, two caches.
+        if _running_installed_code() or _running_pytest():
+            root = _invocation_project_root()
             if root is not None:
                 return root
         return Path.cwd()
-    for d in [start, *start.parents]:
-        if any((d / marker).exists() for marker in _PROJECT_MARKERS):
-            return d
-    return start
+    return _project_root_above(start) or start
 
 
 def _running_console_script() -> str | None:
@@ -913,7 +1090,7 @@ def _installed_entry_point_cache_dir() -> Path | None:
     name = _running_console_script()
     if name is None or name.lower() == "cash":
         return None
-    if _cwd_project_root() is not None:
+    if _invocation_project_root() is not None:
         return None
     try:
         return _per_user_cache_root() / name
@@ -1084,6 +1261,20 @@ def _resolve_config(
         The merged `CashConfig`.
     """
     sources: list[str] = []
+    #: setting -> the layer that set it last (the one that won).
+    origins: dict[str, str] = {}
+    #: every config file looked for, and what was in it.
+    files: list[tuple[str, str, str]] = []
+
+    def file_layer(layer: str, path: Any) -> dict[str, Any]:
+        data, found = _load_toml_layer(Path(path))
+        files.append((layer, str(path), found))
+        data = _validated_layer(data, str(path), strict=False,
+                                unknown_keys=found in (TOML_SECTION, TOML_FLAT))
+        for key in data:
+            origins[key] = str(path)
+        return data
+
     # Where a relative ``cache_dir`` should be resolved FROM. Starts as the
     # project anchor (the default ``.cash`` belongs to the project, not to
     # wherever the job was launched); each layer that sets ``cache_dir``
@@ -1107,8 +1298,7 @@ def _resolve_config(
     else:
         user_path = user_config_path
     if user_path is not None:
-        user_data = _validated_layer(
-            _load_toml_config(Path(user_path)), str(user_path), strict=False)
+        user_data = file_layer("user", user_path)
         if user_data:
             _merge(merged, user_data)
             sources.append(f"user:{user_path}")
@@ -1119,8 +1309,7 @@ def _resolve_config(
     # Layer 2b: explicit ``Cash(config_path=...)`` override (merged on
     # top of the user-scoped layer)
     if config_path is not None:
-        override_data = _validated_layer(
-            _load_toml_config(Path(config_path)), str(config_path), strict=False)
+        override_data = file_layer("config_path", config_path)
         if override_data:
             _merge(merged, override_data)
             sources.append(f"file:{config_path}")
@@ -1134,8 +1323,7 @@ def _resolve_config(
     else:
         project_path = project_config_path
     if project_path is not None:
-        project_data = _validated_layer(
-            _load_toml_config(Path(project_path)), str(project_path), strict=False)
+        project_data = file_layer("project", project_path)
         if project_data:
             _merge(merged, project_data)
             sources.append(f"project:{project_path}")
@@ -1148,6 +1336,8 @@ def _resolve_config(
     if env_data:
         _merge(merged, env_data)
         sources.append("env")
+        for key in env_data:
+            origins[key] = "CASH_TIER_<N>_*" if key == "tiers" else f"CASH_{key.upper()}"
         if "cache_dir" in env_data:
             cache_dir_origin = _CALLER_RELATIVE
             cache_dir_was_configured = True
@@ -1157,6 +1347,8 @@ def _resolve_config(
         overrides = _validated_layer(overrides, "Cash(...) arguments", strict=True)
         _merge(merged, overrides)
         sources.append("kwargs")
+        for key in overrides:
+            origins[key] = "Cash(...)"
         if "cache_dir" in overrides:
             cache_dir_origin = _CALLER_RELATIVE
             cache_dir_was_configured = True
@@ -1167,10 +1359,14 @@ def _resolve_config(
             merged["cache_dir"] = str(installed)
             cache_dir_origin = _CALLER_RELATIVE      # already absolute
             sources.append("entry-point")
+            origins["cache_dir"] = "installed tool, run outside any project"
     merged["cache_dir"] = _anchor_cache_dir(merged.get("cache_dir"), cache_dir_origin)
 
     # Materialise the dict into a CashConfig.
-    return _build_config(merged, source=",".join(sources) if sources else "defaults")
+    cfg = _build_config(merged, source=",".join(sources) if sources else "defaults")
+    cfg._origins = origins
+    cfg._files = files
+    return cfg
 
 
 def validate_value(name: str, value: Any, dataclass_type: type = CashConfig) -> Any:
@@ -1220,14 +1416,20 @@ def validate_value(name: str, value: Any, dataclass_type: type = CashConfig) -> 
         f"{name}={value!r} is a {type(value).__name__}; expected {expected}{hint}")
 
 
-def _validated_layer(data: dict[str, Any], label: str, *, strict: bool) -> dict[str, Any]:
+def _validated_layer(data: dict[str, Any], label: str, *, strict: bool,
+                     unknown_keys: bool = False) -> dict[str, Any]:
     """*data* with every known field checked by `validate_value`.
 
-    Unknown keys pass through untouched (``_build_config`` ignores them; a
-    ``pyproject.toml`` read flat holds plenty). A bad value RAISES when the
-    caller's own code supplied it (*strict*) -- that is a bug at the call site,
-    and the place to say so -- and is logged and dropped when it came from a
-    file or the environment, which must not stop a program from running.
+    A bad value RAISES when the caller's own code supplied it (*strict*) --
+    that is a bug at the call site, and the place to say so -- and is reported
+    (CONFIG-INVALID) and dropped when it came from a file or the environment,
+    which must not stop a program from running.
+
+    With *unknown_keys* -- a ``[tool.cash]`` table or a cash config file, where
+    every key is meant to be cash's -- a key that is not a setting is reported
+    (CONFIG-UNKNOWN-KEY, with the nearest real name). It used to pass through
+    to ``_build_config`` and be dropped there without a word, while
+    ``cash.configure()`` raised on the same typo (round 18).
     """
     valid = {f.name for f in fields(CashConfig) if not f.name.startswith("_")}
     tier_valid = {f.name for f in fields(TierConfig)}
@@ -1235,20 +1437,43 @@ def _validated_layer(data: dict[str, Any], label: str, *, strict: bool) -> dict[
     for key, value in data.items():
         try:
             if key == "tiers" and isinstance(value, list):
-                out[key] = [
-                    {k: (validate_value(k, v, TierConfig) if k in tier_valid else v)
-                     for k, v in t.items()} if isinstance(t, dict) else t
-                    for t in value
-                ]
+                tiers = []
+                for i, t in enumerate(value):
+                    if not isinstance(t, dict):
+                        tiers.append(t)
+                        continue
+                    if unknown_keys:
+                        for k in t:
+                            if k not in tier_valid:
+                                _unknown_key(label, f"tiers[{i}].{k}", k, tier_valid)
+                    tiers.append({k: (validate_value(k, v, TierConfig) if k in tier_valid else v)
+                                  for k, v in t.items()})
+                out[key] = tiers
             elif key in valid:
                 out[key] = validate_value(key, value)
+            elif unknown_keys:
+                _unknown_key(label, key, key, valid)
             else:
                 out[key] = value
         except ValueError as exc:
             if strict:
                 raise ValueError(f"cash config ({label}): {exc}") from None
-            logger.warning("Ignoring invalid cash setting in %s: %s", label, exc)
+            _config_notice(
+                "CONFIG-INVALID",
+                f"{label} sets {exc}. That setting is being ignored, so its "
+                f"default applies.",
+                "correct the value; `cash info` shows every setting in effect "
+                "and where it came from.")
     return out
+
+
+def _unknown_key(label: str, shown: str, key: str, valid: Any) -> None:
+    _config_notice(
+        "CONFIG-UNKNOWN-KEY",
+        f"{label} sets `{shown}`, which is not a cash setting, so it does "
+        f"nothing.{_did_you_mean(key, valid)}",
+        "rename or remove it; `cash info` shows every setting in effect and "
+        "where it came from.")
 
 
 def _merge(base: dict[str, Any], update: dict[str, Any]) -> None:

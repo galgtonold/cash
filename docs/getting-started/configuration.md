@@ -18,7 +18,7 @@ most convenient — explicit code for one-off scripts, `pyproject.toml`
 for team defaults, env vars for deployment overrides, the XDG file for
 personal cross-project defaults.
 
-<!-- claim: cash/config.py:project_anchor @c7c2a516, cash/config.py:_anchor_cache_dir @7f3408d4 -->
+<!-- claim: cash/config.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @7f3408d4 -->
 ### What paths are relative to
 
 Where a relative `cache_dir` points depends on who wrote it, and the rule is
@@ -55,7 +55,9 @@ reinstall. So:
 * **Inside a project** it walks up from your current directory to the project
   root. That is what puts a test suite's cache beside its project, however
   `pytest` was typed and from whichever subdirectory, and what lets
-  `cash inspect` find the cache your code is using.
+  `cash inspect` find the cache your code is using. pytest run from *above*
+  the project (`pytest proj/tests`) uses the project the tests belong to, and
+  so do its xdist workers.
 * **Outside any project** — your home directory, a scratch directory, a drive
   root — an installed console script caches per user, per tool, in the
   platform's cache location. Left on the current directory it would drop a
@@ -87,21 +89,26 @@ cash = Cash(cache_dir="/tmp/scratch", debug=True)
 configure(debug=True, min_cache_savings_pct=0.30)
 ```
 
-<!-- claim: cash/config.py:CashConfig @34f6f773 broad="the field table is a claim about every field of the dataclass" -->
+<!-- claim: cash/config.py:CashConfig @818dd393 broad="the field table is a claim about every field of the dataclass" -->
 ## All `CashConfig` fields
 
 Every field below is settable via every layer. The env-var column shows
 the `CASH_*` binding; the TOML key matches the field name.
 
-<!-- claim: cash/config.py:validate_value @236951a3, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @4f7536d2 -->
+<!-- claim: cash/config.py:validate_value @236951a3, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @758aacf4 -->
 Every value is checked against the field's type, whichever layer it comes
 from. A string is read the way an environment variable is — `"true"`, `"8"` —
 and the byte-size fields (`max_cache_size`, `file_hash_full_max_bytes`, a
 tier's `max_size_bytes`) also take a size: `"2GB"`, `"500MB"`, `"512MiB"`
 (KB/MB/GB/TB are powers of 1000, KiB/MiB/GiB/TiB powers of 1024). A bad value
 passed in code — `Cash(...)`, `cash.configure(...)` — raises `ValueError`
-naming the field; a bad value in a TOML file or an environment variable is
-logged and skipped, so the rest of the configuration still applies.
+naming the field. A bad value in a TOML file or an environment variable is
+reported once ([`CONFIG-INVALID`](../warnings.md#config-invalid)) and skipped,
+so the rest of the configuration still applies. A key in `[tool.cash]` or a
+cash config file that is not a setting is reported too
+([`CONFIG-UNKNOWN-KEY`](../warnings.md#config-unknown-key)), with the setting
+it most resembles. `cash info` lists every setting in effect and where each
+came from.
 
 ### Cache location & file-backend tuning
 
