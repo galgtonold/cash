@@ -26,7 +26,6 @@ import weakref
 from collections import Counter, OrderedDict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from itertools import chain
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 from . import _plain_data
