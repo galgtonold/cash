@@ -3359,7 +3359,7 @@ class Cash:
     def _store_refusal(
         self, func: Callable, func_name: str, res: Any, rng_new: bool,
         cache_if: Callable[[Any], bool] | None, tracker: Any,
-        capture_watch: Any = _NO_WATCH,
+        capture_watch: Any = _NO_WATCH, observer: Any = None,
     ) -> str | None:
         """Why *res* must not be stored, or ``None`` to store it.
 
@@ -3390,6 +3390,17 @@ class Cash:
             refusal = "a file it read changed while it ran"
         if refusal is None and self._code_moved_since_keyed(func, func_name):
             refusal = "its code changed on disk after this process keyed it"
+        mutated = getattr(observer, "mutated_args", None)
+        if refusal is None and mutated and self._purity_modes.get(func_name, "warn") != "silent":
+            # A hit returns the stored value and leaves the caller's object as
+            # it was, where this call changed it: downstream of the call, the
+            # program then differs between a hit and a miss (round 19:
+            # `a -= a.mean()`, `rng.shuffle(a)`, `np.clip(..., out=a)`). Not
+            # storing makes every call run, which is what the code means.
+            # `assume_safe=True` is the audited opt-out.
+            names = ", ".join(repr(n) for n in mutated)
+            refusal = (f"it changed its argument{'s' if len(mutated) > 1 else ''} "
+                       f"{names} in place, which a hit would not do")
         return refusal
 
     def _note_not_stored(self, cache_key: str, refusal: str) -> None:
@@ -3729,6 +3740,7 @@ class Cash:
                 # this (missing) path: a hit runs no body, so there is nothing
                 # to observe and nothing to pay for.
                 observer = self._make_effect_observer()
+                observer.arg_snapshot = self._argument_snapshot(func_name, args, kwargs)
                 # Watch the global RNG across the call: a draw inside the body is
                 # an input the key cannot see statically.
                 rng_pre = self._capture_rng_pre_state()
@@ -3788,7 +3800,8 @@ class Cash:
                 execution_time = time.perf_counter() - call_start
 
                 refusal = self._store_refusal(
-                    func, func_name, res, rng_new, cache_if, tracker, capture_watch)
+                    func, func_name, res, rng_new, cache_if, tracker, capture_watch,
+                    observer=observer)
                 if refusal is not None:
                     self._note_not_stored(cache_key, refusal)
                 else:
@@ -3928,6 +3941,7 @@ class Cash:
                 from cash.notebook.file_tracker import FileAccessTracker
                 tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
                 observer = self._make_effect_observer()
+                observer.arg_snapshot = self._argument_snapshot(func_name, args, kwargs)
                 rng_pre = self._capture_rng_pre_state()
                 body_seconds: float | None = None
                 with tracker, observer:
@@ -3980,7 +3994,8 @@ class Cash:
                 execution_time = time.perf_counter() - call_start
 
                 refusal = self._store_refusal(
-                    func, func_name, res, rng_new, cache_if, tracker, capture_watch)
+                    func, func_name, res, rng_new, cache_if, tracker, capture_watch,
+                    observer=observer)
                 if refusal is not None:
                     self._note_not_stored(cache_key, refusal)
                 else:
@@ -8766,7 +8781,8 @@ class Cash:
                 # whole result -- it gates STORAGE, never what the caller
                 # already received.
                 refusal = self._store_refusal(
-                    None, func_name, buffer, rng_new, cache_if, tracker)
+                    None, func_name, buffer, rng_new, cache_if, tracker,
+                    observer=observer)
                 if refusal is not None:
                     self._note_not_stored(cache_key, refusal)
                 else:
@@ -9244,6 +9260,37 @@ class Cash:
     #: subsequent miss.
     _MUTATION_CHECK_BUDGET_S = 0.05
 
+    def _argument_snapshot(self, func_name: str, args: tuple,
+                           kwargs: dict) -> dict[str, str] | None:
+        """``{parameter: hash}`` of the arguments that CAN change, before the body.
+
+        An int, a str, a tuple of them: rebinding one inside the body (``n -=
+        1``) is invisible to the caller, so they are left out, and most calls
+        snapshot nothing. What remains lets `_check_argument_mutation` name the
+        argument that moved. None when the check has been retired as too
+        costly for this function, or nothing could be hashed.
+        """
+        if func_name in self._mutation_check_too_costly:
+            return None
+        started = time.perf_counter()
+        try:
+            canon_args, canon_kwargs = self._normalize_call_args(func_name, args, kwargs)
+        except Exception:  # noqa: BLE001 - best effort, like the check itself
+            return None
+        named = [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
+        snapshot: dict[str, str] = {}
+        immutable = _IMMUTABLE_VALUE_TYPES()
+        for name, value in named:
+            if self._is_immutable_capture(value) or isinstance(value, immutable):
+                continue
+            try:
+                snapshot[name] = self._hash_arg_payload((value,), {})
+            except Exception:  # noqa: BLE001 - unhashable: the whole-args check still runs
+                continue
+        if time.perf_counter() - started > self._MUTATION_CHECK_BUDGET_S:
+            self._mutation_check_too_costly.add(func_name)
+        return snapshot
+
     def _check_argument_mutation(
         self, func_name: str, args: tuple, kwargs: dict,
         args_hash: str | None, observer: Any,
@@ -9279,11 +9326,25 @@ class Cash:
             return
         if time.perf_counter() - started > self._MUTATION_CHECK_BUDGET_S:
             self._mutation_check_too_costly.add(func_name)
-        if after is not None and after != args_hash:
-            observer.record(
-                "argument mutation",
-                "the arguments differ after the call than before it",
-            )
+        if after is None or after == args_hash:
+            return
+        names = self._mutated_argument_names(func_name, args, kwargs, observer)
+        observer.mutated_args = names or ["an argument"]
+        shown = ", ".join(repr(n) for n in names) if names else "an argument"
+        observer.record(
+            "argument mutation",
+            f"the call changed {shown} in place -- the result was not stored, "
+            f"so this call runs every time",
+        )
+
+    def _mutated_argument_names(self, func_name: str, args: tuple, kwargs: dict,
+                                observer: Any) -> list[str]:
+        """The parameters whose value moved across the call, by name."""
+        before = getattr(observer, "arg_snapshot", None)
+        if not before:
+            return []
+        now = self._argument_snapshot(func_name, args, kwargs) or {}
+        return [name for name, digest in before.items() if now.get(name) != digest]
 
     def _make_effect_observer(self) -> Any:
         """An :class:`EffectObserver` scoped to this instance's cache dir.

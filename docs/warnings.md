@@ -622,8 +622,17 @@ body, so every effect on that list happened exactly once and will not happen
 again. If the effect was part of the point — the file the next step reads, the
 row posted to a service, the dict the caller inspects afterwards — the program
 is correct on the run that filled the cache and quietly different on every run
-after it. `argument mutation` is the one that catches people out: an object the
-caller still holds stopped being changed, and nothing at the call site says so.
+after it.
+
+<!-- claim: cash/core.py:Cash._store_refusal @4aec04ce, cash/core.py:Cash._argument_snapshot @bb810f3c -->
+`argument mutation` is handled differently, because it is the one that caught
+people out: an object the caller still holds would stop being changed. A call
+seen changing an argument is **not stored** — the line names the argument, and
+that call runs every time, as it would uncached. Only an object can change this
+way: rebinding an `int` or `str` parameter inside the body (`n -= 1`) is
+invisible to the caller and never counts. The price is the caching itself, so
+the fix below is still worth making; `assume_safe=True` on the decorator stores
+such a call anyway.
 
 **What to do.** Decide whether the effect is part of the result. If it is, split
 the function: cache the computation that produces the data, and do the writing,
@@ -648,11 +657,10 @@ finding about a `print` hid a network read in the same function.
 
 **When it is safe to ignore.** When everything on the list is bookkeeping nobody
 reads back — a log line, a metrics counter, a `.tmp` file, a progress bar
-writing to disk. You lose it on cache hits and nothing downstream notices. Do
-not ignore an `argument mutation` line without first checking what the caller
-does with that object next: that one is a change in your program's behaviour
-rather than in Cash's, and it only shows up once the cache is warm, which is
-usually not the run you were watching.
+writing to disk. You lose it on cache hits and nothing downstream notices. An
+`argument mutation` line is safe as far as correctness goes — that call is not
+cached — but it means the function is not being cached at all for calls like
+it; return a modified copy to get the caching back.
 
 ## IMPURE-SCOPE-MUTATION {#impure-scope-mutation}
 
@@ -764,11 +772,11 @@ new code arrives unannotated and is reported, and the scope of the exemption is
 visible in the diff that granted it.
 
 A line that **changes an argument in place** is the one to fix rather than
-annotate: the message says "changes the argument '…' in place". On a miss the
-caller's object is changed; on a hit the stored result comes back and the
-object is not, so whatever the caller does next sees two different objects
-depending on whether the call hit. Return a modified copy instead
-(`feats = feats.copy(); feats["x"] = ...; return feats`).
+annotate: the message says "changes the argument '…' in place". A cache hit
+could not repeat that change to the caller's object, so a call that makes it is
+not stored and runs every time (see [argument mutation](#impure-observed-effects))
+— correct, but uncached. Return a modified copy instead
+(`feats = feats.copy(); feats["x"] = ...; return feats`) and it caches.
 
 **When it is safe to ignore.** When every line it names is a `print`, a
 `logging` call or a progress bar. That is far and away the commonest reason this

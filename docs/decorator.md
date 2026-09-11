@@ -873,7 +873,7 @@ business invariants — its job is purely "should this be cached".
 result fits in a single chunk. For multi-chunk results, the predicate
 is bypassed (warning fires) — see the iterator section below.
 
-<!-- claim: cash/core.py:Cash._store_refusal @a62aaa08 -->
+<!-- claim: cash/core.py:Cash._store_refusal @4aec04ce -->
 **It decides what is written, not what is served.** `cache_if` is not part of
 the key, so adding it to a function that already has entries changes nothing
 about those entries: a `None` stored before you added

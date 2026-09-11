@@ -674,12 +674,14 @@ walk into. Measured against a planted library: of four state mutations that
 reached past the analyzer, **three left an observable change in the
 arguments** — so cash looks. The argument hash is already computed to build the
 cache key, so a miss re-runs exactly that and compares; a difference means the
-call changed what it was handed.
+call changed what it was handed. That call's result is **not stored** — a hit
+could not make the same change to the caller's object — so it runs every time,
+and the message names the argument:
 
 ```text
 [IMPURE-OBSERVED-EFFECTS] @cash.cache on report.summarise: the first call had
 effects that static analysis did not see ...
-  argument mutation: the arguments differ after the call than before it
+  argument mutation: the call changed 'rows' in place -- the result was not stored, so this call runs every time
 ```
 
 Two limits worth stating:

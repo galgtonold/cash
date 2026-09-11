@@ -850,7 +850,8 @@ class _PurityVisitor(ast.NodeVisitor):
         root = (base or "").split(".")[0].split("[")[0]
         if root and root in self._param_names:
             return (f"{kind} mutation that changes the argument '{root}' in place; "
-                    f"a cache hit returns the stored result without making that change")
+                    f"a cache hit would not make that change, so a call that makes "
+                    f"it is not stored and runs every time")
         return f"{kind} mutation"
 
 
