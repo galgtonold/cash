@@ -26,8 +26,10 @@ import weakref
 from collections import Counter, OrderedDict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from itertools import chain
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
+from . import _plain_data
 from .backends import CacheBackend, CacheMetadata, CascadingBackend
 from .backends.factory import build_backend_from_config
 
@@ -278,7 +280,8 @@ def _stable_key_repr_of(value: Any, _depth: int, _stack: set) -> Any:
     return value
 
 
-def _canonicalize_dict_order(value: Any, _depth: int = 0) -> Any:
+def _canonicalize_dict_order(value: Any, _depth: int = 0,
+                             _keep: frozenset[int] = frozenset()) -> Any:
     """Rebuild every ``dict`` in *value* in canonical (sorted-key) order so that
     two dicts that are equal but for insertion order pickle to identical bytes
    . Recurses through ``dict``/``list``/``tuple``; other types pass
@@ -300,13 +303,19 @@ def _canonicalize_dict_order(value: Any, _depth: int = 0) -> Any:
     # to reorder, and this runs once per element of every container argument.
     if type(value) in _CODELESS_PRIMS:
         return value
+    # A plain argument (`_plain_container_ids`) has no dict inside either.
+    # Returned as the SAME object, which pickles to the bytes the rebuilt copy
+    # did: `_hash_arg_payload` keeps a value here only when none of its lists
+    # and tuples is reachable twice, so no memo reference tells them apart.
+    if _keep and id(value) in _keep:
+        return value
     if isinstance(value, dict):
         # A dict SUBCLASS keeps insertion order (it may be semantic) and is
         # tagged with its type; a plain dict is sorted (order-insensitive) and
         # untagged, so its key is byte-identical to before this change.
         subclass = type(value) is not dict
         items = [
-            (k, _canonicalize_dict_order(v, _depth + 1)) for k, v in value.items()
+            (k, _canonicalize_dict_order(v, _depth + 1, _keep)) for k, v in value.items()
         ]
         if not subclass:
             try:
@@ -319,12 +328,83 @@ def _canonicalize_dict_order(value: Any, _depth: int = 0) -> Any:
         canon = dict(items)
         return _tag_subtype(value, dict, canon)
     if isinstance(value, list):
-        canon = [_canonicalize_dict_order(v, _depth + 1) for v in value]
+        canon = [_canonicalize_dict_order(v, _depth + 1, _keep) for v in value]
         return _tag_subtype(value, list, canon)
     if isinstance(value, tuple):
-        canon = tuple(_canonicalize_dict_order(v, _depth + 1) for v in value)
+        canon = tuple(_canonicalize_dict_order(v, _depth + 1, _keep) for v in value)
         return _tag_subtype(value, tuple, canon)
     return value
+
+
+_PLAIN_SEQS = (list, tuple)
+
+
+def _plain_container_ids(value: Any) -> list[int] | None:
+    """The ids of every list and tuple in *value* if it is PLAIN data, else None.
+
+    Plain: exact lists and tuples, nested, over exact primitives
+    (`_CODELESS_PRIMS`) -- the rows a parser returns. Such a value holds no set,
+    no dict to put in order and no code, so the three Python-level walks a key
+    otherwise makes over every element of it -- `_contains_set`,
+    `_canonicalize_dict_order`, `_iter_code_carriers` -- can find nothing, and
+    they were nearly all of a warm hit: 8.4 s on two million rows whose body
+    took 0.04 s (round 19). This proves "plain" one level at a time at C speed
+    instead (``chain.from_iterable``, ``map(type, ...)``), 0.34 s on the same
+    rows. Anything else -- a dict, a set, an object, a subclass, a cycle, more
+    than *_max_depth* levels -- returns None, and the walks decide as before.
+    """
+    return _plain_data.container_ids(value)
+
+
+#: A census taken while one cache key is built, shared by the code fold and the
+#: argument hash so a big argument is looked at once (`_plain_census`). None
+#: outside a key build: after the body has run, an argument may have changed.
+_PLAIN_CENSUS = threading.local()
+
+
+def _plain_census(value: Any) -> list[int] | None:
+    """`_plain_container_ids`, memoized for the key build in progress."""
+    memo = getattr(_PLAIN_CENSUS, "memo", None)
+    if memo is not None:
+        hit = memo.get(id(value))
+        if hit is not None and hit[0] is value:
+            return hit[1]
+    ids = _plain_container_ids(value)
+    if memo is not None:
+        memo[id(value)] = (value, ids)
+    return ids
+
+
+_EMPTY_TUPLE_ID = id(())
+
+
+def _plain_payload_values(values: list[Any]) -> frozenset[int] | None:
+    """The ids of the plain arguments among *values*, if the fast path applies.
+
+    It applies when every value is a primitive (a digest the hashers returned
+    is a str) or plain data, and no list or tuple is reachable twice across all
+    of them -- the condition under which keeping them as they are pickles to the
+    same bytes as the rebuilt copy: a shared object is written once and then
+    referenced, a rebuilt one in full each time. The empty tuple is one shared
+    object in every program and is never referenced that way, so it does not
+    count. None otherwise, and when there is nothing plain to keep.
+    """
+    keep: list[int] = []
+    all_ids: list[int] = []
+    for value in values:
+        if type(value) in _CODELESS_PRIMS:
+            continue
+        ids = _plain_census(value)
+        if ids is None:
+            return None
+        keep.append(id(value))
+        all_ids.extend(ids)
+    if not keep:
+        return None
+    repeats = len(all_ids) - len(set(all_ids))
+    if repeats and repeats != max(all_ids.count(_EMPTY_TUPLE_ID) - 1, 0):
+        return None
+    return frozenset(keep)
 
 
 def _contains_set(value: Any, _depth: int = 0, _seen: set[int] | None = None) -> bool:
@@ -1927,6 +2007,10 @@ class Cash:
         # is an exact-type test against a tuple rather than an isinstance.
         if type(value) in _CODELESS_PRIMS:
             return
+        # Plain data carries no code (`_plain_container_ids`); walking two
+        # million rows to find that out was 14% of a warm hit.
+        if _depth == 0 and type(value) in _PLAIN_SEQS and _plain_census(value) is not None:
+            return
         # A frozen function's list/tuple/dict result is keyed by the call that
         # produced it (`_remember_frozen_container`), code inside it included:
         # walking two million rows for functions was most of a hit's cost.
@@ -2637,6 +2721,25 @@ class Cash:
             return None
 
     def _resolve_cache_key(
+        self,
+        func: Callable,
+        func_name: str,
+        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
+        args: tuple,
+        kwargs: dict,
+        call_start: float,
+    ) -> Any:
+        """`_resolve_cache_key_now`, with one plain-data census per argument
+        shared across the key it builds (`_plain_census`)."""
+        previous = getattr(_PLAIN_CENSUS, "memo", None)
+        _PLAIN_CENSUS.memo = {}
+        try:
+            return self._resolve_cache_key_now(
+                func, func_name, dynamic_depends_on, args, kwargs, call_start)
+        finally:
+            _PLAIN_CENSUS.memo = previous
+
+    def _resolve_cache_key_now(
         self,
         func: Callable,
         func_name: str,
@@ -7261,7 +7364,7 @@ class Cash:
         raw = [(label, value) for (label, value), digest in zip(
                    [(f"#{i}", a) for i, a in enumerate(args)] + list(kwargs.items()),
                    list(hashed_args) + list(hashed_kwargs.values()))
-               if digest is value and isinstance(value, (list, tuple, dict, set, frozenset))]
+               if digest is value and type(value) not in _CODELESS_PRIMS]
         payload_t0 = time.perf_counter()
 
         payload: Any = (hashed_args, hashed_kwargs)
@@ -7277,7 +7380,12 @@ class Cash:
         # args equal but for insertion order share a key. This is
         # byte-identical for already-sorted dicts (the normalised top-level
         # kwargs), so only out-of-order dict values change their key.
-        if _contains_set(payload):
+        keep = _plain_payload_values(list(hashed_args) + list(hashed_kwargs.values()))
+        if keep is not None:
+            # Every argument is a digest, a primitive or plain data: no set
+            # anywhere, and nothing inside the plain ones to reorder.
+            payload = _canonicalize_dict_order(payload, _keep=keep)
+        elif _contains_set(payload):
             payload = _stable_key_repr(payload)
         else:
             payload = _canonicalize_dict_order(payload)
@@ -7285,9 +7393,10 @@ class Cash:
         if raw:
             payload_seconds = time.perf_counter() - payload_t0
             if costliest is None or payload_seconds > costliest[1]:
-                label, value = max(raw, key=lambda r: len(r[1]))
-                producer = None
-                if self._frozen_containers and id(value) in self._frozen_containers:
+                label, value = max(raw, key=lambda r: len(r[1]) if hasattr(r[1], "__len__")
+                                   else sys.getsizeof(r[1]))
+                producer = getattr(value, "_cash_lineage_producer", None)
+                if producer is None and self._frozen_containers and id(value) in self._frozen_containers:
                     producer = self._frozen_containers[id(value)][1]
                 costliest = (label, payload_seconds, type(value).__name__, producer, False)
         _ARG_COST.last = costliest
@@ -9548,6 +9657,14 @@ class Cash:
         """
         if func_name in self._mutation_check_too_costly:
             return None
+        # The key was hashed a moment ago, on this thread: if that already cost
+        # more than the check may, the check is retired before it pays -- a
+        # miss on two million rows hashed them three times, once for the key,
+        # once here and once after the body (round 19).
+        cost = getattr(_ARG_COST, "last", None)
+        if cost is not None and cost[1] > self._MUTATION_CHECK_BUDGET_S:
+            self._mutation_check_too_costly.add(func_name)
+            return None
         started = time.perf_counter()
         try:
             canon_args, canon_kwargs = self._normalize_call_args(func_name, args, kwargs)
@@ -9556,9 +9673,13 @@ class Cash:
         named = [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
         snapshot: dict[str, str] = {}
         immutable = _IMMUTABLE_VALUE_TYPES()
-        for name, value in named:
-            if self._is_immutable_capture(value) or isinstance(value, immutable):
-                continue
+        candidates = [(name, value) for name, value in named
+                      if not (self._is_immutable_capture(value) or isinstance(value, immutable))]
+        if len(candidates) == 1:
+            # The only argument that can change is the one that did: named by
+            # elimination, with no hash of its own.
+            return {candidates[0][0]: ""}
+        for name, value in candidates:
             try:
                 snapshot[name] = self._hash_arg_payload((value,), {})
             except Exception:  # noqa: BLE001 - unhashable: the whole-args check still runs
@@ -9619,6 +9740,8 @@ class Cash:
         before = getattr(observer, "arg_snapshot", None)
         if not before:
             return []
+        if len(before) == 1:
+            return list(before)
         now = self._argument_snapshot(func_name, args, kwargs) or {}
         return [name for name, digest in before.items() if now.get(name) != digest]
 

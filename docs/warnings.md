@@ -635,7 +635,7 @@ row posted to a service, the dict the caller inspects afterwards — the program
 is correct on the run that filled the cache and quietly different on every run
 after it.
 
-<!-- claim: cash/core.py:Cash._store_refusal @4aec04ce, cash/core.py:Cash._argument_snapshot @bb810f3c -->
+<!-- claim: cash/core.py:Cash._store_refusal @4aec04ce, cash/core.py:Cash._argument_snapshot @7242f7d0 -->
 `argument mutation` is handled differently, because it is the one that caught
 people out: an object the caller still holds would stop being changed. A call
 seen changing an argument is **not stored** — the line names the argument, and
@@ -643,7 +643,9 @@ that call runs every time, as it would uncached. Only an object can change this
 way: rebinding an `int` or `str` parameter inside the body (`n -= 1`) is
 invisible to the caller and never counts. The price is the caching itself, so
 the fix below is still worth making; `assume_safe=True` on the decorator stores
-such a call anyway.
+such a call anyway. An argument that takes more than ~50 ms to hash is not
+checked -- the check would hash it twice more on every miss -- so for a big
+one, the static findings are what you have.
 
 **What to do.** Decide whether the effect is part of the result. If it is, split
 the function: cache the computation that produces the data, and do the writing,
@@ -900,7 +902,7 @@ somewhere it did not anticipate. The message names the exception and, where it
 can identify one, the argument type most likely responsible. Your call ran and
 returned its real result; only the caching was skipped.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @4adf0746 -->
+<!-- claim: cash/core.py:Cash._resolve_cache_key @31f0c59a -->
 **Why it matters.** That call did not cache. Correctness is not at risk — with
 no key, nothing is written and nothing is read, so this cannot produce a stale
 answer — but you are paying full compute every time it happens.
@@ -1181,7 +1183,7 @@ type when it can identify one; when the offending value is nested inside a
 container it says so instead, because it cannot see which element is to blame.
 The call ran and returned normally.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @4adf0746 -->
+<!-- claim: cash/core.py:Cash._resolve_cache_key @31f0c59a -->
 **Why it matters.** That call did not cache, and calls like it will not cache
 either — this is not first-call warm-up. Every call passing that argument pays
 full compute. Nothing can go stale, because nothing is being stored.

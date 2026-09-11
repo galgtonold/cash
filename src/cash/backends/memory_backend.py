@@ -14,6 +14,7 @@ from typing import Any
 
 from ._base import CacheBackend, MetadataDict
 from .serialization import Serializer
+from .. import _plain_data
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,9 @@ class InMemoryBackend(CacheBackend):
         self._max_size_bytes = max_size_bytes
         self._current_size_bytes = 0
         self._set_count = 0
+        #: Keys whose stored value holds only tuples and immutable primitives
+        #: below its top: a hit copies the top list alone, with no new check.
+        self._immutable_below: builtins.set[str] = set()
 
     #: Types whose instances cannot be mutated, so SHARING one between the
     #: stored entry and the caller is safe. Exact-type membership, never
@@ -96,6 +100,12 @@ class InMemoryBackend(CacheBackend):
                 scalars = InMemoryBackend._IMMUTABLE_SCALARS
                 if all(type(item) in scalars for item in value):
                     return value if value_type is tuple else list(value)
+                # Lists and tuples all the way down, over primitives: copied
+                # without a Python call per element (`_plain_data`). deepcopy
+                # of two million parsed rows took 1.5 s on every RAM hit.
+                done, copied = _plain_data.copy_plain(value)
+                if done:
+                    return copied
             return copy.deepcopy(value)
         except (TypeError, pickle.PicklingError, RecursionError, AttributeError):
             logger.debug("Could not deep-copy value for key %r, returning reference", key)
@@ -114,6 +124,9 @@ class InMemoryBackend(CacheBackend):
             metadata['access_count'] = metadata.get('access_count', 0) + 1
             metadata.setdefault('source', self.source_label)
 
+            if key in self._immutable_below:
+                # Checked when it was stored; the stored value is private.
+                return metadata, (list(value) if type(value) is list else value)
             return metadata, self._safe_deep_copy(value, key)
         return None, None
 
@@ -131,7 +144,12 @@ class InMemoryBackend(CacheBackend):
         # before recording the new one so the running total stays accurate.
         if key in self._store:
             self._current_size_bytes -= self._store[key][0].get('size', 0)
-        self._store[key] = (metadata, self._safe_deep_copy(value, key))
+        stored = self._safe_deep_copy(value, key)
+        self._store[key] = (metadata, stored)
+        if _plain_data.immutable_below(stored):
+            self._immutable_below.add(key)
+        else:
+            self._immutable_below.discard(key)
         self._current_size_bytes += size
 
         # Check max_entries limit
@@ -149,6 +167,7 @@ class InMemoryBackend(CacheBackend):
 
     def _drop(self, key: str) -> None:
         """Remove *key*, keeping the byte-cap running total in sync."""
+        self._immutable_below.discard(key)
         entry = self._store.pop(key, None)
         if entry is not None:
             self._current_size_bytes -= entry[0].get('size', 0)
@@ -158,6 +177,7 @@ class InMemoryBackend(CacheBackend):
 
     def clear(self) -> None:
         self._store.clear()
+        self._immutable_below.clear()
         self._current_size_bytes = 0
         # Also try to free memory back to OS
         self._try_malloc_trim()
@@ -188,6 +208,14 @@ class InMemoryBackend(CacheBackend):
         if obj_id in seen:
             return 0
         seen.add(obj_id)
+
+        # Plain data -- lists and tuples over primitives -- is summed a level at
+        # a time: the per-element recursion below took 3.5 s to size two
+        # million parsed rows being promoted into this tier (round 19).
+        if not seen or len(seen) == 1:
+            plain = _plain_data.size_of(obj)
+            if plain is not None:
+                return plain
 
         # int() on every return, without exception. `mem.sum()` below returns a
         # `numpy.int64`, and this value is written into entry metadata as

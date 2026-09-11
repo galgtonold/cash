@@ -225,6 +225,25 @@ def _message(
         "fingerprints itself, such as a numpy array or a dataframe, that "
         "registration needs override=True -- or drop the decorator here."
     )
+    key_seconds = culprit[2] if culprit is not None else None
+    if key_seconds is not None and key_seconds < 0.25 * per_call_overhead:
+        # Not the key: the lookup itself -- reading and rebuilding the stored
+        # result. Blaming an argument sent round 19's tester after "'path'
+        # (str), about 0ms to hash" for a parser whose hit was a 2M-row restore.
+        what = (
+            f"@cash.cache on {func_name!r} is costing more than it saves. "
+            f"Across {led.calls} calls cash spent {led.overhead_seconds:.2f}s on "
+            f"cache keys and lookups to avoid at most {best_case_saving * 1000:.0f}ms "
+            f"of work per call -- a net loss of about {waste:.1f}s so far. Almost "
+            f"none of it is the key (its costliest argument took about "
+            f"{key_seconds * 1000:.0f}ms to hash): it is loading the stored "
+            f"result, which takes longer than running the function."
+        )
+        return what, (
+            "a result that is slower to load than to compute is not worth "
+            "caching: drop the decorator here, or cache something smaller that "
+            "the rest is computed from -- the aggregate rather than the rows."
+        )
     if culprit is None:
         return what, hasher
     param, type_name, seconds, producer, old_pandas = culprit

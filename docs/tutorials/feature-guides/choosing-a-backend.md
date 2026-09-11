@@ -46,7 +46,7 @@ c = Cash(backend=InMemoryBackend(max_entries=500))
 c.register_magic()
 ```
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.__init__ @a6823bed, cash/backends/memory_backend.py:InMemoryBackend._evict @03ba0434 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.__init__ @46397493, cash/backends/memory_backend.py:InMemoryBackend._evict @03ba0434 -->
 A plain dict guarded by light bookkeeping. Reads and writes deep-copy by default so a downstream mutation can't poison the cache. Eviction has **three** triggers, and they do not use the same policy:
 
 1. `max_entries` — a hard LRU cap, evicting oldest-accessed first (`_evict_lru`).

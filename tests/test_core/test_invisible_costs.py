@@ -29,7 +29,8 @@ def _rows(n):
     return [(i, i * 2, f"x{i % 100}") for i in range(n)]
 
 
-def test_a_frozen_list_is_keyed_by_its_producer_not_its_contents(tmp_path):
+def test_a_frozen_list_is_keyed_by_its_producer_not_its_contents(tmp_path, monkeypatch):
+    import cash.core as core
     c = Cash(cache_dir=str(tmp_path / "cache"))
     calls = []
 
@@ -45,9 +46,17 @@ def test_a_frozen_list_is_keyed_by_its_producer_not_its_contents(tmp_path):
     rows = parse(200_000)
     assert total(rows) == total(rows)
     assert len(calls) == 1
-    t0 = time.perf_counter()
+    # Counted, not timed (a timed bound flaked under a loaded -n 16 run): the
+    # hit neither pickles the list nor walks it.
+    dumped = []
+    real_dumps = core.pickle.dumps
+    monkeypatch.setattr(core.pickle, "dumps", lambda obj, *a, **k:
+                        dumped.append(obj) or real_dumps(obj, *a, **k))
     total(rows)
-    assert time.perf_counter() - t0 < 0.05, "a hit still walked the whole list"
+    payloads = [x for x in dumped if isinstance(x, tuple) and len(x) == 2
+                and isinstance(x[0], tuple)]
+    assert payloads, "no key was hashed"
+    assert not any(a is rows for x in payloads for a in x[0]),         "a hit still serialized the whole list"
 
 
 def test_a_frozen_list_keys_the_same_in_the_next_process(tmp_path):
@@ -153,12 +162,14 @@ def test_the_hit_line_and_the_summary_show_what_the_lookup_cost(tmp_path):
                               "execution_time": 0.002, "cache_key": "app.slow:s::a"})
     assert "lookup" not in quiet
 
-    @c.cache
-    def total(rows):
-        return sum(r[0] for r in rows)
-
-    rows = _rows(200_000)
-    total(rows)
-    total(rows)
+    # The table, from a known account rather than a timed workload: a real
+    # lookup's time depends on the machine, and got fast enough to pass under
+    # the bar once hashing a big list stopped walking it.
+    from collections import Counter
+    c._function_stats["app.total"] = {
+        "hits": 2, "misses": 0, "total_time_saved": 0.02, "lookup_seconds": 2.1,
+        "miss_reasons": Counter(), "not_persisted": Counter(), "not_stored": Counter(),
+        "bypassed": 0}
     summary = c.run_summary()
-    assert "spent on the hits' lookups" in summary, summary
+    assert "spent on the hits' lookups, a net loss of 2.1s" in summary, summary
+    assert "2.1s looking up" in summary, summary

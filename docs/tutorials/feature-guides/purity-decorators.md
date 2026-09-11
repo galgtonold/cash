@@ -687,8 +687,9 @@ effects that static analysis did not see ...
 Two limits worth stating:
 
 - **It runs only while it stays cheap.** A re-hash over ~50 ms retires the
-  check for that function rather than taxing every later miss. The first miss
-  is still checked; only the repeat cost is dropped.
+  check for that function rather than taxing every later miss, and an argument
+  that already took longer than that to hash for the cache key is not checked
+  at all -- checking it would hash it twice more on every miss.
 - **A library mutating its OWN module state stays invisible.** None of it is
   reachable from the caller's arguments, and snapshotting a dependency's
   globals would be both expensive and noisy. If a library keeps a registry you

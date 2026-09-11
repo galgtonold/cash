@@ -62,7 +62,7 @@ content-hashes itself means passing `override=True` (see
 
 Registering for `types.FunctionType`, `types.MethodType` or `functools.partial` is accepted but warns ([KEY-CALLABLE-HASHER](../../warnings.md#key-callable-hasher)): the hasher then covers every function passed to any cached function, and one keyed on the name gives every closure a factory makes the same cache entry. Pass what the closure captures as a plain argument instead.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @16824093, cash/core.py:Cash._try_builtin_type_hash @9c5166b5 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @978d9c46, cash/core.py:Cash._try_builtin_type_hash @9c5166b5 -->
 When a cached function runs, `_serialize_args` calls `_hash_arg_payload`, which walks each argument in this order — **the order matters, and it is not the one you might expect**:
 
 0. **Hashers registered with `override=True`.** Nothing else is consulted for a type you have explicitly taken over — see [overriding a built-in](#overriding-a-built-in-content-hasher).
