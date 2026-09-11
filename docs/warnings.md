@@ -712,7 +712,7 @@ questionable. It found some. The message lists each one with its line number and
 a short label in square brackets, and the label is the part that tells you how
 much to care:
 
-<!-- claim: cash/core.py:Cash._mutable_global_is_keyed @61c8025d -->
+<!-- claim: cash/core.py:Cash._mutable_global_is_keyed @0e737db3 -->
 - `impure_call` — a call whose job is a side effect: `print`, `input`,
   `open(..., "w")`, `os.remove`, `subprocess.run`, `requests.post`,
   `logging.info`, `json.dump`, or a write-shaped method on a receiver the
@@ -726,15 +726,21 @@ much to care:
   *before* the copy is still flagged: it may be the helper's own object.
 - `scope_mutation` — a `global` or `nonlocal` statement, or an assignment to
   someone else's attribute or subscript: `obj.attr = ...`, `d[k] = ...`.
-- `discarded_call` — a method call whose return value is thrown away, which
-  usually means it was made for its effect.
+- `discarded_call` — a call whose return value is thrown away, which usually
+  means it was made for its effect. `time.sleep(...)`, however it is imported,
+  and a call to one of the module's own log helpers are not reported, and a
+  `print(...)` is reported once, as an `impure_call`. A NumPy function that
+  shares a name with a list method (`np.sort`, `np.append`) is not a write
+  either; `np.save` is.
 - `mutable_global` — the function reads a module global that other code in the
   same module reassigns, and the cache key does not fold that global's value.
   The key does fold a data global by value on every call, so a global set
   through a `configure()`-style setter or patched in a test is not reported:
-  a new value is a new entry. What stays reported is a global the function
-  itself changes (see [IMPURE-SCOPE-MUTATION](#impure-scope-mutation)), and a
-  callable, class or module that is not your own code.
+  a new value is a new entry. What stays reported is a global the cached
+  function itself changes (see [IMPURE-SCOPE-MUTATION](#impure-scope-mutation)),
+  and a callable, class or module that is not your own code. A helper that
+  fills a global it then reads — the `load()` behind a lazily loaded settings
+  dict — is not reported for reading it; its writes are listed on their own.
 - `dynamic_pattern` — a callable chosen at run time, `HANDLERS[kind]()` or a
   name bound from a lookup, so editing whichever callable it lands on will not
   invalidate the entry.

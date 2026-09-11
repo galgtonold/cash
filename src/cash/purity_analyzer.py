@@ -44,6 +44,7 @@ import logging
 import re
 import sys
 import textwrap
+import time
 import types
 import weakref
 import threading
@@ -357,7 +358,7 @@ class _PurityVisitor(ast.NodeVisitor):
         "issues", "called_callable_nodes", "_param_names",
         "_qualname", "_line_offset", "_local_owned", "read_names",
         "_assign_kinds", "_name_call_nodes", "_subscript_call_nodes",
-        "_fresh_nodes", "_log_only", "_namespace",
+        "_fresh_nodes", "_log_only", "_namespace", "_log_helpers",
     )
 
     def __init__(self, qualname: str, param_names: frozenset[str],
@@ -365,7 +366,8 @@ class _PurityVisitor(ast.NodeVisitor):
                  local_owned: frozenset[str] = frozenset(),
                  fresh_nodes: frozenset[int] = frozenset(),
                  log_only: frozenset[int] = frozenset(),
-                 namespace: dict[str, Any] | None = None) -> None:
+                 namespace: dict[str, Any] | None = None,
+                 log_helpers: frozenset[str] = frozenset()) -> None:
         self.issues: list[PurityIssue] = []
         self.called_callable_nodes: list[ast.AST] = []
         #: Calls reported as known I/O (``requests.get``, ``open``). Not walked,
@@ -403,6 +405,9 @@ class _PurityVisitor(ast.NodeVisitor):
         # What the body's names are bound to, so an aliased ambient read
         # (`_dt.datetime.now()`) is recognised (`_ambient_call`).
         self._namespace = namespace
+        # The module's own log helpers (`_log_helper_names`): a call to one is
+        # a print, not a call made for an effect a hit would skip.
+        self._log_helpers = log_helpers
 
     # --- impure / dynamic / called-name detection on Call nodes ---
 
@@ -680,6 +685,7 @@ class _PurityVisitor(ast.NodeVisitor):
                 isinstance(func_node, ast.Attribute)
                 and func_node.attr in _WRITE_METHODS
                 and not self._receiver_is_local_owned(func_node.value)
+                and not self._is_module_function_named_like_a_mutator(func_node)
             ):
                 base = _get_base_name(func_node.value)
                 base_str = f"{base}." if base else ""
@@ -716,16 +722,62 @@ class _PurityVisitor(ast.NodeVisitor):
         # Not flagged as anything - record for recursion attempt.
         self.called_callable_nodes.append(node)
 
+    #: Container mutators among the write methods. Called on an object they
+    #: change it; called on a MODULE (`np.sort`, `np.append`, `np.insert`) they
+    #: return a new array and change nothing -- round 19 reported "np.sort()
+    #: - write method". A module's real writes (`np.save`, `plt.savefig`,
+    #: `os.write`) keep being reported, as do `os.remove` and the rest of the
+    #: impure-module table, which is checked first.
+    _MUTATOR_NAMES = frozenset({
+        "append", "extend", "insert", "pop", "remove", "sort", "reverse",
+        "clear", "update", "add", "discard",
+    })
+
+    def _is_module_function_named_like_a_mutator(self, func_node: ast.Attribute) -> bool:
+        if func_node.attr not in self._MUTATOR_NAMES or not self._namespace:
+            return False
+        chain = _callee_chain(func_node.value)
+        if not chain or chain[0] not in self._namespace:
+            return False
+        obj: Any = self._namespace[chain[0]]
+        for attr in chain[1:]:
+            if not isinstance(obj, types.ModuleType):
+                return False
+            obj = getattr(obj, attr, None)
+        return isinstance(obj, types.ModuleType)
+
     # --- discarded-call detection on Expr statements ---
 
+    def _discard_is_expected(self, func_node: ast.AST) -> bool:
+        """A discarded call whose result nobody wants and whose effect a hit
+        may skip: a log helper of the module's own, or `time.sleep` however it
+        is spelled. Round 19: the quickstart's own `time.sleep(5)` was reported
+        as `discarded_call`, a label documented for calls made for an effect."""
+        if isinstance(func_node, ast.Name) and func_node.id in self._log_helpers:
+            return True
+        chain = _callee_chain(func_node)
+        if not chain or not self._namespace or chain[0] not in self._namespace:
+            return False
+        obj: Any = self._namespace[chain[0]]
+        for attr in chain[1:]:
+            if not isinstance(obj, (types.ModuleType, type)):
+                return False
+            obj = getattr(obj, attr, None)
+        return obj is time.sleep
+
     def visit_Expr(self, node: ast.Expr) -> None:  # noqa: N802
+        if isinstance(node.value, ast.Call) and self._discard_is_expected(node.value.func):
+            self.generic_visit(node)
+            return
         if isinstance(node.value, ast.Call):
             call = node.value
             func_node = call.func
             # Plain bare-name call: foo(x)
             if isinstance(func_node, ast.Name):
                 name = func_node.id
-                if name not in KNOWN_PURE_BUILTINS and name not in {"eval", "exec", "compile"}:
+                # `print(...)` is already an impure_call; saying it twice, once
+                # as a discarded return, was the same line counted two ways.
+                if name not in KNOWN_PURE_BUILTINS and name not in _IMPURE_FUNCTION_CALLS:
                     self.issues.append(PurityIssue(
                         kind=ISSUE_DISCARDED_CALL,
                         description=f"discards return of {name}(...)",
@@ -1709,6 +1761,7 @@ class PurityAnalyzer:
                 fresh_nodes=fresh_name_nodes(func_def),
                 log_only=_log_only_ambient_reads(func_def, func, namespace),
                 namespace=namespace,
+                log_helpers=_log_helper_names(func_def, func),
             )
             visitor.visit(func_def)
             visitor.finalize_taint()
@@ -1980,10 +2033,18 @@ def _drop_audited(issues: list[PurityIssue], start: int, src: str) -> None:
 
 
 def _anchor_issue_lines(issues: list[PurityIssue], start: int, func: Any) -> None:
-    """Rewrite ``issues[start:]`` in the defining file's line numbers, in place."""
+    """Rewrite ``issues[start:]`` in the defining file's line numbers, in place.
+
+    Anchored on the same object `own_source` read: for a ``functools.wraps``
+    wrapper, its own code. ``getsourcelines`` unwraps, so a print in the
+    wrapper was numbered from the WRAPPED function's first line, in another
+    file -- "line 46" of an 11-line deco.py (round 19).
+    """
     try:
-        first = inspect.getsourcelines(func)[1]
-        filename = inspect.getsourcefile(func) or ""
+        target = (func.__code__ if isinstance(func, types.FunctionType)
+                  and hasattr(func, "__wrapped__") else func)
+        first = inspect.getsourcelines(target)[1]
+        filename = inspect.getsourcefile(target) or ""
     except SOURCE_RETRIEVAL_ERRORS:
         return
     for index in range(start, len(issues)):

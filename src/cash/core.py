@@ -9527,6 +9527,13 @@ class Cash:
         module_ns = getattr(reader, "__globals__", None)
         if not isinstance(module_ns, dict) or name not in module_ns:
             return False
+        if reader is not func and self._helper_mutates_global(reader, name):
+            # The loader of a lazily filled settings dict (`_CFG.clear();
+            # _CFG.update(...)`) "reads" it only to fill it: its writes are
+            # findings of their own, and the dict is not its input. Reported
+            # as a stale-result risk, it was one more false alarm on the most
+            # common settings pattern there is (round 19).
+            return True
         try:
             if name not in self._read_global_data_names(reader):
                 return False
@@ -9540,6 +9547,24 @@ class Cash:
         if isinstance(value, type):
             return False
         return not (callable(value) and not isinstance(value, (dict, list, tuple, set)))
+
+    @staticmethod
+    def _helper_mutates_global(fn: Any, name: str) -> bool:
+        """Does *fn*'s own body rebind *name* or change it in place?"""
+        code = getattr(fn, "__code__", None)
+        if code is None:
+            return False
+        import dis
+        for scope in Cash._iter_code_scopes(code):
+            for instr in dis.get_instructions(scope):
+                if instr.opname in ("STORE_GLOBAL", "DELETE_GLOBAL") and instr.argval == name:
+                    return True
+        try:
+            tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        except SOURCE_RETRIEVAL_ERRORS + (SyntaxError,):
+            return False
+        return name in Cash._unsafe_uses_of(
+            tree, frozenset({name}), bare_args=False, mutating_methods_only=True)
 
     def _surface_purity(
         self, func_name: str, report: PurityReport, mode: str,

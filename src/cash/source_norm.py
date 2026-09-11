@@ -584,6 +584,12 @@ def _class_functions(cls: type) -> list[types.FunctionType]:
         func = getattr(value, "__func__", value)          # staticmethod / classmethod
         if isinstance(value, property):
             func = value.fget
+        if isinstance(func, types.FunctionType) and getattr(func, "_cash_cached", False):
+            # A cached method's class attribute is cash's wrapper, whose globals
+            # are cash's own: walked as the class's code, it reported
+            # KEY-UNHASHABLE-GLOBAL for `Model.fit.ACTIVE_CONFIG`, a name in
+            # no file of the user's (round 19). The user's function is inside.
+            func = getattr(func, "__wrapped__", func)
         if isinstance(func, types.FunctionType):
             found.append(func)
     return found

@@ -177,7 +177,7 @@ If you genuinely need library versions to fold into the cache key — e.g. you'r
 - **Sensitivity analysis.** Identical to a parameter sweep — vary one input at a time, each combination cached independently, the analysis layer iterates freely.
 - **Embarrassingly parallel sweeps.** Dispatch the cached function across processes with `multiprocessing` or `joblib`. If you want a *guarantee* that two workers don't both compute the same `(alpha, seed)` combination, you need `Cash(use_locking=True)` against `RedisBackend`. Every backend single-flights concurrent callers *within* one process, but a `multiprocessing`/`joblib` sweep puts the workers in **separate processes**, and Redis is the only shipped backend whose lock spans them. See [Thread Safety](../feature-guides/thread-safety.md) for the backend table and the redundancy semantics.
 
-  <!-- claim: cash/backends/_base.py:_in_multiprocessing_child @e87f049e, cash/backends/_base.py:PendingWrites.submit @3bbd9002 -->
+  <!-- claim: cash/backends/_base.py:_in_multiprocessing_child @e87f049e, cash/backends/_base.py:PendingWrites.submit @9fb51a65 -->
   Inside a worker process — a `multiprocessing.Pool`, a `ProcessPoolExecutor`, joblib's workers — cash writes each result *before* the task returns, instead of in the background as it does in your main process. That is what keeps `with Pool() as pool:` safe: its exit *terminates* the workers, and a background write still in flight at that moment used to be lost, so each worker's last task recomputed on every later run. The cost is that a worker's task includes its cache write.
 
 ## Caveats

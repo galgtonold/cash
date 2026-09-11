@@ -176,6 +176,26 @@ _VERSION_FILENAME = "CACHE_VERSION"
 _GITIGNORE_TEXT = "# Created by cash: this directory is a cache.\n*\n"
 
 
+def _untracked() -> Any:
+    """cash's own scan of its cache directory, kept out of every dependency.
+
+    A nested cached call's first store scans the directory (its size, what to
+    evict) while the OUTER call's file tracker is live, and the directory
+    itself became the outer entry's dependency: in each worker of a process
+    pool, the first outer call recomputed on the next run, "file changed:
+    <cache dir> (size changed)" (round 19). The storage filters cannot tell a
+    listing of the cache directory from a user's listing of a directory that
+    `cache_dir` may also be, so the scan says so where it happens.
+    """
+    from cash.notebook.file_tracker import untracked
+    return untracked()
+
+
+def _glob_untracked(pattern: str) -> list[str]:
+    with _untracked():
+        return glob.glob(pattern)
+
+
 def recreate_cache_dir(cache_dir: str) -> bool:
     """Create *cache_dir* as the file backend would, if it is missing.
 
@@ -442,7 +462,7 @@ class FileBackend(CacheBackend):
             entry_files = [
                 f
                 for pattern in _ALL_ENTRY_GLOBS
-                for f in glob.glob(os.path.join(self.cache_dir, pattern))
+                for f in _glob_untracked(os.path.join(self.cache_dir, pattern))
             ]
             if stored is None and self._entries_are_current_format(entry_files):
                 # Unstamped, but the entries say what they are. A directory
@@ -533,7 +553,7 @@ class FileBackend(CacheBackend):
         """
         total_size = 0
         try:
-            with os.scandir(self.cache_dir) as entries:
+            with _untracked(), os.scandir(self.cache_dir) as entries:
                 for entry in entries:
                     if not entry.name.endswith(ENTRY_SUFFIX):
                         continue
@@ -1222,7 +1242,7 @@ class FileBackend(CacheBackend):
         crumb = max(1, int((self._max_size_bytes or 0) * self._EVICT_CRUMB_FRACTION))
         ranks: dict[str, tuple[float, int]] = {}
         try:
-            with os.scandir(self.cache_dir) as entries:
+            with _untracked(), os.scandir(self.cache_dir) as entries:
                 for entry in entries:
                     if not entry.name.endswith(ENTRY_SUFFIX):
                         continue
@@ -1579,7 +1599,7 @@ class FileBackend(CacheBackend):
         # resurrect entries we just removed from disk.
         self._writes.wait_all()
         for pattern in _ALL_ENTRY_GLOBS:
-            for f in glob.glob(os.path.join(self.cache_dir, pattern)):
+            for f in _glob_untracked(os.path.join(self.cache_dir, pattern)):
                 try:
                     os.remove(f)
                 except OSError:
@@ -1614,7 +1634,7 @@ class FileBackend(CacheBackend):
         # flight would be invisible.
         self._writes.wait_all()
         entries = []
-        for path in glob.glob(os.path.join(self.cache_dir, _ENTRY_GLOB)):
+        for path in _glob_untracked(os.path.join(self.cache_dir, _ENTRY_GLOB)):
             try:
                 metadata, _ = read_entry(path, with_payload=False)
                 entries.append(metadata)
@@ -1628,7 +1648,7 @@ class FileBackend(CacheBackend):
             return 0
         self._writes.wait_all()
         count = 0
-        for path in glob.glob(os.path.join(self.cache_dir, _ENTRY_GLOB)):
+        for path in _glob_untracked(os.path.join(self.cache_dir, _ENTRY_GLOB)):
             try:
                 metadata, _ = read_entry(path, with_payload=False)
                 if is_expired(metadata):

@@ -346,8 +346,15 @@ class PendingWrites:
                     raise RuntimeError("PendingWrites: executor has been shut down")
             future: concurrent.futures.Future = concurrent.futures.Future()
             future.set_running_or_notify_cancel()
+            # As the writer thread would: with no file tracker and no effect
+            # observer. Run inline, the write's own directory scan (its size,
+            # what to evict) happened under the OUTER cached call's tracker,
+            # and the cache directory became that entry's dependency -- one
+            # recompute per pool worker per run (round 19).
+            from cash.notebook.file_tracker import untracked
             try:
-                future.set_result(self._run_task(key, fn, args, kwargs))
+                with untracked():
+                    future.set_result(self._run_task(key, fn, args, kwargs))
             except BaseException as exc:  # noqa: BLE001 - reported via wait(), as below
                 future.set_exception(exc)
                 with self._lock:
