@@ -104,3 +104,16 @@ def test_cleanup(cash_instance):
     deleted = cash_instance.cleanup(max_age=0.1)
     assert deleted == 1, 'Should delete the remaining entry'
     assert len(cash_instance.backend._store) == 0, 'All entries should be cleaned'
+
+
+def test_a_file_tier_s_default_ttl_reaches_its_entries(temp_cache_dir, monkeypatch):
+    """`default_ttl` on a declared file tier -- `[[tool.cash.tiers]]` or
+    `CASH_TIER_<N>_DEFAULT_TTL` -- was accepted, shown by `cash info`, and
+    dropped when the tier was built, so entries never expired. It is the
+    only way to give every decorated function a default ttl from config."""
+    monkeypatch.setenv("CASH_TIER_0_TYPE", "file")
+    monkeypatch.setenv("CASH_TIER_0_DEFAULT_TTL", "7")
+    monkeypatch.setenv("CASH_CACHE_DIR", temp_cache_dir)
+    c = Cash(register_magic=False)
+    tiers = getattr(c.backend, "backends", [c.backend])
+    assert [getattr(t, "_default_ttl", None) for t in tiers if isinstance(t, FileBackend)] == [7]

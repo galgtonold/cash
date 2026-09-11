@@ -260,6 +260,9 @@ def _build_tier(tier: "TierConfig", config: "CashConfig") -> CacheBackend:
             compress=tier.compress if tier.compress is not None else config.compress,
             max_size_bytes=tier.max_size_bytes if tier.max_size_bytes is not None else _resolve_disk_cap(config),
             flush_interval=tier.flush_interval if tier.flush_interval is not None else config.flush_interval,
+            # Dropped until round 18: a `default_ttl` on a file tier was
+            # accepted, shown by `cash info`, and never applied.
+            default_ttl=tier.default_ttl,
         )
     if t == "sqlite":
         return SQLiteBackend(
