@@ -118,14 +118,18 @@ def test_the_summary_reaches_an_application_log_in_one_write(tmp_path, monkeypat
 
     handler = Grab()
     logging.getLogger("cash").addHandler(handler)
+    monkeypatch.setattr(logging.getLogger("cash"), "level", logging.INFO)
     monkeypatch.setattr("cash.backends._base._in_multiprocessing_child", lambda: True)
     try:
         c._print_run_summary()
     finally:
         logging.getLogger("cash").removeHandler(handler)
     err = capsys.readouterr().err
-    assert err.startswith(f"cash (pid {os.getpid()}):"), err
-    assert records and records[0].startswith("cash (pid")
+    # Into the application's log, pid-labelled, and ONLY there: written to
+    # stderr as well, with cash's own handler passing it on too, it printed
+    # three times (round 19).
+    assert records and records[0].startswith(f"cash (pid {os.getpid()}):"), records
+    assert "calls restored" not in err, err
 
 
 def test_a_file_read_by_two_spellings_is_listed_once(tmp_path, monkeypatch):
@@ -153,3 +157,23 @@ def test_inspect_prints_one_header_and_when_an_entry_expires(tmp_path):
     out = p.stdout
     assert out.count("Cache dir") == 1, out
     assert "EXPIRES" in out and ("in 59m" in out or "in 1h" in out), out
+
+
+def test_a_summary_the_apps_log_would_drop_goes_to_stderr(tmp_path, monkeypatch, capsys):
+    """The app logs, but the `cash` logger is at WARNING: routed to the log,
+    the INFO summary would reach no handler and be lost."""
+    c = Cash(backend=FileBackend(cache_dir=str(tmp_path / ".cash")), register_magic=False)
+
+    @c.cache
+    def f(x):
+        return x
+
+    f(1)
+    handler = logging.StreamHandler()
+    logging.getLogger("cash").addHandler(handler)
+    monkeypatch.setattr(logging.getLogger("cash"), "level", logging.WARNING)
+    try:
+        c._print_run_summary()
+    finally:
+        logging.getLogger("cash").removeHandler(handler)
+    assert "calls restored" in capsys.readouterr().err

@@ -142,11 +142,12 @@ A notebook shows a badge on every statement. A script shows nothing by
 default, which makes it easy to assume caching is working when it isn't — so
 there are several ways to look.
 
-<!-- claim: cash/core.py:Cash.run_summary @1bc3d713, cash/core.py:Cash._summary_reasons @edbfd060, cash/core.py:Cash._print_run_summary @89b03773 -->
+<!-- claim: cash/core.py:Cash.run_summary @1bc3d713, cash/core.py:Cash._summary_reasons @edbfd060, cash/core.py:Cash._print_run_summary @3c207d6e -->
 **What recomputed just now, and why?** Set `CASH_SUMMARY=1` and a
 per-function table prints to **stderr** when the process exits — stderr, so it
 never lands in a report, a pipe or a JSON response your program writes to
-stdout. No code change, which is the point:
+stdout; into your log instead, when your program configures logging. No code
+change, which is the point:
 
 ```bash
 CASH_SUMMARY=1 python model.py
@@ -209,9 +210,22 @@ arguments new. After a code edit, every call whose arguments an earlier run
 stored says `code or state changed`, not just the first. The time in brackets
 is the body's own, the number the persistence floor is judged on.
 
+<!-- claim: cash/core.py:_StandDownWhenTheAppLogs.filter @534664a0, cash/core.py:Cash._print_run_summary @3c207d6e -->
 With `CASH_DEBUG` they come with cash's other debug records. If your program configures `logging`
 itself, those records go to your handlers in your format instead, and no
-stderr handler is added. `Cash(verbose=True)` gives the per-call lines alone.
+stderr handler is added. That holds when it configures logging *after*
+`import cash`, the usual order in a command-line tool: from the first record
+your handlers take, cash's own stops printing, so nothing appears twice — the
+exit summary included, which goes to your log if it would print at INFO and
+to stderr otherwise. `Cash(verbose=True)` gives the per-call lines alone.
+
+Two things your logging setup does not reach. A **worker process** started by
+`multiprocessing`, `ProcessPoolExecutor` or joblib on the `spawn` start method
+(always, on Windows and macOS) runs none of your `main()`, so its lines go to
+its own stderr: configure logging in the pool's `initializer=` to collect them.
+And cash's **warnings** — `CACHE-THRASH`, `CACHE-NET-LOSS` and the rest — are
+Python warnings, not log records; `logging.captureWarnings(True)` sends them to
+your handlers as well.
 
 **What is on disk, and what is it costing me?**
 
@@ -283,6 +297,9 @@ expect, measured across fresh processes:
 | Read a relative path (`open("data.csv")`) from two working directories | Every switch recomputes, and replaces the other directory's entry | The key holds the string `"data.csv"`, the same from both; the file behind it is not, so the entry is found stale and rewritten. Pass an absolute path, or one resolved from the project |
 | Switch a data file back and forth between two versions | Every switch recomputes | A file is checked when its entry is read, not keyed: one entry per call, rewritten when the file changes |
 | Switch code back and forth between two versions | Switching back hits | Code is in the key, so each version keeps its own entry |
+| Add or edit a method on a settings class whose instance the functions receive, or read as a global | Every function that uses an instance of it recomputes, once | A pre-built instance of your own class is keyed by its class's code as well as its values, so any method counts, used or not |
+| Pass `"C:\Data\x.csv"` in one call and `"c:\data\x.csv"` in the next, on Windows | Two entries | Arguments are keyed by value, and those are two different strings; the file behind them is tracked once. Build paths one way (`Path(p).resolve()`) |
+| Run a package from a checkout, then from `pip install .` | The same keys, so the installed copy hits | Code is keyed by module and text, not by where it is — unless a module global holds a location (`DATA = Path(__file__).parent / "data"`), which is then a different value in each. Resolve such paths inside the function |
 
 <!-- claim: cash/backends/serialization.py:get_serializer @76cf2c1b -->
 **A hit returns a copy.** A miss hands you the object the function returned; a

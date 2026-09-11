@@ -336,3 +336,38 @@ def test_the_per_call_line_gives_the_body_s_time_beside_the_floor(tmp_path):
     lines = _calls(tmp_path, _MODE_JOB, "fast")
     assert "under the 0.1s persistence floor" in lines[0]
     assert "(ran 0.00s" in lines[0], lines[0]
+
+
+_LOG_AFTER_IMPORT = textwrap.dedent("""
+    import logging, sys
+    import cash
+
+    @cash.cache(assume_safe=True)
+    def work(n):
+        return n + 1
+
+    def main():
+        logging.basicConfig(level=logging.WARNING, format="APP %(name)s | %(message)s")
+        work(1)
+        work(1)
+
+    main()
+""")
+
+
+def test_logging_configured_after_import_gets_each_line_once(tmp_path):
+    """Round 19: a CLI configures logging in main(), after `import cash`: every
+    per-call line printed twice (cash's handler and the app's) and the summary
+    three times."""
+    out = _run(tmp_path, _LOG_AFTER_IMPORT, CASH_VERBOSE="1", CASH_SUMMARY="1")
+    lines = out.stderr.splitlines()
+    assert len([ln for ln in lines if "HIT  " in ln]) == 1, out.stderr
+    assert len([ln for ln in lines if "calls restored" in ln]) == 1, out.stderr
+    assert any(ln.startswith("APP cash.calls |") for ln in lines), "not in the app's format"
+
+
+def test_without_the_apps_logging_cash_still_prints(tmp_path):
+    """Control: with no logging configured, cash's own handler prints."""
+    out = _run(tmp_path, _FAST_JOB, CASH_VERBOSE="1", CASH_SUMMARY="1")
+    assert "cash.calls: HIT" in out.stderr
+    assert out.stderr.count("calls restored") == 1

@@ -929,6 +929,10 @@ _CASH_STDERR_HANDLER: logging.Handler | None = None
 _CASH_LEVEL_SET: int | None = None
 
 
+#: Results no lineage tag can be attached to, and that cost nothing to hash.
+_UNTAGGABLE_SCALARS = (int, float, complex, bool, str, bytes, type(None))
+
+
 def _real_handlers(logger: logging.Logger) -> list[logging.Handler]:
     """Handlers that would PRINT a record from *logger*, walking up like logging.
 
@@ -973,8 +977,36 @@ def _enable_cash_logging(level: int) -> None:
     if _CASH_STDERR_HANDLER is None and not _real_handlers(cash_logger):
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
+        handler.addFilter(_StandDownWhenTheAppLogs())
         cash_logger.addHandler(handler)
         _CASH_STDERR_HANDLER = handler
+
+
+def _app_would_emit(levelno: int) -> bool:
+    """Would a handler of the application's print a `cash` record at *levelno*?
+
+    The `cash` logger's own level first: a record it drops reaches no handler,
+    and routing the exit summary to such a log lost it altogether.
+    """
+    cash_logger = logging.getLogger("cash")
+    if not cash_logger.isEnabledFor(levelno):
+        return False
+    return any(h.level <= levelno for h in _real_handlers(cash_logger))
+
+
+class _StandDownWhenTheAppLogs(logging.Filter):
+    """Keep cash's own stderr handler quiet once the application logs.
+
+    It is added when nothing would print cash's records -- a script's
+    default. A program that configures logging AFTER ``import cash``, the
+    usual order for a CLI (imports at the top, ``basicConfig`` in ``main``),
+    then got every line twice: once from this handler, once from its own
+    (round 19). Checked per record, so it follows the application's setup as
+    it changes.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not _app_would_emit(record.levelno)
 
 
 # Why a call missed. The KIND is what the summary counts; the detail goes to
@@ -7672,6 +7704,11 @@ class Cash:
         """
         if ttl is not None:
             return
+        if type(result) in _UNTAGGABLE_SCALARS:
+            # Nothing to attach and nothing worth sparing a hash of: under
+            # CASH_DEBUG every int result logged "Cannot attach
+            # _cash_lineage_hash to int" (round 19).
+            return
         frozen = func_name is not None and func_name in self._frozen_funcs
         if frozen and type(result) in (list, tuple, dict):
             self._remember_frozen_container(
@@ -9306,12 +9343,15 @@ class Cash:
                 # JSON response -- and a summary landing in it broke all three
                 # for round-17 testers. ONE write: pool workers exiting together
                 # interleaved print()'s separate writes mid-line (round 18).
-                sys.stderr.write(text + "\n")
-                sys.stderr.flush()
-                # And into the application's log, when it has one: a service
+                # Into the application's log when it will print it: a service
                 # whose output goes through dictConfig never saw the summary.
-                if _real_handlers(logging.getLogger("cash")):
+                # Otherwise to stderr -- once: both, with cash's own handler
+                # passing it on as well, printed it three times (round 19).
+                if _app_would_emit(logging.INFO):
                     logging.getLogger("cash.summary").info("%s", text)
+                else:
+                    sys.stderr.write(text + "\n")
+                    sys.stderr.flush()
         except Exception:  # noqa: BLE001 - a summary must not fail a finished run
             pass
 

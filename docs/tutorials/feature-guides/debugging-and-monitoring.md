@@ -33,7 +33,7 @@ That's the decorator path. In a notebook the equivalents are `%cash_debug on`, `
 
 ## In a script: `CASH_SUMMARY` and `CASH_DEBUG`
 
-<!-- claim: cash/core.py:Cash._print_run_summary @89b03773, cash/core.py:Cash._log_decorator_call @a6e7827c -->
+<!-- claim: cash/core.py:Cash._print_run_summary @3c207d6e, cash/core.py:Cash._log_decorator_call @a6e7827c -->
 A script shows nothing about the cache by default. Two environment variables
 change that without touching the code:
 
