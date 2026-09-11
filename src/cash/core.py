@@ -806,6 +806,11 @@ def _is_one_shot_iterator(value: Any) -> bool:
 # object, so two Cash instances cannot legitimately disagree about it.
 _SOURCE_HASH_MEMO: dict = {}
 _SOURCE_HASH_MEMO_MAX = 4096
+#: ``id(code) -> (code, path, size, mtime_ns, text digest)``: the stat of the
+#: file whose text a function's key was read from, taken just before reading
+#: it, and that text's digest. The store compares both with the file now
+#: (`Cash._code_moved_since_keyed`).
+_CODE_KEYED_STATS: dict[int, tuple[Any, str, int, int, str]] = {}
 
 #: Seeding calls, by the last segment of their dotted name. ``seed`` alone is
 #: too common a method name, so it only counts under a ``random`` prefix.
@@ -1126,6 +1131,27 @@ def _is_cow_pandas(value: Any) -> bool:
         except Exception:  # noqa: BLE001 - unknown pandas: no memo, hash every time
             _COW_PANDAS = False
     return _COW_PANDAS
+
+
+def _disk_text_digest(fn: Any) -> str:
+    """The digest `Cash._hash_callable_source` keys *fn* by, read from its file
+    now. Raises what ``inspect.getsource`` raises."""
+    if isinstance(fn, types.FunctionType) and hasattr(fn, "__wrapped__"):
+        return source_identity_digest(inspect.getsource(fn.__code__))
+    return source_identity_digest(inspect.getsource(fn))
+
+
+def _stat_code_file(fn: Any) -> tuple[Any, str, int, int] | None:
+    """``(code, path, size, mtime_ns)`` for *fn*'s source file, or None."""
+    code = getattr(fn, "__code__", None)
+    path = getattr(code, "co_filename", "") or ""
+    if not path or path.startswith("<"):
+        return None
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (code, path, st.st_size, st.st_mtime_ns)
 
 
 def _warn_source_changed_since_load(fn: Callable) -> None:
@@ -2118,6 +2144,7 @@ class Cash:
                     _SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
                 return digest
 
+        keyed_stat = _stat_code_file(fn)
         try:
             # A `functools.wraps` wrapper is keyed by its OWN code. Plain
             # `getsource` unwraps, so it returned the WRAPPED function's text --
@@ -2132,6 +2159,8 @@ class Cash:
             digest = source_identity_digest(src)
             if memo_key is not None and len(_SOURCE_HASH_MEMO) < _SOURCE_HASH_MEMO_MAX:
                 _SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
+            if keyed_stat is not None and len(_CODE_KEYED_STATS) < _SOURCE_HASH_MEMO_MAX:
+                _CODE_KEYED_STATS[id(keyed_stat[0])] = (*keyed_stat, digest)
             return digest
         except SOURCE_RETRIEVAL_ERRORS:
             pass
@@ -2406,12 +2435,20 @@ class Cash:
                     _warn_source_changed_since_load(func)
             return pin
         at_decoration = source_hash is not None
+        keyed_stat = _stat_code_file(func)
         if source_hash is None:
             if loaded_code_matches_disk(func):
                 source_hash = CodeAnalyzer.get_source_hash(func)
             else:
                 source_hash = bytecode_identity(func) or CodeAnalyzer.get_source_hash(func)
                 _warn_source_changed_since_load(func)
+                keyed_stat = None            # keyed by what runs, not by the file
+        if (keyed_stat is not None and id(keyed_stat[0]) not in _CODE_KEYED_STATS
+                and len(_CODE_KEYED_STATS) < _SOURCE_HASH_MEMO_MAX):
+            try:
+                _CODE_KEYED_STATS[id(keyed_stat[0])] = (*keyed_stat, _disk_text_digest(func))
+            except SOURCE_RETRIEVAL_ERRORS:
+                pass
         pin = source_hash
         if getattr(func, '__name__', '') == '<lambda>':
             code = getattr(func, '__code__', None)
@@ -3328,6 +3365,8 @@ class Cash:
             refusal = "the result is tied to the identity of an object in memory"
         if refusal is None and self._inputs_moved_during_call(func_name, tracker):
             refusal = "a file it read changed while it ran"
+        if refusal is None and self._code_moved_since_keyed(func, func_name):
+            refusal = "its code changed on disk after this process keyed it"
         return refusal
 
     def _note_not_stored(self, cache_key: str, refusal: str) -> None:
@@ -7635,6 +7674,97 @@ class Cash:
                 "does not work.",
             stacklevel=stacklevel,
         )
+
+    def _code_functions(self, func: Callable, func_name: str) -> list[Any]:
+        """The functions whose code a call of *func_name* runs, as far as cash
+        follows it: its own, its helpers', and those of the cached functions it
+        depends on, transitively."""
+        found: list[Any] = []
+        seen_names: set[str] = set()
+        stack: list[tuple[str, Any]] = [(func_name, func)]
+        while stack:
+            name, fn = stack.pop()
+            if name in seen_names:
+                continue
+            seen_names.add(name)
+            if fn is not None:
+                found.append(fn)
+            report = self._purity_reports.get(name)
+            if report is not None:
+                for ref in report.helper_objects.values():
+                    helper = ref()
+                    if helper is not None:
+                        found.append(helper)
+                for module_name, chain in report.helper_resolution_paths.values():
+                    target = resolve_binding(module_name, chain)
+                    if callable(target):
+                        found.append(target)
+            for dep in self.graph.get_dependencies(name):
+                if dep in self.functions and dep not in seen_names:
+                    stack.append((dep, self.functions[dep]))
+        return found
+
+    def _code_moved_since_keyed(self, func: Callable, func_name: str) -> bool:
+        """Did a file this call's code came from change after its key was read?
+
+        A function is keyed by the text of its file, read once per process;
+        the code that runs is what the process loaded -- or, for a worker a
+        pool starts during the call, whatever the file holds THEN. Edited in
+        between, the result of one version was stored under the other's key,
+        and a later process running the first version was served the second
+        one's numbers (round 19: a helper edited while a pooled call ran, and a
+        deploy that replaced a helper under a running job). Nothing can say
+        which version the result came from, so it is returned and not stored.
+
+        Only THIS code's text counts: a file edited elsewhere -- another
+        function, a comment -- runs the same code in a new worker, and the
+        entry is still right.
+
+        One ``os.stat`` per code file, on a miss only; the text is re-read only
+        for a file that moved.
+        """
+        stats: dict[str, tuple[int, int] | None] = {}
+        moved: list[str] = []
+        for fn in self._code_functions(func, func_name):
+            code = getattr(fn, "__code__", None)
+            rec = _CODE_KEYED_STATS.get(id(code)) if code is not None else None
+            if rec is None or rec[0] is not code:
+                continue
+            path = rec[1]
+            if path not in stats:
+                try:
+                    st = os.stat(path)
+                    stats[path] = (st.st_size, st.st_mtime_ns)
+                except OSError:
+                    stats[path] = None
+            now = stats[path]
+            if now is None or now == (rec[2], rec[3]) or path in moved:
+                continue
+            try:
+                same_text = _disk_text_digest(fn) == rec[4]
+            except SOURCE_RETRIEVAL_ERRORS:
+                same_text = False            # the function is gone from the file
+            if same_text:
+                _CODE_KEYED_STATS[id(code)] = (code, path, *now, rec[4])
+            else:
+                moved.append(path)
+        if not moved:
+            return False
+        shown = ", ".join(moved[:3]) + (f" and {len(moved) - 3} more" if len(moved) > 3 else "")
+        self._warn_once(
+            CashCacheStoreFailedWarning,
+            func_name,
+            "code_changed",
+            f"@cash.cache on {func_name}: {shown} changed on disk after this "
+            f"process read the code it keys {func_name} by. The result was "
+            f"returned but not cached: a worker process started now runs the "
+            f"file's new code, this process runs the old, and nothing can say "
+            f"which one produced it.",
+            code="STORE-CODE-CHANGED",
+            fix="restart the process to run -- and cache -- the new code. A "
+                "deploy that replaces files under a running job opens this window.",
+        )
+        return True
 
     def _inputs_moved_during_call(self, func_name: str, tracker: Any) -> bool:
         """Did a file this call read change before the call returned?

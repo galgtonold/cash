@@ -52,7 +52,7 @@ def register_hasher(
 ) -> None: ...
 ```
 
-<!-- claim: cash/core.py:Cash._hash_callable_source @6c6f2db6, cash/core.py:Cash.register_hasher @eed1ca57 -->
+<!-- claim: cash/core.py:Cash._hash_callable_source @92e81388, cash/core.py:Cash.register_hasher @eed1ca57 -->
 Two things happen on registration — once it is accepted, which for a type Cash
 content-hashes itself means passing `override=True` (see
 [below](#overriding-a-built-in-content-hasher)):

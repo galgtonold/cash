@@ -173,6 +173,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
     "REMOTE-STATE-UNREADABLE", # could not read remote state; will recompute
 
     # -- STORE: compute succeeded, the write did not ------------------------
+    "STORE-CODE-CHANGED",      # a code file changed on disk after the key
+                               # was read, so the result was not stored
     "STORE-CHUNK-FAILED",      # a chunked write failed partway; the entry is
                                # incomplete on retrieval
     "STORE-FAILED",            # the backend refused the write

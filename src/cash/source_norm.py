@@ -480,6 +480,44 @@ def _compiled_module(path: str) -> types.CodeType | None:
     return code
 
 
+def _pyc_proves_unchanged(path: str, st: object) -> bool:
+    """True when the module's ``.pyc`` shows *path* is what this process imported.
+
+    A file's mtime alone proved nothing: ``shutil.copy2``, ``cp -p``, rsync,
+    robocopy and Explorer all keep the SOURCE file's mtime, so a helper
+    replaced under a running process by a copy made two hours earlier looked
+    untouched since the process started -- and was keyed by the new text while
+    the old code ran (round 19).
+
+    The ``.pyc`` is a record of the import: importlib checks its header against
+    the source's (mtime, size) and rewrites it when they differ. A ``.pyc``
+    older than this process whose header still matches the source means the
+    import saw exactly this (mtime, size). A newer one may have been written by
+    a later import of a different file, and a missing one says nothing -- both
+    fall back to compiling the file, once per (path, mtime, size).
+    """
+    import importlib.util
+    import os
+
+    started = _process_start_time()
+    if st.st_mtime > started:
+        return False
+    try:
+        pyc = importlib.util.cache_from_source(path)
+        if os.stat(pyc).st_mtime > started:
+            return False
+        with open(pyc, "rb") as fh:
+            header = fh.read(16)
+    except (OSError, ValueError, NotImplementedError):
+        return False
+    if len(header) < 16 or header[:4] != importlib.util.MAGIC_NUMBER:
+        return False
+    if int.from_bytes(header[4:8], "little") != 0:
+        return False                  # hash-based pyc: no timestamp to compare
+    return (int.from_bytes(header[8:12], "little") == (int(st.st_mtime) & 0xFFFFFFFF)
+            and int.from_bytes(header[12:16], "little") == (st.st_size & 0xFFFFFFFF))
+
+
 def _code_objects(code: types.CodeType):
     yield code
     for const in code.co_consts:
@@ -491,9 +529,9 @@ def loaded_code_matches_disk(fn: object) -> bool:
     """False when *fn*'s source file was edited after this process loaded it.
 
     True whenever that cannot be shown: no file (a REPL, ``exec``, a notebook
-    cell), a file untouched since the process started (the common case, one
-    ``os.stat``), or a file whose compiled form still contains this function
-    unchanged. Only a file modified after the process started is compiled.
+    cell), a file its ``.pyc`` shows is the one imported (the common case; see
+    `_pyc_proves_unchanged`), or a file whose compiled form still contains this
+    function unchanged. Anything else is compiled, once per file version.
     """
     import os
 
@@ -513,7 +551,7 @@ def loaded_code_matches_disk(fn: object) -> bool:
         # and "does not compile" would read as "edited".
         return True
     try:
-        if os.stat(path).st_mtime <= _process_start_time():
+        if _pyc_proves_unchanged(path, os.stat(path)):
             return True
     except OSError:
         return True

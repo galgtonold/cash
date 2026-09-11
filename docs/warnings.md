@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @43312e7a, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @2ff7863c, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 The one exception is the import-time notice from `cash.experimental`: it is a
@@ -1079,11 +1079,18 @@ is exactly backwards here: a library callable would not have warned.
 
 ## KEY-SOURCE-CHANGED {#key-source-changed}
 
-<!-- claim: cash/source_norm.py:loaded_code_matches_disk @cb3b7996, cash/core.py:_warn_source_changed_since_load @02d3e452 -->
+<!-- claim: cash/source_norm.py:loaded_code_matches_disk @58da8cda, cash/core.py:_warn_source_changed_since_load @02d3e452 -->
 **What happened.** A file holding your cached function, or a helper it calls,
 was edited after this process imported it. The process is still running the
 *old* code; the file now holds the *new* code. cash noticed the difference the
 first time the function was called.
+
+<!-- claim: cash/source_norm.py:_pyc_proves_unchanged @c97ead87 -->
+That includes a replacement that keeps an older timestamp — `shutil.copy2`,
+`cp -p`, `rsync -a`, robocopy, a drag-and-drop copy in Explorer all do — which
+before 0.10.1 looked untouched. cash no longer takes the file's time as proof on
+its own: the module's `.pyc` has to agree that this is the file the process
+imported, or cash compares the compiled file with the running code.
 
 **Why it matters.** cash identifies code by its source. Read after the edit,
 that source describes code the process is not running — and a result computed
@@ -1094,7 +1101,7 @@ answering it after the restart. Round 18 found the same for the cached function
 itself, in a worker that imported the old code and made its first call after
 the deploy landed.
 
-<!-- claim: cash/core.py:Cash._pin_own_source @54026f75 -->
+<!-- claim: cash/core.py:Cash._pin_own_source @7e56cf2e -->
 So cash keys that code by what is **actually running** instead: a cached
 function by the source it was imported with (its identity is taken when the
 decorator runs, not at its first call), and a helper by its loaded bytecode.
@@ -1660,6 +1667,33 @@ serialised.
 every call to that function while the entry sits there unreadable, so it is a
 performance bug that will not fix itself — and the write that failed will keep
 failing until you fix its cause.
+
+## STORE-CODE-CHANGED {#store-code-changed}
+
+<!-- claim: cash/core.py:Cash._code_moved_since_keyed @021e1b2f, cash/core.py:Cash._code_functions @bbc5e6f3 -->
+**What happened.** The file holding your cached function, a helper it calls, or
+another cached function it depends on changed on disk after this process read
+the code it keys that function by — and the change touched the code this call
+runs, not just something else in the same file. The message names the file.
+The result was returned to you, but it was **not cached**.
+
+**Why it matters.** A process keeps running the code it imported, but a worker
+that a process pool, `multiprocessing` or joblib starts *now* imports the file
+as it is now. So one call can run the old code here and the new code in its
+workers, and the result belongs to neither identity for sure. Stored under the
+old code's key, it was served to the next run of the old code — measured in
+round 19: a helper edited while a pooled call ran, then reverted, and the
+original code got the edited code's numbers from then on.
+
+**What to do.** Restart the process: it then runs, keys and caches the new code.
+If you are not editing the code, something is replacing files under a running
+job — usually a deploy that copies new files in before it restarts the service.
+
+**When it is safe to ignore.** Once, while you are editing a helper and a job
+is running. Every later call of that function in the same process recomputes,
+so a long-running process that keeps warning is paying for a restart it has not
+had. A reload the process does pick up (`importlib.reload`, `%autoreload`) is
+not affected: the reloaded code is keyed afresh.
 
 ## STORE-FAILED {#store-failed}
 
