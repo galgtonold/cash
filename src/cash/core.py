@@ -1388,6 +1388,7 @@ class Cash:
         # (module_global, attribute) read pairs per code object; see
         # _read_module_attr_pairs.
         self._module_attr_cache: dict = {}
+        self._local_binding_cache: dict[Any, tuple | None] = {}
         # (first_param, self_attrs, uses_super) per code object; see
         # _analyze_method_self_deps.
         self._method_self_dep_cache: dict = {}
@@ -5915,6 +5916,7 @@ class Cash:
                         parts.append((f"{name}#cls:{cname}", chash))
         self._pending_capture_watch.update(watch)
         parts.extend(self._module_attr_parts(func, func_name, g))
+        parts.extend(self._local_binding_parts(func))
         if not parts:
             return state_hash
         payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
@@ -6341,6 +6343,112 @@ class Cash:
         if len(self._module_attr_cache) < 4096:
             self._module_attr_cache[code] = result
         return result
+
+    def _local_binding_plan(self, func: Callable) -> tuple | None:
+        """What `_local_binding_parts` needs from *func*'s source, per code object.
+
+        ``(imports, attr_reads, bare_reads)``: the names an import written in
+        the body binds (``name -> (module, prefix)``), the ``name.ATTR`` reads
+        of any local or closure name, and the bare reads of local names.
+        """
+        code = getattr(func, "__code__", None)
+        if code is None:
+            return None
+        if code in self._local_binding_cache:
+            return self._local_binding_cache[code]
+        plan = None
+        try:
+            from .purity_analyzer import _local_import_map, own_source
+            tree = ast.parse(textwrap.dedent(own_source(func)))
+            func_def = next((n for n in ast.walk(tree)
+                             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))), None)
+            if func_def is not None:
+                imports = _local_import_map(func_def, func)
+                watched = set(imports) | set(code.co_freevars or ())
+                attr_reads: dict[str, set[str]] = {}
+                bare_reads: set[str] = set()
+                for node in ast.walk(func_def):
+                    if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                            and node.value.id in watched and not node.attr.startswith("__")):
+                        attr_reads.setdefault(node.value.id, set()).add(node.attr)
+                    elif (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+                            and node.id in imports):
+                        bare_reads.add(node.id)
+                if attr_reads or bare_reads:
+                    plan = (imports, attr_reads, bare_reads)
+        except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError, ValueError):
+            plan = None
+        if len(self._local_binding_cache) < 4096:
+            self._local_binding_cache[code] = plan
+        return plan
+
+    def _local_binding_parts(self, func: Callable) -> list[tuple[str, str]]:
+        """Key parts for data reached through names the module's globals never see.
+
+        Two shapes, both served stale (round 19, a constant 2 -> 0 and the old
+        report back):
+
+        * an import written INSIDE the body -- ``from .settings import
+          ROUNDING``, or ``from . import settings`` then ``settings.ROUNDING``
+          -- binds a local, so the globals channels never saw it (#132 followed
+          only the FUNCTIONS such an import binds);
+        * a module held in a closure: ``from . import settings`` inside a
+          decorator factory, read by the wrapper as ``settings.ROUNDING``.
+
+        Data values are folded, and a module's ``ATTR`` reads, the same way the
+        ``module.ATTR`` channel folds a global module's. A user module the
+        body has not imported yet is imported here -- the import the body is
+        about to make; a library module only if it is already loaded.
+        """
+        plan = self._local_binding_plan(func)
+        if not plan:
+            return []
+        from .purity_analyzer import _resolve_local_import
+        imports, attr_reads, bare_reads = plan
+        own_pkg = self._own_package(func)
+        root_module = getattr(func, "__module__", None)
+        code = func.__code__
+        cells = dict(zip(code.co_freevars or (), getattr(func, "__closure__", None) or ()))
+        parts: list[tuple[str, str]] = []
+
+        def resolve(name: str) -> Any:
+            if name in imports:
+                module_name, prefix = imports[name]
+                return _resolve_local_import(module_name, prefix, root_module)
+            cell = cells.get(name)
+            if cell is None:
+                return None
+            try:
+                return cell.cell_contents
+            except ValueError:
+                return None
+
+        def fold(label: str, value: Any) -> None:
+            if isinstance(value, (types.ModuleType, type)):
+                return
+            if callable(value) and not isinstance(value, (dict, list, tuple, set)):
+                return                   # code: the helper walk follows it
+            try:
+                stabilized = self._stabilize_for_global_hash(value, self._hash_callable_source)
+                parts.append((label, self._hash_arg_payload((stabilized,), {})))
+            except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+                pass
+
+        for name, attrs in attr_reads.items():
+            obj = resolve(name)
+            if not isinstance(obj, types.ModuleType) or not self._is_user_module(obj, own_pkg):
+                continue
+            for attr in sorted(attrs):
+                try:
+                    value = getattr(obj, attr)
+                except AttributeError:
+                    continue
+                fold(f"local:{name}.{attr}", value)
+        for name in sorted(bare_reads):
+            obj = resolve(name)
+            if obj is not None and not isinstance(obj, types.ModuleType):
+                fold(f"local:{name}", obj)
+        return parts
 
     def _module_attr_parts(
         self, func: Callable, func_name: str, g: dict,

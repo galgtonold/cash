@@ -340,10 +340,13 @@ cached function counts as your code even after `pip install .`, so a changed
 checkout. If you do need a third-party function's identity in the key, name it
 with [`depends_on=`](#depends_on-explicit-dependency-graph).
 
-<!-- claim: cash/purity_analyzer.py:_resolve_local_import @e82fd5a2 -->
+<!-- claim: cash/core.py:Cash._local_binding_parts @3130f596, cash/purity_analyzer.py:_resolve_local_import @e82fd5a2 -->
 An import written **inside** the function (`from .models import auc`, the usual
 way out of an import cycle) is followed the same way as one at the top of the
-file. If the first call reaches cash before the body has made that import, cash
+file -- a function it imports, a constant (`from .settings import ROUNDING`),
+or a module whose attributes the body reads (`settings.ROUNDING`). So is a
+module held in a closure: `from . import settings` inside a decorator factory,
+read by the wrapper. If the first call reaches cash before the body has made that import, cash
 imports a module of *yours* itself to read it; a library you deliberately import
 inside a function to defer its cost is never imported early.
 
@@ -387,7 +390,7 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @2f7c4ca9, cash/core.py:Cash._fold_dependency_read_globals @fbbbd0b2 -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @18066963, cash/core.py:Cash._fold_dependency_read_globals @fbbbd0b2 -->
 Only globals that are **read** participate — and that includes globals read
 on someone else's behalf: by a **helper**, so a helper returning a module-level
 `CONFIG` invalidates its caller when that config changes, and by another
