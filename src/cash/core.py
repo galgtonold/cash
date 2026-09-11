@@ -296,11 +296,22 @@ def _canonicalize_dict_order(value: Any, _depth: int = 0) -> Any:
     return value
 
 
-def _contains_set(value: Any, _depth: int = 0) -> bool:
+def _contains_set(value: Any, _depth: int = 0, _seen: set[int] | None = None) -> bool:
     """True if *value* contains a set/frozenset anywhere (recursively, including
-    inside objects). Gates the canonicalisation so ordinary args are untouched."""
+    inside objects). Gates the canonicalisation so ordinary args are untouched.
+
+    Each container or object is looked at once per walk. Without that, a
+    cyclic graph was walked once per PATH to the depth limit: a module-level
+    ``logger = logging.getLogger(...)`` read in a cached function reaches the
+    logging manager, whose dict of every logger reaches the manager again, and
+    the first call never returned -- in every release up to 0.10.0. A node
+    seen before is either still being walked (its other branches answer for
+    it) or was walked and held no set, or the walk would have stopped there.
+    """
     if _depth > 50:
         return False
+    if _seen is None:
+        _seen = set()
     # An exact builtin primitive cannot contain anything, so it cannot contain
     # a set. Without this the fall-through below called ``_object_state`` on
     # EVERY element -- which walks ``type(value).__mro__`` looking for
@@ -312,16 +323,24 @@ def _contains_set(value: Any, _depth: int = 0) -> bool:
         return False
     if isinstance(value, (set, frozenset)):
         return True
+    if id(value) in _seen:
+        return False
+    if isinstance(value, logging.Logger):
+        # Pickled by NAME (`Logger.__reduce__`), so nothing inside it reaches
+        # the key -- and walking it means walking every logger in the process,
+        # 270 us on each call of any function that reads a module `logger`.
+        return False
+    _seen.add(id(value))
     if isinstance(value, dict):
         return any(
-            _contains_set(k, _depth + 1) or _contains_set(v, _depth + 1)
+            _contains_set(k, _depth + 1, _seen) or _contains_set(v, _depth + 1, _seen)
             for k, v in value.items()
         )
     if isinstance(value, (list, tuple)):
-        return any(_contains_set(v, _depth + 1) for v in value)
+        return any(_contains_set(v, _depth + 1, _seen) for v in value)
     obj_state = _object_state(value)
     if obj_state:
-        return any(_contains_set(v, _depth + 1) for v in obj_state.values())
+        return any(_contains_set(v, _depth + 1, _seen) for v in obj_state.values())
     return False
 
 __all__ = ["Cash", "CacheExplanation"]
