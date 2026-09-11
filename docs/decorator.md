@@ -285,7 +285,7 @@ for the cases this model *can't* see.
 
 ### What else is in the key — the ones that cost a recompute
 
-<!-- claim: cash/core.py:Cash._fold_defaults @6339036d, cash/core.py:Cash._hash_arg_payload @978d9c46, cash/dependency_state.py:DependencyStateHasher.compute @58f96079 -->
+<!-- claim: cash/core.py:Cash._fold_defaults @6339036d, cash/core.py:Cash._hash_arg_payload @513e0ee7, cash/dependency_state.py:DependencyStateHasher.compute @58f96079 -->
 None of these gives a wrong answer. Each one costs a recompute you might not
 expect, measured across fresh processes:
 
@@ -583,7 +583,7 @@ def build(schema):
 build(Schema)                    # edit Schema, call again -> used to return the old answer
 ```
 
-<!-- claim: cash/core.py:Cash._fold_code_args @f9032430, cash/core.py:Cash._iter_code_carriers @996a368c -->
+<!-- claim: cash/core.py:Cash._fold_code_args @f9032430, cash/core.py:Cash._iter_code_carriers @bffc354f -->
 Your code reached through the arguments now folds into `state_hash`, so editing
 it invalidates. cash finds it in a class, a function, an instance (through its
 class), any of those nested in a list/tuple/set/dict, and an instance whose
@@ -1242,12 +1242,12 @@ columns), 50 ms for a 100 MB numpy array. What cash does about it:
   treated the same way; without it, every call hashes.)
 - **In a notebook**, `%cash_on` tracks every assignment and mutation, and cash
   uses that instead of hashing a tracked object again.
-- <!-- claim: cash/core.py:_plain_payload_values @1ee2fa6a, cash/_plain_data.py:container_ids @7536bea7 -->
+- <!-- claim: cash/core.py:_plain_payload_values @5a10242a, cash/_plain_data.py:is_plain @8aff6fb8, cash/_plain_data.py:pickle_unshared @b031ef6e -->
   **Lists and tuples of plain values** — the rows a parser returns — are
   recognised as such in C, a level at a time, and hashed in one pass instead
   of being walked element by element: a warm hit on two million rows went
-  from 8.4 s to 1.4 s, most of which is now the one serialization every call
-  still pays.
+  from 8.4 s to 0.37 s. That is still ten times the 0.04 s it takes to sum
+  them, so a cheap function over a big list is better left uncached.
 - **Everything else** — numpy arrays, models, your own objects — is hashed on
   every call it is passed to. [`CACHE-NET-LOSS`](warnings.md#cache-net-loss)
   tells you when that is costing more than it saves, and says so when the cost

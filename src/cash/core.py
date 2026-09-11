@@ -303,10 +303,8 @@ def _canonicalize_dict_order(value: Any, _depth: int = 0,
     # to reorder, and this runs once per element of every container argument.
     if type(value) in _CODELESS_PRIMS:
         return value
-    # A plain argument (`_plain_container_ids`) has no dict inside either.
-    # Returned as the SAME object, which pickles to the bytes the rebuilt copy
-    # did: `_hash_arg_payload` keeps a value here only when none of its lists
-    # and tuples is reachable twice, so no memo reference tells them apart.
+    # A plain argument (`_is_plain`) has no dict inside either:
+    # returned as the same object, for `_hash_arg_payload` to key by content.
     if _keep and id(value) in _keep:
         return value
     if isinstance(value, dict):
@@ -339,8 +337,8 @@ def _canonicalize_dict_order(value: Any, _depth: int = 0,
 _PLAIN_SEQS = (list, tuple)
 
 
-def _plain_container_ids(value: Any) -> list[int] | None:
-    """The ids of every list and tuple in *value* if it is PLAIN data, else None.
+def _is_plain(value: Any) -> bool:
+    """Is *value* PLAIN data?
 
     Plain: exact lists and tuples, nested, over exact primitives
     (`_CODELESS_PRIMS`) -- the rows a parser returns. Such a value holds no set,
@@ -349,11 +347,12 @@ def _plain_container_ids(value: Any) -> list[int] | None:
     `_canonicalize_dict_order`, `_iter_code_carriers` -- can find nothing, and
     they were nearly all of a warm hit: 8.4 s on two million rows whose body
     took 0.04 s (round 19). This proves "plain" one level at a time at C speed
-    instead (``chain.from_iterable``, ``map(type, ...)``), 0.34 s on the same
-    rows. Anything else -- a dict, a set, an object, a subclass, a cycle, more
-    than *_max_depth* levels -- returns None, and the walks decide as before.
+    instead (``chain.from_iterable``, ``map(type, ...)``), about 0.2 s on the
+    same rows. Anything else -- a dict, a set, an object, a subclass, a cycle,
+    more than `_plain_data.MAX_LEVELS` levels -- is not, and the walks decide
+    as before.
     """
-    return _plain_data.container_ids(value)
+    return _plain_data.is_plain(value)
 
 
 #: A census taken while one cache key is built, shared by the code fold and the
@@ -362,47 +361,35 @@ def _plain_container_ids(value: Any) -> list[int] | None:
 _PLAIN_CENSUS = threading.local()
 
 
-def _plain_census(value: Any) -> list[int] | None:
-    """`_plain_container_ids`, memoized for the key build in progress."""
+def _plain_census(value: Any) -> bool:
+    """`_is_plain`, memoized for the key build in progress."""
     memo = getattr(_PLAIN_CENSUS, "memo", None)
     if memo is not None:
         hit = memo.get(id(value))
         if hit is not None and hit[0] is value:
             return hit[1]
-    ids = _plain_container_ids(value)
+    plain = _is_plain(value)
     if memo is not None:
-        memo[id(value)] = (value, ids)
-    return ids
-
-
-_EMPTY_TUPLE_ID = id(())
+        memo[id(value)] = (value, plain)
+    return plain
 
 
 def _plain_payload_values(values: list[Any]) -> frozenset[int] | None:
     """The ids of the plain arguments among *values*, if the fast path applies.
 
     It applies when every value is a primitive (a digest the hashers returned
-    is a str) or plain data, and no list or tuple is reachable twice across all
-    of them -- the condition under which keeping them as they are pickles to the
-    same bytes as the rebuilt copy: a shared object is written once and then
-    referenced, a rebuilt one in full each time. The empty tuple is one shared
-    object in every program and is never referenced that way, so it does not
-    count. None otherwise, and when there is nothing plain to keep.
+    is a str) or plain data: the payload is then keyed by its content alone
+    (`_plain_data.pickle_unshared`). None otherwise, and when there is nothing
+    plain to keep.
     """
     keep: list[int] = []
-    all_ids: list[int] = []
     for value in values:
         if type(value) in _CODELESS_PRIMS:
             continue
-        ids = _plain_census(value)
-        if ids is None:
+        if not _plain_census(value):
             return None
         keep.append(id(value))
-        all_ids.extend(ids)
     if not keep:
-        return None
-    repeats = len(all_ids) - len(set(all_ids))
-    if repeats and repeats != max(all_ids.count(_EMPTY_TUPLE_ID) - 1, 0):
         return None
     return frozenset(keep)
 
@@ -2007,9 +1994,9 @@ class Cash:
         # is an exact-type test against a tuple rather than an isinstance.
         if type(value) in _CODELESS_PRIMS:
             return
-        # Plain data carries no code (`_plain_container_ids`); walking two
+        # Plain data carries no code (`_is_plain`); walking two
         # million rows to find that out was 14% of a warm hit.
-        if _depth == 0 and type(value) in _PLAIN_SEQS and _plain_census(value) is not None:
+        if _depth == 0 and type(value) in _PLAIN_SEQS and _plain_census(value):
             return
         # A frozen function's list/tuple/dict result is keyed by the call that
         # produced it (`_remember_frozen_container`), code inside it included:
@@ -7383,13 +7370,16 @@ class Cash:
         keep = _plain_payload_values(list(hashed_args) + list(hashed_kwargs.values()))
         if keep is not None:
             # Every argument is a digest, a primitive or plain data: no set
-            # anywhere, and nothing inside the plain ones to reorder.
+            # anywhere, nothing inside the plain ones to reorder, and no
+            # sharing the memo would have to record.
             payload = _canonicalize_dict_order(payload, _keep=keep)
-        elif _contains_set(payload):
-            payload = _stable_key_repr(payload)
+            args_bytes = _plain_data.pickle_unshared(payload)
         else:
-            payload = _canonicalize_dict_order(payload)
-        args_bytes = pickle.dumps(payload)
+            if _contains_set(payload):
+                payload = _stable_key_repr(payload)
+            else:
+                payload = _canonicalize_dict_order(payload)
+            args_bytes = pickle.dumps(payload)
         if raw:
             payload_seconds = time.perf_counter() - payload_t0
             if costliest is None or payload_seconds > costliest[1]:
@@ -9660,9 +9650,10 @@ class Cash:
         # The key was hashed a moment ago, on this thread: if that already cost
         # more than the check may, the check is retired before it pays -- a
         # miss on two million rows hashed them three times, once for the key,
-        # once here and once after the body (round 19).
-        cost = getattr(_ARG_COST, "last", None)
-        if cost is not None and cost[1] > self._MUTATION_CHECK_BUDGET_S:
+        # once here and once after the body (round 19). Read from what
+        # `_note_arg_cost` kept: it has already taken `_ARG_COST.last`.
+        cost = self._arg_costs.get(func_name)
+        if cost is not None and cost[2] > self._MUTATION_CHECK_BUDGET_S:
             self._mutation_check_too_costly.add(func_name)
             return None
         started = time.perf_counter()

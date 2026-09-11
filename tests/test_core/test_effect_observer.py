@@ -386,3 +386,22 @@ def test_the_mutation_check_retires_itself_when_re_hashing_is_expensive(tmp_path
     assert name in c._mutation_check_too_costly, (
         "an over-budget re-hash did not retire the check for that function"
     )
+
+
+def test_an_argument_over_budget_for_the_key_is_not_hashed_again(tmp_path, monkeypatch):
+    """The key's own hash already says what a re-hash would cost, so over the
+    budget the check is retired before it pays. It read that cost from a slot
+    the key build had already emptied, so a miss on two million rows hashed
+    them a second time after the body, every run (round 19)."""
+    c = _cash(tmp_path)
+    c._MUTATION_CHECK_BUDGET_S = 0.0        # any key's cost is over it
+    hashes = []
+    real = c._serialize_args
+    monkeypatch.setattr(c, "_serialize_args",
+                        lambda *a, **k: hashes.append(1) or real(*a, **k))
+
+    def reads(rows):
+        return len(rows)
+
+    _call_capturing(c, reads, [1, 2, 3])
+    assert len(hashes) == 1, f"one miss hashed its arguments {len(hashes)} times"

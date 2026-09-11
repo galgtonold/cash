@@ -136,17 +136,23 @@ class InMemoryBackend(CacheBackend):
         if 'storage' not in metadata:
             metadata['storage'] = ['RAM']
 
-        # Calculate size (approximate) - do this BEFORE copy to be fast logic-wise (size is same)
-        size = self._get_object_size(value)
+        # Plain data is sized, checked and copied from ONE look at it: three
+        # separate walks were most of promoting two million parsed rows here.
+        plain = _plain_data.profile(value)
+        if plain is None:
+            size, immutable = self._get_object_size(value), False
+            stored = self._safe_deep_copy(value, key)
+        else:
+            size, immutable = plain
+            stored = _plain_data.copy_plain(value, immutable)[1]
         metadata['size'] = size
 
         # Byte-cap bookkeeping: on replacement, discount the old entry's size
         # before recording the new one so the running total stays accurate.
         if key in self._store:
             self._current_size_bytes -= self._store[key][0].get('size', 0)
-        stored = self._safe_deep_copy(value, key)
         self._store[key] = (metadata, stored)
-        if _plain_data.immutable_below(stored):
+        if immutable:
             self._immutable_below.add(key)
         else:
             self._immutable_below.discard(key)

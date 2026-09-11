@@ -63,6 +63,29 @@ def test_plain_sizes_track_the_recursive_estimate():
     assert fast == recursive
 
 
+def test_a_big_level_is_sized_from_a_sample_that_lands_close():
+    """Above `SIZE_EXACT_UP_TO` items a level is sampled. Rows flatten to a
+    repeating int, int, str pattern, which a fixed stride could have landed on
+    one column of; texts vary in length."""
+    for value in ([(i, i * 2, "x" * (i % 300)) for i in range(100_000)],
+                  ["y" * ((i * 7919) % 5000) for i in range(100_000)]):
+        exact = sys.getsizeof(value) + sum(
+            sum(map(sys.getsizeof, flat)) for flat, _t in _plain_data._levels(value))
+        estimate = _plain_data.size_of(value)
+        assert abs(estimate - exact) / exact < 0.02
+        assert _plain_data.size_of(value) == estimate, "one value, two sizes"
+
+
+def test_rows_are_looked_at_once_on_the_way_in(monkeypatch):
+    """Sizing, the immutability check and the copy share one walk: three were
+    most of promoting two million parsed rows into the RAM tier."""
+    walks = []
+    real = _plain_data._levels
+    monkeypatch.setattr(_plain_data, "_levels", lambda v: walks.append(1) or real(v))
+    InMemoryBackend().set("k", [(i, str(i)) for i in range(1000)])
+    assert len(walks) == 1
+
+
 def test_non_plain_data_takes_the_old_paths():
     assert _plain_data.size_of({"a": 1}) is None
     assert _plain_data.copy_plain([{1, 2}]) == (False, None)

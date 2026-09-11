@@ -1,11 +1,13 @@
-"""A big plain-data argument is keyed without walking it in Python -- to the same key.
+"""A big plain-data argument is keyed by its content, without walking it in Python.
 
 A warm hit on a function receiving two million parsed rows took 8.4 s against a
 0.04 s body: three Python-level walks over every element (`_contains_set`,
 `_canonicalize_dict_order`, `_iter_code_carriers`) that can find nothing in
-lists and tuples of primitives. That is now proven at C speed and the walks
-are skipped. The key must not move: an entry written before is still found,
-so every shape here is keyed both ways and compared.
+lists and tuples of primitives, then a pickle whose memo -- a dict entry per
+tuple and string -- was 80 % of what was left. Plain data is now proven so at C
+speed and pickled without the memo: 0.37 s. Without the memo the key is the
+content alone, so what matters is that equal content keys equal and anything
+else does not.
 """
 from __future__ import annotations
 
@@ -14,7 +16,7 @@ import time
 import pytest
 
 import cash.core as core
-from cash import Cash
+from cash import Cash, _plain_data
 
 pytestmark = [pytest.mark.core]
 
@@ -43,26 +45,56 @@ def _args(shape):
     return value, {}
 
 
-@pytest.mark.parametrize("shape", sorted(SHAPES))
-def test_the_key_is_the_one_the_walks_gave(tmp_path, monkeypatch, shape):
+@pytest.fixture
+def key(tmp_path):
     c = Cash(cache_dir=str(tmp_path / "cache"))
-    args, kwargs = _args(shape)
-    fast = c._hash_arg_payload(args, kwargs)
-    monkeypatch.setattr(core, "_plain_payload_values", lambda values: None)
-    walked = c._hash_arg_payload(args, kwargs)
-    assert fast == walked, f"{shape}: the key moved"
+    return lambda *args, **kwargs: c._hash_arg_payload(args, kwargs)
+
+
+def test_equal_content_keys_equal(key):
+    """Built twice, and with a string shared between rows against a copy per
+    row: the memo wrote a shared object once and then referred back to it."""
+    tag = "x" * 20
+    shared = [(i, tag) for i in range(100)]
+    fresh = [(i, "".join(["x"] * 20)) for i in range(100)]
+    assert shared[0][1] is shared[1][1] and fresh[0][1] is not fresh[1][1]
+    assert key(shared) == key(fresh)
+    assert key([(1, 2)] * 3) == key([(1, 2), (1, 2), (1, 2)])
+    assert key(rows=[(1, "a")], n=2) == key(n=2, rows=[(1, "a")])
+
+
+@pytest.mark.parametrize("a, b", [
+    ([(1,)], [(1.0,)]),
+    ([(1,)], [(True,)]),
+    ([(1, 2)], [[1, 2]]),
+    (["a"], [b"a"]),
+    ([(1, (2,))], [(1, 2)]),
+    ([1, 2], [2, 1]),
+    ([bytearray(b"a")], [b"a"]),
+    ([None], [()]),
+])
+def test_different_content_keys_apart(key, a, b):
+    assert key(a) != key(b)
+
+
+def test_a_list_reached_twice_keys_like_two_equal_ones(key):
+    """As it always has: the general path rebuilt every list, which dropped
+    the sharing too. The key is the content."""
+    inner = [1]
+    assert key([inner, inner]) == key([[1], [1]])
+    assert key(inner, inner) == key([1], [1])
 
 
 def test_plain_data_is_recognised_and_other_data_is_not():
     rows = [(i, str(i)) for i in range(10)]
-    assert core._plain_container_ids(rows) is not None
-    assert core._plain_container_ids([[1, [2, [3]]]]) is not None
-    assert core._plain_container_ids([{"a": 1}]) is None
-    assert core._plain_container_ids([{1}]) is None
-    assert core._plain_container_ids([object()]) is None
+    assert core._is_plain(rows)
+    assert core._is_plain([[1, [2, [3]]]])
+    assert not core._is_plain([{"a": 1}])
+    assert not core._is_plain([{1}])
+    assert not core._is_plain([object()])
     cyclic: list = [1]
     cyclic.append(cyclic)
-    assert core._plain_container_ids(cyclic) is None
+    assert not core._is_plain(cyclic)
 
 
 def test_a_warm_hit_on_many_rows_does_not_walk_them(tmp_path, monkeypatch):
@@ -91,18 +123,18 @@ def test_a_warm_hit_on_many_rows_does_not_walk_them(tmp_path, monkeypatch):
 
 
 FAST = {"rows", "nested lists", "empty tuples inside", "kwargs", "a list and a scalar",
+        "shared tuple inside", "shared across arguments", "the same list twice",
         "bytearray leaves"}
 
 
 @pytest.mark.parametrize("shape", sorted(SHAPES))
 def test_which_shapes_take_the_fast_path(tmp_path, monkeypatch, shape):
-    """The comparison above is only worth something if the fast path ran for
-    the plain shapes, and fell back for a shared object, a dict, a set, a
-    subclass -- where keeping the object would change the bytes."""
+    """Plain data is pickled without the memo; a dict, a set or a subclass
+    takes the general path, which handles them."""
     c = Cash(cache_dir=str(tmp_path / "cache"))
-    seen = []
-    real = core._plain_payload_values
-    monkeypatch.setattr(core, "_plain_payload_values",
-                        lambda values: seen.append(real(values)) or seen[-1])
+    unshared = []
+    real = _plain_data.pickle_unshared
+    monkeypatch.setattr(_plain_data, "pickle_unshared",
+                        lambda value: unshared.append(1) or real(value))
     c._hash_arg_payload(*_args(shape))
-    assert (seen[-1] is not None) == (shape in FAST), shape
+    assert bool(unshared) == (shape in FAST), shape

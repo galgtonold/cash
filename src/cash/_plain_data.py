@@ -1,8 +1,8 @@
 """Looking at big plain data at C speed.
 
 "Plain" means exact lists and tuples, nested, over exact primitives -- the rows
-a parser returns, a matrix of floats as lists. Such a value holds no set, no
-dict, no code and no object state, so the Python-level walks cash otherwise
+a parser returns, a matrix of floats as lists. Such a value holds no set,
+no dict, no code and no object state, so the Python-level walks cash otherwise
 makes over it -- to key it, to copy it into the RAM tier, to size it -- can be
 answered one LEVEL at a time with ``chain.from_iterable`` and ``map`` instead
 of one element at a time. Round 19 measured what the walks cost: a warm run of
@@ -14,13 +14,15 @@ falls back to its general walk.
 """
 from __future__ import annotations
 
+import io
 import pickle
+import random
 import sys
 from itertools import chain
 from typing import Any
 
 #: Leaves: exact primitives. ``bytearray`` is one for keying (it pickles by
-#: value) but is mutable, so `immutable_below` does not accept it.
+#: value) but is mutable, so a value holding one is not `profile`'s immutable.
 LEAF_TYPES = (str, int, float, bool, type(None), bytes, complex, bytearray)
 IMMUTABLE_LEAF_TYPES = (str, int, float, bool, type(None), bytes, complex)
 SEQS = (list, tuple)
@@ -51,29 +53,91 @@ class _NotPlain(Exception):
     pass
 
 
-def container_ids(value: Any) -> list[int] | None:
-    """The ids of every list and tuple in *value* if it is plain, else None."""
+def is_plain(value: Any) -> bool:
+    """Is *value* a list or tuple of plain data?"""
+    if type(value) not in SEQS:
+        return False
+    try:
+        for _level in _levels(value):
+            pass
+    except (_NotPlain, TypeError):      # TypeError: an unhashable type among them
+        return False
+    return True
+
+
+def pickle_unshared(value: Any) -> bytes:
+    """``pickle.dumps(value)`` without the memo: 5x faster on big plain data.
+
+    The memo -- a dict entry per tuple and string written, so a second
+    reference can be written as a back-reference -- was 80 % of pickling two
+    million rows (0.7 s of 0.9 s). Without it the bytes are the content alone:
+    a string or a list reached twice pickles like two equal ones. Plain data
+    has no cycle (`_levels` gives up on one), which is the one thing the memo
+    was needed for.
+    """
+    buf = io.BytesIO()
+    pickler = pickle.Pickler(buf, protocol=pickle.DEFAULT_PROTOCOL)
+    pickler.fast = True
+    pickler.dump(value)
+    return buf.getvalue()
+
+
+#: A level with more items than this is sized from `SIZE_SAMPLE` of them.
+SIZE_EXACT_UP_TO = 1 << 16
+SIZE_SAMPLE = 1 << 14
+
+
+def _level_size(flat: list) -> int:
+    """``sys.getsizeof`` summed over *flat*, estimated from a sample when big.
+
+    A call per item was 0.33 s of storing two million parsed rows in the RAM
+    tier. The sample is random, not every k-th item: rows flatten to a
+    repeating pattern -- int, int, str -- that a fixed stride can land on one
+    column of. Seeded by the length, so one value always gets one size.
+    """
+    n = len(flat)
+    if n <= SIZE_EXACT_UP_TO:
+        return sum(map(sys.getsizeof, flat))
+    picks = random.Random(n).sample(range(n), SIZE_SAMPLE)
+    return sum(map(sys.getsizeof, map(flat.__getitem__, picks))) * n // SIZE_SAMPLE
+
+
+def profile(value: Any) -> tuple[int, bool] | None:
+    """``(size, immutable)`` for plain data from one walk, else None.
+
+    *size* is ``sys.getsizeof`` summed over *value* and everything in it, an
+    estimate for a memory cap: a leaf shared by many references (a small int,
+    an interned string) is counted once per reference, where a recursive walk
+    with a seen-set counts it once, and a level of more than
+    `SIZE_EXACT_UP_TO` items is sized from a sample (`_level_size`).
+
+    *immutable* is whether every container below *value* is a tuple and every
+    leaf immutable. Then a new top-level list -- or the tuple itself -- is a
+    complete deep copy: nothing the caller holds can reach anything the copy
+    holds that could change.
+    """
     if type(value) not in SEQS:
         return None
-    ids = [id(value)]
+    total = sys.getsizeof(value)
+    immutable = True
     try:
         for flat, types in _levels(value):
-            if all(t in SEQS for t in types):
-                ids.extend(map(id, flat))
-            elif not all(t in LEAF_TYPES for t in types):
-                ids.extend(id(x) for x in flat if type(x) in SEQS)
-    except (_NotPlain, TypeError):      # TypeError: an unhashable type among them
+            total += _level_size(flat)
+            if immutable and not all(t in IMMUTABLE_LEAF_TYPES or t is tuple for t in types):
+                immutable = False
+    except (_NotPlain, TypeError):
         return None
-    return ids
+    return total, immutable
+
+
+def size_of(value: Any) -> int | None:
+    """The size half of `profile`."""
+    found = profile(value)
+    return None if found is None else found[0]
 
 
 def immutable_below(value: Any) -> bool:
-    """Is every container below *value* a tuple, and every leaf immutable?
-
-    Then a new top-level list -- or the tuple itself -- is a complete deep
-    copy: nothing the caller holds can reach anything the copy holds that
-    could change.
-    """
+    """The immutable half of `profile`, stopping at the first level that is not."""
     if type(value) not in SEQS:
         return False
     try:
@@ -85,33 +149,18 @@ def immutable_below(value: Any) -> bool:
     return True
 
 
-def copy_plain(value: Any) -> tuple[bool, Any]:
+def copy_plain(value: Any, immutable: bool | None = None) -> tuple[bool, Any]:
     """``(True, copy)`` for plain data, ``(False, None)`` for anything else.
 
     Tuples of immutables all the way down need a new top list at most; other
     plain data (lists inside) is copied by a pickle round trip, which is exact
-    for these types and runs in C.
+    for these types and runs in C. *immutable* is for a caller that has
+    already profiled *value* and knows it is plain: it saves looking again.
     """
-    if immutable_below(value):
+    if immutable is None:
+        immutable = immutable_below(value)
+        if not immutable and not is_plain(value):
+            return False, None
+    if immutable:
         return True, (list(value) if type(value) is list else value)
-    if container_ids(value) is None:
-        return False, None
     return True, pickle.loads(pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL))
-
-
-def size_of(value: Any) -> int | None:
-    """``sys.getsizeof`` summed over *value* and everything in it, or None.
-
-    A leaf shared by many references (a small int, an interned string) is
-    counted once per reference, where a recursive walk with a seen-set counts
-    it once: an estimate for a memory cap, erring high.
-    """
-    if type(value) not in SEQS:
-        return None
-    total = sys.getsizeof(value)
-    try:
-        for flat, _types in _levels(value):
-            total += sum(map(sys.getsizeof, flat))
-    except (_NotPlain, TypeError):
-        return None
-    return total
