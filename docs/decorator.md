@@ -142,7 +142,7 @@ A notebook shows a badge on every statement. A script shows nothing by
 default, which makes it easy to assume caching is working when it isn't — so
 there are several ways to look.
 
-<!-- claim: cash/core.py:Cash.run_summary @8ff9b5a3, cash/core.py:Cash._summary_reasons @edbfd060, cash/core.py:Cash._print_run_summary @89b03773 -->
+<!-- claim: cash/core.py:Cash.run_summary @1bc3d713, cash/core.py:Cash._summary_reasons @edbfd060, cash/core.py:Cash._print_run_summary @89b03773 -->
 **What recomputed just now, and why?** Set `CASH_SUMMARY=1` and a
 per-function table prints to **stderr** when the process exits — stderr, so it
 never lands in a report, a pipe or a JSON response your program writes to
@@ -271,7 +271,7 @@ for the cases this model *can't* see.
 
 ### What else is in the key — the ones that cost a recompute
 
-<!-- claim: cash/core.py:Cash._fold_defaults @6339036d, cash/core.py:Cash._hash_arg_payload @6eac8bbf, cash/dependency_state.py:DependencyStateHasher.compute @58f96079 -->
+<!-- claim: cash/core.py:Cash._fold_defaults @6339036d, cash/core.py:Cash._hash_arg_payload @16824093, cash/dependency_state.py:DependencyStateHasher.compute @58f96079 -->
 None of these gives a wrong answer. Each one costs a recompute you might not
 expect, measured across fresh processes:
 
@@ -566,7 +566,7 @@ def build(schema):
 build(Schema)                    # edit Schema, call again -> used to return the old answer
 ```
 
-<!-- claim: cash/core.py:Cash._fold_code_args @f9032430, cash/core.py:Cash._iter_code_carriers @90eef39d -->
+<!-- claim: cash/core.py:Cash._fold_code_args @f9032430, cash/core.py:Cash._iter_code_carriers @ff9cd79d -->
 Your code reached through the arguments now folds into `state_hash`, so editing
 it invalidates. cash finds it in a class, a function, an instance (through its
 class), any of those nested in a list/tuple/set/dict, and an instance whose
@@ -1244,10 +1244,18 @@ def score(model, batch):            # keys `model` by train()'s identity:
     return model.predict(batch)     # no hash per call, same key in every process
 ```
 
+<!-- claim: cash/core.py:Cash._remember_frozen_container @49d6d1c0, cash/core.py:Cash._warn_frozen_has_no_effect @a4865188 -->
 A cached function receiving a frozen result keys it by the call that produced
 it: microseconds, the same in every process, and it works for an object that
-cannot be pickled. A numpy array result comes back **read-only**, so a write
-raises instead of going stale. Other objects are **audited**: cash re-hashes one
+cannot be pickled. That covers a numpy array, a pandas / polars / modin frame, a
+pyarrow table, any object that takes an attribute — and a plain **list, tuple
+or dict**, such as the rows a parser returns: two million tuples handed to two
+cached consumers cost seconds per call to hash, and nothing with `frozen=True`.
+For a result it cannot mark (a `set`, an object with `__slots__`),
+[`KEY-FROZEN-NO-EFFECT`](warnings.md#key-frozen-no-effect) says so rather than
+leaving `frozen=True` silently inert. A numpy array result comes back
+**read-only**, so a write raises instead of going stale. Other objects are
+**audited**: cash re-hashes one
 at an occasional use (every use under `CASH_DEBUG=1`), and if it has changed —
 say `model.fit(...)` was called on it downstream —
 [`KEY-FROZEN-MUTATED`](warnings.md#key-frozen-mutated) names the producer and

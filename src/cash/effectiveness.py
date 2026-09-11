@@ -91,6 +91,8 @@ class EffectivenessLedger:
     def __init__(self, waste_threshold_seconds: float = CUMULATIVE_WASTE_SECONDS) -> None:
         self._ledgers: dict[str, _FunctionLedger] = {}
         self._threshold = waste_threshold_seconds
+        # The last culprit each function reported, for `final_verdicts`.
+        self._culprits: dict[str, tuple] = {}
 
     def record(
         self,
@@ -121,6 +123,8 @@ class EffectivenessLedger:
                 return None
             led = self._ledgers[func_name] = _FunctionLedger()
 
+        if culprit is not None:
+            self._culprits[func_name] = culprit
         led.calls += 1
         led.overhead_seconds += overhead_seconds
         led.body_samples.append(body_seconds)
@@ -147,9 +151,36 @@ class EffectivenessLedger:
         led.warned = True
         return _message(func_name, led, waste, per_call_overhead, best_case_saving, culprit)
 
+    def final_verdicts(self) -> list[tuple[str, str]]:
+        """The verdicts a whole run supports, at its end.
+
+        `record` waits for `MIN_OBSERVATIONS` calls of a function, which a
+        command-line tool that calls each function once per process never
+        reaches: its parser was a net loss of seconds on every run, and nothing
+        ever said so (round 19). At the end of the run one call is allowed to
+        count -- under the same bar: seconds of real loss, and overhead above
+        the largest body time seen.
+        """
+        out: list[tuple[str, str]] = []
+        for func_name, led in self._ledgers.items():
+            if led.warned or not led.calls or not led.body_samples:
+                continue
+            waste = led.overhead_seconds - led.saved_seconds
+            if waste < self._threshold:
+                continue
+            per_call_overhead = led.overhead_seconds / led.calls
+            best_case_saving = max(led.body_samples)
+            if per_call_overhead <= best_case_saving:
+                continue
+            led.warned = True
+            out.append(_message(func_name, led, waste, per_call_overhead,
+                                best_case_saving, self._culprits.get(func_name)))
+        return out
+
     def reset(self) -> None:
         """Drop all accounting. For tests and ``cash.reset_session()``."""
         self._ledgers.clear()
+        self._culprits.clear()
 
 
 def _message(

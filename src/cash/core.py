@@ -1328,6 +1328,11 @@ class Cash:
         self._frozen_arrays: dict[int, list] = {}
         # id(obj) -> [weakref, uses, audit baseline or None], see `_audit_frozen`.
         self._frozen_uses: dict[int, list] = {}
+        # id(obj) -> [obj, producer, lineage, uses, audit baseline]: a frozen
+        # function's list / tuple / dict result, which carries no tag and no
+        # weakref -- so the object is held here, while someone else holds it
+        # too (`_remember_frozen_container`).
+        self._frozen_containers: dict[int, list] = {}
         # func_name -> (parameter, type, seconds, producer, pandas without
         # copy-on-write): the costliest argument to hash, for CACHE-NET-LOSS.
         self._arg_costs: dict[str, tuple] = {}
@@ -1889,6 +1894,12 @@ class Cash:
         # ``_iter_contained``'s first line. See `_CODELESS_PRIMS` for why this
         # is an exact-type test against a tuple rather than an isinstance.
         if type(value) in _CODELESS_PRIMS:
+            return
+        # A frozen function's list/tuple/dict result is keyed by the call that
+        # produced it (`_remember_frozen_container`), code inside it included:
+        # walking two million rows for functions was most of a hit's cost.
+        if self._frozen_containers and id(value) in self._frozen_containers \
+                and self._frozen_containers[id(value)][0] is value:
             return
         if _seen is None:
             _seen = set()
@@ -4156,7 +4167,7 @@ class Cash:
         * ``explain(*args, **kwargs)`` - return a `CacheExplanation`
           for that specific call (sync, even on async wrappers).
         """
-        _stats = {'hits': 0, 'misses': 0, 'total_time_saved': 0.0,
+        _stats = {'hits': 0, 'misses': 0, 'total_time_saved': 0.0, 'lookup_seconds': 0.0,
                   # What the misses were, and which results did not reach
                   # disk: the two things "1 miss" alone could not tell anyone.
                   'miss_reasons': Counter(), 'not_persisted': Counter(),
@@ -4175,6 +4186,7 @@ class Cash:
                         if call['cache_hit']:
                             _stats['hits'] += 1
                             _stats['total_time_saved'] += call.get('time_saved', 0.0)
+                            _stats['lookup_seconds'] += call.get('execution_time', 0.0)
                         else:
                             _stats['misses'] += 1
                             kind = (call.get('miss_reason') or (MISS_FIRST, ""))[0]
@@ -6891,6 +6903,87 @@ class Cash:
             entry[2] = content_hash
         return content_hash
 
+    #: Frozen list/tuple/dict results held at once. Past it the oldest goes.
+    _FROZEN_CONTAINERS_MAX = 256
+
+    def _remember_frozen_container(self, obj: Any, producer: str, lineage: str) -> None:
+        """Key a frozen function's list, tuple or dict by its producer's lineage.
+
+        A list of two million parsed rows, passed on to two cached consumers,
+        was pickled in full for every call -- warm runs about 9x slower than
+        uncached -- and ``frozen=True`` on the parser changed nothing: its fast
+        path covered numpy arrays alone, and a list cannot carry a tag (round
+        19). Such a result is now keyed like a frozen frame: by the lineage of
+        the call that produced it, audited now and then (`_audit_frozen`'s
+        schedule).
+
+        It has no weakref either, so the object is held here -- and let go
+        again once nothing else holds it, swept on each new entry.
+        """
+        table = self._frozen_containers
+        # What "held by the table alone" reads as, measured the same way: the
+        # count differs between Python versions (3.14 borrows references).
+        probe = [None, None, None, None, None]
+        probe[0] = object()
+        alone = sys.getrefcount(probe[0])
+        for key, entry in list(table.items()):
+            if sys.getrefcount(entry[0]) <= alone:
+                table.pop(key, None)
+        while len(table) >= self._FROZEN_CONTAINERS_MAX:
+            table.pop(next(iter(table)))
+        table[id(obj)] = [obj, producer, f"frozen:{lineage}", 0, None]
+
+    def _frozen_container_hash(self, obj: Any) -> str | None:
+        """The lineage a frozen list/tuple/dict is keyed by, or None once it
+        has been seen to change (KEY-FROZEN-MUTATED, as for a frozen frame)."""
+        entry = self._frozen_containers.get(id(obj))
+        if entry is None or entry[0] is not obj:
+            return None
+        entry[3] += 1
+        uses = entry[3]
+        due = (self.debug or os.environ.get("CASH_DEBUG")) or uses == _FROZEN_AUDIT_FIRST or (
+            uses > _FROZEN_AUDIT_FIRST and uses % _FROZEN_AUDIT_EVERY == 0)
+        if due:
+            try:
+                digest = hashlib.sha256(pickle.dumps(obj)).hexdigest()
+            except Exception:  # noqa: BLE001 - cannot audit: the declaration stands
+                digest = None
+            if digest is not None:
+                if entry[4] is None:
+                    entry[4] = digest
+                elif entry[4] != digest:
+                    self._frozen_containers.pop(id(obj), None)
+                    warn_diagnostic(
+                        CashImpurityWarning, "KEY-FROZEN-MUTATED",
+                        f"a {type(obj).__name__} returned by {entry[1]}, which is "
+                        f"declared @cash.cache(frozen=True), has been modified since "
+                        f"it was returned. Calls that received it before the change "
+                        f"may have been served results for the unmodified object; "
+                        f"from now on it is keyed by its contents.",
+                        f"take frozen=True off {entry[1]} if its result is meant to "
+                        f"be modified, or modify a copy (`obj = copy.deepcopy(obj)`) "
+                        f"instead.",
+                    )
+                    return None
+        return entry[2]
+
+    def _warn_frozen_has_no_effect(self, func_name: str, result: Any) -> None:
+        """Say so when ``frozen=True`` cannot apply to what the function returned."""
+        self._warn_once(
+            CashCacheIneffectiveWarning,
+            func_name,
+            "frozen_no_effect",
+            f"@cash.cache(frozen=True) on {func_name}: it returned a "
+            f"{type(result).__name__}, which cash cannot mark, so frozen=True has "
+            f"no effect on it -- a call that receives it still hashes it in full. "
+            f"frozen=True applies to a numpy array, a pandas/polars/modin frame, "
+            f"a pyarrow table, a list, tuple or dict, and any object that takes "
+            f"an attribute.",
+            code="KEY-FROZEN-NO-EFFECT",
+            fix="return one of those types, or take frozen=True off; "
+                "cash.register_hasher gives the type a cheap identity instead.",
+        )
+
     def _audit_frozen(self, obj: Any) -> bool:
         """Is a frozen=True result still what it was? False once it is not.
 
@@ -7055,6 +7148,10 @@ class Cash:
                 frozen_hash = self._frozen_array_hash(arg)
                 if frozen_hash is not None:
                     return frozen_hash
+            if self._frozen_containers and id(arg) in self._frozen_containers:
+                frozen_hash = self._frozen_container_hash(arg)
+                if frozen_hash is not None:
+                    return frozen_hash
             if lineage is not None:
                 entry = self._arg_hash_memo.get(id(arg))
                 if entry is not None:
@@ -7114,6 +7211,8 @@ class Cash:
                 producer = getattr(value, "_cash_lineage_producer", None)
                 if producer is None and self._frozen_arrays and id(value) in self._frozen_arrays:
                     producer = self._frozen_arrays[id(value)][1]
+                if producer is None and self._frozen_containers and id(value) in self._frozen_containers:
+                    producer = self._frozen_containers[id(value)][1]
                 old_pandas = (type(value).__name__ in ("DataFrame", "Series")
                               and (type(value).__module__ or "").startswith("pandas")
                               and not _is_cow_pandas(value))
@@ -7122,7 +7221,16 @@ class Cash:
 
         hashed_args = tuple(timed(f"#{i}", a) for i, a in enumerate(args))
         hashed_kwargs = {k: timed(k, v) for k, v in kwargs.items()}
-        _ARG_COST.last = costliest
+        # An argument with no hasher of its own goes into the payload AS IS,
+        # and its cost is the walk and the pickle below, not the lookup timed
+        # above -- so CACHE-NET-LOSS named a 2M-row list as taking "about 0ms
+        # to hash" (round 19). The payload's time is charged to the largest
+        # such argument.
+        raw = [(label, value) for (label, value), digest in zip(
+                   [(f"#{i}", a) for i, a in enumerate(args)] + list(kwargs.items()),
+                   list(hashed_args) + list(hashed_kwargs.values()))
+               if digest is value and isinstance(value, (list, tuple, dict, set, frozenset))]
+        payload_t0 = time.perf_counter()
 
         payload: Any = (hashed_args, hashed_kwargs)
         # A set/frozenset pickles in PYTHONHASHSEED-dependent iteration
@@ -7142,6 +7250,15 @@ class Cash:
         else:
             payload = _canonicalize_dict_order(payload)
         args_bytes = pickle.dumps(payload)
+        if raw:
+            payload_seconds = time.perf_counter() - payload_t0
+            if costliest is None or payload_seconds > costliest[1]:
+                label, value = max(raw, key=lambda r: len(r[1]))
+                producer = None
+                if self._frozen_containers and id(value) in self._frozen_containers:
+                    producer = self._frozen_containers[id(value)][1]
+                costliest = (label, payload_seconds, type(value).__name__, producer, False)
+        _ARG_COST.last = costliest
         return hashlib.sha256(args_bytes).hexdigest()
 
     def _serialize_args(self, func_name: str, args: tuple, kwargs: dict,
@@ -7556,6 +7673,10 @@ class Cash:
         if ttl is not None:
             return
         frozen = func_name is not None and func_name in self._frozen_funcs
+        if frozen and type(result) in (list, tuple, dict):
+            self._remember_frozen_container(
+                result, func_name, self._lineage_hash(cache_key, auto_file_deps))
+            return
         if frozen and type(result).__name__ == "ndarray" and \
                 (type(result).__module__ or "").startswith("numpy"):
             # An array cannot carry a tag, and read-only is a promise numpy
@@ -7579,7 +7700,8 @@ class Cash:
                     # Named in CACHE-NET-LOSS and KEY-FROZEN-MUTATED.
                     result._cash_lineage_producer = func_name
             except (AttributeError, TypeError):
-                pass
+                if frozen:
+                    self._warn_frozen_has_no_effect(func_name, result)
             type_name = type(result).__name__
             module = type(result).__module__ or ''
 
@@ -7707,6 +7829,12 @@ class Cash:
         tag = f"  [{entry_id_of(key)}]" if key else ""
         if entry['cache_hit']:
             saved = entry.get('time_saved') or 0.0
+            lookup = entry.get('execution_time') or 0.0
+            # What the hit cost, when it is not small: the summary said "time
+            # saved" while warm runs were 9x slower than uncached (round 19).
+            if lookup >= 0.01 and lookup >= 0.1 * saved:
+                verdict = "; a net loss" if lookup > saved else ""
+                return f"HIT  {name}{tag}  (saved {saved:.2f}s; the lookup took {lookup:.2f}s{verdict})"
             return f"HIT  {name}{tag}  (saved {saved:.2f}s)"
         kind, detail = entry.get('miss_reason') or (MISS_FIRST, "")
         if kind == MISS_RAISED:
@@ -9079,6 +9207,7 @@ class Cash:
         hits = sum(s['hits'] for _, s in rows)
         calls = hits + sum(s['misses'] for _, s in rows)
         saved = sum(s['total_time_saved'] for _, s in rows)
+        lookups = sum(s.get('lookup_seconds', 0.0) for _, s in rows)
         width = min(44, max(len(name) for name, _ in rows))
 
         def _fit(name: str) -> str:
@@ -9088,7 +9217,14 @@ class Cash:
             # away the function name and kept the package path.
             return name if len(name) <= width else "..." + name[-(width - 3):]
 
-        lines = [f"cash: {hits} of {calls} calls restored, {saved:.1f}s saved"]
+        head = f"cash: {hits} of {calls} calls restored, {saved:.1f}s saved"
+        if lookups >= 0.1 and lookups >= 0.1 * saved:
+            # Saved is the compute the hits stood in for; the hits themselves
+            # cost this much. Left out, a run that got 9x SLOWER read as a win.
+            head += f" -- and {lookups:.1f}s spent on the hits' lookups"
+            if lookups > saved:
+                head += f", a net loss of {lookups - saved:.1f}s"
+        lines = [head]
         where = self._summary_cache_dir()
         if where:
             # Which directory this ran against. A script user has no badge and
@@ -9106,6 +9242,9 @@ class Cash:
             miss_col = f"{stat['misses']} {'miss' if stat['misses'] == 1 else 'misses'}"
             saved_col = (f"{stat['total_time_saved']:.1f}s saved"
                          if stat['total_time_saved'] else "-")
+            lookup = stat.get('lookup_seconds', 0.0)
+            if lookup >= 0.1 and lookup >= 0.1 * stat['total_time_saved']:
+                saved_col += f", {lookup:.1f}s looking up"
             lines.append(f"  {_fit(name):<{width}}  {hit_col:<10}"
                          f"{miss_col:<12}{saved_col}")
             lines.extend(self._summary_reasons(stat))
@@ -9775,6 +9914,17 @@ class Cash:
         nothing to drain, so we no-op.
         """
         backend = getattr(self, '_backend', None)
+        effectiveness = getattr(self, "_effectiveness", None)
+        if effectiveness is not None:
+            try:
+                verdicts = effectiveness.final_verdicts()
+            except Exception:  # noqa: BLE001 - a notice must never block shutdown
+                verdicts = []
+            for what, fix in verdicts:
+                try:
+                    warn_diagnostic(CashCacheIneffectiveWarning, "CACHE-NET-LOSS", what, fix)
+                except Exception:  # noqa: BLE001 - -W error at exit, or teardown
+                    pass
         if backend is not None:
             if getattr(self, "_ram_only_pending", None):
                 self._flush_ram_only_keys()

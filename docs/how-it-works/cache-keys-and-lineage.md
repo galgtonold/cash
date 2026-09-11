@@ -186,12 +186,12 @@ See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full
 
 The two paths answer "what is this object's fingerprint?" differently, and the ordering in each is deliberate.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @6eac8bbf -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @16824093 -->
 **Decorator — hashing a call argument** (`Cash._hash_arg_payload`):
 
 1. **Hashers registered with `override=True`** — see [overriding a built-in](../tutorials/feature-guides/custom-hashers.md#overriding-a-built-in-content-hasher). Nothing below runs for such a type.
 2. **Built-in content hashers** — pandas, numpy, polars, PyArrow, modin, dask. A pandas 3 frame's hash is reused while copy-on-write shows the frame unchanged, and a `frozen=True` numpy result's is computed once.
-3. **`_cash_lineage_hash` attribute** — the cheap identity for objects with no content hasher. Only a tag something keeps current counts: one the notebook's statement layer wrote (it re-tags a variable on every change), or one from a function declared `frozen=True`. The tag a plain `@cash.cache` call puts on its result is not used, because nothing moves it when the object is modified in place.
+3. **`_cash_lineage_hash` attribute** — the cheap identity for objects with no content hasher. Only a tag something keeps current counts: one the notebook's statement layer wrote (it re-tags a variable on every change), or one from a function declared `frozen=True`. The tag a plain `@cash.cache` call puts on its result is not used, because nothing moves it when the object is modified in place. A `frozen=True` function's list, tuple or dict, which cannot carry a tag, is remembered by identity instead and keyed the same way.
 4. **Registered type hashers** — anything added via `register_hasher()`.
 5. **`pickle.dumps()` of the whole argument payload.**
 6. **No key at all** — an unpicklable argument means the call runs *uncached* and Cash emits `CashCacheIneffectiveWarning`. It is never cached under a wrong key.

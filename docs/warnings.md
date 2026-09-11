@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @2ff7863c, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @357b6b10, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 The one exception is the import-time notice from `cash.experimental`: it is a
@@ -376,6 +376,14 @@ fingerprint against 11 ms of work: 34 times slower, every time. Cash only
 speaks up once the loss has accumulated past a couple of real seconds *and* its
 per-call overhead exceeds even the largest body time it has seen, so a function
 that is usually fast but occasionally very slow will not be flagged.
+
+<!-- claim: cash/effectiveness.py:EffectivenessLedger.final_verdicts @701e8440 -->
+It needs three calls of a function to judge during the run, and a command-line
+tool that calls each function once per process never gets there — so the same
+test runs again when the process exits, and there one call can count. The
+per-call log line says it as it happens (`saved 0.01s; the lookup took 1.07s;
+a net loss`), and the `CASH_SUMMARY=1` table gives the time the hits' lookups
+took next to the time they saved.
 
 **What to do.** The message names the costliest argument. If a cached function
 produced it and nothing modifies it afterwards — a trained model, a lookup
@@ -1015,6 +1023,28 @@ or modify a copy (`copy.deepcopy(obj)`). While looking, `CASH_DEBUG=1` audits
 every use, so the warning points at the first call after the change.
 
 **When it is safe to ignore.** Never: the promise the key relies on was broken.
+
+## KEY-FROZEN-NO-EFFECT {#key-frozen-no-effect}
+
+**What happened.** A function is decorated `@cash.cache(frozen=True)`, and it
+returned something cash cannot mark as its result: a `set`, or an object whose
+class does not take new attributes (`__slots__`, many C types). The message
+names the type.
+
+**Why it matters.** `frozen=True` is how a large result gets passed to other
+cached functions without being hashed on every call. On this result it does
+nothing, and nothing else would have said so: a cached function receiving it
+still hashes it in full.
+
+**What to do.** Return one of the types it does cover — a numpy array, a
+pandas / polars / modin frame, a pyarrow table, a list, tuple or dict, or an
+object that takes an attribute (a `set` can become a `frozenset` inside a
+tuple, or a sorted list). Otherwise take `frozen=True` off, and if hashing the
+result costs too much, register a cheaper identity for its type with
+`cash.register_hasher`.
+
+**When it is safe to ignore.** When the result is small: hashing it costs
+nothing worth saving.
 
 ## KEY-INSTANCE-STATE {#key-instance-state}
 

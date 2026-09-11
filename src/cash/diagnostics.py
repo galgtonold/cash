@@ -139,6 +139,7 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
                                # source, so editing it invalidates nothing
     "KEY-DYNAMIC-DEP-FAILED",  # a dynamic_depends_on resolver raised
     "KEY-FROZEN-MUTATED",      # a result declared frozen=True was modified
+    "KEY-FROZEN-NO-EFFECT",    # frozen=True on a function whose result it cannot mark
                                # after it was returned; keyed by content now
     "KEY-INSTANCE-STATE",      # a bound method's instance could not be hashed;
                                # falling back to its process-local identity
