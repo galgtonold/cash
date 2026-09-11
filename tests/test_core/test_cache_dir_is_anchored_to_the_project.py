@@ -337,3 +337,27 @@ def test_a_spawned_worker_anchors_where_its_parent_did(tmp_path):
         f"one run resolved two cache directories: {lines}"
     )
     assert lines["PARENT"] == str(project / ".cash")
+
+
+def test_a_lint_only_pyproject_below_the_project_is_not_a_project(tmp_path):
+    """Round 19: `tests/pyproject.toml` holding only `[tool.ruff]` made
+    `tests/` the project whenever a script there ran -- a second, cold cache,
+    and the repository's `[tool.cash]` ignored. A pyproject.toml marks a
+    project when it has `[project]`, `[build-system]`, `[tool.poetry]` or
+    `[tool.cash]`."""
+    root = tmp_path / "repo"
+    tests = root / "tests"
+    tests.mkdir(parents=True)
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "r"\nversion = "0"\n\n[tool.cash]\ncache_dir = "shared_cache"\n',
+        encoding="utf-8")
+    (tests / "pyproject.toml").write_text('[tool.ruff]\nline-length = 100\n', encoding="utf-8")
+    (tests / "job.py").write_text(_SCRIPT, encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
+    p = subprocess.run([sys.executable, "job.py"], cwd=str(tests), env=env,
+                       capture_output=True, text=True, timeout=120)
+    assert p.returncode == 0, p.stderr[-2000:]
+    cache_dir = next(line.split(" ", 1)[1] for line in p.stdout.splitlines()
+                     if line.startswith("CACHE_DIR"))
+    assert os.path.normcase(os.path.realpath(cache_dir)) == \
+        os.path.normcase(os.path.realpath(root / "shared_cache")), cache_dir

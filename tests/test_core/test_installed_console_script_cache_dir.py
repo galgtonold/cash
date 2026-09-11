@@ -45,6 +45,7 @@ def _write_distribution(root):
     src = root / "src" / _PKG
     src.mkdir(parents=True)
     (src / "__init__.py").write_text("", encoding="utf-8")
+    (src / "__main__.py").write_text("from .cli import main\nmain()\n", encoding="utf-8")
     (src / "cli.py").write_text(textwrap.dedent("""
         import json
         import sys
@@ -274,3 +275,30 @@ def test_the_cli_reaches_a_tools_per_user_cache_by_name(installed_tool, tmp_path
     cleared = _cash_cli(base, "clear", "--tool", _PKG, cwd=nowhere, env=env)
     assert cleared.returncode == 0, cleared.stdout + cleared.stderr
     assert not tool_dir.exists()
+
+
+def test_python_dash_m_of_the_installed_tool_uses_the_same_per_user_cache(installed_tool, tmp_path):
+    """Round 19: cron's `python -m nightly` from whatever directory cron chose
+    cached in `<that directory>/.cash` -- a fresh cache per starting place --
+    while the console script used the per-user cache. Outside a project, the
+    `-m` form of an installed tool is the same tool."""
+    base, exe = installed_tool
+    python = base / "venv" / ("Scripts" if os.name == "nt" else "bin") / (
+        "python.exe" if os.name == "nt" else "python")
+    root, env = _private_user_cache(tmp_path)
+    a, b = tmp_path / "cron_a", tmp_path / "cron_b"
+    a.mkdir()
+    b.mkdir()
+    environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
+    environ.update(env)
+
+    def run_m(cwd):
+        out = subprocess.run([str(python), "-m", _PKG], cwd=str(cwd), capture_output=True,
+                             text=True, env=environ)
+        assert out.returncode == 0, out.stdout + out.stderr
+        return json.loads(out.stdout.strip().splitlines()[-1])["cache_dir"]
+
+    first, second = run_m(a), run_m(b)
+    assert first == second, "python -m cached per directory"
+    assert not os.path.exists(a / ".cash") and not os.path.exists(b / ".cash")
+    assert first == _run(exe, a, env=env)["cache_dir"], "the -m form and the script disagree"

@@ -1,17 +1,19 @@
 # Configuration
 
-Cash settles its configuration from five sources in priority order:
+Cash settles its configuration from six sources in priority order:
 
 1. **Constructor kwargs** — `Cash(redis_host="...", debug=True)` (or any
    `CashConfig` field name).
 2. **Environment variables** — `CASH_*` (every `CashConfig` field has a
    binding, plus `CASH_TIER_<N>_<FIELD>` for tier overrides).
-3. **Project config** — `[tool.cash]` in the nearest `pyproject.toml`
+3. **A file named in code** — `Cash(config_path="...")`
+   ([below](#per-script-overrides-via-config_path)).
+4. **Project config** — `[tool.cash]` in the nearest `pyproject.toml`
    (walks up from the *running script*, not from the current working
    directory — see below).
-4. **User config** — `~/.config/cash/config.toml` on Linux/macOS, or
+5. **User config** — `~/.config/cash/config.toml` on Linux/macOS, or
    `%APPDATA%\cash\config.toml` on Windows. Honours `$XDG_CONFIG_HOME`.
-5. **Built-in defaults** from the `CashConfig` dataclass.
+6. **Built-in defaults** from the `CashConfig` dataclass.
 
 Each layer overrides the next. A single field can be set wherever is
 most convenient — explicit code for one-off scripts, `pyproject.toml`
@@ -30,7 +32,7 @@ the same one you would guess for each:
 | `pyproject.toml` / the XDG user config | that file's own directory, as paths in config files normally are |
 | nothing (the `.cash` default) | the **project anchor**: the first directory above the running script holding a `pyproject.toml`, `setup.py`, `setup.cfg` or `.git`. With no such directory above it, the script's own directory — for `python -m pkg`, the directory of `pkg/__main__.py` |
 | nothing, from **installed code** — `pytest`, `cash`, a `python -m` module in site-packages, your own installed tool — run **inside a project** | that project's root: the first directory above your current directory holding a project marker |
-| nothing, from an **installed console script run outside any project** | a per-user directory named after the tool — `%LOCALAPPDATA%\cash\<tool>`, `~/Library/Caches/cash/<tool>`, or `$XDG_CACHE_HOME/cash/<tool>` |
+| nothing, from an **installed console script — or `python -m` of an installed module — run outside any project** | a per-user directory named after the tool — `%LOCALAPPDATA%\cash\<tool>`, `~/Library/Caches/cash/<tool>`, or `$XDG_CACHE_HOME/cash/<tool>` |
 
 The project anchor is also where `pyproject.toml` itself is looked for. Both
 used to be resolved from the current working directory, which made the cache a
@@ -70,7 +72,8 @@ reinstall. So:
   so do its xdist workers.
 * **Outside any project** — your home directory, a scratch directory, a drive
   root — an installed console script caches per user, per tool, in the
-  platform's cache location. Left on the current directory it would drop a
+  platform's cache location, and so does `python -m` of an installed module
+  (named after its top-level package, the way cron usually runs a tool). Left on the current directory it would drop a
   fresh `.cash` wherever you happened to run it and never reuse one. `cash`
   itself never does this; `cash info` lists these caches, and
   `cash inspect --tool NAME` / `cash clear --tool NAME` reach one.
@@ -326,8 +329,21 @@ additionally overridable element-by-element with `CASH_TIER_<N>_<FIELD>`.
 cash = Cash(config_path="./my_special_config.toml")
 ```
 
-Loads the named TOML as the user-level layer (so env vars and
-constructor kwargs still override it).
+<!-- claim: cash/config.py:_resolve_config @a54cbbca -->
+Loads the named TOML above the user and project files — a file named in code
+outranks the `pyproject.toml` found by walking up from wherever the process
+started — and below environment variables and constructor kwargs. That is how
+an installed package can carry its own cash settings: a `pyproject.toml` is not
+installed with the package, so ship a TOML file inside it and name it here
+(`Path(__file__).with_name("cash.toml")`). Until 0.10.1 the launching
+project's `pyproject.toml` overrode it.
+
+<!-- claim: cash/config.py:_marks_project @2991b315 -->
+A `pyproject.toml` marks a project only when it has a `[project]`,
+`[build-system]`, `[tool.poetry]` or `[tool.cash]` table. One that only
+configures a tool — a `tests/pyproject.toml` holding `[tool.ruff]` — does not,
+so running from `tests/` still finds the repository's project and its
+`[tool.cash]`.
 
 <!-- claim: cash/__init__.py:configure @ccd2f4be -->
 ## Runtime mutation: `cash.configure()`

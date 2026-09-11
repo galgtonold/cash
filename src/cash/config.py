@@ -4,10 +4,11 @@ Resolution precedence (highest priority wins):
 
     1. Explicit constructor kwargs       (Cash(redis_host="..."))
     2. Environment variables             (CASH_* and CASH_TIER_<N>_*)
-    3. Project config                    (./pyproject.toml [tool.cash])
-    4. User config                       (~/.config/cash/config.toml or
+    3. A file named in code              (Cash(config_path="..."))
+    4. Project config                    (./pyproject.toml [tool.cash])
+    5. User config                       (~/.config/cash/config.toml or
                                           %APPDATA%/cash/config.toml on Windows)
-    5. CashConfig dataclass defaults
+    6. CashConfig dataclass defaults
 
 Every field on ``CashConfig`` is settable through every layer. The
 ``tiers`` list is settable as a whole from TOML and field-by-field from
@@ -879,11 +880,34 @@ def _running_installed_code() -> bool:
     return _running_console_script() is not None or _running_installed_module()
 
 
+#: The tables that make a ``pyproject.toml`` a project's. A ``tests/pyproject.toml``
+#: holding only ``[tool.ruff]`` made ``tests/`` a project of its own: a second,
+#: cold cache when pytest ran from there, and the repository's ``[tool.cash]``
+#: ignored (round 19).
+_PYPROJECT_PROJECT_TABLE = re.compile(
+    r"^\s*\[\[?\s*(project|build-system|tool\.cash|tool\.poetry)\s*[\].]", re.MULTILINE)
+
+
+def _marks_project(directory: Path, marker: str) -> bool:
+    path = directory / marker
+    if marker != "pyproject.toml":
+        return path.exists()
+    try:
+        return bool(_PYPROJECT_PROJECT_TABLE.search(path.read_text(encoding="utf-8-sig")))
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
 def _project_root_above(start: Path) -> Path | None:
-    """The first directory at or above *start* holding a project marker."""
+    """The first directory at or above *start* holding a project marker.
+
+    A ``pyproject.toml`` counts when it describes a project -- ``[project]``,
+    ``[build-system]``, ``[tool.poetry]`` -- or configures cash; one that only
+    configures a linter does not.
+    """
     for d in [start, *start.parents]:
         try:
-            if any((d / marker).exists() for marker in _PROJECT_MARKERS):
+            if any(_marks_project(d, marker) for marker in _PROJECT_MARKERS):
                 return d
         except OSError:
             continue
@@ -1047,6 +1071,24 @@ def _running_console_script() -> str | None:
     return name or None
 
 
+def _running_installed_module_name() -> str | None:
+    """The top-level package of ``python -m <installed module>``, or None.
+
+    The same tool as its console script, launched the other way: cron's
+    ``python -m nightly`` from whatever directory cron picked cached in
+    ``<that directory>/.cash``, a fresh one for every place it was started
+    from, while ``nightly`` itself used the per-user cache (round 19). Inside
+    a project it anchors to the project like any installed code; this name is
+    only asked for outside one.
+    """
+    if _interactive_shell_is_running() or not _running_installed_module():
+        return None
+    spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+    top = (getattr(spec, "name", "") or "").split(".", 1)[0]
+    name = re.sub(r"[^A-Za-z0-9._-]", "-", top).strip("-.")
+    return name or None
+
+
 def _per_user_cache_root() -> Path:
     """The platform's own place for caches, where a cache survives ``cd``."""
     if os.name == "nt":
@@ -1089,7 +1131,7 @@ def _installed_entry_point_cache_dir() -> Path | None:
       somewhere no project claims -- a home directory, a scratch directory, a
       drive root.
     """
-    name = _running_console_script()
+    name = _running_console_script() or _running_installed_module_name()
     if name is None or name.lower() == "cash":
         return None
     if _invocation_project_root() is not None:
@@ -1246,10 +1288,10 @@ def _resolve_config(
     """Resolve the merged Cash configuration.
 
     Args:
-        config_path: Convenience override for per-script use (the form
-            documented as ``Cash(config_path=...)``). When given, the
-            file is treated as a user-level TOML and merged on top of
-            ``user_config_path``.
+        config_path: A config file named in code (the form documented as
+            ``Cash(config_path=...)``). Merged on top of the user AND the
+            project layer -- a file named explicitly outranks the one found
+            by walking up -- and below environment variables and kwargs.
         user_config_path: Path to the user-scoped config (the XDG
             location). Pass ``None`` to skip the user layer entirely;
             omit to use the default location.
@@ -1308,17 +1350,6 @@ def _resolve_config(
                 cache_dir_origin = Path(user_path).parent
                 cache_dir_was_configured = True
 
-    # Layer 2b: explicit ``Cash(config_path=...)`` override (merged on
-    # top of the user-scoped layer)
-    if config_path is not None:
-        override_data = file_layer("config_path", config_path)
-        if override_data:
-            _merge(merged, override_data)
-            sources.append(f"file:{config_path}")
-            if "cache_dir" in override_data:
-                cache_dir_origin = Path(config_path).parent
-                cache_dir_was_configured = True
-
     # Layer 3: project TOML
     if project_config_path is _USE_DEFAULT_PATH:
         project_path = _default_project_config_path()
@@ -1331,6 +1362,20 @@ def _resolve_config(
             sources.append(f"project:{project_path}")
             if "cache_dir" in project_data:
                 cache_dir_origin = Path(project_path).parent
+                cache_dir_was_configured = True
+
+    # Layer 3b: explicit ``Cash(config_path=...)``, above the project file. A
+    # file named in code outranks the one found by walking up from wherever
+    # the process started: a package shipping its own cash settings had them
+    # overridden by the pyproject.toml of whatever project launched it
+    # (round 19). Environment variables and Cash(...) arguments still win.
+    if config_path is not None:
+        override_data = file_layer("config_path", config_path)
+        if override_data:
+            _merge(merged, override_data)
+            sources.append(f"file:{config_path}")
+            if "cache_dir" in override_data:
+                cache_dir_origin = Path(config_path).parent
                 cache_dir_was_configured = True
 
     # Layer 4: env vars

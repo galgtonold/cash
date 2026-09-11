@@ -151,3 +151,25 @@ def test_pytest_from_above_the_project_uses_the_project_config(tmp_path, workers
     seen = [os.path.normcase(os.path.realpath(p))
             for p in out.read_text(encoding="utf-8").splitlines()]
     assert seen == [os.path.normcase(os.path.realpath(project / "mycache"))], seen
+
+
+def test_a_config_file_named_in_code_outranks_the_launching_projects_pyproject(tmp_path, monkeypatch):
+    """Round 19: a package shipped its cash settings in a TOML file of its own
+    and named it with Cash(config_path=...); the pyproject.toml of whatever
+    project launched it overrode them. Environment variables still win."""
+    from cash.config import _resolve_config
+    own = tmp_path / "pkg" / "cash.toml"
+    own.parent.mkdir()
+    own.write_text('[tool.cash]\nmax_cache_size = "1GB"\nverbose = true\n', encoding="utf-8")
+    project = tmp_path / "launcher" / "pyproject.toml"
+    project.parent.mkdir()
+    project.write_text('[project]\nname = "l"\nversion = "0"\n\n[tool.cash]\n'
+                       'max_cache_size = "5GB"\nverbose = false\n', encoding="utf-8")
+    for key in [k for k in os.environ if k.startswith("CASH_")]:
+        monkeypatch.delenv(key)
+    config = _resolve_config(own, user_config_path=None, project_config_path=project)
+    assert config.max_cache_size == 1_000_000_000
+    assert config.verbose is True
+    monkeypatch.setenv("CASH_VERBOSE", "0")
+    assert _resolve_config(own, user_config_path=None,
+                           project_config_path=project).verbose is False
