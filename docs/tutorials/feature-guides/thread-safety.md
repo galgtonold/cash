@@ -148,12 +148,19 @@ the next run is all hits. What differs is what each process keeps to itself:
   both compute it. `use_locking=True` with `RedisBackend` is the only lock that
   spans processes (see [which backends](#which-backends-implement-locking)).
 
-For **joblib**, define the cached function in a module you import, not in the
-script you run. Its default process backend pickles a function from the running
-script by value, and a cached function cannot be sent that way: the call fails
-with `Could not pickle the task to send it to the workers`. From an imported
-module it is sent by reference and works. `Parallel(prefer="threads")` works
-either way.
+<!-- claim: cash/core.py:_expose_script_function @eac4e478, cash/core.py:Cash.__reduce__ @713060b9 -->
+For **joblib**, keep the script's work behind `if __name__ == "__main__":`.
+joblib's default process backend sends a function from the running script *by
+value*, and a cached function cannot travel that way. So cash sends one *by
+name* instead, the way `multiprocessing` does, and each worker imports the
+script and decorates the function itself. Keys match, so the workers and the
+parent share entries. Importing the script in a worker runs its top level,
+which is why this needs the guard. Without it, the call fails with a message
+saying to add the guard, or to define the function in a module you import. A
+function defined in a module you import always works, and so does
+`Parallel(prefer="threads")`. A module run with `python -m pkg.mod` counts as
+the running script too, and is not sent by name: import its cached functions
+from another module.
 
 ## Caveats
 
