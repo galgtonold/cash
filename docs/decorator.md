@@ -742,18 +742,24 @@ After the TTL elapses, the next call recomputes and replaces the entry.
 Entries whose calls never come back stay on disk until you reclaim them —
 call `cash.cleanup()`, or run `python -m cash clear` from the CLI.
 
+<!-- claim: cash/core.py:Cash._entry_ttl @3cf07e88, cash/core.py:Cash._absent_entry_reason @f887e2ad -->
 An entry remembers the `ttl` it was written with, and the decorator's
 current `ttl` applies too, so the **shorter** of the two wins. Lengthening
 `ttl=60` to `ttl=3600` does not rescue entries already written under 60 s:
 they expire at 60 s and are rewritten under the new value.
-`explain()` reports either case as `ttl_expired` when this process wrote the
-entry; an entry a previous process wrote under a shorter ttl reads as
-`no_entry`, because the backend drops it on read.
+`explain()` and the miss reason say `ttl expired` in either case, including
+for an entry a previous run wrote.
 
 Without `ttl=`, an entry lives until it is evicted or cleared, unless the tier
 it is written to has a `default_ttl`. That is the way to give every function a
 lifetime from configuration; see
 [running as a service](tutorials/feature-guides/production-transition.md#running-as-a-service-or-a-worker-pool).
+The tier's default works the same way as the decorator's `ttl=`: the shorter
+of the one an entry was written with and the one configured now wins, so
+lowering `default_ttl` from a day to an hour shortens entries already on disk
+too. A decorator's own `ttl=` takes precedence over the tier default, in both
+directions. `cash info` shows each tier's `default_ttl`, and `cash inspect
+--function NAME` when each entry expires.
 
 ### `file_depends_on=` — name a file explicitly
 
@@ -1125,7 +1131,7 @@ dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/core.py:Cash._explain_call @de9ca4b1 -->
+<!-- claim: cash/core.py:Cash._explain_call @69e9c98d -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 

@@ -196,7 +196,7 @@ keep. `show` displays the last 50. Full flag reference in
 
 ## Asking a decorated function directly
 
-<!-- claim: cash/core.py:Cash._explain_call @de9ca4b1 -->
+<!-- claim: cash/core.py:Cash._explain_call @69e9c98d -->
 For a `@cash.cache`-wrapped function, `explain()` answers "would the next call
 with these arguments hit, and why?" without calling the function, mutating
 stats, or writing anything:
@@ -301,7 +301,7 @@ and entry counts it points you at `cash info` in a terminal.
 Anything that requires touching the cache directory itself lives in the CLI, not
 in a magic. These five subcommands are the whole surface:
 
-<!-- claim: cash/__main__.py:main @92b1b60e, cash/__main__.py:cmd_info @21b98e27, cash/__main__.py:_inspect_cache_dir @24d5dddf -->
+<!-- claim: cash/__main__.py:main @92b1b60e, cash/__main__.py:cmd_info @c8efcbea, cash/__main__.py:_inspect_cache_dir @24d5dddf -->
 ```bash
 cash version            # installed version
 cash info               # resolved config + where it came from

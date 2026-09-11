@@ -2932,10 +2932,8 @@ class Cash:
 
         metadata = CacheMetadata.from_dict(raw_metadata)
 
-        # TTL check - match `_try_get_cached`: the decorator's ttl, else the
-        # one the entry was written with (a tier's `default_ttl`).
-        if ttl is None:
-            ttl = getattr(metadata, "ttl", None)
+        # TTL check - the same rule `_try_get_cached` applies.
+        ttl = self._entry_ttl(ttl, metadata)
         if ttl is not None:
             timestamp = metadata.timestamp or 0
             age = time.time() - timestamp
@@ -3110,10 +3108,7 @@ class Cash:
         if metadata is None:
             self._note_miss(func_name, cache_key, self._absent_entry_reason(func_name, cache_key))
             return _CACHE_MISS
-        # With no ttl on the decorator, the one the entry was written with --
-        # a tier's `default_ttl` -- still applies, from whichever tier serves.
-        if ttl is None:
-            ttl = getattr(metadata, "ttl", None)
+        ttl = self._entry_ttl(ttl, metadata)
         try:
             self._validate_ttl(metadata, ttl)
             if not self._auto_file_deps_fresh(metadata):
@@ -3172,6 +3167,31 @@ class Cash:
             self._pending_miss.clear()
         self._pending_miss[cache_key] = reason
         self._last_key[func_name] = cache_key
+
+    def _tier_default_ttl(self) -> int | None:
+        """The ``default_ttl`` of the first tier that has one, as configured now."""
+        backend = self._backend
+        for tier in (*(getattr(backend, "backends", None) or ()), backend):
+            default = getattr(tier, "_default_ttl", None)
+            if default is not None:
+                return default
+        return None
+
+    def _entry_ttl(self, ttl: int | None, metadata: Any) -> int | None:
+        """The ttl a stored entry is judged by.
+
+        The decorator's ``ttl=`` when it has one -- a per-function setting,
+        applied as it stands now, in both directions. Otherwise the SHORTER of
+        the ttl the entry was written with and the tier's ``default_ttl`` as
+        configured now: lowering a tier's default from a day to 5 seconds left
+        every entry written under the day being served (round 19, 3 of 3),
+        while lowering a decorator's ttl took effect at once.
+        """
+        if ttl is not None:
+            return ttl
+        found = [t for t in (getattr(metadata, "ttl", None), self._tier_default_ttl())
+                 if t is not None]
+        return min(found) if found else None
 
     def _absent_entry_reason(self, func_name: str, cache_key: str) -> tuple[str, str]:
         """Why there is no entry for *cache_key*. Reads state; changes none.
@@ -8576,6 +8596,12 @@ class Cash:
             # the 0.1s floor (Windows CI, round 18).
             if body_seconds is not None:
                 execution_time = body_seconds
+            # The ttl the entry is WRITTEN with, a tier's default included: a
+            # backend drops an expired entry on read, so the next miss can only
+            # say "expired" -- rather than "evicted or cleared" -- if this
+            # process and the stored-key record know it (round 19).
+            if ttl is None:
+                ttl = self._tier_default_ttl()
             meta = CacheMetadata(
                 key=cache_key,
                 func_name=func_name,

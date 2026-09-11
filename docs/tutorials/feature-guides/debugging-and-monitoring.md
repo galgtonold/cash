@@ -86,7 +86,7 @@ fetch_user(42)                      # compute and store
 fetch_user.explain(42)              # hit
 ```
 
-<!-- claim: cash/core.py:CacheExplanation @9f1db6f8 broad="the field list and reason set are a claim about the whole dataclass", cash/core.py:Cash._explain_call @de9ca4b1 -->
+<!-- claim: cash/core.py:CacheExplanation @9f1db6f8 broad="the field list and reason set are a claim about the whole dataclass", cash/core.py:Cash._explain_call @69e9c98d -->
 The return value is a `CacheExplanation` dataclass (`would_hit`, `reason`, `func_name`, `cache_key`, `details`, `cache_dir`) with six fields and one of six reason codes. `cache_dir` is the directory the answer was read from, so an explain that reads a different cache from the one you expected (a nested `pyproject.toml`, say) shows it:
 
 | `reason` | Meaning | Key `details` |

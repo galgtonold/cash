@@ -132,7 +132,7 @@ def cmd_info(args: argparse.Namespace) -> None:
     else:
         print("  Persist:    cost model, conservative (1.0s compute floor)")
     if config.tiers:
-        print(f"  Tiers:      {', '.join(t.type for t in config.tiers)}")
+        print(f"  Tiers:      {', '.join(_tier_text(t) for t in config.tiers)}")
     # Where this run looked, and what each layer set. Round 18: a nested
     # pyproject.toml, a pytest launched from the directory above its project
     # and a `disable = true` were each invisible here -- a Source line names
@@ -163,12 +163,36 @@ def cmd_info(args: argparse.Namespace) -> None:
             print(f"    {name:<20} {entries:>5} entries  {_format_bytes(size):>10}  {path}")
 
 
+def _tier_text(tier) -> str:
+    """``file (default_ttl=5s)``: a tier's type and every option it sets.
+
+    Round 19: a tier's ``default_ttl`` decides when entries expire and was
+    shown nowhere -- `Tiers: memory, file` said nothing about it.
+    """
+    import dataclasses
+
+    from cash.config import format_size
+    parts = []
+    for f in dataclasses.fields(tier):
+        value = getattr(tier, f.name, None)
+        if f.name == "type" or value is None:
+            continue
+        if "password" in f.name:
+            value = "***"
+        elif f.name == "default_ttl" and isinstance(value, int):
+            value = f"{value}s"
+        elif f.name == "max_size_bytes" and isinstance(value, int):
+            value = format_size(value)
+        parts.append(f"{f.name}={value}")
+    return f"{tier.type} ({', '.join(parts)})" if parts else tier.type
+
+
 def _setting_text(config, key: str) -> str:
     """One setting's effective value, as `cash info` prints it."""
     from cash.config import _SIZE_FIELDS, format_size
     value = getattr(config, key, None)
     if key == "tiers":
-        return ", ".join(t.type for t in value) or "[]"
+        return ", ".join(_tier_text(t) for t in value) or "[]"
     if key == "redis_password" and value:
         return "***"
     if key in _SIZE_FIELDS and isinstance(value, int):

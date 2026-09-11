@@ -168,7 +168,8 @@ Print the effective merged configuration.
   (`0.1s compute floor, N% savings required`), or a conservative fallback when
   smart persistence is off.
 - `Tiers` — present when the active config declares an explicit tier
-  list; lists each tier's type in order.
+  list; lists each tier's type in order, with the options it sets —
+  `memory, file (default_ttl=3600s)`.
 - `Config files` — every config file looked for and what happened: `read`,
   `not found`, `no [tool.cash] section`, or `could not be read` (a warning
   says why).
@@ -435,7 +436,7 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 ---
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @21b98e27 -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @c8efcbea -->
 ## Exit codes
 
 | Code | When |

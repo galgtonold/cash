@@ -147,3 +147,69 @@ def test_a_tier_default_ttl_expires_the_ram_copy_too(temp_cache_dir, monkeypatch
     assert f.explain(1).reason == "ttl_expired"
     f(1)
     assert runs == [1, 1], "the RAM tier served an entry past its tier's default_ttl"
+
+
+def _tiered(monkeypatch, cache_dir, default_ttl):
+    monkeypatch.setenv("CASH_TIER_0_TYPE", "memory")
+    monkeypatch.setenv("CASH_TIER_1_TYPE", "file")
+    monkeypatch.setenv("CASH_TIER_1_DEFAULT_TTL", str(default_ttl))
+    monkeypatch.setenv("CASH_CACHE_DIR", cache_dir)
+    return Cash(register_magic=False)
+
+
+def test_lowering_a_tier_default_ttl_shortens_entries_already_written(temp_cache_dir, monkeypatch, clock):
+    """Round 19: `default_ttl` 86400 -> 5 in the project config, and an entry
+    written under the day was still served 8 seconds later (3 of 3). A
+    decorator's ttl= lowered the same way took effect at once."""
+    runs = []
+
+    def make(c):
+        @c.cache(assume_safe=True)
+        def f(x):
+            runs.append(x)
+            time.sleep(0.15)        # past the persistence floor: the next run reads disk
+            return x
+        return f
+
+    first = _tiered(monkeypatch, temp_cache_dir, 86400)
+    make(first)(1)
+    first.backend.backends[-1]._writes.wait_all()
+    later = _tiered(monkeypatch, temp_cache_dir, 5)     # the next run, config lowered
+    f = make(later)
+    clock[0] += 3
+    f(1)
+    assert runs == [1], "control: inside the new ttl it hits"
+    clock[0] += 5
+    assert f.explain(1).reason == "ttl_expired"
+    f(1)
+    assert runs == [1, 1], "an entry written under the old default outlived the new one"
+
+
+def test_an_entry_expired_under_the_tier_default_says_so(temp_cache_dir, monkeypatch, clock):
+    """The file tier drops an expired entry on read, so the miss looked like an
+    eviction -- "entry gone: evicted or cleared" -- in the reason and in
+    explain(). It is recorded with the ttl it was written with now."""
+    def body(x):
+        time.sleep(0.15)            # past the persistence floor: the next run reads disk
+        return x
+
+    c = _tiered(monkeypatch, temp_cache_dir, 5)
+    c.cache(assume_safe=True)(body)(1)
+    c.backend.backends[-1]._writes.wait_all()
+    fresh = _tiered(monkeypatch, temp_cache_dir, 5)    # a new process: no RAM copy
+    f = fresh.cache(assume_safe=True)(body)
+    clock[0] += 9
+    explanation = f.explain(1)
+    assert explanation.reason == "ttl_expired", explanation
+    assert "ttl=5" in str(explanation.details)
+
+
+def test_cash_info_shows_a_tier_s_default_ttl(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from cash.__main__ import cmd_info
+    monkeypatch.setenv("CASH_TIER_0_TYPE", "memory")
+    monkeypatch.setenv("CASH_TIER_1_TYPE", "file")
+    monkeypatch.setenv("CASH_TIER_1_DEFAULT_TTL", "5")
+    cmd_info(SimpleNamespace())
+    assert "file (default_ttl=5s)" in capsys.readouterr().out
