@@ -99,7 +99,8 @@ entries, and it also gives up everything the cache saves you between local
 runs. To keep that, and switch the cache off only for the tests that must not
 see it, use a fixture:
 
-<!-- test:skip reason="a conftest.py fixture; configure(disable=...) is exercised by tests/test_core/test_disable.py" -->
+<!-- claim: cash/__init__.py:disabled @8ca8a96a -->
+<!-- test:skip reason="a conftest.py fixture; run under CASH_DISABLE=1 by tests/test_core/test_disabled_context.py" -->
 ```python
 # conftest.py
 import cash
@@ -107,14 +108,18 @@ import pytest
 
 @pytest.fixture
 def no_cache():
-    cash.configure(disable=True)      # every @cash.cache call runs its body
-    yield
-    cash.configure(disable=False)
+    with cash.disabled():             # every @cash.cache call runs its body
+        yield
 
 # test_model.py
 def test_training_really_trains(no_cache):
     ...
 ```
+
+`cash.disabled()` puts back whatever was in force before the block, so a run
+started with `CASH_DISABLE=1` stays uncached after the fixture's first use.
+Ending the fixture with `cash.configure(disable=False)` instead — which this
+page used to show — switches caching back **on** for the rest of that run.
 
 ## Mocking and monkeypatching
 

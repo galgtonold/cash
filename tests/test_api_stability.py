@@ -40,6 +40,7 @@ def test_core_exports_stable():
         'Cash', 'CacheExplanation', 'cache', 'show_stats',
         'register_hasher', 'reset_session', 'configure', 'cleanup',
         'help',  # public since d30849a (orientation summary, aimed at coding agents)
+        'disabled',  # public since round 19 (a no-cache block that restores CASH_DISABLE)
         # Purity declarations
         'pure', 'stateful', 'is_pure', 'is_stateful',
         'analyze_function_purity', 'mark_pure', 'mark_stateful',

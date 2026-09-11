@@ -7,7 +7,7 @@ page is the exhaustive parameter and method reference.
 ## Imports
 
 ```python
-from cash import Cash, CacheExplanation, configure, reset_session
+from cash import Cash, CacheExplanation, configure, disabled, reset_session
 ```
 
 `cash.cache`, `cash.show_stats`, and `cash.register_hasher` are
@@ -74,11 +74,13 @@ cash.register_hasher(MyType, my_hasher)
 ```
 
 Equivalent to calling these methods on a singleton `Cash()`. For custom
-configuration, instantiate `Cash(...)` explicitly. The two
-module-level functions below cover runtime reconfiguration and session
-reset.
+configuration, instantiate `Cash(...)` explicitly. The module-level
+functions below cover runtime reconfiguration, switching caching off for a
+block, and session reset.
 
 ::: cash.configure
+
+::: cash.disabled
 
 ::: cash.reset_session
 

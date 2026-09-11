@@ -15,6 +15,8 @@ for convenience.  Either import path is valid for those symbols; prefer
 """
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Iterator
 from typing import Any
 
 from .backends import CascadingBackend, FileBackend, InMemoryBackend
@@ -319,6 +321,29 @@ def configure(**overrides: Any) -> None:
         c._backend = build_backend_from_config(c.config)
 
 
+@contextlib.contextmanager
+def disabled(on: bool = True) -> Iterator[None]:
+    """Run the block with the default ``Cash`` switched off, then put it back.
+
+    Inside ``with cash.disabled():`` every ``@cash.cache`` call runs its body
+    and nothing is read from or written to the cache. On the way out the
+    ``disable`` setting returns to what it was -- including ``True``, when the
+    run was started with ``CASH_DISABLE=1``. The fixture the testing guide
+    showed ended with ``cash.configure(disable=False)``, which switched a
+    ``CASH_DISABLE=1`` run back ON from the first test that used it, so the
+    job meant to run uncached read and wrote the cache (round 19).
+
+    ``disabled(False)`` is the reverse: force caching on for the block.
+    """
+    c = _get_global_cash()
+    previous = bool(c.config.disable)
+    configure(disable=bool(on))
+    try:
+        yield
+    finally:
+        configure(disable=previous)
+
+
 def cleanup(max_age: int | None = None) -> int:
     """Remove expired entries from the default ``Cash`` singleton's backend.
 
@@ -408,6 +433,7 @@ __all__ = [
     "help",
     "reset_session",
     "configure",
+    "disabled",
     "cleanup",
     # Purity declarations (stable)
     "pure",
