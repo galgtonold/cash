@@ -177,6 +177,36 @@ cold, which is correct but slow. Options, in increasing order of setup:
   and **exits 2** (argparse's bad-invocation code), which in a CI step is a
   failed build rather than a clean start.
 
+## Running as a service or a worker pool
+
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._drop_ram_if_cleared @ac7e18c7, cash/backends/factory.py:_build_tier @db302ac5 -->
+- **Clearing a live service.** `cash clear --all`, `--function` and `--entry`
+  reach processes that are still running: each checks at most once a second
+  whether its cache directory was cleared and, if so, drops what it holds in
+  RAM. Within about a second nothing serves a pre-clear result. Restarting is
+  not needed.
+- **Workers that should hold nothing in RAM.** `backend = "file"` (or
+  `CASH_BACKEND=file`) keeps every entry on disk only: each hit reads the file,
+  and a worker's memory stays flat.
+- **A default ttl for every function.** There is no top-level setting; a
+  decorator's `ttl=` covers one function. To give every entry a lifetime,
+  declare the tier stack with a `default_ttl` on the disk tier. It applies to
+  entries written without a `ttl=`, from RAM as well as from disk:
+
+  ```toml
+  [[tool.cash.tiers]]
+  type = "memory"
+
+  [[tool.cash.tiers]]
+  type = "file"
+  default_ttl = 3600          # seconds
+  ```
+
+  The same from the environment: `CASH_TIER_0_TYPE=memory`,
+  `CASH_TIER_1_TYPE=file`, `CASH_TIER_1_DEFAULT_TTL=3600`.
+- **Worker processes** share the disk cache and keep their own RAM, summary
+  and warnings; see [across processes](thread-safety.md#across-processes-pool-processpoolexecutor-joblib).
+
 ## Migration checklist
 
 - [ ] Identify expensive notebook statements

@@ -1,6 +1,6 @@
 # Debugging and monitoring — figuring out why Cash did what it did
 
-When Cash isn't behaving the way you expect — missing when you thought it'd hit, hitting when you expected fresh — there are four tools for figuring out why: `f.explain()` for per-call introspection, `%cash_debug` for verbose tracing, `%cash_stats` / `cache_info()` for aggregate health, and the `cash` CLI for inspecting on-disk state.
+When Cash isn't behaving the way you expect — missing when you thought it'd hit, hitting when you expected fresh — there are five tools for figuring out why: `CASH_SUMMARY` and `CASH_DEBUG` for a script you would rather not edit, `f.explain()` for per-call introspection, `%cash_debug` for verbose tracing in a notebook, `%cash_stats` / `cache_info()` for aggregate health, and the `cash` CLI for inspecting on-disk state.
 
 This guide walks through all four, plus the common diagnostic patterns and the cache-management commands you reach for once you've found the problem.
 
@@ -31,6 +31,45 @@ expensive.cache_info()
 
 That's the decorator path. In a notebook the equivalents are `%cash_debug on`, `%cash_stats`, and the badge above each cell's output. On disk, `cash inspect` and `cash clear` cover everything from outside the kernel.
 
+## In a script: `CASH_SUMMARY` and `CASH_DEBUG`
+
+<!-- claim: cash/core.py:Cash._print_run_summary @89b03773, cash/core.py:Cash._log_decorator_call @af6a4e2f -->
+A script shows nothing about the cache by default. Two environment variables
+change that without touching the code:
+
+```bash
+CASH_SUMMARY=1 python model.py      # one table when the process exits
+CASH_DEBUG=1 python model.py        # one line per call, as it happens
+```
+
+`CASH_SUMMARY` prints, to stderr, what each function did and why it missed:
+
+```
+cash: 1 of 4 calls restored, 0.4s saved
+  cache: /home/me/proj/.cash
+  model.ray_component  1 hit,    1 miss      0.4s saved
+      missed: 1 no entry yet
+  model.build_grid     0 hits,   2 misses    -
+      missed: 1 no entry yet, 1 new arguments
+      kept in RAM only (2x): under the 0.1s persistence floor; a new process recomputes it
+```
+
+The `cache:` line is the directory the run used; check it first when a run
+that should have been warm was not. A "kept in RAM only" line names results
+the next run will compute again.
+
+`CASH_DEBUG` logs each call with the entry id `cash inspect --function` lists:
+
+```
+cash.calls: HIT  model.ray_component  [45be55281a10]  (saved 0.36s)
+cash.calls: MISS model.build_grid  [7d5c31acf1d4]  no entry yet: the first call with these arguments in this process, and no earlier run stored one  (ran 0.05s; kept in RAM only -- under the 0.1s persistence floor -- so another process will recompute it)
+```
+
+`CASH_VERBOSE=1` gives the per-call lines without cash's other debug records.
+If your program configures `logging`, the lines go to your handlers instead of
+stderr. [Seeing what it did](../../decorator.md#seeing-what-it-did) has the
+full format, every miss reason, and when the summary cannot print.
+
 ## Tool 1: `f.explain()` — the diagnostic API
 
 Every function wrapped with `@cash.cache` gets an `explain` attribute. Call it with the same args you'd pass to the function and it tells you exactly what would happen on the next real call — without computing anything, without mutating stats, without touching the backend.
@@ -47,7 +86,7 @@ fetch_user(42)                      # compute and store
 fetch_user.explain(42)              # hit
 ```
 
-<!-- claim: cash/core.py:CacheExplanation @9f1db6f8 broad="the field list and reason set are a claim about the whole dataclass", cash/core.py:Cash._explain_call @de760288 -->
+<!-- claim: cash/core.py:CacheExplanation @9f1db6f8 broad="the field list and reason set are a claim about the whole dataclass", cash/core.py:Cash._explain_call @de9ca4b1 -->
 The return value is a `CacheExplanation` dataclass (`would_hit`, `reason`, `func_name`, `cache_key`, `details`, `cache_dir`) with six fields and one of six reason codes. `cache_dir` is the directory the answer was read from, so an explain that reads a different cache from the one you expected (a nested `pyproject.toml`, say) shows it:
 
 | `reason` | Meaning | Key `details` |
@@ -157,12 +196,12 @@ The full shape and field meanings:
 Outside a notebook (CI, scripts, postmortem), the `cash` CLI inspects and manages cache directories on disk:
 
 ```bash
-cash inspect                          # summarise ./.cash
+cash inspect                          # the cache in use (the directory `cash info` reports)
 cash inspect ./notebooks/analysis.ipynb   # inspect the .cash next to a notebook
 cash inspect /tmp/some-cache-dir      # any directory
 
-cash clear --all                      # nuke ./.cash (no confirmation)
-cash clear ./notebooks/analysis.ipynb # nuke the sibling .cash
+cash clear --all                      # delete the cache in use (no confirmation)
+cash clear ./notebooks/analysis.ipynb # delete the sibling .cash
 ```
 
 `cash inspect` reports total size, entry count, and a per-function table sorted by size. `--function NAME` drills into one function's individual entries, showing what each one *saves* alongside its size. See the [CLI reference](../../cli.md) for the full output and flag list.
@@ -248,7 +287,7 @@ From inside a notebook, `%cash_repair` covers the two flavors of reset:
 From outside, the CLI:
 
 ```bash
-cash clear --all                      # delete ./.cash
+cash clear --all                      # delete the cache in use
 cash clear ./notebooks/analysis.ipynb # delete the sibling .cash
 ```
 
@@ -279,6 +318,8 @@ Both are experimental: stick to `f.explain()` and `%cash_debug` for anything tha
 
 | Tool | Surface | Import / invocation | Effect |
 |---|---|---|---|
+| `CASH_SUMMARY=1` | Script | environment variable | A per-function hit/miss table on stderr when the process exits, with why each function missed. |
+| `CASH_DEBUG=1` / `CASH_VERBOSE=1` | Script | environment variable | One line per call: hit or miss, the entry id, and why. `VERBOSE` gives those lines alone. |
 | `f.explain(*args, **kwargs)` | Decorator | attribute on `@cash.cache`-wrapped function | Returns `CacheExplanation` for the next call. No execution, no stats mutation. |
 | `f.cache_info()` | Decorator | attribute on `@cash.cache`-wrapped function | Returns `{hits, misses, hit_rate, total_time_saved, warnings}` per function. |
 | `f.cache_clear()` | Decorator | attribute on `@cash.cache`-wrapped function | Wipes backend entries for this function; resets stats + warnings. |
@@ -289,7 +330,7 @@ Both are experimental: stick to `f.explain()` and `%cash_debug` for anything tha
 | `%cash_repair [--state] [--full]` | Notebook | line magic | Clear corrupted entries (default), reset state only (`--state`), or full reset (`--full`). |
 | `cash inspect [path]` | CLI | shell command | Summarise a cache dir or notebook's sibling `.cash`. Read-only. |
 | `cash clear [path] [--all]` | CLI | shell command | Delete a cache directory. **No confirmation prompt.** |
-| `CacheExplanation` | Type | `from cash import CacheExplanation` | Frozen dataclass returned by `explain()`. Fields: `would_hit`, `reason`, `func_name`, `cache_key`, `details`. |
+| `CacheExplanation` | Type | `from cash import CacheExplanation` | Frozen dataclass returned by `explain()`. Fields: `would_hit`, `reason`, `func_name`, `cache_key`, `details`, `cache_dir`. |
 | `cash.experimental.CacheExplorer` | UI | `from cash.experimental import CacheExplorer` | List/preview/clear backend entries. Experimental. |
 | `cash.experimental.CacheDebugger` | UI | `from cash.experimental import CacheDebugger` | Step-through inspector for the notebook pipeline. Experimental. |
 

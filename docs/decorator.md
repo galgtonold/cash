@@ -214,12 +214,15 @@ cash inspect
 ```
 
 ```
-Cache directory: .cash
-  Total size: 1.68 GB    Entries: 412    Functions: 6
+Cache directory: /srv/etl/.cash
+  Total size: 1.6 GiB    Entries: 412    Functions: 6
 
-  FUNCTION                      ENTRIES        SIZE   LAST USED
-  model.ray_component               180     1.21 GB   2 min ago
-  model.build_grid                   97      310 MB   2 min ago
+  FUNCTION                                  ENTRIES        SIZE   LAST USED
+  model.ray_component                           180     1.2 GiB   2 min ago
+  model.build_grid                               97   310.0 MiB   2 min ago
+
+  cash inspect --function NAME   to list one function's entries
+  cash clear   --function NAME   to drop them
 ```
 
 **Drop one function's entries** when you're out of disk but still want the
@@ -259,6 +262,28 @@ for the cases this model *can't* see.
 > `joblib.Memory` adds the decorated function's own body but **not** the helpers
 > it calls, so editing a helper quietly serves a stale result. Cash follows the
 > call graph.
+
+### What else is in the key — the ones that cost a recompute
+
+<!-- claim: cash/core.py:Cash._fold_defaults @6339036d, cash/core.py:Cash._hash_arg_payload @6eac8bbf, cash/dependency_state.py:DependencyStateHasher.compute @58f96079 -->
+None of these gives a wrong answer. Each one costs a recompute you might not
+expect, measured across fresh processes:
+
+| You do this | What happens | Why |
+|---|---|---|
+| Move an unchanged helper into another module | Every function that calls it recomputes, once | A helper is keyed by where it lives as well as by its code |
+| Call with `0.5` in one run and `np.float64(0.5)` in the next | Two entries, one per type | An argument is keyed by its type as well as its value, and the two pickle differently though they compare equal |
+| Change a constant used as a parameter default (`def f(x, k=K)`) | Calls that pass `k` explicitly recompute too | The defaults are part of the function, whatever a particular call passes |
+| Read a relative path (`open("data.csv")`) from two working directories | Every switch recomputes, and replaces the other directory's entry | The key holds the string `"data.csv"`, the same from both; the file behind it is not, so the entry is found stale and rewritten. Pass an absolute path, or one resolved from the project |
+| Switch a data file back and forth between two versions | Every switch recomputes | A file is checked when its entry is read, not keyed: one entry per call, rewritten when the file changes |
+| Switch code back and forth between two versions | Switching back hits | Code is in the key, so each version keeps its own entry |
+
+<!-- claim: cash/backends/serialization.py:get_serializer @76cf2c1b -->
+**A hit returns a copy.** A miss hands you the object the function returned; a
+hit hands you one rebuilt from the stored bytes. The difference shows when a
+function returns a view of an argument, `return a[:3]` on an array: after a
+miss, writing into the result writes into `a`; after a hit it does not. Return
+`a[:3].copy()` if a caller writes into what it gets back.
 
 ### It follows the functions you call
 
@@ -677,6 +702,11 @@ they expire at 60 s and are rewritten under the new value.
 entry; an entry a previous process wrote under a shorter ttl reads as
 `no_entry`, because the backend drops it on read.
 
+Without `ttl=`, an entry lives until it is evicted or cleared, unless the tier
+it is written to has a `default_ttl`. That is the way to give every function a
+lifetime from configuration; see
+[running as a service](tutorials/feature-guides/production-transition.md#running-as-a-service-or-a-worker-pool).
+
 ### `file_depends_on=` — name a file explicitly
 
 Reach for this when a file the result depends on isn't read through a tracked
@@ -788,6 +818,14 @@ business invariants — its job is purely "should this be cached".
 **Iterator returns + `cache_if`:** the predicate is honored when the
 result fits in a single chunk. For multi-chunk results, the predicate
 is bypassed (warning fires) — see the iterator section below.
+
+<!-- claim: cash/core.py:Cash._store_refusal @a7a30b86 -->
+**It decides what is written, not what is served.** `cache_if` is not part of
+the key, so adding it to a function that already has entries changes nothing
+about those entries: a `None` stored before you added
+`cache_if=lambda r: r is not None` is still returned on the next call. After
+adding or tightening a predicate, drop what was stored under the old rule with
+`cash clear --function NAME` (or `f.cache_clear()` in-process).
 
 ### `strict=` and `assume_safe=` — purity gates
 
@@ -1039,7 +1077,7 @@ dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/core.py:Cash._explain_call @de760288 -->
+<!-- claim: cash/core.py:Cash._explain_call @de9ca4b1 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 

@@ -43,9 +43,9 @@ Deliberately small so you can paste and run it. A real sweep is the same three
 lines with bigger numbers — and that is the point: adding seeds or alphas later
 only computes the combinations you haven't run yet.
 
-First run: 40 simulations execute and get cached. Re-running the same loop: 40 cache hits, no computation. Add `alpha=4.0` to the list: 10 new runs, the existing 40 still hit. This is the workflow that justifies the cache directory's existence.
+First run: 12 simulations (4 alphas × 3 seeds) execute and get cached. Re-running the same loop: 12 cache hits, no computation. Add `alpha=4.0` to the list: 3 new runs, the existing 12 still hit. This is the workflow that justifies the cache directory's existence.
 
-For an embarrassingly parallel sweep you can dispatch the same loop across workers — see the parallel-sweep note in [Caveats](#caveats).
+For an embarrassingly parallel sweep you can dispatch the same loop across worker processes — see [across processes](../feature-guides/thread-safety.md#across-processes-pool-processpoolexecutor-joblib) for what the workers share and what each keeps to itself.
 
 <!-- claim: cash/notebook/randomness.py:RNG_CARRIER_CONSTRUCTORS @3248b870 -->
 ## Determinism: always seed the RNG

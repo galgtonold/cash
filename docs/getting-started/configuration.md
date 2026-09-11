@@ -28,7 +28,7 @@ the same one you would guess for each:
 |---|---|
 | `Cash(cache_dir="…")` or `CASH_CACHE_DIR` | your current working directory — you typed it here, so it means here |
 | `pyproject.toml` / the XDG user config | that file's own directory, as paths in config files normally are |
-| nothing (the `.cash` default) | the **project anchor**: the first directory above the running script holding a `pyproject.toml`, `setup.py`, `setup.cfg` or `.git` |
+| nothing (the `.cash` default) | the **project anchor**: the first directory above the running script holding a `pyproject.toml`, `setup.py`, `setup.cfg` or `.git`. With no such directory above it, the script's own directory — for `python -m pkg`, the directory of `pkg/__main__.py` |
 | nothing, from **installed code** — `pytest`, `cash`, a `python -m` module in site-packages, your own installed tool — run **inside a project** | that project's root: the first directory above your current directory holding a project marker |
 | nothing, from an **installed console script run outside any project** | a per-user directory named after the tool — `%LOCALAPPDATA%\cash\<tool>`, `~/Library/Caches/cash/<tool>`, or `$XDG_CACHE_HOME/cash/<tool>` |
 
@@ -41,7 +41,17 @@ exactly that case.
 
 With no program to anchor to at all — an interactive interpreter, a Jupyter
 kernel, `python -c` — the current directory is still the answer, which is why a
-notebook's cache stays exactly where it was. A *local* package run with
+notebook's cache stays exactly where it was.
+
+Without a project marker the CLI and a script can disagree. The script caches
+beside itself; `cash inspect` and `cash clear` run from somewhere else resolve
+from where they are run, and report on a different directory (or on none:
+`Nothing cleared: no cache at …`). Adding a `pyproject.toml` (or `git init`) at
+the top of the project makes them agree. Until then, pass the script's
+directory: `cash inspect path/to/.cash`. The first run after adding a marker
+caches in the new place and says so if it finds the old cache in the current
+directory ([`CACHE-DIR-MOVED`](../warnings.md#cache-dir-moved)); a cache beside
+the script is left where it was. A *local* package run with
 `python -m pkg` is not in that group: its `__main__.py` is a file of yours, so
 it anchors to its project like any script.
 

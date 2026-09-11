@@ -100,7 +100,7 @@ gracefully: it emits a `CashCacheIneffectiveWarning` naming the offending
 argument type, and runs the function uncached.
 
 ??? question "Why is the `func` segment module-qualified?"
-    <!-- claim: cash/core.py:Cash._get_func_key @6285ab22 -->
+    <!-- claim: cash/core.py:Cash._get_func_key @d3484eff -->
     Cash keys functions on `f"{func.__module__}.{func.__qualname__}"`, not
     `__qualname__` alone. Early on, bare qualnames collided: a notebook cell's
     `dep()` and a helper module's `dep()` produced the *same* key, so a call to
@@ -119,7 +119,10 @@ argument type, and runs the function uncached.
     agree. It also *reduces* collisions: every script alike used to be
     `__main__`, so two unrelated scripts with a same-named function met;
     now only two scripts with the same **filename** do — and the state hash
-    (source, helpers, read globals) still separates those.
+    (source, helpers, read globals) still separates those. A worker process
+    started with `spawn` (the default on Windows and macOS) re-imports the
+    script as `__mp_main__`, which is resolved the same way, so a pool's
+    workers and the process that started them share entries.
 
     A REPL, `python -c`, a frozen app and a Jupyter kernel have no defining
     file, so they stay `__main__` — there is no import for them to agree with.

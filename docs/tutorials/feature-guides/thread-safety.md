@@ -122,6 +122,39 @@ The standard introspection surface works:
 - `f.explain()` shows the cause of the next call's miss or hit. It doesn't currently surface "this call was about to be a miss but the lock turned it into a hit" — but the absence of a redundant compute is itself the evidence.
 - Set `Cash(debug=True)` to log decorator calls with their hit/miss outcome — under load you can grep for repeated misses on the same key as a sanity check.
 
+## Across processes: Pool, ProcessPoolExecutor, joblib { #across-processes-pool-processpoolexecutor-joblib }
+
+<!-- claim: cash/utils.py:resolve_main_module @787a38f9, cash/backends/_base.py:_in_multiprocessing_child @e87f049e, cash/core.py:Cash._print_run_summary @89b03773 -->
+A `multiprocessing.Pool`, a `ProcessPoolExecutor` or joblib's process workers
+all use the cache directory of the process that started them, so what one
+worker computes is a hit for the others, for the parent afterwards, and for the
+next run. Measured with a four-task sweep: a cold run computes each task once
+across both workers, the parent's own call afterwards hits a worker's entry, and
+the next run is all hits. What differs is what each process keeps to itself:
+
+- **RAM.** Each process has its own memory tier. Only the disk is shared.
+- **Writes.** A worker writes each result before its task returns, so a pool
+  shutting its workers down loses nothing. The task takes that much longer.
+- **The summary.** `CASH_SUMMARY` prints one table per process that exits
+  normally. `ProcessPoolExecutor` workers exit normally and print theirs,
+  labelled with their pid (`cash (pid 4711): 3 of 3 calls restored`).
+  `multiprocessing.Pool` terminates its workers, so only the parent's table
+  prints, and it counts only the parent's own calls.
+- **Warnings.** Each process warns once for itself, so a warning the parent
+  gave is repeated by every worker that reaches the same function.
+- **The disk cap.** Each process enforces `max_cache_size` on its own writes,
+  so several workers can together overshoot it before one of them evicts.
+- **No single-flight.** Two workers asked for the same key at the same moment
+  both compute it. `use_locking=True` with `RedisBackend` is the only lock that
+  spans processes (see [which backends](#which-backends-implement-locking)).
+
+For **joblib**, define the cached function in a module you import, not in the
+script you run. Its default process backend pickles a function from the running
+script by value, and a cached function cannot be sent that way: the call fails
+with `Could not pickle the task to send it to the workers`. From an imported
+module it is sent by reference and works. `Parallel(prefer="threads")` works
+either way.
+
 ## Caveats
 
 - **Latency on every cache miss.** The double-checked-locking path adds two operations per miss (acquire + re-read) on top of the compute. For Redis that's two network round-trips; for the in-process lock it's an uncontended `RLock` acquire — nanoseconds.

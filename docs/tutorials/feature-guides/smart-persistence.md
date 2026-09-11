@@ -118,7 +118,7 @@ so the two paths differ here.)
 
 ## Inspecting where a value actually landed
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @f8cb4832, cash/backends/tiered_backend.py:TieredBackend.get @d9642778 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @183f6a3c, cash/backends/tiered_backend.py:TieredBackend.get @d9642778 -->
 The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']`. This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (set in `TieredBackend.get`).
 
 When it went no further than RAM, `metadata['persist_skipped']` says why: `"compute"` (the compute floor or the cost model) or `"size"` (a tier's size cap).

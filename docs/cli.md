@@ -369,7 +369,10 @@ Delete a cache directory, or just one function's entries.
   leave the rest of the cache intact — the alternative to keeping a cache you
   cannot afford or deleting work you still want. Resolves names exactly as
   `cash inspect --function` does, including `notebook`. Takes precedence over
-  `--all`.
+  `--all`. It clears that function and nothing that calls it: a cached
+  function that calls another is keyed on the inner one's *code*, not on its
+  result, so clearing the inner one leaves the outer one's entries serving.
+  To recompute a caller, clear the caller (or both).
 - `--force` — *Optional.* Clear a directory even though it holds no
   `CACHE_VERSION` and no `.entry` files. Never clears the current directory
   or one that contains it.

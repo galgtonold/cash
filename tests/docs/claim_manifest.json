@@ -1,6 +1,6 @@
 {
   "docs/annotations.md": {
-    "anchors": 9,
+    "anchors": 11,
     "audited": "2026-07-27"
   },
   "docs/api/backend_internals.md": {
@@ -12,7 +12,7 @@
     "audited": "2026-07-27"
   },
   "docs/api/cash.md": {
-    "anchors": 0,
+    "anchors": 2,
     "audited": "2026-07-27"
   },
   "docs/api/config.md": {
@@ -44,7 +44,7 @@
     "audited": "2026-07-27"
   },
   "docs/badges.md": {
-    "anchors": 3,
+    "anchors": 5,
     "audited": "2026-07-27"
   },
   "docs/benchmarks.md": {
@@ -52,7 +52,7 @@
     "audited": "2026-07-27"
   },
   "docs/cli.md": {
-    "anchors": 8,
+    "anchors": 12,
     "audited": "2026-07-27"
   },
   "docs/contributing.md": {
@@ -64,7 +64,7 @@
     "audited": "2026-07-27"
   },
   "docs/decorator.md": {
-    "anchors": 23,
+    "anchors": 47,
     "audited": "2026-07-27"
   },
   "docs/faq.md": {
@@ -77,7 +77,7 @@
     "note": "Cannot carry anchors: this page must stay BYTE-IDENTICAL to cash._agent_guide.AGENT_GUIDE (tests/test_core/test_agent_guide_sync.py). Any HTML comment added here fails that test. Ground its claims in the docstring of AGENT_GUIDE instead."
   },
   "docs/getting-started/configuration.md": {
-    "anchors": 7,
+    "anchors": 14,
     "audited": "2026-07-27"
   },
   "docs/getting-started/installation.md": {
@@ -85,7 +85,7 @@
     "audited": "2026-07-27"
   },
   "docs/getting-started/quickstart.md": {
-    "anchors": 4,
+    "anchors": 5,
     "audited": "2026-07-27"
   },
   "docs/glossary.md": {
@@ -101,7 +101,7 @@
     "audited": "2026-07-27"
   },
   "docs/how-it-works/inspecting.md": {
-    "anchors": 33,
+    "anchors": 36,
     "audited": "2026-07-27"
   },
   "docs/how-it-works/invalidation.md": {
@@ -133,7 +133,7 @@
     "audited": "2026-07-27"
   },
   "docs/known-limitations.md": {
-    "anchors": 26,
+    "anchors": 31,
     "audited": "2026-07-27"
   },
   "docs/magics.md": {
@@ -161,7 +161,7 @@
     "audited": "2026-08-28"
   },
   "docs/tutorials/feature-guides/choosing-a-backend.md": {
-    "anchors": 7,
+    "anchors": 8,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/controlling-cache-behavior.md": {
@@ -169,7 +169,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/custom-file-sources.md": {
-    "anchors": 8,
+    "anchors": 10,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/custom-hashers.md": {
@@ -177,7 +177,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/debugging-and-monitoring.md": {
-    "anchors": 12,
+    "anchors": 14,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/dynamic-dependencies.md": {
@@ -185,15 +185,15 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/iterator-caching.md": {
-    "anchors": 11,
+    "anchors": 12,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/production-transition.md": {
-    "anchors": 3,
+    "anchors": 5,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/purity-decorators.md": {
-    "anchors": 15,
+    "anchors": 27,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/sharing-caches.md": {
@@ -205,11 +205,11 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/testing-your-code.md": {
-    "anchors": 1,
+    "anchors": 2,
     "audited": "2026-09-10"
   },
   "docs/tutorials/feature-guides/thread-safety.md": {
-    "anchors": 8,
+    "anchors": 13,
     "audited": "2026-07-27"
   },
   "docs/tutorials/use-cases/data-engineering.md": {
@@ -225,7 +225,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/use-cases/scientific-computing.md": {
-    "anchors": 3,
+    "anchors": 5,
     "audited": "2026-07-27"
   },
   "docs/versioning.md": {
@@ -233,7 +233,7 @@
     "audited": "2026-07-27"
   },
   "docs/warnings.md": {
-    "anchors": 48,
+    "anchors": 75,
     "audited": "2026-09-06"
   },
   "docs/why-cash.md": {

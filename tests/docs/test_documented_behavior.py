@@ -446,3 +446,205 @@ def test_decorator_doc_ambient_read_bullet_actually_fires(tmp_path):
         warnings.simplefilter("ignore")
         stamped()
     assert len(ran) == 1, "the doc says the function is still cached"
+
+
+# --------------------------------------------------------------------------- #
+# Round-18 docs sweep: each test executes one sentence the docs now make.     #
+# --------------------------------------------------------------------------- #
+
+def _counted(c, calls, **decorator):
+    @c.cache(assume_safe=True, **decorator)
+    def value_of(v):
+        calls.append(v)
+        return v
+    return value_of
+
+
+def test_a_float_and_an_np_float64_are_two_entries(tmp_path):
+    """decorator.md "What else is in the key": `0.5` and `np.float64(0.5)`."""
+    np = pytest.importorskip("numpy")
+    calls = []
+    f = _counted(_cash(tmp_path), calls)
+    f(0.5)
+    f(np.float64(0.5))
+    f(0.5)
+    assert len(calls) == 2
+
+
+def test_a_changed_default_recomputes_a_call_that_passes_the_argument(tmp_path):
+    """decorator.md: "Calls that pass `k` explicitly recompute too"."""
+    c = _cash(tmp_path)
+    calls = []
+
+    def scaled(x, k=3):
+        calls.append(k)
+        return x * k
+
+    f = c.cache(scaled, assume_safe=True)
+    f(2, k=5)
+    f(2, k=5)
+    assert calls == [5], "control: an unchanged function hits"
+    scaled.__defaults__ = (4,)          # what editing `K` does to the function
+    f(2, k=5)
+    assert calls == [5, 5]
+
+
+def test_a_data_file_switched_back_recomputes_and_code_would_not(tmp_path):
+    """decorator.md: data versions overwrite one entry (every switch recomputes)."""
+    c = _cash(tmp_path)
+    data = tmp_path / "data.csv"
+    calls = []
+
+    @c.cache(assume_safe=True)
+    def load(path):
+        calls.append(1)
+        with open(path) as fh:
+            return fh.read()
+
+    for content in ("v1", "v2", "v1"):
+        data.write_text(content, encoding="utf-8")
+        assert load(str(data)) == content
+    assert len(calls) == 3
+
+
+def test_a_relative_path_from_two_directories_is_right_and_recomputes(tmp_path, monkeypatch):
+    """decorator.md: the same "data.csv" from two cwds -- correct answers, and
+    every switch recomputes."""
+    c = _cash(tmp_path / ".cash")
+    for name, content in (("a", "AAA"), ("b", "BBBB")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "data.csv").write_text(content, encoding="utf-8")
+    calls = []
+
+    @c.cache(assume_safe=True)
+    def read(path):
+        calls.append(1)
+        with open(path) as fh:
+            return fh.read()
+
+    for name, expected in (("a", "AAA"), ("b", "BBBB"), ("a", "AAA")):
+        monkeypatch.chdir(tmp_path / name)
+        assert read("data.csv") == expected
+    assert len(calls) == 3
+
+
+def test_the_parameter_sweep_counts(tmp_path):
+    """scientific-computing.md: 12 runs, then 12 hits, then 3 for a new alpha."""
+    c = _cash(tmp_path)
+    calls = []
+
+    @c.cache(assume_safe=True)
+    def simulate(n, dt, alpha, seed):
+        calls.append((alpha, seed))
+        return alpha * seed
+
+    def sweep(alphas):
+        for alpha in alphas:
+            for seed in range(3):
+                simulate(1_000, 0.01, alpha, seed)
+
+    sweep([0.1, 0.5, 1.0, 2.0])
+    assert len(calls) == 12
+    sweep([0.1, 0.5, 1.0, 2.0])
+    assert len(calls) == 12
+    sweep([0.1, 0.5, 1.0, 2.0, 4.0])
+    assert len(calls) == 15
+
+
+def test_cache_if_decides_writes_not_what_is_served(tmp_path):
+    """decorator.md: a None stored before `cache_if` was added is still served."""
+    c = _cash(tmp_path)
+    calls = []
+
+    def lookup(x):
+        calls.append(x)
+        return None
+
+    c.cache(lookup, assume_safe=True)(1)
+    c.cache(lookup, assume_safe=True, cache_if=lambda r: r is not None)(1)
+    assert calls == [1], "adding cache_if changed what an existing entry serves"
+
+
+def test_a_hit_returns_a_copy_where_a_miss_returned_a_view(tmp_path):
+    """decorator.md "A hit returns a copy"."""
+    np = pytest.importorskip("numpy")
+    c = _cash(tmp_path)
+
+    @c.cache(assume_safe=True)
+    def head(a):
+        return a[:3]
+
+    first = np.arange(10)
+    head(first)[0] = 99
+    assert first[0] == 99, "on a miss the result is the function's own view"
+    second = np.arange(10)
+    head(second)[0] = 99
+    assert second[0] == 0, "on a hit the result is rebuilt from the stored bytes"
+
+
+def test_clearing_an_inner_function_leaves_its_caller_serving(tmp_path):
+    """cli.md `cash clear --function`: the caller is keyed on the inner code,
+    so clearing the inner function does not make its caller recompute."""
+    import subprocess
+    import sys
+    import textwrap
+
+    script = tmp_path / "pipeline.py"
+    script.write_text(textwrap.dedent("""
+        import sys, time
+        import cash
+
+        @cash.cache(assume_safe=True)
+        def inner(x):
+            print("RUN inner", file=sys.stderr)
+            time.sleep(0.15)
+            return x
+
+        @cash.cache(assume_safe=True)
+        def outer(x):
+            print("RUN outer", file=sys.stderr)
+            time.sleep(0.15)
+            return inner(x) + 1
+
+        print(outer(1))
+    """), encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
+    env.update(CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONDONTWRITEBYTECODE="1")
+
+    def run(*argv):
+        return subprocess.run([sys.executable, *argv], cwd=str(tmp_path), env=env,
+                              capture_output=True, text=True, timeout=120)
+
+    first = run(str(script))
+    assert "RUN inner" in first.stderr and "RUN outer" in first.stderr
+    cleared = run("-m", "cash", "clear", "--function", "inner", str(tmp_path / ".cash"))
+    assert "Cleared 1 entry" in cleared.stdout, cleared.stdout + cleared.stderr
+    again = run(str(script))
+    assert again.stdout.strip() == "2"
+    assert "RUN" not in again.stderr, "clearing the inner function recomputed its caller"
+
+
+def test_the_debug_line_format_matches_the_guide(tmp_path):
+    """debugging-and-monitoring.md: the `cash.calls:` lines, id and all."""
+    import subprocess
+    import sys
+    import textwrap
+
+    script = tmp_path / "model.py"
+    script.write_text(textwrap.dedent("""
+        import cash
+
+        @cash.cache(assume_safe=True)
+        def build_grid(n):
+            return list(range(n))
+
+        build_grid(3)
+        build_grid(3)
+    """), encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
+    env.update(CASH_DEBUG="1", CASH_CACHE_DIR=str(tmp_path / ".cash"))
+    err = subprocess.run([sys.executable, str(script)], cwd=str(tmp_path), env=env,
+                         capture_output=True, text=True, timeout=120).stderr
+    lines = [line for line in err.splitlines() if line.startswith("cash.calls:")]
+    assert re.match(r"cash\.calls: MISS model\.build_grid  \[[0-9a-f]{12}\]  no entry yet", lines[0]), lines
+    assert re.match(r"cash\.calls: HIT  model\.build_grid  \[[0-9a-f]{12}\]  \(saved ", lines[1]), lines

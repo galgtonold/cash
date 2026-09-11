@@ -94,6 +94,28 @@ CASH_CACHE_DIR="$(mktemp -d)" pytest
 written anywhere, and each test process — every xdist worker is one — starts
 empty.
 
+A session-wide cache directory keeps a test run from reading the application's
+entries, and it also gives up everything the cache saves you between local
+runs. To keep that, and switch the cache off only for the tests that must not
+see it, use a fixture:
+
+<!-- test:skip reason="a conftest.py fixture; configure(disable=...) is exercised by tests/test_core/test_disable.py" -->
+```python
+# conftest.py
+import cash
+import pytest
+
+@pytest.fixture
+def no_cache():
+    cash.configure(disable=True)      # every @cash.cache call runs its body
+    yield
+    cash.configure(disable=False)
+
+# test_model.py
+def test_training_really_trains(no_cache):
+    ...
+```
+
 ## Mocking and monkeypatching
 
 Patching a helper that a cached function calls works the way the test expects:
