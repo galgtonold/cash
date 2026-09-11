@@ -55,7 +55,10 @@ def test_redis_set(redis_backend):
     pipe = redis_backend.client.pipeline.return_value
     
     redis_backend.set('k', 'data', {'ttl': 60})
-    
+    # The pipeline runs on the backend's write worker; asserting straight
+    # after set() raced it and failed under a loaded xdist run.
+    redis_backend._writes.wait('k')
+
     assert pipe.set.call_count == 2, 'Should set both meta and data'
     assert pipe.expire.call_count == 2, 'Should set TTL on both'
     pipe.execute.assert_called_once()

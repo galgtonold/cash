@@ -350,6 +350,15 @@ read by the wrapper. If the first call reaches cash before the body has made tha
 imports a module of *yours* itself to read it; a library you deliberately import
 inside a function to defer its cost is never imported early.
 
+<!-- claim: cash/notebook/analysis.py:CodeAnalyzer.find_called_functions @61e7b6cb, cash/notebook/analysis.py:CodeAnalyzer._referenced_function @639a43a5 -->
+**Another cached function counts whether you call it or hand it on.** Calling
+`inner(n)` makes `inner` part of the caller's key, and so does passing it as a
+value — `map(inner, xs)`, `pool.map(inner, xs)`, `joblib.delayed(inner)`,
+`for fn in [inner]`, a `fn=inner` default, a `partial(inner)` — so editing
+`inner` or anything it calls recomputes the caller too. This is the usual way
+to spread a cached step across a pool, and before 0.10.1 only the call form
+counted.
+
 ### File reads are tracked automatically
 
 <!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21, cash/notebook/file_tracker.py:FileDependencyRegistry @db1cd112 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->

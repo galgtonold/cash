@@ -9003,7 +9003,8 @@ class Cash:
         cheap on repeated registrations.
         """
         self._populated.add(func_name)
-        called_names = CodeAnalyzer.find_called_functions(func, self.functions)
+        called_names = CodeAnalyzer.find_called_functions(
+            func, self.functions, include_references=True)
         for called in called_names:
             if called != func_name:
                 self.graph.add_dependency(func_name, called)

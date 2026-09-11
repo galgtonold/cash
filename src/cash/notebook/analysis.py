@@ -10,10 +10,12 @@ analysis drives cache key computation and dependency tracking.
 import ast
 import builtins
 import datetime
+import functools
 import hashlib
 import inspect
 import logging
 import time
+import types
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -31,10 +33,32 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class _CallVisitor(ast.NodeVisitor):
-    """Collect all function-call names from an AST for find_called_functions."""
+    """Collect all function-call names from an AST for find_called_functions.
+
+    ``referenced`` is every name and ``a.b`` chain READ anywhere, called or
+    not: ``map(inner, xs)``, ``pool.map(inner, xs)``, ``delayed(inner)(x)``,
+    ``for fn in [inner]``, ``def f(fn=inner)``.
+    """
 
     def __init__(self) -> None:
         self.names_to_resolve: list[str] = []
+        self.referenced: list[str] = []
+
+    def visit_Name(self, node: ast.Name) -> None:  # noqa: N802
+        if isinstance(node.ctx, ast.Load):
+            self.referenced.append(node.id)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:  # noqa: N802
+        if isinstance(node.ctx, ast.Load):
+            parts: list[str] = []
+            curr: ast.expr = node
+            while isinstance(curr, ast.Attribute):
+                parts.append(curr.attr)
+                curr = curr.value
+            if isinstance(curr, ast.Name):
+                parts.append(curr.id)
+                self.referenced.append(".".join(reversed(parts)))
+        self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         if isinstance(node.func, ast.Name):
@@ -440,11 +464,19 @@ class CodeAnalyzer:
         return hashlib.sha256(f"__cash_opaque__:{identity}".encode('utf-8')).hexdigest()
 
     @staticmethod
-    def find_called_functions(func: Callable, known_functions: dict[str, Callable] | None = None) -> set[str]:
+    def find_called_functions(func: Callable, known_functions: dict[str, Callable] | None = None,
+                              *, include_references: bool = False) -> set[str]:
         """
         Parse the function AST and find calls to other functions.
         Resolves names using the function's globals to handle imports and aliases.
         Returns a set of function names (qualnames).
+
+        With ``include_references`` (and ``known_functions`` to filter by),
+        a known function the body only REFERENCES counts too: handed to
+        ``map``, a pool, ``joblib.delayed``, kept in a list or a default. A
+        ``functools.partial`` over one resolves to it, called or referenced.
+        Round 19: ``sum(map(inner, [n]))`` with ``inner`` cached kept its old
+        result after ``inner``'s helper changed -- only a CALL made an edge.
         """
         import textwrap
         try:
@@ -479,6 +511,10 @@ class CodeAnalyzer:
                 try:
                     for part in parts[1:]:
                         obj = getattr(obj, part)
+                    for _ in range(8):
+                        if not isinstance(obj, functools.partial):
+                            break
+                        obj = obj.func
                     if hasattr(obj, '__qualname__'):
                         module = getattr(obj, '__module__', None) or '__unknown__'
                         fqn = f"{module}.{obj.__qualname__}"
@@ -487,7 +523,43 @@ class CodeAnalyzer:
                 except AttributeError:
                     pass  # Expected: some callables lack __qualname__
 
+        if include_references and known_functions is not None:
+            called = set(visitor.names_to_resolve)
+            for name in dict.fromkeys(visitor.referenced):
+                if name in called:
+                    continue
+                fqn = CodeAnalyzer._referenced_function(name, globals_dict)
+                if fqn is not None and fqn in known_functions:
+                    resolved_qualnames.add(fqn)
+
         return resolved_qualnames
+
+    @staticmethod
+    def _referenced_function(name: str, globals_dict: dict[str, Any]) -> str | None:
+        """``module.qualname`` of the function a READ name holds, or None.
+
+        Resolved through modules and classes only: an instance's attribute can
+        be a property, and analysis must not run user code to find a name.
+        """
+        parts = name.split('.')
+        obj = globals_dict.get(parts[0])
+        try:
+            for part in parts[1:]:
+                if not isinstance(obj, (types.ModuleType, type)):
+                    return None
+                obj = inspect.getattr_static(obj, part, None)
+            for _ in range(8):
+                if not isinstance(obj, functools.partial):
+                    break
+                obj = obj.func
+            if not callable(obj) or isinstance(obj, type):
+                return None
+            qualname = getattr(obj, '__qualname__', None)
+            if not isinstance(qualname, str):
+                return None
+            return f"{getattr(obj, '__module__', None) or '__unknown__'}.{qualname}"
+        except Exception:  # noqa: BLE001 - a probe of arbitrary globals
+            return None
 
     @staticmethod
     def _logical_line_start_flags(code: str) -> list[bool]:
