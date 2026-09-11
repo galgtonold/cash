@@ -81,6 +81,60 @@ def test_a_clear_under_a_running_process_empties_its_ram_tier(tmp_path, monkeypa
     assert calls == [1, 1], "the RAM tier served a result cleared from disk"
 
 
+@pytest.mark.parametrize("how", ["all", "function"])
+def test_a_clear_reaches_a_process_that_started_with_no_cache(tmp_path, monkeypatch, how):
+    """Round 19: the test above checks on every read, so it always saw the
+    stamp the first write created. A real process checks once a second: one
+    that started with no cache directory saw no stamp, wrote one, and read the
+    clear that followed -- the stamp gone again, or rewritten -- as "still
+    new", serving the pre-clear answer from RAM 5 times in 5."""
+    cache_dir = tmp_path / ".cash"
+    assert not cache_dir.exists()
+    c = Cash(cache_dir=str(cache_dir), register_magic=False)
+    monkeypatch.setattr(type(c.backend), "_GENERATION_CHECK_EVERY", 3600.0)
+    calls = []
+
+    @c.cache
+    def f(x):
+        calls.append(x)
+        time.sleep(0.15)
+        return x * 2
+
+    f(1)
+    f(1)
+    assert calls == [1]
+    c.backend.backends[-1]._writes.wait_all()
+    if how == "all":
+        shutil.rmtree(cache_dir)
+    else:
+        from types import SimpleNamespace
+
+        from cash.__main__ import cmd_clear
+        cmd_clear(SimpleNamespace(path=str(cache_dir), all=False, function="f"))
+    monkeypatch.setattr(type(c.backend), "_GENERATION_CHECK_EVERY", 0.0)   # the second has passed
+    f(1)
+    assert calls == [1, 1], "the RAM tier served a result cleared from disk"
+
+
+def test_a_directory_recreated_by_a_sidecar_write_gets_its_gitignore_and_stamp(tmp_path):
+    """Round 19: after a clear, the stored-key record re-created the cache
+    directory with a bare makedirs, and the entry written next found it there:
+    no .gitignore and no format stamp (1 run in 3-6)."""
+    cache_dir = tmp_path / ".cash"
+    c = Cash(cache_dir=str(cache_dir), register_magic=False)
+
+    @c.cache
+    def f(x):
+        return x
+
+    f(1)
+    c.backend.backends[-1]._writes.wait_all()
+    shutil.rmtree(cache_dir)
+    c._record_stored_key("mod.f", "mod.f:key", None)
+    assert (cache_dir / ".gitignore").read_text(encoding="utf-8").strip().endswith("*")
+    assert (cache_dir / "CACHE_VERSION").exists()
+
+
 def test_the_access_stamp_of_a_hot_entry_is_not_rewritten_on_every_flush(tmp_path, monkeypatch):
     backend = FileBackend(cache_dir=str(tmp_path / ".cash"))
     backend.set("k", 1, {"key": "k"})

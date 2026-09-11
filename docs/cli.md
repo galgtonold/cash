@@ -407,17 +407,26 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 - The no-op "nothing to clear" message paths (no resolved cache, no sibling
   cache) exit 0; they're treated as success, not failure.
 <!-- claim: cash/backends/file_backend.py:FileBackend._check_format_version @46ebcae7, cash/backends/file_backend.py:FileBackend._entries_are_current_format @a4172379 -->
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._drop_ram_if_cleared @ac7e18c7, cash/__main__.py:_bump_generation @9e2ac2be -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._drop_ram_if_cleared @b4292676, cash/__main__.py:_bump_generation @9e2ac2be -->
 - **Clearing the cache of a process that is still running** reaches its memory
   too. A running process checks, at most once a second, whether its cache
   directory was cleared (`--all`, `--function`, `--entry`), and if so drops
   what it holds in RAM, so within about a second it stops serving pre-clear
-  results. Whatever it writes after the clear goes into a freshly re-created
-  directory, which it stamps with the format version, so the next process
-  keeps those entries rather than discarding them.
+  results. That includes a process that started with no cache at all and
+  created the directory itself, which earlier versions took for "the directory
+  is still new" and kept serving from memory. Whatever it
+  writes after the clear goes into a freshly re-created directory, which it
+  stamps with the format version, so the next process keeps those entries
+  rather than discarding them.
+- **A call that is computing while you clear its function** is not stopped: it
+  finishes, and stores what it computed into the cleared cache, because the
+  result is still right for the code and inputs it ran with. If you are
+  clearing *because* that code or its data changed, stop the job first — or
+  change the code or the file, which makes the entry miss anyway.
 - A cache directory cash creates contains a `.gitignore` of `*`, so `git add .`
-  in the project leaves it out. A directory that already existed is left
-  alone.
+  in the project leaves it out — including when a clear removed it under a
+  running process and that process re-creates it. A directory that already
+  existed is left alone.
 - `Nothing cleared: no cache at …` means the directory `cash info` reports for
   where you are standing has no cache. A script outside any project (no
   `pyproject.toml`, `setup.py`, `setup.cfg` or `.git` above it) caches beside

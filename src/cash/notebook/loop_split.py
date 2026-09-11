@@ -177,7 +177,8 @@ class LoopSplitStore:
         doc = {"version": _STORE_VERSION, "splits": dict(sorted(self._splits.items()))}
         tmp_path = f"{self._path}.{os.getpid()}.tmp"
         try:
-            os.makedirs(os.path.dirname(self._path), exist_ok=True)
+            from cash.backends.file_backend import recreate_cache_dir
+            recreate_cache_dir(os.path.dirname(self._path))
             with open(tmp_path, "w", encoding="utf-8") as fh:
                 json.dump(doc, fh)
             # Not a bare os.replace: on Windows the call is DENIED, not

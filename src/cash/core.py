@@ -3316,8 +3316,11 @@ class Cash:
             keys[cache_key] = [time.time(), ttl]
             while len(keys) > self._STORED_KEYS_MAX:
                 keys.pop(next(iter(keys)))
+            from cash.backends.file_backend import recreate_cache_dir
             from cash.notebook.file_tracker import untracked
-            os.makedirs(os.path.dirname(path), exist_ok=True)
+            keys_dir = os.path.dirname(path)
+            recreate_cache_dir(os.path.dirname(keys_dir))
+            os.makedirs(keys_dir, exist_ok=True)
             tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
             with untracked():
                 with open(tmp, "w", encoding="utf-8") as fh:

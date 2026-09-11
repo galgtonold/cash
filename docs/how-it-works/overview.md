@@ -54,7 +54,7 @@ Non-determinism is the one case where "recompute" is not the safe answer, and Ca
     </div>
   </div>
   <div class="cash-arch-arrow" aria-hidden="true"></div>
-  <!-- claim: cash/backends/tiered_backend.py:TieredBackend @649f0640, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend broad="TieredBackend's tier ordering is a property of the class as a whole; the other three are existence claims" -->
+  <!-- claim: cash/backends/tiered_backend.py:TieredBackend @0bbddd8f, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend broad="TieredBackend's tier ordering is a property of the class as a whole; the other three are existence claims" -->
   <div class="cash-arch-node cash-arch-backend">
     <span class="cash-arch-title">Cache backend</span>
     <span class="cash-arch-sub">TieredBackend &mdash; L1 in-memory &rarr; L2 on disk &middot; pluggable: SQLite, Redis, S3</span>

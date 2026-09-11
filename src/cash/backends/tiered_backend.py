@@ -67,6 +67,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         # See `_drop_ram_if_cleared`.
         self._generation: Any = _UNSEEN
         self._generation_checked_at = 0.0
+        self._stamp_writes_seen = 0
         self.promotion_policy = promotion_policy or self._default_promotion_policy
         self._min_persist_compute_s = min_persist_compute_s
         self._min_persist_savings_pct = min_persist_savings_pct
@@ -228,8 +229,17 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         except Exception:  # noqa: BLE001 - a check must never break a read
             return
         # From no stamp to one is a directory being created, not cleared --
-        # including this backend's own first write.
-        if self._generation not in (_UNSEEN, None) and token != self._generation:
+        # unless THIS process wrote that stamp since the last look. A process
+        # that started cold saw no stamp, created one on its first write, and
+        # took the clear that followed -- the stamp gone again with `--all`, or
+        # rewritten by `--function` -- for "still new": 5 of 5 kept serving
+        # the pre-clear answer from RAM (round 19).
+        known = self._generation
+        writes = getattr(disk, "stamp_writes", 0)
+        if known in (_UNSEEN, None) and writes != self._stamp_writes_seen:
+            known = getattr(disk, "written_stamp", None)
+        self._stamp_writes_seen = writes
+        if known not in (_UNSEEN, None) and token != known:
             for faster in self.backends[:self.backends.index(disk)]:
                 try:
                     faster.clear()

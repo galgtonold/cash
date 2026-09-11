@@ -173,6 +173,31 @@ CACHE_FORMAT_VERSION = 2
 # Filename of the per-directory format stamp. Has no entry extension so it
 # is invisible to entry globs (listing, sizing, clearing).
 _VERSION_FILENAME = "CACHE_VERSION"
+_GITIGNORE_TEXT = "# Created by cash: this directory is a cache.\n*\n"
+
+
+def recreate_cache_dir(cache_dir: str) -> bool:
+    """Create *cache_dir* as the file backend would, if it is missing.
+
+    Anything that writes a sidecar into the cache directory -- the stored-key
+    record, the notebook's verdict stores -- re-created a directory `cash
+    clear` had just removed with a bare ``os.makedirs``, and the entry written
+    next found it there: no ``.gitignore`` and no format stamp, 1 run in 3-6
+    after a clear during a write (round 19). Returns whether it created it.
+    Raises what ``os.makedirs`` raises.
+    """
+    if os.path.isdir(cache_dir):
+        return False
+    os.makedirs(cache_dir, exist_ok=True)
+    for name, text in ((".gitignore", _GITIGNORE_TEXT), (_VERSION_FILENAME, str(CACHE_FORMAT_VERSION))):
+        path = os.path.join(cache_dir, name)
+        try:
+            if not os.path.exists(path):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(text)
+        except OSError:
+            logger.debug("Could not write %s", path, exc_info=True)
+    return True
 
 
 #: What reading a cache entry's metadata can raise, and why every one of them
@@ -279,6 +304,12 @@ class FileBackend(CacheBackend):
         #: Set when the cache directory turned out to be unusable. Every public
         #: operation then answers as an empty cache would: a miss, a no-op write.
         self._unusable = False
+        #: The format stamp this process last wrote, and how many it has
+        #: written: a process that started cold saw no stamp, then wrote one,
+        #: and without this could not tell a later clear from "still new"
+        #: (`TieredBackend._drop_ram_if_cleared`).
+        self.written_stamp: tuple | None = None
+        self.stamp_writes = 0
 
     def _ensure_initialized(self) -> None:
         """Lazily create cache directory, check the format stamp, start the flusher.
@@ -487,6 +518,9 @@ class FileBackend(CacheBackend):
                 "Could not write cache format marker at %s", version_path,
                 exc_info=True,
             )
+            return
+        self.written_stamp = self.generation_token()
+        self.stamp_writes += 1
 
     def _scan_size_bytes(self) -> int:
         """Total the directory's bytes with ``scandir`` + ``stat``.
@@ -581,7 +615,7 @@ class FileBackend(CacheBackend):
         try:
             if not os.path.exists(path):
                 with open(path, "w", encoding="utf-8") as fh:
-                    fh.write("# Created by cash: this directory is a cache.\n*\n")
+                    fh.write(_GITIGNORE_TEXT)
         except OSError:
             logger.debug("Could not write %s", path, exc_info=True)
 
