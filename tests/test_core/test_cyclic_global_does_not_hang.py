@@ -50,6 +50,27 @@ def test_a_cyclic_argument_is_keyed_without_walking_every_path(tmp_path):
     assert calls == [0], "the second call did not hit"
 
 
+def test_a_cyclic_argument_holding_a_set_runs_uncached_and_says_so(tmp_path):
+    """A set inside sends the key through the canonical form, which has no
+    finite answer for a loop: it hung, and a stand-in for the loop could key
+    two different graphs alike. Now: reported unhashable, run every time."""
+    c = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
+    calls = []
+
+    @c.cache(assume_safe=True)
+    def f(node):
+        calls.append(node.name)
+        return len(node.peers)
+
+    graph = _complete_graph(12)
+    for node in [graph, *graph.peers]:
+        node.tags = {"a", "b"}
+    with pytest.warns(UserWarning, match=r"\[KEY-UNHASHABLE-ARG\]"):
+        assert f(graph) == 11
+    assert f(graph) == 11
+    assert calls == [0, 0]
+
+
 def test_a_module_logger_read_in_a_cached_function_returns(tmp_path):
     """The shape that hung: a subprocess, so a regression times out one
     child process rather than a test worker."""

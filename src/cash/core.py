@@ -203,18 +203,48 @@ def _tag_subtype(value: Any, base: type, canon: Any) -> Any:
     return ("__cash_subtype__", f"{t.__module__}.{t.__qualname__}", canon)
 
 
-def _stable_key_repr(value: Any, _depth: int = 0) -> Any:
+class CyclicValueError(TypeError):
+    """A value whose object graph loops back on itself and holds a set."""
+
+
+def _stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None) -> Any:
     """Rewrite *value* into a form whose pickled bytes are independent of
     set/dict iteration order (which depends on PYTHONHASHSEED for str/bytes
     elements). Sets/frozensets and dict items are sorted by their pickled
     element bytes; lists/tuples keep order. Recurses into arbitrary objects via
     their ``__dict__`` so a set buried inside a dataclass is canonicalised too.
     Leaf values pass through unchanged.
+
+    A graph that loops back on itself raises `CyclicValueError` (a
+    TypeError, so the value is reported as unhashable and the call runs
+    uncached). It used to be expanded once per path to the depth limit and
+    the call never returned; and a form that stood in for the loop could
+    make two different graphs key alike, which would be a wrong answer.
     """
     if _depth > 50:
         return value
+    if type(value) in _CODELESS_PRIMS:
+        return value
+    if _stack is None:
+        _stack = set()
+    if id(value) in _stack:
+        raise CyclicValueError(
+            f"a {type(value).__qualname__} that contains itself, with a set inside, "
+            f"has no stable form to key on")
+    _stack.add(id(value))
+    try:
+        return _stable_key_repr_of(value, _depth, _stack)
+    finally:
+        _stack.discard(id(value))
+
+
+def _stable_key_repr_of(value: Any, _depth: int, _stack: set) -> Any:
+    """`_stable_key_repr` of one object, with the path walked so far."""
+    def sub(v: Any) -> Any:
+        return _stable_key_repr(v, _depth + 1, _stack)
+
     if isinstance(value, (set, frozenset)):
-        items = [_stable_key_repr(v, _depth + 1) for v in value]
+        items = [sub(v) for v in value]
         items.sort(key=lambda x: pickle.dumps(x, protocol=4))
         tag = "__cash_frozenset__" if isinstance(value, frozenset) else "__cash_set__"
         return (tag, tuple(items))
@@ -224,26 +254,22 @@ def _stable_key_repr(value: Any, _depth: int = 0) -> Any:
         # insensitive by ``==`` and keeps the sorted, untagged form so its key
         # is byte-identical to before this change.
         subclass = type(value) is not dict
-        items = [
-            (_stable_key_repr(k, _depth + 1), _stable_key_repr(v, _depth + 1))
-            for k, v in value.items()
-        ]
+        items = [(sub(k), sub(v)) for k, v in value.items()]
         if not subclass:
             items.sort(key=lambda kv: pickle.dumps(kv[0], protocol=4))
         canon = ("__cash_dict__", tuple(items))
         return _tag_subtype(value, dict, canon)
     if isinstance(value, list):
-        canon = ("__cash_list__", tuple(_stable_key_repr(v, _depth + 1) for v in value))
+        canon = ("__cash_list__", tuple(sub(v) for v in value))
         return _tag_subtype(value, list, canon)
     if isinstance(value, tuple):
-        canon = tuple(_stable_key_repr(v, _depth + 1) for v in value)
+        canon = tuple(sub(v) for v in value)
         return _tag_subtype(value, tuple, canon)
     obj_state = _object_state(value)
     if obj_state:
         # Arbitrary object (dataclass, __slots__ class, ...) - canonicalise its
         # instance state, tagged with the type so two types don't collide.
-        return ("__cash_obj__", type(value).__qualname__,
-                _stable_key_repr(obj_state, _depth + 1))
+        return ("__cash_obj__", type(value).__qualname__, sub(obj_state))
     return value
 
 
