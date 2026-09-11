@@ -166,6 +166,8 @@ class _Entry:
     # The files the entry was computed from: the question behind most "why
     # did this recompute?" and "why did this NOT recompute?" reports.
     reads: tuple[str, ...] = ()
+    # When the entry stops being served (created_at + ttl), or None for none.
+    expires: float | None = None
 
 
 # What a user may type instead of the literal ``(notebook statements)`` group
@@ -217,8 +219,23 @@ def _scan_entries(cache_path: Path) -> list[_Entry]:
             uses=int(metadata.get('access_count') or 0),
             outputs=tuple(str(o) for o in outputs),
             reads=tuple(str(p) for p in (metadata.get('auto_file_deps') or {})),
+            expires=(float(metadata.get('created_at') or stat.st_mtime) + float(metadata['ttl'])
+                     if metadata.get('ttl') is not None else None),
         ))
     return entries
+
+
+def _expires(when: float | None) -> str:
+    """``-`` for no ttl, ``expired``, or how long is left (``in 5m``)."""
+    if when is None:
+        return "-"
+    left = when - time.time()
+    if left <= 0:
+        return "expired"
+    for size, unit in ((86400, "d"), (3600, "h"), (60, "m")):
+        if left >= size:
+            return f"in {int(left // size)}{unit}"
+    return f"in {int(left)}s"
 
 
 def _resolve_entry(entries: list[_Entry], wanted: str) -> _Entry | None:
@@ -307,8 +324,9 @@ def cmd_inspect(args: argparse.Namespace) -> None:
         print(f"No cache found at {os.path.abspath(cache_dir)}.")
         print("Specify a notebook or cache directory, or set CASH_CACHE_DIR.")
         sys.exit(1)
-    if not target:
-        print(f"Cache dir: {os.path.abspath(cache_dir)}")
+    # The directory is printed once, by `_inspect_cache_dir`, absolute: this
+    # used to print it too, so every default `cash inspect` began with two
+    # headers naming the same place (round 18).
     _inspect_cache_dir(cache_dir, only_function=only_function)
 
 
@@ -361,7 +379,7 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
     total_size = sum(f.stat().st_size for f in cache_path.rglob('*') if f.is_file())
     entries = _scan_entries(cache_path)
 
-    print(f"Cache directory: {cache_path}")
+    print(f"Cache directory: {cache_path.resolve()}")
 
     if only_function is not None:
         resolved = _resolve_function(entries, only_function)
@@ -378,15 +396,17 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
         # view showed an opaque id, a size and an age -- enough to see that
         # entries exist, not enough to choose between them.
         shows_outputs = any(e.outputs for e in owned)
+        # EXPIRES: an entry with a ttl stops being served at a time the table
+        # could not show, so an expired entry looked like a live one.
         header = (f"  {'ENTRY':<14}{'SAVES':>9}{'SIZE':>11}{'USES':>7}"
-                  f"   {'LAST USED':<12}")
+                  f"   {'LAST USED':<12}{'EXPIRES':<12}")
         print((header + "PRODUCES") if shows_outputs else header.rstrip())
         for entry in owned:
             saves = f"{entry.saves:.1f}s" if entry.saves else "-"
             produces = ", ".join(entry.outputs) if shows_outputs else ""
             row = (f"  {entry.stem[:12]:<14}{saves:>9}"
                    f"{_format_bytes(entry.size):>11}{str(entry.uses) + 'x':>7}"
-                   f"   {_age(entry.mtime):<12}{produces}")
+                   f"   {_age(entry.mtime):<12}{_expires(entry.expires):<12}{produces}")
             print(row.rstrip())
             if entry.reads:
                 shown = ", ".join(entry.reads[:3])

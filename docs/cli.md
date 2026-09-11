@@ -198,7 +198,7 @@ cash info
   `[tool.cash]` and XDG user config — see
   [Configuration](getting-started/configuration.md#file-locations)).
 
-<!-- claim: cash/__main__.py:cmd_inspect @426ecc1d, cash/__main__.py:_inspect_cache_dir @2252ac91, cash/__main__.py:_inspect_notebook @06ba3efe -->
+<!-- claim: cash/__main__.py:cmd_inspect @e3a7eb28, cash/__main__.py:_inspect_cache_dir @24d5dddf, cash/__main__.py:_inspect_notebook @06ba3efe -->
 ### `cash inspect [path] [--function NAME]` { #cash-inspect-path }
 
 Summarise a cache directory, or report on a notebook and its sibling `.cash`
@@ -232,7 +232,11 @@ cash inspect /tmp/some-cache-dir
 ```
 
 - `--function NAME` — *Optional.* List one function's individual entries
-  instead of the per-function overview. An unambiguous trailing segment is
+  instead of the per-function overview: the id `cash clear --entry` takes
+  (and the per-call debug line prints), what the entry saves, its size,
+  `USES` (reads from disk — hits a running process serves from RAM are not
+  counted), when it was last used and, for an entry written with a `ttl`,
+  when it `EXPIRES`. An unambiguous trailing segment is
   enough: `--function work` finds `model.work`. `notebook` (or
   `statements`) selects the `(notebook statements)` group without its
   brackets. An ambiguous name prints the candidates and exits 1; an unknown

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import atexit
+import contextvars
 import dataclasses
 import functools
 import hashlib
@@ -717,21 +718,53 @@ _calls_logger = logging.getLogger("cash.calls")
 #: The stderr handler `_enable_cash_logging` installed, if it installed one.
 _CASH_STDERR_HANDLER: logging.Handler | None = None
 
+#: The level `_enable_cash_logging` last set on the `cash` logger; a level
+#: anyone else set is theirs.
+_CASH_LEVEL_SET: int | None = None
+
+
+def _real_handlers(logger: logging.Logger) -> list[logging.Handler]:
+    """Handlers that would PRINT a record from *logger*, walking up like logging.
+
+    Two kinds do not count. pytest's logging plugin puts capture handlers on the
+    root logger, so under pytest "something is configured" was always true and
+    `CASH_DEBUG=1` printed nothing, even with `-s` (round 18). A NullHandler
+    prints nothing by definition. cash's own stderr handler is left out too, so
+    the answer means "the application configured logging".
+    """
+    found = []
+    current: logging.Logger | None = logger
+    while current is not None:
+        for handler in current.handlers:
+            if handler is _CASH_STDERR_HANDLER or isinstance(handler, logging.NullHandler):
+                continue
+            if (type(handler).__module__ or "").startswith("_pytest"):
+                continue
+            found.append(handler)
+        if not current.propagate:
+            break
+        current = current.parent
+    return found
+
 
 def _enable_cash_logging(level: int) -> None:
     """Make `cash` log records at *level* reach the user.
 
-    Lowers the `cash` logger's level, and -- only when nothing anywhere would
-    print a record, which is a script's default -- attaches one stderr handler.
-    An application that configured logging keeps its own handlers and format;
-    it just starts receiving cash's records. stderr, not stdout: stdout is
-    often the program's output (a report, a pipe, a JSON response).
+    Sets the `cash` logger's level unless someone else already has, and --
+    only when nothing would print a record, which is a script's default (and a
+    pytest run's) -- attaches one stderr handler. An application that
+    configured logging keeps its own handlers, format and levels: it starts
+    receiving cash's records, and a `cash` level it set is respected rather
+    than lowered under it on every Cash() (round 18: dictConfig's INFO was
+    overridden). stderr, not stdout: stdout is often the program's output.
     """
-    global _CASH_STDERR_HANDLER
+    global _CASH_STDERR_HANDLER, _CASH_LEVEL_SET
     cash_logger = logging.getLogger("cash")
-    if cash_logger.level == logging.NOTSET or cash_logger.level > level:
+    if cash_logger.level == logging.NOTSET or (
+            cash_logger.level == _CASH_LEVEL_SET and cash_logger.level > level):
         cash_logger.setLevel(level)
-    if _CASH_STDERR_HANDLER is None and not cash_logger.hasHandlers():
+        _CASH_LEVEL_SET = level
+    if _CASH_STDERR_HANDLER is None and not _real_handlers(cash_logger):
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
         cash_logger.addHandler(handler)
@@ -752,6 +785,13 @@ MISS_INCOMPLETE = "entry incomplete"
 MISS_UNHASHABLE = "unhashable argument"
 MISS_KEY_FAILED = "key could not be built"
 MISS_MOCKED = "a helper is a mock"
+MISS_RAISED = "raised"
+
+#: Set by `_log_raised` in this context (thread or asyncio task), consumed by the
+#: stats wrapper, so a call that raised is counted without re-counting the
+#: previous call's entry.
+_RAISE_LOGGED: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "_cash_raise_logged", default=False)
 
 #: `_store_refusal` was not handed a capture watch (the streaming path).
 _NO_WATCH = object()
@@ -774,10 +814,25 @@ _STALE_REASON_TEXT = {
 _STORE_OUTCOMES_MAX = 4096
 
 
+def _same_file_key(path: str) -> str:
+    """One spelling per file: the tracker can record a file under the relative
+    path the code opened it by AND its absolute path, which listed it twice --
+    "and 1 more" was the same file (round 18)."""
+    try:
+        return os.path.normcase(os.path.realpath(path))
+    except (OSError, ValueError, TypeError):
+        return path
+
+
 def _describe_file_deps(deps: dict[str, Any] | None) -> dict[str, str]:
     """``{path: fingerprint}`` for the files an entry recorded, readably."""
     out: dict[str, str] = {}
+    seen: set[str] = set()
     for path, rec in (deps or {}).items():
+        same = _same_file_key(path)
+        if same in seen:
+            continue
+        seen.add(same)
         if not isinstance(rec, dict):
             out[path] = str(rec)
             continue
@@ -1169,7 +1224,8 @@ class Cash:
         self._async_inflight: dict[str, tuple[Any, Any]] = {}
         self.debug = debug  # Debug mode flag
         self.use_locking = use_locking
-        self.verbose = verbose
+        self.verbose = bool(verbose) or bool(getattr(self.config, "verbose", False))
+        verbose = self.verbose
         # Asking for debug output has to produce some. The flag used to set
         # nothing but this attribute, and a script has no logging configured,
         # so `CASH_DEBUG=1` printed not one line (round 17, three testers).
@@ -2909,10 +2965,15 @@ class Cash:
             file_dep_is_fresh,
         )
         stale: dict[str, str] = {}
+        seen: set[str] = set()
         for path, recorded in (metadata.auto_file_deps or {}).items():
             here = dep_path_for_this_process(path, recorded)
+            same = _same_file_key(here)
+            if same in seen:
+                continue
             is_fresh, why = file_dep_is_fresh(here, recorded)
             if not is_fresh:
+                seen.add(same)
                 stale[here] = _STALE_REASON_TEXT.get(why or "", "changed")
         return stale
 
@@ -3370,7 +3431,11 @@ class Cash:
                 body_seconds: float | None = None
                 with tracker, observer:
                     body_t0 = time.perf_counter()
-                    res = func(*args, **kwargs)
+                    try:
+                        res = func(*args, **kwargs)
+                    except Exception as exc:
+                        self._log_raised(func_name, exc, call_start)
+                        raise
                     # The user's own work, isolated. Everything cash does sits
                     # outside this pair, which is the whole point: it is the
                     # only number that can answer "did caching pay?".
@@ -3562,7 +3627,11 @@ class Cash:
                 body_seconds: float | None = None
                 with tracker, observer:
                     body_t0 = time.perf_counter()
-                    res = await func(*args, **kwargs)
+                    try:
+                        res = await func(*args, **kwargs)
+                    except Exception as exc:
+                        self._log_raised(func_name, exc, call_start)
+                        raise
                     body_seconds = time.perf_counter() - body_t0
                     rng_new = self._note_rng_draw(func_name, rng_pre)
                     is_iter = _is_one_shot_iterator(res)
@@ -3706,6 +3775,13 @@ class Cash:
                                 _stats['not_persisted'][call['not_persisted']] += 1
                         break
 
+        def _drain_raised() -> None:
+            # Only when THIS call logged its raise: otherwise the last entry
+            # for this function is the previous call's, already counted.
+            if _RAISE_LOGGED.get():
+                _RAISE_LOGGED.set(False)
+                _drain_stats()
+
         def _bypass(args: tuple, kwargs: dict) -> Any:
             # A helper, not inline: a caller that captures this wrapper in a
             # closure has the wrapper's own captures folded into ITS key, and
@@ -3722,6 +3798,9 @@ class Cash:
                 token = ACTIVE_CONFIG.set(self.config)
                 try:
                     result = await wrapper(*args, **kwargs)
+                except BaseException:
+                    _drain_raised()
+                    raise
                 finally:
                     ACTIVE_CONFIG.reset(token)
                 _drain_stats()
@@ -3740,6 +3819,9 @@ class Cash:
                 token = ACTIVE_CONFIG.set(self.config)
                 try:
                     result = wrapper(*args, **kwargs)
+                except BaseException:
+                    _drain_raised()
+                    raise
                 finally:
                     ACTIVE_CONFIG.reset(token)
                 _drain_stats()
@@ -6969,6 +7051,8 @@ class Cash:
             elif args_hash == 'unkeyable':
                 reason = (MISS_MOCKED, f"{miss_detail}, which has no code to key, "
                                        f"so the call ran uncached")
+            elif args_hash == 'raised':
+                reason = (MISS_RAISED, miss_detail)
             else:
                 reason = self._pending_miss.pop(cache_key, None) or (MISS_FIRST, "")
             entry['miss_reason'] = reason
@@ -6983,18 +7067,26 @@ class Cash:
             self._decorator_call_log.append(entry)
         # Asked for, not merely permitted: an application that turned the
         # `cash` logger up to INFO did not ask for a line per call.
-        if (self.verbose or self.debug) and _calls_logger.isEnabledFor(logging.INFO):
+        if (self.verbose or self.debug or getattr(self.config, "verbose", False)) \
+                and _calls_logger.isEnabledFor(logging.INFO):
             _calls_logger.info("%s", self._describe_call(entry))
 
     @staticmethod
     def _describe_call(entry: dict[str, Any]) -> str:
         """One line for the per-call log: what happened, and on a miss, why."""
         name = entry['func_name']
+        # The id `cash inspect` lists and `cash clear --entry` takes, so a log
+        # line can be matched to an entry on disk.
+        key = entry.get('cache_key') or ''
+        tag = f"  [{entry_id_of(key)}]" if key else ""
         if entry['cache_hit']:
             saved = entry.get('time_saved') or 0.0
-            return f"HIT  {name}  (saved {saved:.2f}s)"
+            return f"HIT  {name}{tag}  (saved {saved:.2f}s)"
         kind, detail = entry.get('miss_reason') or (MISS_FIRST, "")
-        line = f"MISS {name}  {kind}" + (f": {detail}" if detail else "")
+        if kind == MISS_RAISED:
+            return (f"RAISE {name}  {detail}; nothing stored  "
+                    f"(ran {entry['execution_time']:.2f}s)")
+        line = f"MISS {name}{tag}  {kind}" + (f": {detail}" if detail else "")
         line += f"  (ran {entry['execution_time']:.2f}s"
         if entry.get('not_stored'):
             line += f"; not stored: {entry['not_stored']}"
@@ -7002,6 +7094,20 @@ class Cash:
             line += (f"; kept in RAM only -- {entry['not_persisted']} -- so "
                      f"another process will recompute it")
         return line + ")"
+
+    def _log_raised(self, func_name: str, exc: BaseException, call_start: float) -> None:
+        """Record a call whose body raised: nothing is stored, and it counts.
+
+        Such a call produced no line at all, and a run that crashed half-way
+        summarised as "5 of 5 calls restored" (round 18).
+        """
+        self._log_decorator_call(
+            func_name, cache_hit=False,
+            execution_time=time.perf_counter() - call_start,
+            args_hash='raised', cache_key='',
+            miss_detail=f"{type(exc).__name__}: {str(exc)[:80]}",
+        )
+        _RAISE_LOGGED.set(True)
 
     def _warn_cache_if_raised(
         self, func_name: str, error: BaseException, *, stacklevel: int | None = None,
@@ -8243,10 +8349,20 @@ class Cash:
         try:
             text = self.run_summary()
             if text:
+                from .backends._base import _in_multiprocessing_child
+                if _in_multiprocessing_child():
+                    # One table per worker process: say whose it is.
+                    text = text.replace("cash:", f"cash (pid {os.getpid()}):", 1)
                 # stderr: stdout is the program's output -- a report, a pipe, a
                 # JSON response -- and a summary landing in it broke all three
-                # for round-17 testers.
-                print(text, file=sys.stderr)
+                # for round-17 testers. ONE write: pool workers exiting together
+                # interleaved print()'s separate writes mid-line (round 18).
+                sys.stderr.write(text + "\n")
+                sys.stderr.flush()
+                # And into the application's log, when it has one: a service
+                # whose output goes through dictConfig never saw the summary.
+                if _real_handlers(logging.getLogger("cash")):
+                    logging.getLogger("cash.summary").info("%s", text)
         except Exception:  # noqa: BLE001 - a summary must not fail a finished run
             pass
 

@@ -297,6 +297,13 @@ def configure(**overrides: Any) -> None:
 
             from .core import _enable_cash_logging
             _enable_cash_logging(logging.DEBUG)
+    if "verbose" in overrides:
+        c.verbose = bool(overrides["verbose"])
+        if c.verbose:
+            import logging
+
+            from .core import _enable_cash_logging
+            _enable_cash_logging(logging.INFO)
 
     if needs_rebuild:
         from .backends.factory import build_backend_from_config

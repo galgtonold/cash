@@ -228,7 +228,7 @@ caching is switched off — each carrying its own `details` (which files changed
 which argument type couldn't be hashed). The
 full shape is in the [`CacheExplanation`](../api/cash.md) reference.
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats @253593ac, cash/core.py:Cash._wrap_with_stats.cache_info @5ecbb192, cash/core.py:Cash._log_decorator_call @778db02f -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats @f5641186, cash/core.py:Cash._wrap_with_stats.cache_info @5ecbb192, cash/core.py:Cash._log_decorator_call @af6a4e2f -->
 !!! warning "`cache_info()` is not the surface to trust in a notebook"
     The wrapper also exposes `cache_info()`, but its `hits` / `misses` counters
     live on the **wrapper object** and count only since that wrapper was
@@ -300,7 +300,7 @@ and entry counts it points you at `cash info` in a terminal.
 Anything that requires touching the cache directory itself lives in the CLI, not
 in a magic. These five subcommands are the whole surface:
 
-<!-- claim: cash/__main__.py:main @92b1b60e, cash/__main__.py:cmd_info @eb48d766, cash/__main__.py:_inspect_cache_dir @2252ac91 -->
+<!-- claim: cash/__main__.py:main @92b1b60e, cash/__main__.py:cmd_info @eb48d766, cash/__main__.py:_inspect_cache_dir @24d5dddf -->
 ```bash
 cash version            # installed version
 cash info               # resolved config + where it came from

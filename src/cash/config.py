@@ -318,6 +318,13 @@ class CashConfig:
     Useful for diagnosing 'why didn't this hit?' mysteries. Hot
     field — flippable at runtime via ``cash.configure(debug=True)``."""
 
+    verbose: bool = False
+    """When True, log one line per decorated call -- a hit, or a miss and
+    why -- to the ``cash.calls`` logger, without cash's other debug
+    records. ``debug`` implies it. Settable wherever ``debug`` is: the
+    constructor, ``cash.configure(verbose=True)``, ``CASH_VERBOSE=1``,
+    ``verbose = true`` under ``[tool.cash]``."""
+
     # --- Backend selection (simple mode) ---
     backend: str = "tiered"
     """Backend selector. ``"tiered"`` (default) builds a RAM + disk

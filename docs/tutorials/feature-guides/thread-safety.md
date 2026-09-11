@@ -56,7 +56,7 @@ def expensive(x):
     ...
 ```
 
-<!-- claim: cash/core.py:Cash.__init__ @b3d2d68a -->
+<!-- claim: cash/core.py:Cash.__init__ @e1bf5f00 -->
 The flag is a `Cash`-instance option, not a per-decorator one. All functions registered through this instance go through the lock path on misses; switch instances if you want a mix.
 
 Lock acquisition uses **the cache backend itself** — `self.backend.lock(cache_key)` returns a context manager whose semantics are defined by the backend subclass. See the next section for what each backend implements.
@@ -99,7 +99,7 @@ There are exactly **two** `lock()` definitions in the codebase:
 
 ## Async
 
-<!-- claim: cash/core.py:Cash._make_async_wrapper @b70cb584 -->
+<!-- claim: cash/core.py:Cash._make_async_wrapper @a7d865e2 -->
 `use_locking=True` **is supported on the async path**, via in-process single-flight rather than `_compute_with_lock`. Concurrent awaits of the same cache key coalesce: the first awaiter (the *leader*) registers an `asyncio.Event` in `self._async_inflight`, computes, and stores; other awaiters of the same key (the *followers*) `await` the event and then read the stored result. If the leader stored nothing — `cache_if` rejected the value, or the compute raised — followers fall through and compute themselves, so correctness is never traded for the optimization.
 
 The coalescing is keyed on the running event loop, so it dedupes an `asyncio.gather` within one process, not across processes. For cross-process async, you still want Redis. Test reference: `tests/test_core/test_async_single_flight.py`.
