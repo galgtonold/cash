@@ -120,3 +120,19 @@ def test_the_numbers_that_drifted_are_the_ones_now_derived(path, name):
     assert f"<!-- docnum:{name} -->" in text, (
         f"{path} no longer derives `{name}`; it is hand-maintained again"
     )
+
+
+def test_a_rounded_count_on_a_boundary_is_not_drift():
+    """365 docs tests round to ~360 (round-half-even) and 366 to ~370: one
+    platform-dependent test made every CI push fail the gate with nothing out
+    of date. One step of difference passes; two does not."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("doc_numbers", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    fact = mod.Fact("tests_docs", lambda: 366, mod._approx(10))
+    assert mod._close_enough(fact, "~370", "~360")
+    assert not mod._close_enough(fact, "~380", "~360")
+    exact = mod.Fact("platforms", lambda: 15, mod._exact)
+    assert not mod._close_enough(exact, "15", "16")

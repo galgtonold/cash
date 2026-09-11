@@ -164,7 +164,29 @@ def _approx(step: int):
     """
     def render(value: int) -> str:
         return f"~{round(value / step) * step:,}"
+    render.step = step  # type: ignore[attr-defined]
     return render
+
+
+def _close_enough(fact: "Fact", current: str, wanted: str) -> bool:
+    """A rounded figure one step off still passes ``--check``.
+
+    A count sitting on a rounding boundary rounds differently on different
+    platforms -- CI collected 365 docs tests (``~360``, since ``round`` goes to
+    even) where a Windows checkout collected 366 (``~370``) -- and the gate
+    failed every push with no drift at all. Within one step the printed figure
+    is still off by at most a step, which is what ``~`` promises;
+    ``--update`` still writes the exact rounding.
+    """
+    step = getattr(fact._render, "step", None)
+    if step is None or not (current.startswith("~") and wanted.startswith("~")):
+        return False
+    try:
+        a = int(current[1:].replace(",", ""))
+        b = int(wanted[1:].replace(",", ""))
+    except ValueError:
+        return False
+    return abs(a - b) <= step
 
 
 def _exact(value: int) -> str:
@@ -326,7 +348,8 @@ def main() -> int:
         return 0
 
     stale = [(rel, name, cur, want)
-             for rel, name, cur, want in _walk(resolved, root) if cur != want]
+             for rel, name, cur, want in _walk(resolved, root)
+             if cur != want and not _close_enough(facts[name], cur, want)]
     if stale:
         print("Stale numbers in the docs "
               "(run `python scripts/doc_numbers.py --update`):\n")
