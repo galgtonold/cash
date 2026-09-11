@@ -64,12 +64,21 @@ def counted(monkeypatch):
     Module globals are consulted before builtins, so binding ``open`` on the
     module intercepts its file access and nobody else's.
     """
+    import threading
+
     reads: list[int] = []
     writes: list[int] = []
     real_open = open
+    # Only this thread's access. The patch covers the whole module, so a
+    # FileBackend flusher left running by an earlier test in the worker would
+    # otherwise be counted as well -- see test_the_counter_sees_only_this_thread.
+    mine = threading.get_ident()
 
     def counting_open(path, mode="r", *a, **k):
-        return _CountingHandle(real_open(path, mode, *a, **k), reads, writes)
+        handle = real_open(path, mode, *a, **k)
+        if threading.get_ident() != mine:
+            return handle
+        return _CountingHandle(handle, reads, writes)
 
     monkeypatch.setattr(entry_format, "open", counting_open, raising=False)
     return reads, writes
@@ -245,3 +254,19 @@ def test_a_flush_after_a_read_leaves_a_big_value_intact(tmp_path):
     metadata, value = backend.get("k")
     assert value == payload
     assert metadata["access_count"] >= 1
+
+
+def test_the_counter_sees_only_this_thread(tmp_path, counted):
+    """The byte counts above are for THIS thread's reads. `open` is patched on
+    the whole module, so a FileBackend flusher left running by an earlier test
+    in the same worker, updating an access stamp, used to be counted too: the
+    flat-cost arm once read 116 bytes for the small entry against 92 for the
+    big one on macOS CI, two stray 12-byte header reads."""
+    import threading
+
+    reads, _writes = counted
+    path, _meta, _payload = _write_big(tmp_path)
+    other = threading.Thread(target=read_entry, args=(path,), kwargs={"with_payload": False})
+    other.start()
+    other.join()
+    assert sum(reads) == 0, f"another thread's {sum(reads)} bytes were counted"
