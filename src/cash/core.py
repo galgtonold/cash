@@ -548,6 +548,19 @@ def _expose_script_function(func: Callable, wrapper: Callable) -> None:
         logger.debug("could not expose %s for pickling by name", name, exc_info=True)
 
 
+@functools.lru_cache(maxsize=1)
+def _IMMUTABLE_VALUE_TYPES() -> tuple[type, ...]:  # noqa: N802 - a constant, built once
+    """Standard-library value types that cannot change once built."""
+    import datetime
+    import decimal
+    import enum
+    import fractions
+    import pathlib
+    import uuid
+    return (datetime.date, datetime.time, datetime.timedelta, datetime.tzinfo,
+            decimal.Decimal, fractions.Fraction, uuid.UUID, pathlib.PurePath, enum.Enum)
+
+
 def _backend_cache_dir(backend: Any) -> str | None:
     """The directory *backend* keeps entries in -- its disk tier's, if tiered."""
     for tier in [backend, *getattr(backend, "backends", ())]:
@@ -4566,6 +4579,7 @@ class Cash:
         if not closure or code is None:
             return ""
         written = self._closure_written_freevars(code)
+        unsafe: frozenset | None = None
         captures = []
         for name, cell in zip(code.co_freevars, closure):
             if name in written:
@@ -4574,8 +4588,21 @@ class Cash:
                 value = cell.cell_contents
             except ValueError:
                 continue
-            if callable(value) or not self._is_immutable_capture(value):
+            if callable(value) or isinstance(value, types.ModuleType):
                 continue
+            if not (self._is_immutable_capture(value)
+                    or isinstance(value, _IMMUTABLE_VALUE_TYPES())):
+                # A container the helper only READS is data like any other:
+                # `lambda: when` with `when` a list, a dict -- or a datetime
+                # before the type list above had it -- gave every value ONE
+                # entry, so the standard frozen-clock fixture served July's
+                # answer to a March test (round 19). What the body mutates
+                # (a decorator's cache dict, a counter list) stays out, as
+                # before: folding it would make every call miss.
+                if unsafe is None:
+                    unsafe = self._capture_unsafe_uses(fn)
+                if name in unsafe or not isinstance(value, (list, dict, set, tuple, frozenset)):
+                    continue
             captures.append((name, value))
         if not captures:
             return ""

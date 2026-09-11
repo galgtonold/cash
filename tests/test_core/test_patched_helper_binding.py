@@ -329,3 +329,75 @@ def test_a_module_global_replaced_by_a_mock_is_not_cached(c, mods, real_first):
     with mock.patch.object(app, "json", fake):
         assert app.total('{"v": 2}') == 70
     assert _check(app.total, '{"v": 2}') == 20, "the mock's answer was stored"
+
+
+# -- a patched helper built by a factory (round 19, r19s3 F4) ----------------
+
+import datetime as _dt  # noqa: E402
+import decimal as _decimal  # noqa: E402
+import pathlib as _pathlib  # noqa: E402
+
+_CAPTURED = {
+    "datetime": (_dt.datetime(2024, 7, 15), _dt.datetime(2024, 3, 10)),
+    "date": (_dt.date(2024, 7, 15), _dt.date(2024, 3, 10)),
+    "timedelta": (_dt.timedelta(days=1), _dt.timedelta(days=2)),
+    "decimal": (_decimal.Decimal("1.10"), _decimal.Decimal("2.20")),
+    "path": (_pathlib.Path("a.txt"), _pathlib.Path("b.txt")),
+    "list": ([1, 2], [1, 3]),
+    "dict": ({"k": 1}, {"k": 2}),
+    "tuple-with-date": ((1, _dt.date(2024, 7, 15)), (1, _dt.date(2024, 3, 10))),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_CAPTURED))
+def test_a_frozen_clock_fixture_keys_what_it_froze(c, mods, kind):
+    """`monkeypatch.setattr(clock, "now", lambda: when)` -- every `when` got ONE
+    entry for anything but str/int/float/bytes, so a March test was served July's
+    answer."""
+    clock, app = mods({
+        "clock": """
+            def now():
+                return "real"
+        """,
+        "app": """
+            import PFX_clock as clock
+            def stamp(tag):
+                return clock.now()
+        """,
+    }, "clock,app")
+    app.stamp = c.cache(app.stamp)
+
+    def freeze(when):
+        clock.now = lambda: when
+
+    real = clock.now
+    first, second = _CAPTURED[kind]
+    try:
+        freeze(first)
+        assert app.stamp("t") == first
+        freeze(second)
+        assert app.stamp("t") == second, "served the first frozen value's entry"
+    finally:
+        clock.now = real
+
+
+def test_a_closure_that_mutates_what_it_captured_still_hits(c, mods):
+    """The control: a memo dict the helper writes into stays out of the key,
+    or every call would miss."""
+    (app,) = mods({"app": """
+        def _make():
+            seen = {}
+            def helper(x):
+                seen[x] = seen.get(x, 0) + 1
+                return x * 2
+            return helper
+        helper = _make()
+        def f(x):
+            return helper(x)
+    """}, "app")
+    calls = []
+    real = app.f
+    app.f = c.cache(lambda x: (calls.append(x), real(x))[1])
+    app.f(3)
+    app.f(3)
+    assert calls == [3], "a helper's mutated memo made the key drift"
