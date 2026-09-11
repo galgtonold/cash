@@ -75,7 +75,7 @@ from .source_norm import (
     normalize_source_for_hash,
     source_identity_digest,
 )
-from .utils import resolve_main_module
+from .utils import MAIN_MODULE_NAMES, resolve_main_module
 
 logger = logging.getLogger(__name__)
 
@@ -2166,7 +2166,7 @@ def _qualname_of(func: Callable[..., Any]) -> str:
         module = func.__globals__.get("__name__") or module
         code = func.__code__
         qualname = getattr(code, "co_qualname", None) or f"{code.co_name}@wrapper"
-    if module == "__main__":
+    if module in MAIN_MODULE_NAMES:
         module = resolve_main_module(func)
     return f"{module}.{qualname}"
 

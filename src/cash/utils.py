@@ -289,6 +289,15 @@ def _module_stem(path: str) -> str:
     return os.path.splitext(os.path.basename(path))[0]
 
 
+#: The names a script's own module goes by. ``__mp_main__`` is the script
+#: re-imported in a multiprocessing child under the spawn start method (the
+#: default on Windows and macOS). Left as it was, a pool worker keyed
+#: ``work`` as ``__mp_main__.work`` while the parent keyed it ``model.work``:
+#: the workers shared their entries with each other and never with the
+#: process that started them (round 18 docs sweep, measured).
+MAIN_MODULE_NAMES = frozenset({"__main__", "__mp_main__"})
+
+
 def resolve_main_module(func: Any) -> str:
     """What to call ``__main__`` when qualifying *func* for a cache key.
 
@@ -329,7 +338,7 @@ def resolve_main_module(func: Any) -> str:
     # caches for one function, and `cash clear --function f` ambiguous between
     # them (round 18). The module spec carries the dotted name the import uses.
     spec_name = getattr(g.get('__spec__'), 'name', None)
-    if isinstance(spec_name, str) and spec_name and spec_name != '__main__':
+    if isinstance(spec_name, str) and spec_name and spec_name not in MAIN_MODULE_NAMES:
         return spec_name
     path = g.get('__file__')
     if not isinstance(path, str) or not path:

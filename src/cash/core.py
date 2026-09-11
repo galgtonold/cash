@@ -79,7 +79,7 @@ from .source_norm import (
     loaded_code_matches_disk,
     source_identity_digest,
 )
-from .utils import resolve_main_module
+from .utils import MAIN_MODULE_NAMES, resolve_main_module
 
 # Configure Logging
 logger = logging.getLogger(__name__)
@@ -1459,7 +1459,7 @@ class Cash:
         and ``__name__``; fall back to ``repr`` so keying them never crashes.
         """
         module = getattr(func, '__module__', None) or '__unknown__'
-        if module == '__main__':
+        if module in MAIN_MODULE_NAMES:
             module = resolve_main_module(func)
         qualname = (
             getattr(func, '__qualname__', None)
@@ -6027,7 +6027,7 @@ class Cash:
         ``__main__`` never counts: a script is not a package, and everything
         it imports is judged on its own merits.
         """
-        if not module_name or not own_pkg or own_pkg == "__main__":
+        if not module_name or not own_pkg or own_pkg in MAIN_MODULE_NAMES:
             return False
         return module_name == own_pkg or module_name.startswith(own_pkg + ".")
 
