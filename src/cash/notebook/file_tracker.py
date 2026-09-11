@@ -10,6 +10,7 @@ automatically invalidates dependent cached results.
 
 import builtins
 import contextvars
+import functools
 import importlib
 import importlib.abc
 import importlib.util
@@ -325,6 +326,37 @@ def _patch_pathlib_accessor() -> None:
         accessor.open = staticmethod(wrapper)
     except (AttributeError, TypeError) as e:
         logger.debug("[FILE_TRACKER] Failed to patch pathlib accessor: %s", e)
+
+
+def _patch_thread_pool_submit() -> None:
+    """Run work submitted to a ``ThreadPoolExecutor`` under the submitter's context.
+
+    The tracker is found through a ContextVar, and a pool's worker threads
+    start with an empty context -- so ``ex.map(np.load, shards)`` inside a
+    cached function read files no tracker saw, and editing a shard served the
+    pre-edit result while the serial loop beside it invalidated (round 19).
+
+    With a tracker active, ``submit`` (which ``Executor.map`` calls) wraps the
+    call in ``copy_context().run``; with none, it is the original. A pool can
+    opt out with ``_cash_internal = True``. Threads started directly with
+    ``threading.Thread`` still begin empty -- documented, not patched.
+    """
+    import concurrent.futures.thread as cf_thread
+
+    pool = cf_thread.ThreadPoolExecutor
+    original = pool.__dict__.get("submit")
+    if original is None or getattr(original, "_is_file_tracker_patch", False):
+        return
+
+    @functools.wraps(original)
+    def submit(self, fn, /, *args, **kwargs):
+        if _active_tracker.get() is None or getattr(self, "_cash_internal", False):
+            return original(self, fn, *args, **kwargs)
+        return original(self, contextvars.copy_context().run, fn, *args, **kwargs)
+
+    submit._is_file_tracker_patch = True
+    submit._original_func = original
+    pool.submit = submit
 
 
 def _unwrap_to_real(func: Any) -> Any:
@@ -920,6 +952,9 @@ class FileAccessTracker:
         # 2b. Python 3.10 only: pathlib captured io.open at import time, so the
         # io.open patch above misses every pathlib read. See the function.
         _patch_pathlib_accessor()
+
+        # 2c. Work handed to a thread pool runs under the submitter's tracker.
+        _patch_thread_pool_submit()
 
         # 3. Patch Loaded Modules
         # Iterate over registered modules

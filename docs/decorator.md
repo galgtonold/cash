@@ -382,6 +382,16 @@ coming back False is an input — it chose the defaults branch — so the entry 
 produced stops being valid once that file appears, including when the same
 relative name resolves into a directory that has one.
 
+<!-- claim: cash/notebook/file_tracker.py:_patch_thread_pool_submit @e0f54e32 -->
+Reads in a **thread pool** the function starts count too:
+`ThreadPoolExecutor(4).map(np.load, shards)` records every shard, the same as a
+serial loop would — before 0.10.1 it recorded none of them. A thread you start
+yourself with `threading.Thread(target=...)` begins with nothing cash can see,
+so a file read only there is not tracked; read it in the function, hand the work
+to a `ThreadPoolExecutor`, or name the file with `file_depends_on=`. A
+*process* pool's reads happen in another process and are not seen either —
+`file_depends_on=` again.
+
 ### Module globals a function reads
 
 A cached function that reads a module-level global — a config constant, a
