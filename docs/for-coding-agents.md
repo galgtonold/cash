@@ -40,7 +40,7 @@ you cached something too cheap).
 1. **Cache pure + expensive only.** Same code + same inputs → restored. Editing
    the code or an upstream input invalidates automatically.
 2. **Cross-process persistence has a ~0.1 s floor.** A result whose compute was
-   faster than that stays in RAM only — instant on a repeat *in the same process*,
+   faster than that (for `@cash.cache`, the function body's own time) stays in RAM only — instant on a repeat *in the same process*,
    but recomputed after a kernel restart or a fresh `python run.py`. Force disk
    with `# @cash:persist`.
 3. **Non-determinism is FROZEN, not blocked.** An unseeded random draw is cached

@@ -8024,15 +8024,23 @@ class Cash:
         try:
             serializer = get_serializer(result)
 
+            # What a later hit saves is the BODY's time. The wall-clock cost
+            # also holds cash's own work -- the first call's analysis, the key
+            # -- which the next process pays again whether this entry exists
+            # or not. Judged on wall-clock, a function that returns at once was
+            # persisted whenever a busy machine made that first-call work cross
+            # the 0.1s floor (Windows CI, round 18).
+            if body_seconds is not None:
+                execution_time = body_seconds
             meta = CacheMetadata(
                 key=cache_key,
                 func_name=func_name,
                 timestamp=time.time(),
-                # The decorator's measured wall-clock cost. ``TieredBackend``
-                # reads this to decide whether the value is expensive enough
-                # to promote past RAM (otherwise the smart-persistence
-                # policy gates everything at the 0.1s floor, and script
-                # runs that recompute the same cheap value forever).
+                # The body's measured cost. ``TieredBackend`` reads this to
+                # decide whether the value is expensive enough to promote past
+                # RAM (otherwise the smart-persistence policy gates everything
+                # at the 0.1s floor, and script runs that recompute the same
+                # cheap value forever).
                 execution_time=execution_time,
                 # The body's own cost, so a later HIT can tell what it
                 # actually saved. execution_time cannot answer that: it is

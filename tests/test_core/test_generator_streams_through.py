@@ -101,8 +101,13 @@ def test_the_first_item_arrives_before_the_last_is_produced(c):
         arrivals, items = _drain(slow_stream)
 
     assert items == [0, 1, 2, 3]
-    assert arrivals[0] < arrivals[-1] / 2, (
-        f"first item at {arrivals[0]:.2f}s of {arrivals[-1]:.2f}s -- buffered"
+    # The gap between the first and the last arrival, not the first arrival's
+    # share of the total: the first call's one-off analysis lands before item
+    # 0, and on a contended Windows runner it made a streamed run read as
+    # buffered (0.31s of 0.61s). Buffered, all four arrive together; streamed,
+    # the last three items' 0.3s of work separates the first from the last.
+    assert arrivals[-1] - arrivals[0] > 0.2, (
+        f"first item at {arrivals[0]:.2f}s, last at {arrivals[-1]:.2f}s -- buffered"
     )
 
 

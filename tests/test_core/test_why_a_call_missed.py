@@ -194,6 +194,29 @@ def test_the_summary_says_what_stayed_in_ram(c):
     assert "RAM only" not in slow_notes, "a persisted result was reported as RAM-only"
 
 
+def test_cash_s_own_work_does_not_push_a_trivial_function_past_the_floor(c, monkeypatch):
+    """The floor is judged on the body's time. It was the call's wall-clock
+    time, cash's own key work included -- which the next process pays again
+    whether the entry exists or not -- so on a busy Windows runner a function
+    that returns at once was persisted, and this summary test failed. Here
+    the key work is made slow on purpose."""
+    real = type(c)._serialize_args
+
+    def slow_key(self, *args, **kwargs):
+        time.sleep(0.15)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(c), "_serialize_args", slow_key)
+
+    @c.cache(assume_safe=True)
+    def fast(n):
+        return n
+
+    fast(1)
+    notes = next(v for k, v in _summary_blocks(c.run_summary()).items() if k.endswith(".fast"))
+    assert "kept in RAM only" in notes and "persistence floor" in notes, notes
+
+
 def _summary_blocks(text: str) -> dict[str, str]:
     """``{function: its indented note lines}`` from a run summary."""
     blocks: dict[str, str] = {}

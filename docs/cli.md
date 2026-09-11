@@ -262,7 +262,8 @@ cash inspect /tmp/some-cache-dir
   bbbbbbbbbbbb       0.4s     1.0 KB     1x   2 min ago   scores
   ```
 
-  `SAVES` is the recorded execution time — what you lose by deleting it —
+  `SAVES` is the recorded execution time of the function's own body (cash's
+  key work is paid on a hit too, so it is not counted) — what you lose by deleting it —
   which together with `SIZE` and `USES` is the whole trade. `PRODUCES` names
   the variables a notebook statement produced, and is omitted when no entry
   in the group has any. An entry computed from files gets a `reads:` line
