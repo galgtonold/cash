@@ -274,9 +274,16 @@ def mock_register_magic(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def mock_time_sleep(monkeypatch):
-    """Mock time.sleep to a no-op so smart-persistence.md fences don't delay."""
+    """Cap time.sleep at 1 ms so smart-persistence.md fences don't delay.
+
+    Capped, not removed. A no-op sleep turns every polling loop in the process
+    into a busy loop that holds the GIL -- the test suite's stall watchdog was
+    one, and it slowed the docs tests running beside it until pytest-timeout
+    killed the worker. A 1 ms sleep still yields.
+    """
     import time
-    monkeypatch.setattr(time, "sleep", lambda s: None)
+    real_sleep = time.sleep
+    monkeypatch.setattr(time, "sleep", lambda s: real_sleep(min(s, 0.001)) if s > 0 else real_sleep(0))
     yield
 
 

@@ -120,3 +120,27 @@ def test_allowance_never_shortens_the_limit():
     w, _ = _watchdog(300.0)
     w.set_allowance(30.0)
     assert w.effective_timeout() == 300.0
+
+
+def test_a_patched_time_sleep_does_not_make_it_spin(monkeypatch):
+    """A test that patches `time.sleep` to a no-op must not turn the watchdog
+    into a busy loop. tests/docs did exactly that for every docs test: the
+    watchdog thread spun holding the GIL, the test beside it ran 10-100x
+    slower, and pytest-timeout killed the worker -- "node down: Not properly
+    terminated", a different test each run."""
+    w, fired = _watchdog(60)          # poll every 5s: a handful of wakes at most
+    polls = [0]
+    real = type(w).poll_interval
+
+    def counted(self):
+        polls[0] += 1
+        return real.fget(self)
+
+    monkeypatch.setattr(type(w), "poll_interval", property(counted))
+    real_sleep = time.sleep
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    w.start()
+    real_sleep(0.5)
+    count = polls[0]
+    assert count <= 2, f"the watchdog polled {count} times in 0.5s"
+    assert not fired

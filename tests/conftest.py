@@ -75,6 +75,12 @@ class _StallWatchdog:
         self._current = "<none yet>"
         self._started = False
         self._allowance: float | None = None
+        # Waited on, never set: the poll's timer. Not `time.sleep`, which a
+        # test may patch -- tests/docs patched it to a no-op for every docs
+        # test, and this thread then spun holding the GIL, slowing whatever
+        # test was running 10-100x until pytest-timeout killed the worker
+        # ("node down: Not properly terminated", a different test each run).
+        self._tick = threading.Event()
 
     def poke(self, what: str | None = None) -> None:
         with self._lock:
@@ -122,7 +128,7 @@ class _StallWatchdog:
 
     def _run(self) -> None:
         while True:
-            time.sleep(self.poll_interval)
+            self._tick.wait(self.poll_interval)
             with self._lock:
                 idle = time.monotonic() - self._last
                 current = self._current
