@@ -117,3 +117,28 @@ def test_a_file_tier_s_default_ttl_reaches_its_entries(temp_cache_dir, monkeypat
     c = Cash(register_magic=False)
     tiers = getattr(c.backend, "backends", [c.backend])
     assert [getattr(t, "_default_ttl", None) for t in tiers if isinstance(t, FileBackend)] == [7]
+
+
+def test_a_tier_default_ttl_expires_the_ram_copy_too(temp_cache_dir, monkeypatch):
+    """The ttl was stamped into the file tier's copy only, and the decorator
+    checked its own ttl alone: in the process that wrote the entry, the RAM
+    tier kept serving it after the disk copy had expired."""
+    monkeypatch.setenv("CASH_TIER_0_TYPE", "memory")
+    monkeypatch.setenv("CASH_TIER_1_TYPE", "file")
+    monkeypatch.setenv("CASH_TIER_1_DEFAULT_TTL", "1")
+    monkeypatch.setenv("CASH_CACHE_DIR", temp_cache_dir)
+    c = Cash(register_magic=False)
+    runs = []
+
+    @c.cache(assume_safe=True)
+    def f(x):
+        runs.append(x)
+        return x
+
+    f(1)
+    f(1)
+    assert runs == [1], "control: inside the ttl it hits"
+    time.sleep(1.3)
+    assert f.explain(1).reason == "ttl_expired"
+    f(1)
+    assert runs == [1, 1], "the RAM tier served an entry past its tier's default_ttl"

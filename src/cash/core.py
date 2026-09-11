@@ -2769,8 +2769,10 @@ class Cash:
 
         metadata = CacheMetadata.from_dict(raw_metadata)
 
-        # TTL check - match _validate_ttl semantics: only if ttl was set
-        # at decoration time.
+        # TTL check - match `_try_get_cached`: the decorator's ttl, else the
+        # one the entry was written with (a tier's `default_ttl`).
+        if ttl is None:
+            ttl = getattr(metadata, "ttl", None)
         if ttl is not None:
             timestamp = metadata.timestamp or 0
             age = time.time() - timestamp
@@ -2945,6 +2947,10 @@ class Cash:
         if metadata is None:
             self._note_miss(func_name, cache_key, self._absent_entry_reason(func_name, cache_key))
             return _CACHE_MISS
+        # With no ttl on the decorator, the one the entry was written with --
+        # a tier's `default_ttl` -- still applies, from whichever tier serves.
+        if ttl is None:
+            ttl = getattr(metadata, "ttl", None)
         try:
             self._validate_ttl(metadata, ttl)
             if not self._auto_file_deps_fresh(metadata):

@@ -275,6 +275,16 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         original_metadata = metadata
         metadata = dict(metadata) if metadata is not None else {}
         stored_destinations = []
+        # A tier's `default_ttl` belongs to the entry, not to that tier: stamped
+        # once, here, every tier's copy expires together. Left to the file tier
+        # alone, a process kept serving the result from RAM long after the
+        # disk copy had expired.
+        if metadata.get("ttl") is None:
+            for tier in self.backends:
+                default = getattr(tier, "_default_ttl", None)
+                if default is not None:
+                    metadata["ttl"] = default
+                    break
 
         # Always write to Tier 0 (Memory)
         try:
