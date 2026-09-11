@@ -365,6 +365,9 @@ class _PurityVisitor(ast.NodeVisitor):
                  log_only: frozenset[int] = frozenset()) -> None:
         self.issues: list[PurityIssue] = []
         self.called_callable_nodes: list[ast.AST] = []
+        #: Calls reported as known I/O (``requests.get``, ``open``). Not walked,
+        #: but their bindings are noted, so a mock put in their place is seen.
+        self.impure_call_nodes: list[ast.AST] = []
         # Bare names read (Load context) in this body - used to detect reads of
         # mutable module globals.
         self.read_names: set[str] = set()
@@ -658,6 +661,7 @@ class _PurityVisitor(ast.NodeVisitor):
                         where=self._qualname,
                         line=line,
                     ))
+                    self.impure_call_nodes.append(node)
                     return
 
             # Method calls in _WRITE_METHODS (to_csv, write, savefig, ...).
@@ -1695,6 +1699,21 @@ class PurityAnalyzer:
                 ]
                 own = _is_user_code(callee, root_module)
                 if not own and not layers:
+                    # A library function the call site names by a module
+                    # attribute (`requests.get`, `pd.read_csv`): not walked,
+                    # but its binding is noted, so `mock.patch("requests.get")`
+                    # -- or the whole module swapped for a MagicMock -- is seen
+                    # on the next call and runs it uncached. It was not: the
+                    # fake answer was stored under the real key and served to
+                    # every later, unpatched run (round 19).
+                    #
+                    # Plain and builtin functions only, reached back through
+                    # their path: a bound method is a new object on every
+                    # attribute read and would look rebound on every call.
+                    if (path is not None
+                            and isinstance(callee, (types.FunctionType, types.BuiltinFunctionType))
+                            and resolve_binding(*path) is callee):
+                        _note_binding(callee, path)
                     return
                 _note_binding(callee, path)
                 if own:
@@ -1704,7 +1723,7 @@ class PurityAnalyzer:
                 for layer in layers:
                     stack.append((layer, depth + 1, False))  # noqa: B023 - same
 
-            for call_node in visitor.called_callable_nodes:
+            for call_node in visitor.called_callable_nodes + visitor.impure_call_nodes:
                 _queue_helper(
                     _resolve_callee(call_node.func, namespace),
                     getattr(call_node, "lineno", 0),

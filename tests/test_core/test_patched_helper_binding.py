@@ -272,3 +272,60 @@ def test_the_helper_home_rebound_is_not_what_runs(c, mods):
     assert _check(app.count, 1) == 20
     with mock.patch.object(lib, "sieve", lambda n: -1):
         assert _check(app.count, 1) == 20
+
+
+# -- a LIBRARY function patched where it lives (round 19, r19s3 F5) ----------
+
+def _json_app(c, mods):
+    (app,) = mods({"app": """
+        import json
+        def total(text):
+            return json.loads(text)["v"] * 10
+    """}, "app")
+    app.total = c.cache(app.total)
+    return app
+
+
+@pytest.mark.parametrize("real_first", [False, True], ids=["patched-first", "real-first"])
+def test_a_patched_library_function_is_not_cached_as_the_real_answer(c, mods, real_first):
+    """`mock.patch("requests.get")` stored the fake under the real key, and
+    every later unpatched call got it. The standard library stands in for the
+    installed module: `json.loads` is someone else's code, patched where it
+    lives."""
+    app = _json_app(c, mods)
+    if real_first:
+        assert _check(app.total, '{"v": 2}') == 20
+    with mock.patch("json.loads", return_value={"v": 5}):
+        assert app.total('{"v": 2}') == 50
+    assert _check(app.total, '{"v": 2}') == 20, "the mock's answer was stored"
+
+
+@pytest.mark.parametrize("real_first", [False, True], ids=["patched-first", "real-first"])
+def test_a_known_io_call_patched_is_not_cached_as_the_real_answer(c, mods, real_first):
+    """The exact round-19 shape: `requests.get` is on cash's known-I/O list, and
+    those call sites were never even looked at. `os.system` is on the same list
+    (`exit 0` is harmless everywhere)."""
+    (app,) = mods({"app": """
+        import os
+        def run(cmd):
+            return (os.system(cmd) or 0) * 10 + 1
+    """}, "app")
+    app.run = c.cache(app.run, assume_safe=True)
+    if real_first:
+        assert _check(app.run, "exit 0") == 1
+    with mock.patch("os.system", return_value=5):
+        assert app.run("exit 0") == 51
+    assert _check(app.run, "exit 0") == 1, "the mock's answer was stored"
+
+
+@pytest.mark.parametrize("real_first", [False, True], ids=["patched-first", "real-first"])
+def test_a_module_global_replaced_by_a_mock_is_not_cached(c, mods, real_first):
+    """`mock.patch("mylib.requests", MagicMock())` -- the whole module swapped."""
+    app = _json_app(c, mods)
+    if real_first:
+        assert _check(app.total, '{"v": 2}') == 20
+    fake = mock.MagicMock()
+    fake.loads.return_value = {"v": 7}
+    with mock.patch.object(app, "json", fake):
+        assert app.total('{"v": 2}') == 70
+    assert _check(app.total, '{"v": 2}') == 20, "the mock's answer was stored"

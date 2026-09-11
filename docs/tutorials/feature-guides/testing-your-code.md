@@ -146,10 +146,21 @@ Patching `sievelib.sieve` after `primes` imported it changes nothing `count`
 runs, and so nothing about its key. That holds at any depth: a helper's own
 helpers are looked up in the helper's module.
 
+<!-- claim: cash/purity_analyzer.py:is_mock @5ea1b6ab -->
 A `unittest.mock` object (`mock.patch(..., return_value=...)`, `MagicMock`,
 `pytest-mock`'s `mocker`) has no code for cash to key, and its answer is
-whatever the test configured, so a call that reaches one **runs uncached**.
-That is usually what a test with a mock wants.
+whatever the test configured, so a call that reaches one **runs uncached**,
+and nothing it returns is stored. That is usually what a test with a mock
+wants. It holds wherever the mock sits: a helper of yours, a library function
+patched where it lives (`mock.patch("requests.get")`), or a whole module
+swapped out (`mock.patch("mylib.requests", MagicMock())`).
+
+What cash cannot see is a library that intercepts calls deeper down without
+replacing the function you call: `responses`, `requests-mock`, `vcrpy`,
+`httpretty`. Under those, `requests.get` is still the real
+function, so a cached call that goes through it is cached as usual, and the
+recorded response can be stored under the real key. Run those tests uncached
+(see the fixture above).
 
 ## Which to use
 
