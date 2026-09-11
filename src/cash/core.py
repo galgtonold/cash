@@ -2717,28 +2717,38 @@ class Cash:
                         ids.append(repr(ds))
         return ids
 
-    @staticmethod
-    def _first_unhashable_arg_type(args: tuple, kwargs: dict) -> str:
-        """Return the qualname of the first non-built-in arg type, or '<unknown>'.
+    def _first_unhashable_arg_type(self, args: tuple, kwargs: dict) -> str:
+        """Return the qualname of the argument that could not be hashed, or '<unknown>'.
 
         Used to attribute CashCacheIneffectiveWarning to a concrete type name
-        so the user knows which register_hasher() call to add. Skips strings,
-        ints, floats, bools, None, lists, dicts, tuples, sets - they're
-        always picklable, so they're never the culprit. The first non-builtin
-        wins; this is heuristic but matches the most common single-bad-arg
-        case.
+        so the user knows which register_hasher() call to add. See
+        `_first_unhashable_arg` for how the argument is found.
         """
-        suspect = Cash._first_unhashable_arg(args, kwargs)
+        suspect = self._first_unhashable_arg(args, kwargs)
         return "<unknown>" if suspect is _NO_SUSPECT else type(suspect).__qualname__
 
-    @staticmethod
-    def _first_unhashable_arg(args: tuple, kwargs: dict) -> Any:
-        """The value `_first_unhashable_arg_type` names, or ``_NO_SUSPECT``."""
+    def _first_unhashable_arg(self, args: tuple, kwargs: dict) -> Any:
+        """The argument that could not be hashed, or ``_NO_SUSPECT``.
+
+        Each candidate is hashed ALONE and the first that fails is named. It
+        used to be simply the first argument of a non-built-in type, so
+        ``score(df, lambda d: d * 2)`` blamed the DataFrame and advised a
+        DataFrame hasher -- which cash rejects, and which with override=True
+        would re-key every DataFrame function -- while the lambda was the
+        culprit (round 18). This runs only on the failure path. Strings,
+        numbers, None and built-in containers are skipped: a scalar always
+        hashes, and a container holding the culprit is reported as "nested",
+        which says more than naming the list. When no single candidate fails
+        on its own, the first non-built-in is the best remaining guess.
+        """
         BUILTIN_OK = (str, int, float, bool, type(None), bytes, list, dict, tuple, set, frozenset)
-        for a in (*args, *kwargs.values()):
-            if not isinstance(a, BUILTIN_OK):
-                return a
-        return _NO_SUSPECT
+        candidates = [a for a in (*args, *kwargs.values()) if not isinstance(a, BUILTIN_OK)]
+        for candidate in candidates:
+            try:
+                self._hash_arg_payload((candidate,), {})
+            except Exception:  # noqa: BLE001 - exactly what we are looking for
+                return candidate
+        return candidates[0] if candidates else _NO_SUSPECT
 
     def _try_get_cached(
         self,

@@ -108,3 +108,41 @@ def test_registering_a_hasher_for_an_ordinary_type_is_silent(c):
         warnings.simplefilter("always")
         c.register_hasher(Session, lambda s: "one")
     assert not _messages(rec, "KEY-CALLABLE-HASHER")
+
+
+# ---------------------------------------------------------------------------
+# Round 18 (r18s5, F4): the argument NAMED was the first one of a non-built-in
+# type, not the one that failed. `score(df, lambda d: ...)` blamed the
+# DataFrame and advised a DataFrame hasher -- rejected by cash, and with
+# override=True a re-key of every DataFrame function -- while the lambda was
+# the culprit. Each candidate is now hashed on its own.
+# ---------------------------------------------------------------------------
+
+def test_a_frame_next_to_a_lambda_blames_the_lambda(c):
+    pd = pytest.importorskip("pandas")
+
+    @c.cache
+    def score(df, fn):
+        return float(fn(df).sum().sum())
+
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        score(pd.DataFrame({"a": [1, 2]}), lambda d: d * 2)
+    found = _messages(rec, "KEY-UNHASHABLE-ARG")
+    assert found
+    assert "of type function" in found[0]
+    assert "DataFrame" not in found[0]
+
+
+def test_an_unpicklable_object_after_a_frame_is_named(c):
+    pd = pytest.importorskip("pandas")
+
+    @c.cache
+    def use(df, session):
+        return len(df)
+
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        use(pd.DataFrame({"a": [1]}), Session())
+    found = _messages(rec, "KEY-UNHASHABLE-ARG")
+    assert found and "of type Session" in found[0]
