@@ -390,7 +390,7 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @18066963, cash/core.py:Cash._fold_dependency_read_globals @fbbbd0b2 -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @2037320a, cash/core.py:Cash._fold_dependency_read_globals @fbbbd0b2 -->
 Only globals that are **read** participate — and that includes globals read
 on someone else's behalf: by a **helper**, so a helper returning a module-level
 `CONFIG` invalidates its caller when that config changes, and by another
@@ -420,6 +420,19 @@ normally.
 
 The same rule applies to variables a closure captures, not just module
 globals.
+
+<!-- claim: cash/core.py:Cash._carried_global_hash @6bd504f4 -->
+**A callable built from data counts as that data.** A global that is a
+library callable carrying values — `SMOOTH = partial(ndimage.gaussian_filter,
+sigma=SIGMA)`, `POLY = np.poly1d(COEFFS)`, `CAL = interp1d(X, Y)`,
+`LOOKUP = RATES.get`, `PREDICT = model.predict` — is keyed by what it was built
+with, so editing `SIGMA` or the table recomputes, whether you import the
+name or read it as `cfg.SMOOTH`. A callable wrapping *your* code is followed
+as a helper instead. A bound write or log method (`record = RESULTS.append`,
+`log = logger.info`) is left out: what its object holds is the call's output.
+Some library callables change when called — a bound `rng.normal` advances its
+generator, `np.vectorize` fills a cache — and cash stops keying those after
+the first call that changes them, which costs one extra miss in that process.
 
 Globals read inside a nested scope count too. A generator expression or
 `lambda` always compiles to its own code object, and detection recurses into

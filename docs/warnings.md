@@ -663,7 +663,7 @@ moved — which means calling the function is what moves it. The message names t
 variable and says whether it is a module global or a variable captured from an
 enclosing scope.
 
-<!-- claim: cash/core.py:Cash._learn_mutating_captures @367b8947 -->
+<!-- claim: cash/core.py:Cash._learn_mutating_captures @7b9aaf25 -->
 **Why it matters.** Two things follow, and neither is visible at the call site.
 A cache hit runs no body, so the write stops happening: a counter stops
 counting, an accumulator stops accumulating, and code that reads the variable
@@ -1173,7 +1173,7 @@ whole function's caching, not just the calls that rely on the default.
 
 ## KEY-UNHASHABLE-GLOBAL {#key-unhashable-global}
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @18066963 -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @2037320a -->
 **What happened.** The function reads a module-level variable — its own
 module's, or a helper's, in which case the message shows a dotted name — and
 Cash could not fingerprint that variable's value. Cash normally folds the

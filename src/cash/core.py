@@ -95,6 +95,11 @@ _UNHASHABLE_GLOBAL_FIX = (
     "part the result actually depends on -- a URL, a connection string -- "
     "instead of the live object."
 )
+#: A logger's methods, bound into a global (`log = logger.info`): output sinks,
+#: never keyed as what the callable carries (`Cash._carried_global_hash`).
+_LOG_METHOD_NAMES = frozenset({
+    "debug", "info", "warning", "warn", "error", "exception", "critical", "log",
+})
 _STORE_FAILED_FIX = (
     "read the exception: a full disk, a cache_dir you cannot write to, or a "
     "value that cannot be pickled -- return the data, not the handle that "
@@ -1389,6 +1394,7 @@ class Cash:
         # _read_module_attr_pairs.
         self._module_attr_cache: dict = {}
         self._local_binding_cache: dict[Any, tuple | None] = {}
+        self._carrier_verdicts: dict[int, tuple[Any, bool]] = {}
         # (first_param, self_attrs, uses_super) per code object; see
         # _analyze_method_self_deps.
         self._method_self_dep_cache: dict = {}
@@ -5854,6 +5860,7 @@ class Cash:
         # exactly the case it exists for.
         parts: list[tuple[str, str]] = []
         own_pkg = self._own_package(func)
+        root_module = getattr(func, "__module__", None)
         code = getattr(func, "__code__", None)
         # A missing provisional entry means "unknown", not "none" -- watch every
         # folded name rather than fold one blind (see `_read_global_data_names`).
@@ -5882,6 +5889,10 @@ class Cash:
             if isinstance(v, types.ModuleType) or isinstance(v, type):
                 continue
             if callable(v) and not isinstance(v, (dict, list, tuple, set)):
+                carried = self._carried_global_hash(v, root_module)
+                if carried is not None:
+                    parts.append((f"{name}#carried", carried))
+                    watch[name] = (carried, "carrier", (g, name))
                 continue
             try:
                 stabilized = self._stabilize_for_global_hash(v, self._hash_callable_source)
@@ -5914,8 +5925,9 @@ class Cash:
                     for cname, chash in self._instance_class_source_parts(
                             item, own_pkg=own_pkg):
                         parts.append((f"{name}#cls:{cname}", chash))
+        parts.extend(self._module_attr_parts(
+            func, func_name, g, learned=learned_mutating, watch=watch))
         self._pending_capture_watch.update(watch)
-        parts.extend(self._module_attr_parts(func, func_name, g))
         parts.extend(self._local_binding_parts(func))
         if not parts:
             return state_hash
@@ -6055,6 +6067,79 @@ class Cash:
             return self._hash_arg_payload((stabilized,), {})
         except Exception:  # noqa: BLE001 - never break a call over this
             return None
+
+    def _carried_global_hash(self, value: Any, root_module: str | None) -> str | None:
+        """Hash of the data a LIBRARY-made callable carries, or None.
+
+        ``SMOOTH = partial(ndimage.gaussian_filter, sigma=SIGMA)``, ``POLY =
+        np.poly1d(COEFFS)``, ``CAL = interp1d(X, Y)``, ``LOOKUP = RATES.get``:
+        the code is a library's, so the helper walk does not follow it, and
+        what it was built with reached no channel -- editing SIGMA served the
+        old result (round 19). The same partial passed as an argument was
+        keyed all along.
+
+        None for what another channel keys or what carries no data: a
+        function, a class, a module, a mock, a cached function, a method of a
+        class or module, a C object without a ``__dict__`` (``np.add``), and
+        any callable that runs USER code, whose binding the helper walk notes
+        and `_carried_state_digest` keys.
+
+        Some of these change when called -- a bound ``rng.normal`` advances
+        its generator, ``np.vectorize`` fills a cache -- so every one is
+        watched by `_learn_mutating_captures`, which stops folding it after
+        the first call that moved it (one extra miss, no warning: the user
+        did not write the mutation).
+        """
+        if (isinstance(value, (type, types.ModuleType, types.FunctionType))
+                or is_mock(value)):
+            return None
+        # Whether it runs user code, and whether it could be hashed at all,
+        # are decided once per object: the user-code test resolves file paths,
+        # which cost more than the hash (a logger's `.info` hit went 45 -> 250
+        # microseconds without this).
+        verdict = self._carrier_verdicts.get(id(value))
+        if verdict is not None and verdict[0] is value and not verdict[1]:
+            return None
+        try:
+            if getattr(value, "_cash_cached", False):
+                return None
+            if isinstance(value, functools.partial):
+                payload: Any = ("partial", value.func, value.args, dict(value.keywords))
+            elif isinstance(value, (types.MethodType, types.BuiltinMethodType)):
+                owner = getattr(value, "__self__", None)
+                if owner is None or isinstance(owner, (type, types.ModuleType)):
+                    return None
+                method = getattr(value, "__name__", "")
+                from cash.notebook.purity import _WRITE_METHODS
+                if method in _WRITE_METHODS or method in _LOG_METHOD_NAMES:
+                    # `record = RESULTS.append`, `log = logger.info`: what the
+                    # owner holds is the call's OUTPUT, not an input.
+                    return None
+                payload = ("method", method, owner)
+            else:
+                state = getattr(value, "__dict__", None)
+                if not isinstance(state, dict) or not state:
+                    return None
+                cls = type(value)
+                payload = ("instance", cls.__module__, cls.__qualname__, state)
+            if verdict is None:
+                from .purity_analyzer import _own_code_is_user, callable_layers
+                runs_user_code = any(
+                    _own_code_is_user(layer, root_module) for layer in callable_layers(value))
+                self._note_carrier_verdict(value, not runs_user_code)
+                if runs_user_code:
+                    return None
+            stabilized = self._stabilize_for_global_hash(payload, self._hash_callable_source)
+            return self._hash_arg_payload((stabilized,), {})
+        except Exception:  # noqa: BLE001 - unkeyable before, never break a call over it
+            self._note_carrier_verdict(value, False)
+            return None
+
+    def _note_carrier_verdict(self, value: Any, keyable: bool) -> None:
+        # Holds the object, so its id cannot be reused while the entry stands.
+        if len(self._carrier_verdicts) >= 4096:
+            self._carrier_verdicts.clear()
+        self._carrier_verdicts[id(value)] = (value, keyable)
 
     def _decorator_global_names(self, fn: Callable) -> tuple[str, ...]:
         """Names the decorator expressions on *fn*'s ``def`` read from its module.
@@ -6452,6 +6537,7 @@ class Cash:
 
     def _module_attr_parts(
         self, func: Callable, func_name: str, g: dict,
+        *, learned: frozenset | set = frozenset(), watch: dict | None = None,
     ) -> list[tuple[str, str]]:
         """Key parts for ``module.ATTR`` data reads, one level of recursion deep.
 
@@ -6464,7 +6550,11 @@ class Cash:
           fold the data globals the callee reads from its own module too.
 
         Callables, classes and nested modules are skipped as data (the first is
-        handled by the helper channel, the others carry no editable value).
+        handled by the helper channel, the others carry no editable value) --
+        except what a library-made callable was built with (``conf.SMOOTH =
+        partial(gaussian_filter, sigma=...)``), which is folded when *watch*
+        is given, so the drift guard can see it too (`_carried_global_hash`).
+        *learned* is the drift guard's verdict: labels not to fold.
         """
         parts: list[tuple[str, str]] = []
         own_pkg = self._own_package(func)
@@ -6492,6 +6582,12 @@ class Cash:
                 # module-level helper's own constants here.
                 if not is_mod:
                     continue
+                if watch is not None and label not in learned:
+                    carried = self._carried_global_hash(value, getattr(func, "__module__", None))
+                    if carried is not None:
+                        parts.append((f"{label}#carried", carried))
+                        watch[label] = (carried, "carrier", (vars(obj), attr))
+                        continue
                 # One level only: fold the constants the helper itself reads.
                 # Deeper recursion would drag in whole transitive namespaces for
                 # a diminishing chance of catching a real edit.
@@ -8112,6 +8208,12 @@ class Cash:
                     if cell is None:
                         continue
                     after = self._hash_arg_payload((cell.cell_contents,), {})
+                elif scope == "carrier":
+                    mapping, key = owner
+                    if key not in mapping:
+                        continue
+                    after = self._carried_global_hash(
+                        mapping[key], getattr(func, "__module__", None))
                 else:
                     # The mapping the BEFORE hash came from -- a helper's
                     # module, when this entry was folded on a helper's behalf.
@@ -8124,6 +8226,13 @@ class Cash:
             except Exception:  # noqa: BLE001 - unhashable NOW; treat as unchanged
                 continue
             if after == before:
+                continue
+            if scope == "carrier":
+                # The library's own state (a generator advanced, a cache
+                # filled), not a mutation the user wrote: stop folding it.
+                self._mutating_globals.setdefault((code, "global"), set()).add(name)
+                logger.debug("[CORE] %s: stopped keying what %s carries; calling "
+                             "it changes it", func_name, name)
                 continue
             self._mutating_globals.setdefault((code, scope), set()).add(name)
             where = ("variable it captures" if scope == "closure"
