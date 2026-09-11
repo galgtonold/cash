@@ -231,6 +231,75 @@ def _is_cash_internal(path: str) -> bool:
     return absolute.startswith(dirs)
 
 
+#: ``code -> files read while a frame of it was on the stack``, process-wide.
+#: A memo (``functools.lru_cache``, a module dict) hands a later call the
+#: product of an earlier read, and the later call reads nothing -- so its entry
+#: recorded no file and kept serving after the file changed (round 19). What a
+#: helper read once is what `credited_reads` answers when a call reaches it
+#: again. A code past `_READS_PER_CODE_MAX` files is marked ``None``: it reads
+#: per argument, and every file it ever read is no one call's dependency.
+_READS_BY_CODE: dict[Any, set[str] | None] = {}
+_READS_BY_CODE_MAX = 4096
+_READS_PER_CODE_MAX = 16
+_CASH_PACKAGE_DIR = os.path.normcase(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_LIBRARY_ROOTS: tuple[str, ...] | None = None
+_FILE_IS_USER: dict[str, bool] = {}
+
+
+def _is_user_file(filename: str) -> bool:
+    """Is *filename* code outside cash, the standard library and site-packages?"""
+    verdict = _FILE_IS_USER.get(filename)
+    if verdict is not None:
+        return verdict
+    global _LIBRARY_ROOTS
+    if _LIBRARY_ROOTS is None:
+        import sysconfig
+        roots = {os.path.normcase(os.path.abspath(p)) for key, p in sysconfig.get_paths().items()
+                 if key in ("stdlib", "platstdlib", "purelib", "platlib") and p}
+        roots.add(_CASH_PACKAGE_DIR)
+        _LIBRARY_ROOTS = tuple(sorted(roots))
+    norm = os.path.normcase(os.path.abspath(filename)) if filename and not filename.startswith("<") else ""
+    verdict = bool(norm) and not norm.startswith(_LIBRARY_ROOTS) and "site-packages" not in norm
+    if len(_FILE_IS_USER) < 8192:
+        _FILE_IS_USER[filename] = verdict
+    return verdict
+
+
+def _credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
+    """Credit a read to the user code on the stack, up to the cached call."""
+    try:
+        frame = sys._getframe(1)
+    except ValueError:
+        return
+    depth = 0
+    while frame is not None and depth < 64:
+        code = frame.f_code
+        filename = code.co_filename
+        if os.path.normcase(filename).endswith(os.path.join("cash", "core.py")) and \
+                os.path.normcase(filename).startswith(_CASH_PACKAGE_DIR):
+            break                    # the cached call's own wrapper: the walk ends
+        if _is_user_file(filename):
+            tracker._note_reading_code(code)
+            reads = _READS_BY_CODE.get(code, ())
+            if reads is not None and abs_path not in reads:
+                if code not in _READS_BY_CODE:
+                    if len(_READS_BY_CODE) >= _READS_BY_CODE_MAX:
+                        frame, depth = frame.f_back, depth + 1
+                        continue
+                    reads = _READS_BY_CODE[code] = set()
+                if len(reads) >= _READS_PER_CODE_MAX:
+                    _READS_BY_CODE[code] = None
+                else:
+                    reads.add(abs_path)
+        frame, depth = frame.f_back, depth + 1
+
+
+def credited_reads(code: Any) -> set[str] | None:
+    """Files read while *code* was on the stack; None when it reads per argument."""
+    reads = _READS_BY_CODE.get(code, ())
+    return None if reads is None else set(reads)
+
+
 def _dispatch_track(path: Any) -> None:
     """Module-level tracker-dispatching shim. Custom handler factories
     registered via :func:`cash.register_file_handler` receive this as
@@ -741,6 +810,9 @@ class FileAccessTracker:
         # FileAccessTracker()` nesting stays isolated by default.
         self._propagate_to_parent = propagate_to_parent
         self._parent_stack: list[Optional["FileAccessTracker"]] = []
+        # The user code that read a file in THIS block (see
+        # `_credit_read_to_stack`): its recorded reads are live, not remembered.
+        self.reading_codes: set[Any] = set()
 
     def __enter__(self):
         # Install permanent dispatcher patches. Each (module/dict, name)
@@ -841,6 +913,10 @@ class FileAccessTracker:
             logger.debug("[TRACKER] Ignoring cash-internal read %r", abs_path)
             return
         self._add_tracked(abs_path)
+        try:
+            _credit_read_to_stack(abs_path, self)
+        except Exception:  # noqa: BLE001 - attribution is an aid; the read counts regardless
+            logger.debug("[TRACKER] Could not credit %r to the stack", abs_path, exc_info=True)
         # a RELATIVE read path also records the UN-resolved relative
         # string as its own dependency. The realpath above is frozen to the cwd
         # at track time, so after an ``os.chdir`` edit it still looks fresh even
@@ -887,6 +963,14 @@ class FileAccessTracker:
         parent = self._parent_stack[-1] if self._parent_stack else None
         if parent is not None and parent is not self:
             parent._add_tracked(abs_path)
+
+    def _note_reading_code(self, code: Any) -> None:
+        self.reading_codes.add(code)
+        if not self._propagate_to_parent:
+            return
+        parent = self._parent_stack[-1] if self._parent_stack else None
+        if parent is not None and parent is not self:
+            parent._note_reading_code(code)
 
     def _track_absent(self, path) -> None:
         """Record *path* as looked-for-and-missing.

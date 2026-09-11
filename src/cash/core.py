@@ -3758,6 +3758,7 @@ class Cash:
                 self._check_argument_mutation(
                     func_name, args, kwargs, args_hash, observer)
                 self._report_observed_effects(func_name, observer)
+                self._credit_remembered_reads(func_name, tracker, args, kwargs)
                 auto_file_deps = self._snapshot_tracked_deps(tracker, func.__module__)
 
                 # Non-iterator return: existing single-blob path.
@@ -3949,6 +3950,7 @@ class Cash:
                 self._check_argument_mutation(
                     func_name, args, kwargs, args_hash, observer)
                 self._report_observed_effects(func_name, observer)
+                self._credit_remembered_reads(func_name, tracker, args, kwargs)
                 auto_file_deps = self._snapshot_tracked_deps(tracker, func.__module__)
 
                 # Non-iterator return: single-blob path (unchanged).
@@ -7704,6 +7706,64 @@ class Cash:
                     stack.append((dep, self.functions[dep]))
         return found
 
+    def _credit_remembered_reads(self, func_name: str, tracker: Any,
+                                 args: tuple, kwargs: dict) -> None:
+        """Add the files a helper read in an EARLIER call to this call's inputs.
+
+        A parse memoised with ``functools.lru_cache`` or a module dict: the
+        first cached consumer read the file and recorded it; the second got
+        the memoised rows, read nothing, and stored ``file_deps: None`` -- so
+        after the file changed it kept serving the old total (round 19).
+
+        For each function this call's code reaches that did NOT read a file in
+        this call, its remembered files are added (`credited_reads`). A memo
+        keyed by a path the call was given (``parse(path)``) adds only that
+        path when it is among them; a memo of a fixed file adds what it read.
+        The cached function's own history is left out -- it is per argument --
+        and so is a function that read too many files to attribute.
+        """
+        from cash.notebook.file_tracker import credited_reads
+        func = self.functions.get(func_name)
+        if func is None or tracker is None:
+            return
+        live = getattr(tracker, "reading_codes", set())
+        own = getattr(func, "__code__", None)
+        have = tracker.get_accessed_files()
+        arg_paths: set[str] | None = None
+        for fn in self._code_functions(func, func_name):
+            code = getattr(fn, "__code__", None)
+            if code is None or code is own or code in live:
+                continue
+            remembered = credited_reads(code)
+            if not remembered or remembered <= have:
+                continue
+            if arg_paths is None:
+                arg_paths = self._argument_paths(args, kwargs)
+            # Chosen BEFORE what is already tracked is taken away: `have` grows
+            # as files are added, and a remainder that misses the arguments
+            # would read as a memo of a fixed file.
+            chosen = (remembered & arg_paths) or remembered
+            for path in sorted(chosen - have):
+                tracker._add_tracked(path)
+
+    @staticmethod
+    def _argument_paths(args: tuple, kwargs: dict) -> set[str]:
+        """The resolved paths among a call's arguments, one container deep."""
+        from cash.utils import normalize_path
+        values: list[Any] = [*args, *kwargs.values()]
+        for value in list(values):
+            if isinstance(value, (list, tuple)) and len(value) <= 64:
+                values.extend(value)
+        found: set[str] = set()
+        for value in values:
+            if isinstance(value, os.PathLike) or (
+                    isinstance(value, str) and 0 < len(value) < 1024 and "\n" not in value):
+                try:
+                    found.add(normalize_path(os.path.realpath(os.fspath(value))))
+                except (TypeError, ValueError, OSError):
+                    continue
+        return found
+
     def _code_moved_since_keyed(self, func: Callable, func_name: str) -> bool:
         """Did a file this call's code came from change after its key was read?
 
@@ -8669,6 +8729,7 @@ class Cash:
 
             self._check_argument_mutation(func_name, args, kwargs, args_hash, observer)
             self._report_observed_effects(func_name, observer)
+            self._credit_remembered_reads(func_name, tracker, args, kwargs)
             auto_file_deps = self._snapshot_tracked_deps(tracker, code_module)
 
             if chunk_index == 0:

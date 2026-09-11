@@ -392,6 +392,19 @@ to a `ThreadPoolExecutor`, or name the file with `file_depends_on=`. A
 *process* pool's reads happen in another process and are not seen either —
 `file_depends_on=` again.
 
+<!-- claim: cash/core.py:Cash._credit_remembered_reads @883260d2, cash/notebook/file_tracker.py:_credit_read_to_stack @58e9c25c -->
+A read your code **memoises** counts for every call that uses it. With
+`parse = functools.lru_cache()(parse_csv)` — or a module-level dict of parsed
+files — only the first cached function to call `parse(path)` actually opens
+the file; the next one gets the stored rows and reads nothing. cash remembers
+which of your functions read which file, and when a later call reaches one of
+them without it reading, adds what it read then — just `path`, when the memo is
+keyed by a path this call was given. Before 0.10.1 the second consumer recorded
+no file at all and kept its result after the file changed. Two limits: a memo
+filled before any cached call ran (at import, say) was never seen reading, and a
+helper that has read more than 16 different files is taken to read per argument
+and is not attributed — name those files with `file_depends_on=`.
+
 ### Module globals a function reads
 
 A cached function that reads a module-level global — a config constant, a
