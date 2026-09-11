@@ -24,7 +24,7 @@ directives. The rendered reference is at
 offline, `help(cash.Cash)` prints the same text. The two signatures you
 reach for most:
 
-<!-- claim: cash/core.py:Cash.__init__ @27ee7307, cash/core.py:Cash.cache @2431dc44 -->
+<!-- claim: cash/core.py:Cash.__init__ @73c3d45e, cash/core.py:Cash.cache @2431dc44 -->
 ```text
 Cash(backend=None, cache_dir=None, backends=None, compress=None,
      register_magic=None, debug=None, use_locking=False, config_path=None,

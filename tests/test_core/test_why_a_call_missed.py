@@ -265,3 +265,74 @@ def test_explain_gives_the_entry_id_cash_clear_takes(c, tmp_path):
         capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert e.entry_id in listing.stdout, listing.stdout + listing.stderr
     assert "reads:" in listing.stdout and data.name in listing.stdout
+
+
+# -- round 19: reasons that crossed a process boundary -------------------------
+
+_MODE_JOB = textwrap.dedent("""
+    import sys, time
+    import cash
+
+    @cash.cache(assume_safe=True)
+    def step(mode):
+        if mode == "slow":
+            time.sleep(0.2)
+        return mode
+
+    step(sys.argv[1] if len(sys.argv) > 1 else "fast")
+""")
+
+
+def _calls(tmp_path, body, *args):
+    script = tmp_path / "job.py"
+    script.write_text(body, encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
+    env.update(CASH_CACHE_DIR=str(tmp_path / ".cash"), CASH_VERBOSE="1")
+    p = subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True,
+                       cwd=str(tmp_path), env=env, encoding="utf-8", errors="replace")
+    assert p.returncode == 0, p.stderr[-2000:]
+    return [line for line in p.stderr.splitlines() if "cash.calls:" in line]
+
+
+def test_a_result_the_last_run_kept_in_ram_says_so_next_run(tmp_path):
+    """The stored-key record held persisted keys only, so the next run's miss
+    for the same call read "new arguments: not seen in the last run", run
+    after run."""
+    _calls(tmp_path, _MODE_JOB, "slow")
+    _calls(tmp_path, _MODE_JOB, "fast")
+    third = _calls(tmp_path, _MODE_JOB, "fast")
+    assert len(third) == 1
+    assert "kept it in RAM only" in third[0], third[0]
+    assert "new arguments" not in third[0]
+
+
+def test_after_a_code_edit_every_call_of_a_loop_says_the_code_changed(tmp_path):
+    """Only the first call did: the rest were compared with the call before
+    them in this process, whose key had the new state too, and blamed their
+    arguments."""
+    body = textwrap.dedent("""
+        import time
+        import cash
+
+        OFFSET = {k}
+
+        @cash.cache(assume_safe=True)
+        def f(x):
+            time.sleep(0.12)
+            return x + OFFSET
+
+        print([f(x) for x in range(3)])
+    """)
+    _calls(tmp_path, body.format(k=2))
+    lines = _calls(tmp_path, body.format(k=3))
+    assert len(lines) == 3
+    assert all("code or state changed" in line for line in lines), "\n".join(lines)
+
+
+def test_the_per_call_line_gives_the_body_s_time_beside_the_floor(tmp_path):
+    """The floor is judged on the body; the line showed the whole call's time,
+    so "ran 0.20s ... under the 0.1s persistence floor" read as a
+    contradiction."""
+    lines = _calls(tmp_path, _MODE_JOB, "fast")
+    assert "under the 0.1s persistence floor" in lines[0]
+    assert "(ran 0.00s" in lines[0], lines[0]

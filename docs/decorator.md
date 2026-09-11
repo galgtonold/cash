@@ -197,11 +197,17 @@ The id in brackets is the one `cash inspect --function` lists and
 `CASH_VERBOSE=1` or `verbose = true` give these lines without the other debug
 records.
 
+<!-- claim: cash/core.py:Cash._absent_entry_reason @8f62826d, cash/core.py:Cash._remember_ram_only @17341e53 -->
 A reason is not limited to what this process saw: each function's recently
 stored keys are recorded beside the cache (in `.keys/`), so the first call of a
 new run can still say that the code changed, that the arguments are new, that
 an earlier run's entry expired under its `ttl`, or that it was evicted or
-cleared.
+cleared. Results a run kept in RAM only are recorded there too, when it exits,
+so the next run says `not stored last time: an earlier run computed it but kept
+it in RAM only (under the 0.1s persistence floor)` instead of calling the same
+arguments new. After a code edit, every call whose arguments an earlier run
+stored says `code or state changed`, not just the first. The time in brackets
+is the body's own, the number the persistence floor is judged on.
 
 With `CASH_DEBUG` they come with cash's other debug records. If your program configures `logging`
 itself, those records go to your handlers in your format instead, and no
@@ -742,7 +748,7 @@ After the TTL elapses, the next call recomputes and replaces the entry.
 Entries whose calls never come back stay on disk until you reclaim them —
 call `cash.cleanup()`, or run `python -m cash clear` from the CLI.
 
-<!-- claim: cash/core.py:Cash._entry_ttl @3cf07e88, cash/core.py:Cash._absent_entry_reason @f887e2ad -->
+<!-- claim: cash/core.py:Cash._entry_ttl @3cf07e88, cash/core.py:Cash._absent_entry_reason @8f62826d -->
 An entry remembers the `ttl` it was written with, and the decorator's
 current `ttl` applies too, so the **shorter** of the two wins. Lengthening
 `ttl=60` to `ttl=3600` does not rescue entries already written under 60 s:

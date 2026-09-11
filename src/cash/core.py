@@ -1421,6 +1421,9 @@ class Cash:
         self._module_attr_cache: dict = {}
         self._local_binding_cache: dict[Any, tuple | None] = {}
         self._carrier_verdicts: dict[int, tuple[Any, bool]] = {}
+        self._stored_doc_memo: dict[str, tuple[tuple[int, int], dict]] = {}
+        self._ram_only_pending: dict[str, dict[str, list]] = {}
+        self._ram_only_lock = threading.Lock()
         # (first_param, self_attrs, uses_super) per code object; see
         # _analyze_method_self_deps.
         self._method_self_dep_cache: dict = {}
@@ -3216,16 +3219,34 @@ class Cash:
                                "evicted or cleared")
         previous = self._last_key.get(func_name)
         since = "since the last call"
+        doc = self._stored_doc(func_name)
+        record = doc["keys"]
+        if cache_key in record:
+            stored_at, written_ttl = record[cache_key][:2]
+            age = time.time() - stored_at
+            if written_ttl is not None and age > written_ttl:
+                return MISS_TTL, (f"stored {age:.0f}s ago by an earlier run, "
+                                  f"with ttl={written_ttl}s")
+            return MISS_GONE, ("an earlier run stored it; it has since been "
+                               "evicted or cleared")
+        if cache_key in doc["ram_only"]:
+            why = doc["ram_only"][cache_key][1]
+            return MISS_NOT_STORED, (f"an earlier run computed it but kept it in "
+                                     f"RAM only ({why}), so this process recomputed it")
+        # The same arguments stored under another state: the code or a value
+        # it reads changed. Asked of the record BEFORE the call-to-call
+        # comparison, which after a code edit blamed "new arguments" on every
+        # call of a loop but the first (round 19).
+        new_parts = cache_key.rsplit(":", 3)
+        if len(new_parts) == 4:
+            for key in reversed([*record, *doc["ram_only"]]):
+                old_parts = key.rsplit(":", 3)
+                if (len(old_parts) == 4 and old_parts[2:] == new_parts[2:]
+                        and old_parts[1] != new_parts[1]):
+                    return MISS_CODE, ("the function's code, a helper it calls, or a "
+                                       "value it reads changed since an earlier run "
+                                       "stored it")
         if previous is None or previous == cache_key:
-            record = self._stored_keys(func_name)
-            if cache_key in record:
-                stored_at, written_ttl = record[cache_key]
-                age = time.time() - stored_at
-                if written_ttl is not None and age > written_ttl:
-                    return MISS_TTL, (f"stored {age:.0f}s ago by an earlier run, "
-                                      f"with ttl={written_ttl}s")
-                return MISS_GONE, ("an earlier run stored it; it has since been "
-                                   "evicted or cleared")
             others = [key for key in record if key != cache_key]
             if previous is None and others:
                 previous = others[-1]
@@ -3302,12 +3323,26 @@ class Cash:
                 return os.path.join(path, ".keys", f"{name}.json")
         return None
 
-    def _stored_keys(self, func_name: str) -> dict[str, list]:
-        """``{cache_key: [stored_at, ttl]}`` earlier runs recorded, oldest first."""
+    def _stored_doc(self, func_name: str) -> dict[str, dict[str, list]]:
+        """What earlier runs recorded for *func_name*, oldest first per kind.
+
+        ``keys``: ``{cache_key: [stored_at, ttl]}`` for results that reached
+        disk. ``ram_only``: ``{cache_key: [computed_at, why]}`` for results a
+        run computed and kept in RAM only (see `_remember_ram_only`). Read
+        through a memo on the file's (mtime, size), because every miss asks.
+        """
+        empty: dict[str, dict[str, list]] = {"keys": {}, "ram_only": {}}
         path = self._stored_keys_path(func_name)
         if path is None:
-            return {}
+            return empty
         from cash.notebook.file_tracker import untracked
+        try:
+            st = os.stat(path)
+        except OSError:
+            return empty
+        memo = self._stored_doc_memo.get(path)
+        if memo is not None and memo[0] == (st.st_mtime_ns, st.st_size):
+            return {kind: dict(value) for kind, value in memo[1].items()}
         try:
             # Cash's own bookkeeping: a nested call reads this while the OUTER
             # call's file tracker is live, and it must not become that entry's
@@ -3315,9 +3350,70 @@ class Cash:
             with untracked(), open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
         except (OSError, ValueError):
-            return {}
-        keys = data.get("keys") if isinstance(data, dict) else None
-        return keys if isinstance(keys, dict) else {}
+            return empty
+        doc = {}
+        for kind in ("keys", "ram_only"):
+            value = data.get(kind) if isinstance(data, dict) else None
+            doc[kind] = value if isinstance(value, dict) else {}
+        if len(self._stored_doc_memo) >= 256:
+            self._stored_doc_memo.clear()
+        self._stored_doc_memo[path] = ((st.st_mtime_ns, st.st_size), doc)
+        return {kind: dict(value) for kind, value in doc.items()}
+
+    def _stored_keys(self, func_name: str) -> dict[str, list]:
+        """``{cache_key: [stored_at, ttl]}`` earlier runs recorded, oldest first."""
+        return self._stored_doc(func_name)["keys"]
+
+    def _write_stored_doc(self, func_name: str, doc: dict[str, dict[str, list]]) -> None:
+        """Replace the record for *func_name*. Raises; callers swallow."""
+        path = self._stored_keys_path(func_name)
+        if path is None:
+            return
+        for kind in ("keys", "ram_only"):
+            entries = doc.setdefault(kind, {})
+            while len(entries) > self._STORED_KEYS_MAX:
+                entries.pop(next(iter(entries)))
+        from cash.backends.file_backend import recreate_cache_dir
+        from cash.notebook.file_tracker import untracked
+        keys_dir = os.path.dirname(path)
+        recreate_cache_dir(os.path.dirname(keys_dir))
+        os.makedirs(keys_dir, exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        with untracked():
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"func": func_name, **doc}, fh)
+            os.replace(tmp, path)
+
+    def _remember_ram_only(self, func_name: str, cache_key: str, why: str) -> None:
+        """Note a result this process kept in RAM only, for the NEXT run's reason.
+
+        Without it the next run's miss read "new arguments: not seen in the
+        last run" although the last run was called with exactly these (round
+        19, 4 of 5 testers). Buffered and written once, at shutdown: a result
+        kept in RAM is by definition a quick one, and rewriting the record per
+        miss would cost more than the body.
+        """
+        with self._ram_only_lock:
+            pending = self._ram_only_pending.setdefault(func_name, {})
+            pending.pop(cache_key, None)
+            pending[cache_key] = [time.time(), why]
+            while len(pending) > self._STORED_KEYS_MAX:
+                pending.pop(next(iter(pending)))
+
+    def _flush_ram_only_keys(self) -> None:
+        """Write what `_remember_ram_only` buffered. Never raises."""
+        with self._ram_only_lock:
+            pending, self._ram_only_pending = self._ram_only_pending, {}
+        for func_name, entries in pending.items():
+            try:
+                doc = self._stored_doc(func_name)
+                for key, value in entries.items():
+                    doc["keys"].pop(key, None)       # its disk copy is gone: this run recomputed it
+                    doc["ram_only"].pop(key, None)
+                    doc["ram_only"][key] = value
+                self._write_stored_doc(func_name, doc)
+            except Exception:  # noqa: BLE001 - a diagnostic aid
+                logger.debug("could not record RAM-only keys for %s", func_name, exc_info=True)
 
     def _record_stored_key(self, func_name: str, cache_key: str, ttl: int | None) -> None:
         """Remember that *cache_key* reached disk, for the next process's reasons.
@@ -3327,25 +3423,16 @@ class Cash:
         rename; the loser's key is missing from the record, which costs a
         vaguer reason, never a wrong answer. Never raises.
         """
-        path = self._stored_keys_path(func_name)
-        if path is None:
+        if self._stored_keys_path(func_name) is None:
             return
+        with self._ram_only_lock:
+            self._ram_only_pending.get(func_name, {}).pop(cache_key, None)
         try:
-            keys = self._stored_keys(func_name)
-            keys.pop(cache_key, None)
-            keys[cache_key] = [time.time(), ttl]
-            while len(keys) > self._STORED_KEYS_MAX:
-                keys.pop(next(iter(keys)))
-            from cash.backends.file_backend import recreate_cache_dir
-            from cash.notebook.file_tracker import untracked
-            keys_dir = os.path.dirname(path)
-            recreate_cache_dir(os.path.dirname(keys_dir))
-            os.makedirs(keys_dir, exist_ok=True)
-            tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
-            with untracked():
-                with open(tmp, "w", encoding="utf-8") as fh:
-                    json.dump({"func": func_name, "keys": keys}, fh)
-                os.replace(tmp, path)
+            doc = self._stored_doc(func_name)
+            doc["ram_only"].pop(cache_key, None)
+            doc["keys"].pop(cache_key, None)
+            doc["keys"][cache_key] = [time.time(), ttl]
+            self._write_stored_doc(func_name, doc)
         except Exception:  # noqa: BLE001 - a diagnostic aid; the store succeeded
             logger.debug("could not record the stored key for %s", func_name, exc_info=True)
 
@@ -3820,6 +3907,7 @@ class Cash:
                     func_name, cache_hit=False,
                     execution_time=execution_time,
                     args_hash=args_hash, cache_key=cache_key,
+                    body_seconds=body_seconds,
                 )
                 self._note_effectiveness(
                     func_name, cash_overhead,
@@ -4013,6 +4101,7 @@ class Cash:
                     func_name, cache_hit=False,
                     execution_time=execution_time,
                     args_hash=args_hash, cache_key=cache_key,
+                    body_seconds=body_seconds,
                 )
                 self._note_effectiveness(
                     func_name, cash_overhead,
@@ -7551,6 +7640,7 @@ class Cash:
         cache_key: str,
         time_saved: float = 0.0,
         miss_detail: str = "",
+        body_seconds: float | None = None,
     ) -> None:
         """Record a decorator call event for notebook integration.
 
@@ -7571,6 +7661,7 @@ class Cash:
             'func_name': func_name,
             'cache_hit': cache_hit,
             'execution_time': execution_time,
+            'body_seconds': body_seconds,
             'time_saved': time_saved,
             'args_hash': args_hash,
             'cache_key': cache_key,
@@ -7622,7 +7713,11 @@ class Cash:
             return (f"RAISE {name}  {detail}; nothing stored  "
                     f"(ran {entry['execution_time']:.2f}s)")
         line = f"MISS {name}{tag}  {kind}" + (f": {detail}" if detail else "")
-        line += f"  (ran {entry['execution_time']:.2f}s"
+        # The body's own time: the persistence floor named beside it is judged
+        # on that, and the call's time -- key, analysis, lookup -- made "ran
+        # 0.20s ... under the 0.1s floor" read as a contradiction (round 19).
+        ran = entry.get('body_seconds')
+        line += f"  (ran {entry['execution_time'] if ran is None else ran:.2f}s"
         if entry.get('not_stored'):
             line += f"; not stored: {entry['not_stored']}"
         elif entry.get('not_persisted'):
@@ -8653,6 +8748,8 @@ class Cash:
             })
             if not_persisted is None:
                 self._record_stored_key(func_name, cache_key, ttl)
+            else:
+                self._remember_ram_only(func_name, cache_key, not_persisted)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
             self._note_not_stored(cache_key, "the backend refused the write")
             backend_name = type(self.backend).__name__
@@ -9654,4 +9751,6 @@ class Cash:
         """
         backend = getattr(self, '_backend', None)
         if backend is not None:
+            if getattr(self, "_ram_only_pending", None):
+                self._flush_ram_only_keys()
             backend.shutdown()
