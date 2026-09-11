@@ -625,6 +625,40 @@ def _format_issues_summary(func_name: str, issues: list[Any]) -> str:
     return "\n".join(lines)
 
 
+_NETWORK_CALLS = frozenset({"post", "put", "patch", "send", "sendall", "sendto", "publish",
+                            "upload", "upload_file", "upload_fileobj", "put_object"})
+_FILE_WRITE_CALLS = frozenset({"open", "write", "write_bytes", "write_text", "writelines",
+                               "to_csv", "to_excel", "to_json", "to_parquet", "to_pickle",
+                               "save", "savefig", "dump", "makedirs", "mkdir", "remove",
+                               "rename", "replace", "rmdir", "unlink", "copy", "copy2",
+                               "move", "rmtree"})
+
+
+def _static_effect_kinds(report: Any) -> set[str]:
+    """The observed-effect kinds (``EffectObserver``) a static report names.
+
+    So an effect the static warning already listed is not repeated by
+    IMPURE-OBSERVED-EFFECTS, while one of another kind still is. Errs toward
+    NOT covering: an unrecognised call covers nothing.
+    """
+    kinds: set[str] = set()
+    for issue in getattr(report, "issues", ()) or ():
+        description = getattr(issue, "description", "")
+        if "changes the argument" in description:
+            kinds.add("argument mutation")
+        if getattr(issue, "kind", None) != "impure_call":
+            continue
+        name = description.split(" - ", 1)[0].removesuffix("()").split("(", 1)[0]
+        last = name.rsplit(".", 1)[-1]
+        if name.startswith(("subprocess.", "os.system")):
+            kinds.add("subprocess")
+        elif name.startswith("requests.") or last in _NETWORK_CALLS:
+            kinds.add("network")
+        elif last in _FILE_WRITE_CALLS:
+            kinds.add("file write")
+    return kinds
+
+
 def _is_one_shot_iterator(value: Any) -> bool:
     """Return True if *value* is its own iterator (a one-shot consumable).
 
@@ -1636,26 +1670,42 @@ class Cash:
             return Cash._is_user_code_object(wrapped)
         return Cash._is_user_code_object(type(carrier))
 
-    def _warn_unhashable_code_once(self, carrier: Any) -> None:
+    def _warn_unhashable_code_once(self, carrier: Any, func_name: str = "?",
+                                   param: str | None = None) -> None:
         """Tell the user once that a reached type's code is NOT in the key.
 
         "reached", not "passed": the code channel keys off the BOUND arguments,
         so a carrier arriving as a parameter default the caller never typed
         gets here too.
+
+        Names the parameter, the cached function and what the object wraps.
+        Round 18: the text named only the object's type, so an object the
+        user had already covered with depends_on= and a new one nobody had
+        covered printed the same line -- a new hole looked like a handled one.
+        Once per (object, function, parameter) for the same reason.
         """
         name = self._carrier_name(carrier)
-        if name in Cash._WARNED_UNHASHABLE:
+        inner = getattr(carrier, "func", None) or getattr(carrier, "__wrapped__", None)
+        inner_name = (getattr(inner, "__qualname__", None) or getattr(inner, "__name__", None)
+                      if inner is not None else None)
+        mark = (f"{name}:{inner_name}", func_name, param)
+        if mark in Cash._WARNED_UNHASHABLE:
             return
-        Cash._WARNED_UNHASHABLE.add(name)
+        Cash._WARNED_UNHASHABLE.add(mark)
+        where = f"the argument `{param}` of {func_name}" if param else f"a call of {func_name}"
+        wrapping = f", wrapping {inner_name}," if inner_name else ""
         what = (
-            f"{name} reached a cached call as an argument or a parameter "
-            f"default, but its code could not be hashed, so editing it will NOT "
-            f"invalidate the cache."
+            f"{name}{wrapping} reached {where}, but its code could not be "
+            f"hashed, so editing it will NOT invalidate the cache."
         )
+        kind = carrier if isinstance(carrier, type) else type(carrier)
+        kind_name = getattr(kind, "__qualname__", None) or getattr(kind, "__name__", "?")
         fix = (
-            f"name it with @cash.cache(depends_on=[...]) if the result depends "
-            f"on its implementation, or record that it does not with "
-            f"cash.mark_opaque({name})."
+            f"name what it runs with @cash.cache(depends_on=[...]) if the result "
+            f"depends on its implementation, or pass it in a form cash can read "
+            f"(a plain function and keyword arguments). cash.mark_opaque({kind_name}) "
+            f"records that the code does not matter -- for every {kind_name} in "
+            f"the process, including ones added later."
         )
         # The log carries the same rendered text as the warning, code and all,
         # so a log-only reader is not the one person without a handle to search.
@@ -1803,7 +1853,7 @@ class Cash:
         parts: list[str] = []
         seen_carriers: set[int] = set()
         try:
-            for value in (*args, *kwargs.values()):
+            for param, value in (*((None, a) for a in args), *kwargs.items()):
                 for carrier in self._iter_code_carriers(value):
                     # Dedup ACROSS arguments too, not just within one walk:
                     # `f(a, b, c)` with three instances of one class reaches
@@ -1834,7 +1884,7 @@ class Cash:
                         # edit will NOT invalidate -- so say so once. This is
                         # the residue where cash genuinely cannot determine the
                         # answer, and silence is the danger.
-                        self._warn_unhashable_code_once(carrier)
+                        self._warn_unhashable_code_once(carrier, func_name, param)
         except Exception as e:  # noqa: BLE001 - never break a call
             logger.debug("[CORE] code-arg fold failed: %s", e)
             return state_hash
@@ -8663,23 +8713,32 @@ class Cash:
     def _report_observed_effects(self, func_name: str, observer: Any) -> None:
         """Warn once when the first call did something a hit will not do.
 
-        Silent in three cases, each for its own reason:
+        Silent when:
 
-        * ``assume_safe=True`` -- the user audited this function and said so.
-        * the static analyzer already flagged it -- they have been told; a
-          second warning about one function is noise, not information.
+        * ``assume_safe=True`` -- the user audited this function and said so;
+          ``# @cash:assume-safe`` on a line that led to an effect waives that
+          effect alone (see ``EffectObserver.record_effect``).
+        * the static findings already name that KIND of effect -- a write the
+          analyzer listed is not news when the observer sees it too. Only the
+          kinds they cover are dropped. The whole warning used to be, so a
+          static finding about a log line hid a network read in the same
+          function: never reported in 30 starts (round 18).
         * nothing was observed -- which is *not* proof of purity. Only the
           path this call took was watched, so an effect behind a branch that
           did not run is unobserved. That is why this supplements the static
           pass rather than replacing it.
         """
-        summary = observer.summary() if observer is not None else None
-        if summary is None:
+        if observer is None or not observer.effects:
             return
         if self._purity_modes.get(func_name, "warn") == "silent":
             return
+        covered: set[str] = set()
         if func_name in self._purity_static_flagged:
+            covered = _static_effect_kinds(self._purity_reports.get(func_name))
+        effects = [(kind, detail) for kind, detail in observer.effects if kind not in covered]
+        if not effects:
             return
+        summary = "\n".join(dict.fromkeys(f"  {kind}: {detail}" for kind, detail in effects))
         self._warn_once(
             CashImpurityWarning,
             func_name,
@@ -8691,9 +8750,52 @@ class Cash:
             code="IMPURE-OBSERVED-EFFECTS",
             fix="split the function if an effect is part of the result -- an "
                 "'argument mutation' line means an object the CALLER still "
-                "holds stops being changed -- or record it as incidental with "
-                "@cash.cache(assume_safe=True).",
+                "holds stops being changed. If it is incidental, put "
+                "`# @cash:assume-safe` on the line named (any line of yours on "
+                "the way to it counts); @cash.cache(assume_safe=True) waives "
+                "the whole function instead, including effects added later.",
         )
+
+    def _mutable_global_is_keyed(self, func_name: str, report: PurityReport, issue: Any) -> bool:
+        """Is this ``mutable_global`` finding about a global the key already
+        folds by value on every call?
+
+        Then "cached results won't reflect changes to it" is false: a setter
+        rebinding it, or a test patching it, makes the next call a new entry.
+        Measured in round 18 -- a `configure()`-set module flag re-ran the
+        function each time it changed, 0 diffs against a no-cache oracle --
+        while the warning, of the kind the docs say never to ignore, said
+        otherwise. Kept for what the fold leaves out: callables, modules,
+        classes (tracked their own way, or not at all), and a global the
+        function itself writes.
+        """
+        from .purity_analyzer import ISSUE_MUTABLE_GLOBAL
+        name = getattr(issue, "subject", "")
+        if getattr(issue, "kind", None) != ISSUE_MUTABLE_GLOBAL or not name:
+            return False
+        func = self.functions.get(func_name)
+        reader: Any = func
+        where = getattr(issue, "where", "")
+        if where in report.helper_resolution_paths:
+            reader = resolve_binding(*report.helper_resolution_paths[where])
+        elif where in report.helper_objects:
+            reader = report.helper_objects[where]()
+        module_ns = getattr(reader, "__globals__", None)
+        if not isinstance(module_ns, dict) or name not in module_ns:
+            return False
+        try:
+            if name not in self._read_global_data_names(reader):
+                return False
+        except Exception:                                    # noqa: BLE001
+            return False
+        value = module_ns[name]
+        if isinstance(value, types.ModuleType):
+            # `conf.RATE` reads of a module of the user's are folded by value
+            # (`_module_attr_parts`); "mutated elsewhere" is `conf.RATE = ...`.
+            return self._is_user_module(value, self._own_package(reader))
+        if isinstance(value, type):
+            return False
+        return not (callable(value) and not isinstance(value, (dict, list, tuple, set)))
 
     def _surface_purity(
         self, func_name: str, report: PurityReport, mode: str,
@@ -8712,7 +8814,8 @@ class Cash:
         * ``strict``: raise `CashImpureFunctionError`. Opaque
           callees count as issues in this mode (paranoid).
         """
-        issues = list(report.issues)
+        issues = [i for i in report.issues
+                  if not self._mutable_global_is_keyed(func_name, report, i)]
         if mode == "strict" and report.opaque_callees:
             opaque_list = ", ".join(report.opaque_callees[:5])
             if len(report.opaque_callees) > 5:

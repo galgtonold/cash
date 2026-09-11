@@ -9,7 +9,7 @@ import warnings
 
 import pytest
 
-from cash import CashImpurityWarning, CashImpureFunctionError
+from cash import CashImpurityWarning
 from cash.purity_analyzer import (
     ISSUE_MUTABLE_GLOBAL,
     _module_modified_globals,
@@ -51,13 +51,23 @@ def test_reads_constant_global_not_flagged():
     assert _global_flags(gf.lookup) == set()
 
 
-def test_default_mode_warns_about_the_global():
+def test_a_global_the_key_folds_is_not_reported_and_invalidates():
+    """The analyzer still finds the read (above); the decorator does not
+    report it, because CONFIG is folded into the key by value on every call
+    and "cached results won't reflect changes to it" is false. This test
+    pinned that warning until round 18 measured the opposite. The second
+    half is the reason: a setter's change is a new entry, not a stale hit."""
     gf.price.cache_clear()                # reset warn-once dedup
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        gf.price(100)
+        assert gf.price(100) == pytest.approx(110)
         msgs = [str(x.message) for x in w if issubclass(x.category, CashImpurityWarning)]
-    assert any("CONFIG" in m for m in msgs), msgs
+    assert not any("CONFIG" in m for m in msgs), msgs
+    try:
+        gf.set_rate(0.5)
+        assert gf.price(100) == pytest.approx(150)
+    finally:
+        gf.set_rate(0.10)
 
 
 def test_constant_read_does_not_warn():
@@ -69,7 +79,11 @@ def test_constant_read_does_not_warn():
     assert not any("TABLE" in m or "LIMIT" in m for m in msgs), msgs
 
 
-def test_strict_mode_raises_on_mutated_global():
-    with pytest.raises(CashImpureFunctionError) as exc:
-        gf.strict_price(100)
-    assert "CONFIG" in str(exc.value)
+def test_strict_mode_does_not_raise_on_a_global_the_key_folds():
+    """strict=True raises on every purity issue; a folded global is not one."""
+    try:
+        assert gf.strict_price(100) == pytest.approx(110)
+        gf.set_rate(0.3)
+        assert gf.strict_price(100) == pytest.approx(130)
+    finally:
+        gf.set_rate(0.10)

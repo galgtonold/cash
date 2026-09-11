@@ -49,8 +49,10 @@ code that was never run, which is a different and complementary guarantee.
 from __future__ import annotations
 
 import contextvars
+import linecache
 import logging
 import os
+import sys
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -71,7 +73,45 @@ _PATCHED = False
 def _record(kind: str, detail: str) -> None:
     observer = _active_observer.get()
     if observer is not None:
-        observer.record(kind, detail)
+        observer.record_effect(kind, detail)
+
+
+#: The cash package directory: its frames are never the user's line.
+_OWN_DIR = os.path.dirname(os.path.abspath(__file__)) + os.sep
+
+#: filename -> "is this library or interpreter code?", decided once per file.
+_LIBRARY_FILE: dict[str, bool] = {}
+
+
+def _is_library_file(filename: str) -> bool:
+    known = _LIBRARY_FILE.get(filename)
+    if known is not None:
+        return known
+    if filename.startswith("<"):
+        answer = True
+    else:
+        try:
+            path = os.path.abspath(filename)
+            if path.startswith(_OWN_DIR):
+                answer = True
+            else:
+                from pathlib import Path
+
+                from .config import _is_installed_path
+                answer = _is_installed_path(Path(path).resolve())
+        except (OSError, ValueError):
+            answer = True
+    _LIBRARY_FILE[filename] = answer
+    return answer
+
+
+def _line_waived(filename: str, lineno: int) -> bool:
+    """Does ``# @cash:assume-safe`` cover *lineno* -- on it, or alone above it?"""
+    from .purity_analyzer import _ASSUME_SAFE_RE
+    if _ASSUME_SAFE_RE.search(linecache.getline(filename, lineno)):
+        return True
+    above = linecache.getline(filename, lineno - 1)
+    return above.lstrip().startswith("#") and bool(_ASSUME_SAFE_RE.search(above))
 
 
 def _install_patches() -> None:
@@ -147,6 +187,10 @@ class EffectObserver:
 
     def __init__(self, exclude_under: str | None = None) -> None:
         self.effects: list[tuple[str, str]] = []
+        #: The frames that entered this observer. The user's lines that led to
+        #: an effect are the frames above these, and no further: the caller of
+        #: the cached function did not perform the effect.
+        self._outer: list[Any] = []
         # cash's own cache directory. A write in there is cash storing the
         # entry, not the user's function doing I/O, and reporting it would
         # make every cached function look impure.
@@ -157,11 +201,14 @@ class EffectObserver:
     def __enter__(self) -> "EffectObserver":
         _install_patches()
         self._tokens.append(_active_observer.set(self))
+        self._outer.append(sys._getframe(1))
         return self
 
     def __exit__(self, *exc_info: Any) -> bool:
         if self._tokens:
             _active_observer.reset(self._tokens.pop())
+        if self._outer:
+            self._outer.pop()           # a frame must not outlive its call
         return False
 
     def suspend(self):
@@ -177,6 +224,42 @@ class EffectObserver:
             return
         self.effects.append((kind, detail))
 
+    def record_effect(self, kind: str, detail: str) -> None:
+        """Record an effect performed on the stack right now, naming the user's
+        line that led to it -- unless ``# @cash:assume-safe`` waives any line
+        on the way.
+
+        The effect itself happens inside a library, where no waiver can be
+        written; the user's code that called into it can carry one, the same
+        statement-scoped waiver the static findings take. Before this the only
+        way to quiet an observed effect was ``assume_safe=True``, which also
+        silences every effect added to the function later (round 18).
+        """
+        sites = self._user_sites()
+        if any(_line_waived(filename, lineno) for filename, lineno in sites):
+            return
+        if sites:
+            inner = f"{os.path.basename(sites[0][0])}:{sites[0][1]}"
+            outer = f"{os.path.basename(sites[-1][0])}:{sites[-1][1]}"
+            detail += f", at {inner}" + (f" (from {outer})" if outer != inner else "")
+        self.record(kind, detail)
+
+    def _user_sites(self) -> list[tuple[str, int]]:
+        """``(file, line)`` of the user's frames inside the observed call,
+        innermost first."""
+        stop = self._outer[-1] if self._outer else None
+        sites: list[tuple[str, int]] = []
+        try:
+            frame = sys._getframe(2)
+        except ValueError:
+            return sites
+        while frame is not None and frame is not stop:
+            filename = frame.f_code.co_filename
+            if filename and not _is_library_file(filename):
+                sites.append((filename, frame.f_lineno))
+            frame = frame.f_back
+        return sites
+
     def record_write(self, path: Any) -> None:
         """Record a file opened for writing, unless it is cash's own storage."""
         try:
@@ -185,7 +268,7 @@ class EffectObserver:
             return
         if self._exclude and resolved.startswith(self._exclude):
             return
-        self.record("file write", resolved)
+        self.record_effect("file write", resolved)
 
     # -- reporting ---------------------------------------------------------
     def summary(self) -> str | None:

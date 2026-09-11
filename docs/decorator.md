@@ -487,7 +487,7 @@ def build(schema):
 build(Schema)                    # edit Schema, call again -> used to return the old answer
 ```
 
-<!-- claim: cash/core.py:Cash._fold_code_args @c5599254, cash/core.py:Cash._iter_code_carriers @90eef39d -->
+<!-- claim: cash/core.py:Cash._fold_code_args @f9032430, cash/core.py:Cash._iter_code_carriers @90eef39d -->
 Your code reached through the arguments now folds into `state_hash`, so editing
 it invalidates. cash finds it in a class, a function, an instance (through its
 class), any of those nested in a list/tuple/set/dict, and an instance whose
@@ -567,7 +567,7 @@ flowchart TD
     F -->|Yes| G[Return cached value]
 ```
 
-<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @c5599254 -->
+<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @f9032430 -->
 The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
 
 - `state_hash` folds in the function's own source hash + every
@@ -791,7 +791,7 @@ is bypassed (warning fires) — see the iterator section below.
 
 ### `strict=` and `assume_safe=` — purity gates
 
-<!-- claim: cash/core.py:Cash._surface_purity @86786923, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @81b928f4, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 By default, `@cash.cache` runs a static analyzer on the function body
 (and module-bounded helpers) on first call. What it does depends on what it finds:
 
@@ -822,8 +822,8 @@ The analyzer stops at library boundaries, so an effect *inside* a dependency is
 reachable only by the method's name (`session.post`, `cur.execute`). Because a
 name cannot reach everything — `session.get` collides with `dict.get` — cash
 also **watches the first call** and warns if it wrote a file, opened a
-connection, or spawned a process that the analyzer never saw. A hit repeats
-none of those. See
+connection, or spawned a process that the analyzer never saw, naming the line
+of yours that led to it. A hit repeats none of those. See
 [observed effects](tutorials/feature-guides/purity-decorators.md#observed-effects-what-the-first-call-actually-did).
 
 ```python

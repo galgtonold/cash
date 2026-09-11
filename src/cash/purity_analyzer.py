@@ -60,7 +60,7 @@ from .notebook.cacheability import (
     _is_open_write_mode,
 )
 from .notebook.function_tracker import is_local_module
-from .purity_flow import LogOnlyFlow, fresh_name_nodes, receiver_is_fresh
+from .purity_flow import LogOnlyFlow, fresh_name_nodes, is_log_helper, receiver_is_fresh
 from .notebook.purity import (
     _AMBIENT_READ_CALLS,
     _IMPURE_FUNCTION_CALLS,
@@ -140,6 +140,8 @@ class PurityIssue:
             whole function.
         filename: That file, so a finding in a helper names the helper's
             module rather than the file of the call that surfaced it.
+        subject: The name the finding is about, where there is one -- the
+            global of a ``mutable_global``.
     """
 
     kind: str
@@ -147,6 +149,7 @@ class PurityIssue:
     where: str
     line: int = 0
     filename: str = ""
+    subject: str = ""
 
 
 @dataclass(frozen=True)
@@ -1600,7 +1603,7 @@ class PurityAnalyzer:
             visitor = _PurityVisitor(
                 qualname=qualname, param_names=param_names, local_owned=local_owned,
                 fresh_nodes=fresh_name_nodes(func_def),
-                log_only=_log_only_ambient_reads(func_def),
+                log_only=_log_only_ambient_reads(func_def, func),
             )
             visitor.visit(func_def)
             visitor.finalize_taint()
@@ -1777,6 +1780,7 @@ class PurityAnalyzer:
                 ),
                 where=qualname,
                 line=0,
+                subject=name,
             ))
 
 
@@ -1879,8 +1883,14 @@ def _anchor_issue_lines(issues: list[PurityIssue], start: int, func: Any) -> Non
         )
 
 
-def _log_only_ambient_reads(func_def: ast.AST) -> frozenset[int]:
-    """ids of the ambient reads in *func_def* whose value is only logged."""
+def _log_only_ambient_reads(func_def: ast.AST, func: Any = None) -> frozenset[int]:
+    """ids of the ambient reads in *func_def* whose value is only logged.
+
+    "Logged" includes being passed to one of the module's own log helpers
+    (`_log_helper_names`): round 18 counted ~20 KEY-AMBIENT-READ lines per
+    worker start from ``_log(f"... {time.perf_counter() - t0:.2f}s")``,
+    none of which could reach a result.
+    """
     candidates = []
     for node in ast.walk(func_def):
         if isinstance(node, ast.Call):
@@ -1893,8 +1903,41 @@ def _log_only_ambient_reads(func_def: ast.AST) -> frozenset[int]:
             candidates.append(node)
     if not candidates:
         return frozenset()          # the common case pays for no parent map
-    flow = LogOnlyFlow(func_def)
+    flow = LogOnlyFlow(func_def, _log_helper_names(func_def, func))
     return frozenset(id(n) for n in candidates if flow.only_logged(n))
+
+
+def _log_helper_names(func_def: ast.AST, func: Any) -> frozenset[str]:
+    """Names *func_def* calls that are, in *func*'s globals, log helpers."""
+    module_ns = getattr(func, "__globals__", None)
+    if not isinstance(module_ns, dict):
+        return frozenset()
+    called = {node.func.id for node in ast.walk(func_def)
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+    return frozenset(name for name in called
+                     if _is_log_helper_function(module_ns.get(name)))
+
+
+def _is_log_helper_function(value: Any) -> bool:
+    code = getattr(value, "__code__", None)
+    if not isinstance(value, types.FunctionType) or code is None:
+        return False
+    known = _LOG_HELPER_CACHE.get(code)
+    if known is None:
+        try:
+            tree = ast.parse(textwrap.dedent(inspect.getsource(value)))
+            known = bool(tree.body) and is_log_helper(tree.body[0])
+        except SOURCE_RETRIEVAL_ERRORS + (SyntaxError, ValueError):
+            known = False
+        if len(_LOG_HELPER_CACHE) >= 4096:     # a notebook redefines freely
+            _LOG_HELPER_CACHE.clear()
+        _LOG_HELPER_CACHE[code] = known
+    return known
+
+
+#: code object -> "is it a log helper?". Code objects are immutable, so a
+#: redefined helper is a new key.
+_LOG_HELPER_CACHE: dict[Any, bool] = {}
 
 
 def _describe_subscript(node: ast.Subscript) -> str:

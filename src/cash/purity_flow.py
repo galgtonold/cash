@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import ast
 
-__all__ = ["fresh_name_nodes", "receiver_is_fresh", "LogOnlyFlow"]
+__all__ = ["fresh_name_nodes", "receiver_is_fresh", "LogOnlyFlow", "is_log_helper"]
 
 _FRESH_CONSTRUCTOR_NAMES = frozenset({
     "list", "dict", "set", "bytearray", "defaultdict", "OrderedDict", "Counter", "deque",
@@ -327,16 +327,21 @@ _LOG_METHODS = frozenset({"debug", "info", "warning", "warn", "error", "exceptio
                           "critical", "log"})
 
 #: Expression nodes a value passes through on its way to wherever it ends up.
+#: A dict / list / set literal too: ``logger.info(json.dumps({"ts": now}))``
+#: is a structured log line, and the literal only carries the value to it.
 _TRANSPARENT = (ast.BinOp, ast.UnaryOp, ast.JoinedStr, ast.FormattedValue,
                 ast.Call, ast.Attribute, ast.Subscript, ast.Compare, ast.IfExp,
-                ast.BoolOp, ast.Tuple, ast.keyword, ast.Starred)
+                ast.BoolOp, ast.Tuple, ast.keyword, ast.Starred,
+                ast.Dict, ast.List, ast.Set)
 
 
-def _is_log_sink(call: ast.Call) -> bool:
-    """``print(...)``, ``logger.info(...)`` and kin, ``warnings.warn(...)``."""
+def _is_log_sink(call: ast.Call, log_helpers: frozenset[str] = frozenset()) -> bool:
+    """``print(...)``, ``logger.info(...)`` and kin, ``warnings.warn(...)``,
+    ``sys.stderr.write(...)``, and a call to one of *log_helpers* -- the
+    caller's own functions that do nothing but that (see `is_log_helper`)."""
     f = call.func
     if isinstance(f, ast.Name):
-        return f.id == "print"
+        return f.id == "print" or f.id in log_helpers
     if not isinstance(f, ast.Attribute):
         return False
     recv = f.value
@@ -344,13 +349,40 @@ def _is_log_sink(call: ast.Call) -> bool:
                  else recv.id if isinstance(recv, ast.Name) else "")
     if f.attr in _LOG_METHODS and "log" in recv_name.lower():
         return True
+    if f.attr == "write" and recv_name in ("stderr", "stdout"):
+        return True
     return f.attr == "warn" and recv_name == "warnings"
+
+
+def is_log_helper(func_def: ast.AST) -> bool:
+    """Is *func_def* a log helper: a body of nothing but log calls?
+
+    ``def _log(msg): print(msg, file=sys.stderr)`` is how most analytics code
+    logs, and a value passed to it reaches a log line and nothing else: it
+    cannot be part of any result. A docstring and a bare ``return`` are
+    allowed; anything else -- a returned value, an assignment, a branch --
+    makes it an ordinary function.
+    """
+    body = list(getattr(func_def, "body", []))
+    if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)):
+        body = body[1:]
+    if not body:
+        return False
+    for stmt in body:
+        if isinstance(stmt, ast.Return) and stmt.value is None:
+            continue
+        if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
+                and _is_log_sink(stmt.value)):
+            return False
+    return True
 
 
 class LogOnlyFlow:
     """Answers "does this value reach nothing but a print / log call?"."""
 
-    def __init__(self, func_def: ast.AST):
+    def __init__(self, func_def: ast.AST, log_helpers: frozenset[str] = frozenset()):
+        self._log_helpers = log_helpers
         self._parent: dict[int, ast.AST] = {}
         self._loads: dict[str, list[ast.Name]] = {}
         for node in ast.walk(func_def):
@@ -365,7 +397,8 @@ class LogOnlyFlow:
             up = self._parent.get(id(child))
             if up is None:
                 return False
-            if isinstance(up, ast.Call) and child is not up.func and _is_log_sink(up):
+            if (isinstance(up, ast.Call) and child is not up.func
+                    and _is_log_sink(up, self._log_helpers)):
                 return True
             if isinstance(up, _TRANSPARENT):
                 child = up

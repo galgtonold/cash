@@ -612,8 +612,10 @@ missed and had to run — and saw it reach outside its own return value. The
 message lists what it saw, one line per effect: a `file write` and the path, a
 `network` connection and the address, a `subprocess` and the command, or an
 `argument mutation`, meaning an object you passed in was different after the
-call than before it. These happen inside library code, which the source scan
-does not walk into, so watching the call was the only way to find them.
+call than before it. Each effect names the line of your code that led to it
+(`at fetch.py:6 (from jobs.py:37)`: the innermost line of yours, and the line
+in the cached function). These happen inside library code, which the source
+scan does not walk into, so watching the call was the only way to find them.
 
 **Why it matters.** A cache hit returns the stored value and runs none of the
 body, so every effect on that list happened exactly once and will not happen
@@ -627,16 +629,22 @@ caller still holds stopped being changed, and nothing at the call site says so.
 the function: cache the computation that produces the data, and do the writing,
 posting or mutating in an uncached caller. If it is incidental — a log file, a
 progress marker, a temp file the function cleans up itself — record that
-decision with `@cash.cache(assume_safe=True)`, which is what the message
-suggests.
+decision with `# @cash:assume-safe` on the line the message names, or on any
+line of yours on the way to it (the call in the cached function counts as well
+as the line inside your helper). It waives that effect and nothing else, so an
+effect added to the function later is still reported. `@cash.cache(assume_safe=True)`
+waives the whole function, including whatever is added to it later.
 
-<!-- claim: cash/core.py:Cash._report_observed_effects @960249ed -->
+<!-- claim: cash/core.py:Cash._report_observed_effects @2d2693d1 -->
 One caveat worth knowing: only the path this particular call took was watched.
 An effect behind a branch that did not run was not seen, so silence here is not
 a proof of purity — this supplements the source scan behind
 [IMPURE-SIDE-EFFECTS](#impure-side-effects) rather than replacing it. The two
-never appear together: if the source scan already flagged this function, this
-warning stays quiet.
+can appear together. An effect of a kind the source scan already listed for
+the function (a file write beside an `open(..., "w")` finding, say) is left
+out of this one, but an effect of another kind is reported. Until 0.10.1 the
+whole warning stayed quiet once the source scan had said anything, so a
+finding about a `print` hid a network read in the same function.
 
 **When it is safe to ignore.** When everything on the list is bookkeeping nobody
 reads back — a log line, a metrics counter, a `.tmp` file, a progress bar
@@ -686,13 +694,14 @@ it is rarely what you want.
 
 ## IMPURE-SIDE-EFFECTS {#impure-side-effects}
 
-<!-- claim: cash/core.py:Cash._surface_purity @86786923 -->
+<!-- claim: cash/core.py:Cash._surface_purity @81b928f4 -->
 **What happened.** Before the first call, Cash reads the source of your function
 and of the helpers it calls, looking for shapes that make a cached result
 questionable. It found some. The message lists each one with its line number and
 a short label in square brackets, and the label is the part that tells you how
 much to care:
 
+<!-- claim: cash/core.py:Cash._mutable_global_is_keyed @61c8025d -->
 - `impure_call` — a call whose job is a side effect: `print`, `input`,
   `open(..., "w")`, `os.remove`, `subprocess.run`, `requests.post`,
   `logging.info`, `json.dump`, or a write-shaped method on a receiver the
@@ -709,7 +718,12 @@ much to care:
 - `discarded_call` — a method call whose return value is thrown away, which
   usually means it was made for its effect.
 - `mutable_global` — the function reads a module global that other code in the
-  same module reassigns.
+  same module reassigns, and the cache key does not fold that global's value.
+  The key does fold a data global by value on every call, so a global set
+  through a `configure()`-style setter or patched in a test is not reported:
+  a new value is a new entry. What stays reported is a global the function
+  itself changes (see [IMPURE-SCOPE-MUTATION](#impure-scope-mutation)), and a
+  callable, class or module that is not your own code.
 - `dynamic_pattern` — a callable chosen at run time, `HANDLERS[kind]()` or a
   name bound from a lookup, so editing whichever callable it lands on will not
   invalidate the entry.
@@ -773,10 +787,15 @@ process is running, or for a fresh UUID: `datetime.now()`, `date.today()`,
 `time.time()`, `os.getenv(...)`, `os.environ["..."]`, `os.getcwd()`,
 `uuid.uuid4()`. The named line ran, and the result was cached as normal.
 
-A read whose value goes only into a `print`, a `logging` call or
-`warnings.warn` — `t = time.perf_counter()` feeding an elapsed-time line — is
-not reported: it cannot reach the result. Once the value is returned, stored,
-tested in a condition or passed to any other call, it is.
+<!-- claim: cash/purity_flow.py:is_log_helper @eb60d621, cash/purity_analyzer.py:_log_helper_names @efc95035 -->
+A read whose value goes only into a log line cannot reach the result, and is
+not reported. A log line is a `print`, a `logging` call, `warnings.warn`,
+`sys.stderr.write`, or a function of your own whose body is nothing but those
+(`def _log(msg): print(msg, file=sys.stderr)`). The value may pass through a
+dict or list on the way (`logger.info(json.dumps({"ts": time.time()}))`).
+`t = time.perf_counter()` feeding an elapsed-time line is the usual case. Once
+the value is returned, stored, tested in a condition or passed to any other
+call, it is reported.
 
 **Why it matters.** That value is an *input* to your result, and it is not one
 Cash can see: it does not arrive as an argument, so it is not in the cache key.
@@ -1007,7 +1026,10 @@ cache looks healthy and is silently doing nothing.
 reached a cached call — as an argument you passed, or
 as a parameter default you never typed — and Cash could not fingerprint its
 body. Cash normally folds the code of such things into the key, so that editing
-them invalidates. This one it could not.
+them invalidates. This one it could not. The message names the parameter it
+arrived in, the cached function, and the function it wraps where it wraps one,
+and it is given once for each of those, so a new object in a new place is a new
+warning rather than a repeat of one you have already handled.
 
 Cash only says so when it judges the carrier to be **your** code: the check
 excludes anything defined under `site-packages`, `dist-packages` or the stdlib
@@ -1033,7 +1055,10 @@ the invalidation gap; it does not silence the warning, because the carrier
 itself is still unhashable. If the result does not depend on it — the identity
 is already covered by another argument, or the carrier is library code Cash
 misjudged — say so deliberately: `cash.mark_opaque(TheType)`, which does silence
-it, or `@cash.opaque` on a class you own. (`cash.mark_opaque(functools.partial)`,
+it, or `@cash.opaque` on a class you own. Both cover the whole type: every
+object of it in the process, including ones passed later over code you are
+still editing, so prefer passing a plain function and keyword arguments where
+you can. (`cash.mark_opaque(functools.partial)`,
 once the advice for partials, no longer applies to them: it silenced every partial
 in the process, including ones over code you were still editing.) Both record the decision in the code,
 which is what makes them better than a warning filter.

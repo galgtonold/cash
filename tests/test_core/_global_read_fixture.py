@@ -7,10 +7,10 @@ import cash
 
 c = cash.Cash(backend=cash.InMemoryBackend())
 
-CONFIG = {"rate": 0.10}          # mutated below -> footgun
+CONFIG = {"rate": 0.10}          # mutated below -> flagged by the analyzer
 TABLE = {"a": 1, "b": 2}         # never written -> constant
 LIMIT = 100                      # constant int
-COUNTER = 0                      # reassigned via `global` -> footgun
+COUNTER = 0                      # reassigned via `global` -> flagged by the analyzer
 
 REGISTRY = {}                    # populated at import time (top-level) only...
 for _name in ("alpha", "beta"):
@@ -34,7 +34,7 @@ def unrelated_local():
 
 @c.cache
 def price(amount):
-    return amount * (1 + CONFIG["rate"])     # reads mutated CONFIG -> flag
+    return amount * (1 + CONFIG["rate"])     # analyzer flags CONFIG; the key folds it
 
 
 @c.cache
@@ -54,4 +54,4 @@ def with_counter(x):
 
 @c.cache(strict=True)
 def strict_price(amount):
-    return amount * (1 + CONFIG["rate"])      # strict -> raises
+    return amount * (1 + CONFIG["rate"])      # strict, and still no raise: folded

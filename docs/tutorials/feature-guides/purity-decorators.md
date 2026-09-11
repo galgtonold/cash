@@ -442,7 +442,7 @@ what to cache based on purity). The same machinery now runs on
 cleanly to "I want a warning", "I want it silent", and "I want it to
 fail CI".
 
-<!-- claim: cash/core.py:Cash._surface_purity @86786923, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @81b928f4, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 ### Default: warn at first call
 
 <!-- test:expect-warning reason="this section exists to demonstrate the first-call impurity warning" -->
@@ -618,7 +618,7 @@ both raises `ValueError` at decoration time.
 <!-- claim: cash/__init__.py:mark_pure @ba10636a, cash/__init__.py:mark_stateful @ca0b83f6 -->
 ### Observed effects — what the first call actually did { #observed-effects-what-the-first-call-actually-did }
 
-<!-- claim: cash/effect_observer.py:EffectObserver @aeccafc9 broad="the observed-effect contract is the class as a whole", cash/core.py:Cash._report_observed_effects @960249ed -->
+<!-- claim: cash/effect_observer.py:EffectObserver @f2d0ab11 broad="the observed-effect contract is the class as a whole", cash/core.py:Cash._report_observed_effects @2d2693d1 -->
 Static analysis stops at library boundaries, so an effect *inside* a library is
 reachable only by the method's name — and a name cannot reach everything.
 `session.get(url)` is a network call, but `get` cannot go in the write-method
@@ -626,15 +626,15 @@ list without matching `dict.get`.
 
 So cash also *watches* the first call. While the body of a cache **miss** runs,
 it records effects it can see wherever the code lives: a file opened for
-writing, an outbound socket connection, a spawned subprocess. If any happen and
-the analyzer said nothing, you get one warning naming what it saw:
+writing, an outbound socket connection, a spawned subprocess. If any happen
+that the analyzer did not list, you get one warning naming what it saw and the
+line of yours that led to it:
 
 ```text
-@cash.cache on api.fetch_user: the first call performed side effects that
-static analysis did not see, which means they happen inside library code cash
-does not walk into. Every cache HIT from here on returns the stored value
-WITHOUT repeating them.
-  network: socket connect to 10.0.0.4:443
+@cash.cache on api.fetch_user: the first call had effects that static analysis
+did not see -- they happen inside library code cash does not walk into. Every
+cache HIT from here on returns the stored value WITHOUT repeating them.
+  network: socket connect to 10.0.0.4:443, at client.py:12 (from api.py:30)
 ```
 
 Four things worth knowing:
@@ -654,9 +654,12 @@ Four things worth knowing:
   per-task, so an effect on a worker thread is not reported as this function's.
   (The ordinary `Thread(target=...)` shape is already caught statically.)
 
-`assume_safe=True` silences this along with the static warnings, and a function
-the analyzer already flagged does not get a second warning about the same
-thing.
+`# @cash:assume-safe` on the line it names, or on any line of yours on the way
+to it, waives that one effect. `assume_safe=True` silences this along with the
+static warnings, for the whole function. An effect of a kind the analyzer
+already listed (a file write beside an `open(..., "w")` finding) is not
+repeated here; an effect of another kind is, even when the analyzer flagged
+the function for something else.
 
 #### Mutated arguments count as an effect
 
