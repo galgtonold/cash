@@ -19,12 +19,16 @@ Design notes, both deliberate:
   class, and a benchmark-shaped test is the last place to add another.
   Statement statuses are deterministic; the seconds behind them are not.
 
-* **Cells sized above the cost-model floor.** cash declines to cache any
-  statement whose compute is under ~10ms -- storing it would cost more than
-  recomputing. A first version of this test used a chain of microsecond
-  statements and measured a restorable set of exactly zero, at which point
-  the waste assertion passed while proving nothing. The arrays below are
-  sized so each step clears that floor; keep them that way.
+* **Cells sized above the cost-model floor, on any machine.** cash declines
+  to cache any statement whose compute is under ~10ms -- storing it would
+  cost more than recomputing. A first version of this test used a chain of
+  microsecond statements and measured a restorable set of exactly zero, at
+  which point the waste assertion passed while proving nothing. Each step
+  below is a fixed number of interpreter iterations, whose cost varies about
+  2x between machines; numpy transcendental ufuncs, used before, vary far
+  more with the CPU's vector units, and on a fast Linux runner two of five
+  steps fell under the floor (``restorable_count`` 3, twice in a dozen CI
+  runs). Keep each step well clear of the floor.
 
 * **``session_mode='live'``.** The measured half reuses the priming run's
   ``Cash``, which is what re-running a cell in a live kernel gets you. It is
@@ -56,37 +60,31 @@ MIN_RESTORABLE_STATEMENTS = 4
 def _write_chain_notebook(path: Path) -> None:
     """A short dependency chain: each cell consumes the previous cell's value.
 
-    The *shape* of these statements is load-bearing, and two earlier
-    versions of this notebook measured nothing because of it:
+    The *shape* of these statements is load-bearing, and three earlier
+    versions of this notebook measured nothing, or not reliably, because of
+    it:
 
     * A chain of ``base * 2`` steps ran in 0.2-2ms, below cash's ~10ms
       caching floor. Nothing was stored, so nothing could be reused.
     * Raising the array size instead made each step a 32MB array. Those
       clear the time floor but the cost model correctly refuses them --
       writing 32MB costs more than recomputing 15ms of arithmetic.
+    * Several numpy ufunc passes reduced to one float took 30-60ms here and
+      under 10ms on a fast Linux runner, where two steps stopped caching.
 
-    What caches is **expensive compute with a small result**, so each step
-    below is several ufunc passes reduced to one float: ~30-60ms of work
-    for a 24-byte value. Measured, not assumed. Keep that property if you
-    change these cells, and re-measure if you do.
+    What caches, everywhere, is **expensive compute with a small result**
+    whose cost does not depend on vector hardware: each step below is 1.5M
+    interpreter iterations reduced to one float -- about 65ms here, and
+    several times the floor on a machine twice as fast. Measured, not
+    assumed. Keep that property if you change these cells, and re-measure
+    if you do.
     """
-    heavy = [
-        "np.sin(base).sum() + np.cos(base).sum() "
-        "+ np.sqrt(base).sum() + np.log1p(base).sum()",
-        "np.tan(base).sum() + np.arctan(base).sum() "
-        "+ np.exp(-base).sum() + np.cbrt(base).sum()",
-        "np.tanh(base).sum() + np.square(base).sum() "
-        "+ np.abs(base).sum() + np.expm1(-base).sum()",
-        "np.arcsinh(base).sum() + np.log10(1 + base).sum() "
-        "+ np.rint(base).sum() + np.negative(base).sum()",
-        "np.cos(base).sum() + np.log2(1 + base).sum() "
-        "+ np.sign(base).sum() + np.reciprocal(1 + base).sum()",
-    ]
-    cells = ["import numpy as np",
-             "base = np.arange(2_000_000, dtype='float64')"]
+    functions = ["sin", "cos", "sqrt", "log1p", "atan"]
+    cells = ["import math"]
     previous = "0.0"
-    for i, expression in enumerate(heavy):
-        cells.append(f"s{i} = float({expression}) + {previous}")
+    for i, function in enumerate(functions):
+        cells.append(
+            f"s{i} = sum(math.{function}(i) for i in range(1_500_000)) + {previous}")
         previous = f"s{i}"
     cells.append(f"total = {previous}")
     cells.append("print(f'{total:.3f}')")
