@@ -309,7 +309,7 @@ cash clear [path]       # delete a cache directory (see below)
 cash autoload on|off    # load cash in every new kernel via an IPython startup hook
 ```
 
-<!-- claim: cash/__main__.py:cmd_clear @39776b43 -->
+<!-- claim: cash/__main__.py:cmd_clear @9e608a46 -->
 !!! warning "`cash clear` deletes a whole directory"
     `cash clear` is directory-granular, not notebook-granular. Pointing it at a
     notebook (`cash clear analysis.ipynb`) removes the entire `.cash/` folder

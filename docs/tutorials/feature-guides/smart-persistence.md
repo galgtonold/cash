@@ -118,7 +118,7 @@ so the two paths differ here.)
 
 ## Inspecting where a value actually landed
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @f8cb4832, cash/backends/tiered_backend.py:TieredBackend.get @5413e4ec -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @f8cb4832, cash/backends/tiered_backend.py:TieredBackend.get @d9642778 -->
 The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']`. This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (set in `TieredBackend.get`).
 
 When it went no further than RAM, `metadata['persist_skipped']` says why: `"compute"` (the compute floor or the cost model) or `"size"` (a tier's size cap).
@@ -202,7 +202,7 @@ See [Choosing a Backend](choosing-a-backend.md) for how to wire `TieredBackend` 
 
 ## Built-in `_default_promotion_policy` fallback
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._default_promotion_policy @7c228c64, cash/backends/tiered_backend.py:TieredBackend.__init__ @59106d1e -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._default_promotion_policy @7c228c64, cash/backends/tiered_backend.py:TieredBackend.__init__ @aa78bb3d -->
 When `smart_persistence=False` (so the factory wires in no cost-model closure), or when a user constructs `TieredBackend(..., promotion_policy=None)` directly, the backend falls back to its own bound method `_default_promotion_policy`:
 
 ```python

@@ -144,8 +144,10 @@ class TestCLIClear:
         from types import SimpleNamespace
         cmd_clear(SimpleNamespace(path=None, all=True))
         captured = capsys.readouterr()
-        assert "No cache directory found at" in captured.out
+        assert "Nothing cleared: no cache at" in captured.out
         assert str(tmp_path) in captured.out
+        # Round 18: where a running program's cache is when it is not here.
+        assert "beside the script" in captured.out
 
     def test_clear_nonexistent_path(self, capsys):
         """Clear nonexistent path should fail."""

@@ -323,7 +323,15 @@ def resolve_main_module(func: Any) -> str:
     ``python -c``, a frozen app, and a Jupyter kernel, where ``__main__`` is
     the user namespace rather than a file and there is no import to agree with.
     """
-    path = (getattr(func, '__globals__', None) or {}).get('__file__')
+    g = getattr(func, '__globals__', None) or {}
+    # `python -m pkg.mod` runs pkg/mod.py as `__main__`, and the file stem
+    # alone called it `mod` while `import pkg.mod` called it `pkg.mod`: two
+    # caches for one function, and `cash clear --function f` ambiguous between
+    # them (round 18). The module spec carries the dotted name the import uses.
+    spec_name = getattr(g.get('__spec__'), 'name', None)
+    if isinstance(spec_name, str) and spec_name and spec_name != '__main__':
+        return spec_name
+    path = g.get('__file__')
     if not isinstance(path, str) or not path:
         return '__main__'
     return _module_stem(path) or '__main__'

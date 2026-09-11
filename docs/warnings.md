@@ -168,7 +168,10 @@ the caching.
 being run -- the project the running script belongs to -- rather than next to
 wherever the process was launched from. This run found a cache in the current
 directory that the new location does not have, so it is telling you that cache
-will not be used.
+will not be used. Two things leave one there: a cache from before this
+anchoring, when it followed the directory a process ran from, and a project
+marker (`pyproject.toml`, `setup.py`, `setup.cfg`, `.git`) added or moved since
+the cache was written.
 
 **Why it matters.** For this run only: it is a cold one, and everything
 recomputes. From then on the project's cache is in one place no matter where the

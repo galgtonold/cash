@@ -465,6 +465,7 @@ def _clear_function(cache_dir: str, wanted: str) -> None:
     for entry in owned:
         _remove_entry_files(cache_path, entry.stem)
         removed += 1
+    _bump_generation(cache_path)
     noun = "entry" if removed == 1 else "entries"
     print(f"Cleared {removed} {noun} for {resolved} ({_format_bytes(freed)} freed)")
 
@@ -492,8 +493,27 @@ def _clear_entry(cache_dir: str, wanted: str) -> None:
     if entry is None:
         sys.exit(1)
     _remove_entry_files(cache_path, entry.stem)
+    _bump_generation(cache_path)
     print(f"Cleared entry {entry.stem[:12]} from {entry.function} "
           f"({_format_bytes(entry.size)} freed)")
+
+
+def _bump_generation(cache_path: Path) -> None:
+    """Tell running processes that entries were removed under them.
+
+    A process keeps results in RAM, and a clear of some entries left those
+    served (round 18). Replacing the format stamp gives it a new identity,
+    which a running `TieredBackend` notices within a second and drops its RAM
+    tier. (`--all` needs nothing: the stamp goes with the directory.)
+    """
+    stamp = cache_path / "CACHE_VERSION"
+    try:
+        if stamp.exists():
+            tmp = cache_path / "CACHE_VERSION.tmp"
+            tmp.write_text(stamp.read_text(encoding="utf-8"), encoding="utf-8")
+            os.replace(tmp, stamp)
+    except OSError:
+        logger.debug("Could not refresh %s", stamp, exc_info=True)
 
 
 def _looks_like_a_cache(cache_dir: str) -> bool:
@@ -588,7 +608,17 @@ def cmd_clear(args: argparse.Namespace) -> None:
         if os.path.isdir(cache_dir):
             _rmtree_cache(cache_dir, force=force)
         else:
-            print(f"No cache directory found at {os.path.abspath(cache_dir)}")
+            # "Nothing here" is true and was not enough: a live service kept
+            # its whole cache while this reported success (round 18). Say
+            # which directory was looked at, and the two ways a running
+            # program's cache is somewhere else.
+            print(f"Nothing cleared: no cache at {os.path.abspath(cache_dir)}, "
+                  f"the directory `cash info` reports for here.")
+            print("  A script outside any project (no pyproject.toml, setup.py, "
+                  "setup.cfg or .git above it) caches in a .cash beside the script: "
+                  "cash clear <script dir>/.cash")
+            print("  A cache_dir that was changed leaves the old directory behind: "
+                  "cash clear <old path>")
         return
 
     target = args.path

@@ -1020,10 +1020,12 @@ def _warn_if_cache_moved(resolved: str, relative: str) -> None:
         warn_diagnostic(
             CashCacheIneffectiveWarning,
             "CACHE-DIR-MOVED",
-            f"cash keeps this project's cache at {resolved}, next to the code, "
-            f"rather than at {previous} -- the directory this process happens to "
-            f"be running in. The cache already at {previous} will not be used, "
-            f"so this run is a cold one.",
+            f"cash keeps this project's cache at {resolved}, next to the "
+            f"project it found, and not at {previous}, where an earlier run left "
+            f"one. That happens when the cache used to live in the directory a "
+            f"process ran from, and when the project's marker (pyproject.toml, "
+            f"setup.py, setup.cfg, .git) was added or moved since. The cache at "
+            f"{previous} will not be used, so this run is a cold one.",
             f"nothing to do if you did not know that cache was there. To keep "
             f"using it, set CASH_CACHE_DIR={previous} or move it to {resolved}; "
             f"to be rid of it, delete it once this run has repopulated the new "

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from typing import Any
 
 from ._base import CacheBackend, MetadataDict
 from .cascading_backend import _MultiBackendMixin
 from .serialization import PickleSerializer, Serializer
+
+_UNSEEN = object()
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +64,9 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 ``CashConfig.min_cache_savings_pct`` (Gate A's threshold).
         """
         self.backends = backends
+        # See `_drop_ram_if_cleared`.
+        self._generation: Any = _UNSEEN
+        self._generation_checked_at = 0.0
         self.promotion_policy = promotion_policy or self._default_promotion_policy
         self._min_persist_compute_s = min_persist_compute_s
         self._min_persist_savings_pct = min_persist_savings_pct
@@ -198,7 +204,41 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 return metadata
         return None
 
+    #: How often a process checks whether its disk cache was cleared under it.
+    _GENERATION_CHECK_EVERY = 1.0
+
+    def _drop_ram_if_cleared(self) -> None:
+        """Forget RAM-held results when the disk cache was cleared under us.
+
+        `cash clear` on a live service cleared the disk and nothing else: a
+        worker kept serving the pre-clear answer from its RAM tier (round 18,
+        5 stale answers in a row). The disk tier's generation token moves on a
+        clear; this compares it at most once a second -- one stat, not one per
+        hit -- and empties the faster tiers when it moved.
+        """
+        now = time.monotonic()
+        if now - self._generation_checked_at < self._GENERATION_CHECK_EVERY:
+            return
+        self._generation_checked_at = now
+        disk = next((b for b in self.backends if hasattr(b, "generation_token")), None)
+        if disk is None:
+            return
+        try:
+            token = disk.generation_token()
+        except Exception:  # noqa: BLE001 - a check must never break a read
+            return
+        # From no stamp to one is a directory being created, not cleared --
+        # including this backend's own first write.
+        if self._generation not in (_UNSEEN, None) and token != self._generation:
+            for faster in self.backends[:self.backends.index(disk)]:
+                try:
+                    faster.clear()
+                except Exception:  # noqa: BLE001
+                    logger.debug("could not drop %s after a clear", type(faster).__name__)
+        self._generation = token
+
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
+        self._drop_ram_if_cleared()
         for i, backend in enumerate(self.backends):
             metadata, value = backend.get(key)
             # Key-presence test: metadata is None when the child backend

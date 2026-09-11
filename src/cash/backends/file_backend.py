@@ -243,6 +243,9 @@ class FileBackend(CacheBackend):
         self._write_seq_by_key: dict[str, int] = {}
         self._warned_evict_after_write = False
         self._dirty_metadata: set[str] = set()
+        # key -> when its access stamp was last written, for the periodic
+        # flusher's rate limit.
+        self._access_flushed: dict[str, float] = {}
         # Metadata for the keys THIS process has touched. Not every entry on
         # disk: eviction used to need that and no longer does, so this stays
         # bounded by the session's working set rather than the directory.
@@ -294,7 +297,10 @@ class FileBackend(CacheBackend):
             if self._initialized:
                 return
             try:
+                created = not os.path.isdir(self.cache_dir)
                 os.makedirs(self.cache_dir, exist_ok=True)
+                if created:
+                    self._ignore_in_git()
             except OSError as exc:
                 # The directory cannot even be CREATED: a read-only volume, a
                 # drive that did not mount, a path that is a file, a locked-down
@@ -456,6 +462,20 @@ class FileBackend(CacheBackend):
                 return False
         return True
 
+    def generation_token(self) -> tuple | None:
+        """What identifies this directory's current contents as a whole.
+
+        The format stamp's identity: `cash clear --all` removes it with the
+        directory (the next write stamps a new one), and a clear of some
+        entries rewrites it. A process holding results in RAM compares this to
+        notice the cache was cleared under it. None when there is no stamp.
+        """
+        try:
+            st = os.stat(os.path.join(self.cache_dir, _VERSION_FILENAME))
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size, st.st_ino)
+
     def _stamp_format_version(self) -> None:
         """Write the current format stamp into the cache directory."""
         version_path = os.path.join(self.cache_dir, _VERSION_FILENAME)
@@ -547,13 +567,35 @@ class FileBackend(CacheBackend):
                 self.cache_dir, self._current_size_bytes,
             )
 
+    def _ignore_in_git(self) -> None:
+        """Keep a cache directory cash just created out of version control.
+
+        `.cash` sits next to the project, so `git add .` committed it: 66 MB
+        in one round-18 tester's repository. A `.gitignore` of `*` inside it
+        ignores the directory from within, the way `.pytest_cache` does, with
+        no edit to the project's own `.gitignore`. Only for a directory cash
+        created -- never in a directory that already existed, which could be
+        anything, a project root included -- and never over an existing file.
+        """
+        path = os.path.join(self.cache_dir, ".gitignore")
+        try:
+            if not os.path.exists(path):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write("# Created by cash: this directory is a cache.\n*\n")
+        except OSError:
+            logger.debug("Could not write %s", path, exc_info=True)
+
     def _flush_periodically(self) -> None:
         while not self._stop_event.is_set():
             if self._stop_event.wait(self._flush_interval):
                 break
-            self._flush_metadata()
+            self._flush_metadata(periodic=True)
 
-    def _flush_metadata(self) -> None:
+    #: Seconds between persisted access stamps for one entry, while the
+    #: process runs; everything outstanding is flushed at shutdown.
+    _ACCESS_FLUSH_MIN_INTERVAL = 600.0
+
+    def _flush_metadata(self, periodic: bool = False) -> None:
         """Write dirty metadata back into each entry, in place.
 
         Every ``get`` bumps ``last_access`` and ``access_count`` and marks the
@@ -567,13 +609,27 @@ class FileBackend(CacheBackend):
         If metadata has outgrown that slack the update is skipped rather than
         forced. What is lost is LRU precision for one entry until it is next
         written -- never a value, and never correctness.
+
+        *periodic* (the flusher thread) writes an entry's stamp at most once
+        per `_ACCESS_FLUSH_MIN_INTERVAL`: a hot entry was modified every few
+        seconds for as long as it kept being read, and where the cache sits in
+        a synced folder, each modification re-uploads the whole file (round
+        18: an 89 MB entry rewritten after every hit). The rest wait for the
+        next due flush or for shutdown, which flushes everything.
         """
+        now = time.time()
         with self._lock:
             if not self._dirty_metadata:
                 return
-
-            keys_to_flush = list(self._dirty_metadata)
-            self._dirty_metadata.clear()
+            if periodic:
+                keys_to_flush = [
+                    k for k in self._dirty_metadata
+                    if now - self._access_flushed.get(k, 0.0) >= self._ACCESS_FLUSH_MIN_INTERVAL
+                ]
+                self._dirty_metadata.difference_update(keys_to_flush)
+            else:
+                keys_to_flush = list(self._dirty_metadata)
+                self._dirty_metadata.clear()
 
         for key in keys_to_flush:
             try:
@@ -583,6 +639,7 @@ class FileBackend(CacheBackend):
                         "Metadata for %r no longer fits its reserved region; "
                         "access stats not flushed", key,
                     )
+                self._access_flushed[key] = now
             except (OSError, pickle.PickleError) as exc:
                 logger.debug("Failed to flush metadata for key %r: %s", key, exc)
 
@@ -930,6 +987,7 @@ class FileBackend(CacheBackend):
             # instead of simply recreating the directory. Recreate + retry once;
             # costs nothing on the normal path.
             os.makedirs(self.cache_dir, exist_ok=True)
+            self._ignore_in_git()
             # Stamp it first. `cash clear` against a live process removes the
             # stamp with the directory, and entries written into an unstamped
             # directory used to be discarded by the next process as an
