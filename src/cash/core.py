@@ -2550,7 +2550,11 @@ class Cash:
         )
         frozen_args = self._frozen_arg_names(normalized_args)
 
-        raw_metadata, _data = self.backend.get(cache_key)
+        # Looking, not reading: `get` would count this as a use (USES / LAST
+        # USED in `cash inspect`) and make the file backend rewrite the entry.
+        raw_metadata = self.backend.peek_metadata(cache_key)
+        if raw_metadata is not None and raw_metadata.get('metadata_only'):
+            raw_metadata = None          # nothing to restore: a real call misses
         if raw_metadata is None:
             details = {
                 'hint': (

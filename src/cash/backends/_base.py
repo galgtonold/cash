@@ -781,6 +781,18 @@ class CacheBackend(ABC):
                 count += 1
         return count
 
+    def peek_metadata(self, key: str) -> MetadataDict | None:
+        """Metadata for *key* WITHOUT counting it as a use, or ``None``.
+
+        For looking, not reading: ``explain()`` asks whether the next call
+        would hit, and going through ``get()`` recorded that as an access --
+        USES and LAST USED moved in ``cash inspect``, and the file backend
+        rewrote the entry to persist the stamp (round 18). The default is
+        ``get_metadata``; a backend whose ``get_metadata`` records an access
+        overrides this.
+        """
+        return self.get_metadata(key)
+
     def get_metadata(self, key: str) -> MetadataDict | None:
         """Get only metadata for a cache key without deserializing the value.
 

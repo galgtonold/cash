@@ -101,6 +101,11 @@ class InMemoryBackend(CacheBackend):
             logger.debug("Could not deep-copy value for key %r, returning reference", key)
             return value
 
+    def peek_metadata(self, key: str) -> MetadataDict | None:
+        """The metadata, without counting an access. See `BaseBackend.peek_metadata`."""
+        entry = self._store.get(key)
+        return dict(entry[0]) if entry is not None else None
+
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         if key in self._store:
             metadata, value = self._store[key]

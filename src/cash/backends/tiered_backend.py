@@ -187,6 +187,17 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             f"the serialized one, the same number `cash inspect` reports.",
         )
 
+    def peek_metadata(self, key: str) -> MetadataDict | None:
+        """The fastest tier's metadata for *key*, without counting an access
+        or promoting anything. See `BaseBackend.peek_metadata`."""
+        for backend in self.backends:
+            metadata = backend.peek_metadata(key)
+            if metadata is not None:
+                metadata = dict(metadata)
+                metadata['source'] = getattr(type(backend), 'source_label', None) or type(backend).__name__
+                return metadata
+        return None
+
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         for i, backend in enumerate(self.backends):
             metadata, value = backend.get(key)

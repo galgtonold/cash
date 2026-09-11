@@ -1,6 +1,6 @@
 # Backend internals
 
-<!-- claim: cash/backends/_base.py:CacheBackend @e479b7c2 broad="the page documents the ABC as a whole contract" -->
+<!-- claim: cash/backends/_base.py:CacheBackend @b613672d broad="the page documents the ABC as a whole contract" -->
 This page is for users **writing their own backend** or contributing
 fixes to the bundled ones. End-users picking a backend should go to
 [Backends](backends.md) instead.
@@ -29,6 +29,11 @@ from cash.backends.serialization import (
 3. Honour the error contract: return `(None, None)` from `get()` on
    miss, raise `CacheBackendError` from anywhere else for
    infrastructure failures.
+
+If your `get()` records an access (a use count, a last-used time), also
+override `peek_metadata(key)` to return the metadata without recording one:
+`explain()` uses it, and is documented to change nothing. The default falls
+back to `get_metadata()`, whose own default is a full `get()`.
 
 If your backend touches the network or disk, also pull in
 `PendingWrites` (below) so `set()` can return fast and the real I/O
