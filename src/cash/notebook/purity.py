@@ -202,7 +202,15 @@ _AMBIENT_READ_CALLS = frozenset({
     'time.localtime', 'time.gmtime',
     'os.getcwd', 'os.getenv', 'os.environ.get',
     'uuid.uuid1', 'uuid.uuid4',
+    'pandas.Timestamp.now', 'pandas.Timestamp.today', 'pandas.Timestamp.utcnow',
 })
+
+#: Constructors that read the clock only when a string argument says so:
+#: ``pd.to_datetime("today")``, ``pd.Timestamp("now")``, ``np.datetime64("now")``.
+_AMBIENT_WHEN_ARG_CALLS = frozenset({
+    'pandas.to_datetime', 'pandas.Timestamp', 'numpy.datetime64',
+})
+_AMBIENT_ARG_VALUES = frozenset({'now', 'today'})
 
 #: Method names meaning "this call changed something outside the function".
 #:

@@ -62,7 +62,9 @@ from .notebook.cacheability import (
 from .notebook.function_tracker import is_local_module
 from .purity_flow import LogOnlyFlow, fresh_name_nodes, is_log_helper, receiver_is_fresh
 from .notebook.purity import (
+    _AMBIENT_ARG_VALUES,
     _AMBIENT_READ_CALLS,
+    _AMBIENT_WHEN_ARG_CALLS,
     _IMPURE_FUNCTION_CALLS,
     _IMPURE_MODULE_CALLS,
     _WRITE_METHODS,
@@ -355,14 +357,15 @@ class _PurityVisitor(ast.NodeVisitor):
         "issues", "called_callable_nodes", "_param_names",
         "_qualname", "_line_offset", "_local_owned", "read_names",
         "_assign_kinds", "_name_call_nodes", "_subscript_call_nodes",
-        "_fresh_nodes", "_log_only",
+        "_fresh_nodes", "_log_only", "_namespace",
     )
 
     def __init__(self, qualname: str, param_names: frozenset[str],
                  line_offset: int = 0,
                  local_owned: frozenset[str] = frozenset(),
                  fresh_nodes: frozenset[int] = frozenset(),
-                 log_only: frozenset[int] = frozenset()) -> None:
+                 log_only: frozenset[int] = frozenset(),
+                 namespace: dict[str, Any] | None = None) -> None:
         self.issues: list[PurityIssue] = []
         self.called_callable_nodes: list[ast.AST] = []
         #: Calls reported as known I/O (``requests.get``, ``open``). Not walked,
@@ -397,6 +400,9 @@ class _PurityVisitor(ast.NodeVisitor):
         self._fresh_nodes = fresh_nodes
         # Ambient reads (by node id) whose value reaches only a log line.
         self._log_only = log_only
+        # What the body's names are bound to, so an aliased ambient read
+        # (`_dt.datetime.now()`) is recognised (`_ambient_call`).
+        self._namespace = namespace
 
     # --- impure / dynamic / called-name detection on Call nodes ---
 
@@ -633,15 +639,18 @@ class _PurityVisitor(ast.NodeVisitor):
             dotted = f"{module_name}.{func_name}" if module_name else func_name
 
             # Ambient reads (datetime.now, os.getenv, uuid4, ...). Only ever
-            # matched DOTTED: every entry carries its module, so a method named
-            # `now` on the user's own object is not this.
-            if dotted in _AMBIENT_READ_CALLS and id(node) in self._log_only:
+            # matched DOTTED, or through what a name is bound to: every entry
+            # carries its module, so a method named `now` on the user's own
+            # object is not this.
+            ambient = _ambient_call(node, self._namespace)
+            if ambient is not None and id(node) in self._log_only:
                 return          # only ever printed or logged: cannot reach a result
-            if dotted in _AMBIENT_READ_CALLS:
+            if ambient is not None:
+                shown = ambient if ambient.endswith(")") else f"{ambient}()"
                 self.issues.append(PurityIssue(
                     kind=ISSUE_AMBIENT_READ,
                     description=(
-                        f"{dotted}() - reads ambient state, which is not in the "
+                        f"{shown} - reads ambient state, which is not in the "
                         f"cache key, so the first call's value is frozen into "
                         f"every later result"
                     ),
@@ -1168,6 +1177,86 @@ def _callee_chain(node: ast.AST) -> tuple[str, ...] | None:
     return tuple(reversed(parts))
 
 
+_AMBIENT_ROOTS: dict[str, Any] = {"loaded": None, "roots": {}}
+
+
+def _ambient_roots() -> dict[int, tuple[Any, str]]:
+    """``id(obj) -> (obj, canonical name)`` for every module, class and plain
+    function an ambient-read spelling passes through (``datetime``,
+    ``datetime.datetime``, ``time.time``, ``pandas.Timestamp``), among the
+    modules loaded now. Rebuilt when that set changes."""
+    table = _AMBIENT_READ_CALLS | _AMBIENT_WHEN_ARG_CALLS
+    loaded = tuple(sorted({e.split(".", 1)[0] for e in table} & set(sys.modules)))
+    if _AMBIENT_ROOTS["loaded"] == loaded:
+        return _AMBIENT_ROOTS["roots"]
+    roots: dict[int, tuple[Any, str]] = {}
+    for entry in table:
+        parts = entry.split(".")
+        obj: Any = sys.modules.get(parts[0])
+        if obj is None:
+            continue
+        roots.setdefault(id(obj), (obj, parts[0]))
+        for i in range(1, len(parts)):
+            try:
+                nxt = getattr(obj, parts[i])
+                # Only objects with a stable identity: `datetime.datetime.now`
+                # is a new bound method on every read, and a recycled id would
+                # match something else.
+                if nxt is not getattr(obj, parts[i]):
+                    break
+            except AttributeError:
+                break
+            obj = nxt
+            roots.setdefault(id(obj), (obj, ".".join(parts[:i + 1])))
+    _AMBIENT_ROOTS["loaded"], _AMBIENT_ROOTS["roots"] = loaded, roots
+    return roots
+
+
+def _ambient_call(node: ast.Call, namespace: dict[str, Any] | None) -> str | None:
+    """The ambient read *node* makes, spelled canonically, or None.
+
+    The spelling in the source first (``datetime.now()``), then what its names
+    are bound to in *namespace*: round 19 found ``import datetime as _dt;
+    _dt.datetime.now()``, ``from datetime import datetime as DateTime``,
+    ``import time as _time``, ``import os as _os`` and ``pd.Timestamp.now()``
+    freezing a timestamp with no warning, while the canonical spellings
+    warned. Also ``pd.to_datetime("today")`` and ``pd.Timestamp("now")``.
+    """
+    func_node = node.func
+    name = _get_call_name(func_node)
+    module = _get_call_module(func_node)
+    if name:
+        dotted = f"{module}.{name}" if module else name
+        if dotted in _AMBIENT_READ_CALLS:
+            return dotted
+    chain = _callee_chain(func_node)
+    if not namespace or not chain or chain[0] not in namespace:
+        return None
+    roots = _ambient_roots()
+    obj: Any = namespace[chain[0]]
+    candidates: list[str] = []
+    for i in range(len(chain)):
+        if i:
+            if not isinstance(obj, (types.ModuleType, type)):
+                break
+            try:
+                obj = getattr(obj, chain[i])
+            except Exception:  # noqa: BLE001 - a probe of user namespaces
+                break
+        hit = roots.get(id(obj))
+        if hit is not None and hit[0] is obj:
+            candidates.append(".".join((hit[1], *chain[i + 1:])))
+    for canonical in reversed(candidates):
+        if canonical in _AMBIENT_READ_CALLS:
+            return canonical
+        if (canonical in _AMBIENT_WHEN_ARG_CALLS and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and node.args[0].value.strip().lower() in _AMBIENT_ARG_VALUES):
+            return f"{canonical}({node.args[0].value!r})"
+    return None
+
+
 def is_mock(obj: Any) -> bool:
     """A ``unittest.mock`` object (``pytest-mock`` uses the same classes).
 
@@ -1604,10 +1693,21 @@ class PurityAnalyzer:
 
             local_owned = _compute_local_owned(func_def, param_names)
             own_issues_from = len(all_issues)
+            # What the body's names are bound to: the callee resolution below,
+            # and aliased ambient reads, both need it. Imports written inside
+            # the body bind locals the module's globals never see; a local
+            # shadows a global of the same name.
+            namespace = _build_namespace(func)
+            local_imports = _local_import_map(func_def, func)
+            for _local, (_mod, _prefix) in local_imports.items():
+                _obj = _resolve_local_import(_mod, _prefix, root_module)
+                if _obj is not None:
+                    namespace[_local] = _obj
             visitor = _PurityVisitor(
                 qualname=qualname, param_names=param_names, local_owned=local_owned,
                 fresh_nodes=fresh_name_nodes(func_def),
-                log_only=_log_only_ambient_reads(func_def, func),
+                log_only=_log_only_ambient_reads(func_def, func, namespace),
+                namespace=namespace,
             )
             visitor.visit(func_def)
             visitor.finalize_taint()
@@ -1634,17 +1734,9 @@ class PurityAnalyzer:
                 continue
 
             # Resolve callees and queue user-code helpers. The merged
-            # namespace includes closure cells so nested-function
-            # helpers (defined inside another function) are visible
-            # for recursion.
-            namespace = _build_namespace(func)
-            # Imports written inside the body bind locals the module's globals
-            # never see; a local shadows a global of the same name.
-            local_imports = _local_import_map(func_def, func)
-            for _local, (_mod, _prefix) in local_imports.items():
-                _obj = _resolve_local_import(_mod, _prefix, root_module)
-                if _obj is not None:
-                    namespace[_local] = _obj
+            # namespace (built above) includes closure cells so nested-function
+            # helpers (defined inside another function) are visible for
+            # recursion.
 
             def _call_site_path(chain: tuple[str, ...] | None) -> tuple[str, tuple[str, ...]] | None:
                 if chain and chain[0] in local_imports:  # noqa: B023 - loop var, used within iteration
@@ -1902,7 +1994,8 @@ def _anchor_issue_lines(issues: list[PurityIssue], start: int, func: Any) -> Non
         )
 
 
-def _log_only_ambient_reads(func_def: ast.AST, func: Any = None) -> frozenset[int]:
+def _log_only_ambient_reads(func_def: ast.AST, func: Any = None,
+                            namespace: dict[str, Any] | None = None) -> frozenset[int]:
     """ids of the ambient reads in *func_def* whose value is only logged.
 
     "Logged" includes being passed to one of the module's own log helpers
@@ -1913,9 +2006,7 @@ def _log_only_ambient_reads(func_def: ast.AST, func: Any = None) -> frozenset[in
     candidates = []
     for node in ast.walk(func_def):
         if isinstance(node, ast.Call):
-            name = _get_call_name(node.func)
-            module = _get_call_module(node.func)
-            if name and (f"{module}.{name}" if module else name) in _AMBIENT_READ_CALLS:
+            if _ambient_call(node, namespace) is not None:
                 candidates.append(node)
         elif (isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load)
                 and _get_base_name(node.value) in _ENVIRON_NAMES):

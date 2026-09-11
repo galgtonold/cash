@@ -780,12 +780,21 @@ stale-result kinds, and nothing else will tell you when they bite.
 
 ## KEY-AMBIENT-READ {#key-ambient-read}
 
-<!-- claim: cash/notebook/purity.py:_AMBIENT_READ_CALLS @23eb97e5, cash/purity_analyzer.py:_PurityVisitor.visit_Subscript @c9ab46b9 -->
+<!-- claim: cash/notebook/purity.py:_AMBIENT_READ_CALLS @b18fb0f0, cash/purity_analyzer.py:_PurityVisitor.visit_Subscript @c9ab46b9 -->
 **What happened.** Reading the source of the function you decorated found a
 call that asks the world what time it is, what the environment says, where the
 process is running, or for a fresh UUID: `datetime.now()`, `date.today()`,
 `time.time()`, `os.getenv(...)`, `os.environ["..."]`, `os.getcwd()`,
-`uuid.uuid4()`. The named line ran, and the result was cached as normal.
+`uuid.uuid4()`, and pandas' `pd.Timestamp.now()`, `pd.Timestamp.today()`,
+`pd.to_datetime("today")`. The named line ran, and the result was cached as
+normal.
+
+<!-- claim: cash/purity_analyzer.py:_ambient_call @67465e6f -->
+It is recognised by what the names refer to, not by how they are spelled:
+`import datetime as _dt; _dt.datetime.now()`, `from datetime import datetime as
+DateTime; DateTime.now()`, `import time as _time` and `from time import time as
+now` all count, and a method of your own that happens to be called `now` does
+not.
 
 <!-- claim: cash/purity_flow.py:is_log_helper @eb60d621, cash/purity_analyzer.py:_log_helper_names @efc95035 -->
 A read whose value goes only into a log line cannot reach the result, and is
