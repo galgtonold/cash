@@ -700,15 +700,15 @@ Two large objects that differ only outside the sampled region therefore hash ide
 
 ## A very large file, edited in place, with its timestamp put back
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @6c0592fa, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864 -->
-Files up to `file_hash_full_max_bytes` (**64 MiB** by default) are hashed in
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @6c0592fa, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
+Files up to `file_hash_full_max_bytes` (**256 MiB** by default) are hashed in
 full, so their content decides and none of this applies. Above that, the hash
 covers three 256 KiB regions — head, middle and tail — and the file's
 timestamps stand in for the bytes it never reads.
 
 One shape gets through all of it, and it takes every one of these at once:
 
-1. the file is **larger than 64 MiB**, so it is sampled;
+1. the file is **larger than 256 MiB**, so it is sampled;
 2. the edit leaves the **size unchanged**;
 3. it lands **outside all three sampled regions**;
 4. its **mtime is restored afterwards at full nanosecond precision**;
@@ -725,6 +725,15 @@ full 100 ns value. A format that carries only whole seconds — a plain
 restored timestamp differs and the edit **is** caught. On Linux and macOS
 condition 5 fails too: the inode change time moves on any write and no ordinary
 tool puts it back, so the edit is caught there regardless.
+
+On Windows one writer needs no restoring at all: a memory-mapped write —
+`np.memmap(path, mode="r+")`, then assigning into it — changes the bytes and
+leaves NTFS's LastWriteTime *and* its change time exactly as they were
+(measured on an 80 MiB `.npy`: SHA changed, size, `st_mtime_ns` and change time
+did not, and a cached reader was served the old contents 3 times in 3). Above
+the threshold that edit is invisible on Windows. The default threshold was
+raised from 64 MiB to 256 MiB for exactly this, so an ordinary array file is
+hashed in full.
 
 **What to do:** raise the threshold above the file, and content decides again
 on every platform:

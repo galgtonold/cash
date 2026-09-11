@@ -73,11 +73,14 @@ _ABSENT_MARKER = "absent"
 # every freshness check stays cheap. The sample is a function of the file size
 # only, so snapshot-time and check-time hashes are computed identically.
 #
-# 64 MiB, not the 8 MiB this shipped with: the sampled regime has a hole (see
+# 256 MiB, not the 8 MiB this shipped with: the sampled regime has a hole (see
 # ``file_dep_is_fresh``) that cost two round-16 testers a wrong answer each,
 # and the memo below made the full hash a once-per-process cost rather than a
 # per-check one -- which is what makes covering the ordinary CSV affordable.
-_HASH_FULL_MAX_BYTES_DEFAULT = 64 * 1024 * 1024       # 64 MiB
+# Raised from 64 MiB in round 19: an 80 MiB .npy written through np.memmap on
+# Windows changes neither its size nor any timestamp, so above the cap only
+# content can see it, and a stale answer came back 3 of 3.
+_HASH_FULL_MAX_BYTES_DEFAULT = 256 * 1024 * 1024      # 256 MiB
 
 
 #: The config of the `Cash` instance whose call is running, set by its
@@ -517,7 +520,8 @@ def file_dep_is_fresh(
         # and `tar -x` do. On POSIX ``st_ctime`` is not: it is the inode change
         # time, it moves on any write, and no ordinary tool puts it back. On
         # Windows it is the creation time and does not move, so this closes the
-        # hole on Linux and macOS and narrows nothing there. The remaining
+        # hole on Linux and macOS and narrows nothing there -- nor does NTFS move
+        # LastWriteTime or ChangeTime for a write through np.memmap. The remaining
         # Windows case is documented, and ``file_hash_full_max_bytes`` closes it
         # on any platform at the cost of hashing the whole file on every check
         # (measured ~0.72 ms/MiB).

@@ -83,7 +83,9 @@ unsampled interior bytes of a file above that threshold, whose mtime is then
 restored at full nanosecond precision, is not detected -- and only on Windows,
 where there is no inode change time. The timestamp comparison is exact on the
 integer nanoseconds, so a tool restoring whole seconds does not reach it. The
-threshold defaults to 64 MiB — above the ordinary CSV or parquet — because the
+threshold defaults to 256 MiB (64 MiB until round 19, when a memory-mapped
+`.npy` write on Windows showed that a timestamp can stay put without any tool
+restoring it) — above the ordinary CSV, parquet or array file — because the
 digest is memoized per process, so a full hash is paid once rather than on every
 lookup.
 

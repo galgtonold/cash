@@ -300,11 +300,11 @@ A matching size *and* a matching content hash is fresh, **regardless of the mtim
 
 ### Large files are sampled, not fully hashed
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @6c0592fa, cash/notebook/file_dep_snapshot.py:file_content_hash @6dd07760, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @6c0592fa, cash/notebook/file_dep_snapshot.py:file_content_hash @6dd07760, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
 Hashing a multi-GB parquet on every lookup would defeat the point of caching, so the hash is size-bounded (`file_content_hash`), at a threshold you can move (`file_hash_full_max_bytes`):
 
-- Files **≤ 64 MiB** (`_HASH_FULL_MAX_BYTES`) are hashed **in full**.
-- Files **> 64 MiB** are **sampled** at three deterministic, size-derived offsets — head, middle, and tail, **256 KiB each** (`_HASH_SAMPLE_REGION_BYTES`) — with the byte length folded into the digest.
+- Files **≤ 256 MiB** (`_HASH_FULL_MAX_BYTES`) are hashed **in full**.
+- Files **> 256 MiB** are **sampled** at three deterministic, size-derived offsets — head, middle, and tail, **256 KiB each** (`_HASH_SAMPLE_REGION_BYTES`) — with the byte length folded into the digest.
 
 A full hash costs about 0.72 ms per MiB, and the digest is memoized per process against the file's stat fields, so a file that nothing has touched is hashed once and then costs a `stat()`.
 
@@ -316,8 +316,8 @@ The tradeoff therefore inverted rather than disappearing. What you pay for a lar
 
 | File size | Hash covers | mtime | You can be surprised by |
 |---|---|---|---|
-| ≤ 64 MiB | every byte | ignored | nothing — content decides |
-| > 64 MiB | head/middle/tail | must also match | a needless recompute after a touch |
+| ≤ 256 MiB | every byte | ignored | nothing — content decides |
+| > 256 MiB | head/middle/tail | must also match | a needless recompute after a touch |
 
 If a spurious recompute on a multi-GB input is itself too expensive, write a `DataSource` subclass whose `state_token()` returns whatever cheap, authoritative version marker your data already has (a manifest hash, an ETag, a build id) and pass it via `depends_on=`.
 
@@ -369,7 +369,7 @@ Two things on network mounts do still deserve care:
 
 - **`file_depends_on=` remains mtime-based**, so the coarse-resolution problem applies to it in full. On a network mount, prefer auto-tracking for critical files, or write a `DataSource` subclass whose `state_token()` returns a content hash.
 - **Directory dependencies are mtime-based too.** A directory has no content to hash, so the [directory tracking](#directory-enumeration-tracks-the-directory) added for `glob` / `listdir` / `scandir` falls back to the mtime path. It relies on the filesystem bumping a directory's mtime when an entry is added or removed — true on local filesystems, not guaranteed on every network mount. If a new file appearing in a globbed directory must invalidate on such a mount, list the files explicitly via `file_depends_on=`.
-- **Content hashing costs a network read.** On a slow mount the hash is I/O over the wire whenever the size matches. The size check short-circuits the common "file was replaced wholesale" case first, and files over 64 MiB only pull 768 KiB of samples, but a large directory of same-size files re-hashed on every lookup is worth measuring.
+- **Content hashing costs a network read.** On a slow mount the hash is I/O over the wire whenever the size matches. The size check short-circuits the common "file was replaced wholesale" case first, and files over 256 MiB only pull 768 KiB of samples, but a large directory of same-size files re-hashed on every lookup is worth measuring.
 
 ### Files outside the working directory
 

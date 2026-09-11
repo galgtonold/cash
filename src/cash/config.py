@@ -185,21 +185,23 @@ class CashConfig:
     values reduce data loss on crash but increase disk I/O. Set to
     0 to flush after every write (slowest, safest)."""
 
-    file_hash_full_max_bytes: int = 64 * 1024 * 1024
+    file_hash_full_max_bytes: int = 256 * 1024 * 1024
     """Largest tracked file hashed IN FULL when checking freshness.
 
     Above this, the content hash covers three deterministic head/middle/tail
     regions plus the size, and the file's timestamps are used as a backstop —
     which keeps a freshness check on a multi-GB parquet cheap, and leaves one
-    hole: a same-size edit *outside* the sampled regions whose mtime is then
-    restored (`cp -p`, `rsync -a`, `tar -x`) is invisible. On Linux and macOS
-    the inode change time closes that; on Windows it does not.
+    hole: a same-size edit *outside* the sampled regions that leaves the mtime
+    as it was is invisible. `cp -p`, `rsync -a` and `tar -x` restore the mtime;
+    a write through ``np.memmap(mode="r+")`` on Windows never moves it at all.
+    On Linux and macOS the inode change time closes that; on Windows nothing
+    does.
 
-    The default covers the ordinary CSV or parquet outright. A full hash
-    costs about 0.72 ms per MiB — 46 ms at 64 MiB — but only the FIRST
-    check of a file pays it: the digest is memoized per process, so later
-    checks of an unchanged file cost a ``stat``. Lower it if your inputs are
-    large, on a slow mount, and re-read by many short-lived processes."""
+    The default covers the ordinary CSV, parquet or ``.npy`` outright. A full
+    hash costs about 0.72 ms per MiB — about 0.2 s at 256 MiB — but only the
+    FIRST check of a file pays it: the digest is memoized per process, so
+    later checks of an unchanged file cost a ``stat``. Lower it if your inputs
+    are large, on a slow mount, and re-read by many short-lived processes."""
 
     shutdown_write_timeout: float = 60.0
     """Seconds a finishing process waits for its background cache

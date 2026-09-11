@@ -14,12 +14,12 @@ Three things came out of it:
   the edit is caught. On Windows it is the CREATION time and does not move --
   measured on this machine, which is why the next two items exist.
 * ``file_hash_full_max_bytes`` makes the threshold configurable.
-* **the default is 64 MiB**, not the 8 MiB this shipped with, so the ordinary
-  CSV or parquet is hashed in full and the hole does not reach it on any
+* **the default is 256 MiB** (64 MiB until round 19), not the 8 MiB this
+  shipped with, so the ordinary CSV, parquet or .npy is hashed in full and the hole does not reach it on any
   platform. A full hash costs about 0.72 ms per MiB, but the digest is
   memoized per process, so only the first check of a file pays it.
 
-Above 64 MiB the sampled regime is still the sampled regime, and the timestamp
+Above 256 MiB the sampled regime is still the sampled regime, and the timestamp
 comparison is what stands in for the bytes the hash never reads. It compares
 the integer nanoseconds exactly now, and what that catches depends on the
 resolution the restoring tool stores: whole seconds (a plain ``tar`` ustar
@@ -43,7 +43,7 @@ from cash.notebook.file_dep_snapshot import (
     snapshot_file_deps,
 )
 
-# A 9 MiB fixture is BELOW the 64 MiB default (full-hashed) and above this
+# A 9 MiB fixture is BELOW the 256 MiB default (full-hashed) and above this
 # lowered one (sampled). Both regimes are then reachable from one file.
 _SAMPLE_ABOVE = 1024 * 1024
 
@@ -246,3 +246,14 @@ def test_an_unedited_big_file_still_hits(tmp_path):
 
     assert rows(path) == rows(path)
     assert len(runs) == 1
+
+
+def test_the_default_full_hash_threshold_covers_a_memmapped_npy():
+    """Round 19: an 80 MiB .npy written through ``np.memmap(mode="r+")`` on
+    Windows kept its size, mtime and NTFS change time -- only its content
+    moved, and above the 64 MiB threshold content was sampled, so the reader
+    was served stale 3 of 3. Decided: raise the default to 256 MiB. The config
+    field and the snapshot's fallback must agree."""
+    from cash.config import CashConfig
+    assert _HASH_FULL_MAX_BYTES_DEFAULT == 256 * 1024 * 1024
+    assert CashConfig().file_hash_full_max_bytes == _HASH_FULL_MAX_BYTES_DEFAULT

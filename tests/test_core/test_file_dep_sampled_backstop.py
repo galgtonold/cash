@@ -37,7 +37,7 @@ from cash.notebook.file_dep_snapshot import (
 pytestmark = pytest.mark.core
 
 # The threshold is lowered here rather than the fixtures grown past the real
-# default (64 MiB): what is under test is the SAMPLED regime, which begins
+# default (256 MiB): what is under test is the SAMPLED regime, which begins
 # wherever the threshold sits, and a 130 MiB fixture per test buys nothing.
 # ``test_sampled_file_freshness_backstops.py`` pins the default itself.
 _FULL_MAX = 1024 * 1024                    # 1 MiB

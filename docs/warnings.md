@@ -266,7 +266,10 @@ cheaper:
 * `file_hash_full_max_bytes` decides where cash stops hashing a file in full and
   starts sampling three regions of it. Sampling is cheaper **per file** and no
   cheaper per file *count*, so it helps with a few huge inputs and not with
-  hundreds of small ones.
+  hundreds of small ones. Lowering it below a file you edit in place with
+  `np.memmap` is a correctness trade on Windows, not just a cost one: such a
+  write moves no timestamp there, so above the threshold it is not seen (see
+  [known limitations](known-limitations.md#a-very-large-file-edited-in-place-with-its-timestamp-put-back)).
 
 **When it is safe to ignore.** When the numbers say the trade is still worth it
 — half a second of checking against a five-minute pipeline is a good deal, and
