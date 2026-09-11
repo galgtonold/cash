@@ -70,6 +70,10 @@ def test_fresh_instance_hits_on_first_call(tmp_path):
     top1 = _build_chain(c1)
     for s in (1, 2, 3):
         top1(s)
+    # A second process starts after the first has finished writing; a second
+    # instance in this one must wait for that too. Without it the last write
+    # was still on the writer thread when `explain` peeked (macOS CI, once).
+    c1.backend._writes.wait_all()
 
     c2 = Cash(backend=FileBackend(cache_dir=cache_dir))
     top2 = _build_chain(c2)
