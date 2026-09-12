@@ -38,6 +38,8 @@ CELLS = [
     "import cash\n%cash_on\n",
     # imports: the import system and matplotlib read files of their own
     "import json\n"
+    "import os\n"
+    "os.environ['PROJECT_MODE'] = 'report'\n"
     "from pathlib import Path\n"
     "import numpy as np\n"
     "import pandas as pd\n"
@@ -68,6 +70,7 @@ CELLS = [
     "tot = df.groupby('region')['spend'].sum()\n"
     "fig, ax = plt.subplots(figsize=(4, 3))\n"
     "tot.plot(ax=ax, kind='bar')\n"
+    "ax.set_xlabel('region'); ax.set_ylabel('spend')\n"
     "fig.tight_layout()\n"
     "fig.savefig(OUT / 'chart.png', dpi=50)\n"
     "plt.close(fig)\n",
@@ -80,7 +83,8 @@ CELLS = [
     "after = float(m.score(X, y))\n",
     # the report: reads nearly everything above
     "report = {'before': before, 'after': after, 'score': score(df),\n"
-    "          'totals': totals, 'noise': round(float(noise.sum()), 6)}\n"
+    "          'totals': totals, 'noise': round(float(noise.sum()), 6),\n"
+    "          'mode': os.environ['PROJECT_MODE']}\n"
     "(OUT / 'report.json').write_text(json.dumps(report))\n"
     "print('REPORT', json.dumps(report, sort_keys=True))\n",
 ]

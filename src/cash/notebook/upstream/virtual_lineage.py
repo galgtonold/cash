@@ -1059,11 +1059,18 @@ class VirtualLineage:
         stmt_lookup_times: dict,
         loop_target_vars: set,
         cell_file_deps: dict,
+        raw_cell: str | None = None,
     ) -> None:
         """Simulate a single AST statement node, updating all mutable state in-place.
 
         Returns without doing anything for control structures (they are handled
         by ``_simulate_control_structure`` directly).
+
+        *raw_cell* is the text *node* was parsed from. The runtime keys an
+        expression followed by ``;`` WITH the ``;`` (IPython's display
+        suppression), which ``ast.unparse`` drops -- so ``ax.bar(...);
+        ax.set_xlabel(...)`` on one line got another key and lineage here, and
+        every chart drawn that way disagreed (round 21).
         """
         try:
             if is_control_structure(node):
@@ -1071,6 +1078,10 @@ class VirtualLineage:
                 return
 
             stmt_code = ast.unparse(node)
+            if raw_cell is not None:
+                from ..ipython.cell_executor import CellExecutor
+                if CellExecutor._expr_has_trailing_semicolon(raw_cell, node):
+                    stmt_code += ";"
         except (ValueError, TypeError, AttributeError) as e:
             logger.debug("[UPSTREAM] Error processing node in cell %d: %s", i, e)
             raise
@@ -1181,6 +1192,7 @@ class VirtualLineage:
                     virtual_lineage, virtual_modules, simulation_trace,
                     vars_mutated_by_loops, vars_with_stale_files,
                     stmt_lookup_times, loop_target_vars, cell_file_deps,
+                    raw_cell=clean_cell_code,
                 )
 
         except SyntaxError:
