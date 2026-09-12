@@ -151,14 +151,26 @@ Patching `sievelib.sieve` after `primes` imported it changes nothing `count`
 runs, and so nothing about its key. That holds at any depth: a helper's own
 helpers are looked up in the helper's module.
 
-<!-- claim: cash/purity_analyzer.py:is_mock @5ea1b6ab -->
+<!-- claim: cash/purity_analyzer.py:is_mock @90a11aac -->
 A `unittest.mock` object (`mock.patch(..., return_value=...)`, `MagicMock`,
 `pytest-mock`'s `mocker`) has no code for cash to key, and its answer is
 whatever the test configured, so a call that reaches one **runs uncached**,
 and nothing it returns is stored. That is usually what a test with a mock
 wants. It holds for a mock the function reaches by name: a helper of yours, a
 library function patched where it lives (`mock.patch("requests.get")`), or a
-whole module swapped out (`mock.patch("mylib.requests", MagicMock())`).
+whole module swapped out (`mock.patch("mylib.requests", MagicMock())`). An
+`autospec=True` patch counts too; its `side_effect` is the test's code, not
+yours, and is not read — before, a fake that used `__import__` made the test
+raise `CashImpureFunctionError`.
+
+<!-- claim: cash/_clock.py:perf_counter @9808b623, cash/_plain_data.py:_fake_clock @994b2ab0 -->
+**A clock test double** such as freezegun is not a mock in this sense: the
+call is cached as usual. Cash times its own work with a clock `freeze_time`
+does not reach, so a body that takes three seconds is still measured as three
+seconds and stored under a frozen clock. A `date` or `datetime` made under freezegun
+is keyed as the date it equals, so a frozen run and a real one share entries.
+What the frozen clock does reach is TTLs, which follow `time.time()`: an
+entry's age is measured on the clock the test is pretending to.
 
 <!-- claim: cash/effect_observer.py:_hook_mock_calls @d4677a09, cash/core.py:Cash._store_refusal @c3dac710 -->
 A mock deeper down — `mock.patch("requests.Session.request")`,

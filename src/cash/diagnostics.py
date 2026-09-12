@@ -80,6 +80,54 @@ def _stacklevel_of_first_user_frame() -> int:
         level += 1
     return level - 1
 
+
+#: Standard-library machinery that calls user code without being it.
+_MACHINERY = ("threading", "concurrent.futures", "multiprocessing", "asyncio")
+
+
+def _machinery_roots() -> tuple[str, ...]:
+    roots = []
+    for name in _MACHINERY:
+        path = getattr(sys.modules.get(name), "__file__", None)
+        if path:
+            path = os.path.abspath(path)
+            roots.append(path if name == "threading" else os.path.dirname(path) + os.sep)
+    return tuple(roots)
+
+
+def _user_frame_level() -> int | None:
+    """`_stacklevel_of_first_user_frame`, also passing over thread and process
+    pool machinery -- or ``None`` when no frame on this thread's stack is the
+    user's. A cached function first called in a ``ThreadPoolExecutor`` blamed
+    CPython's ``concurrent/futures/thread.py`` (round 20): a worker's stack
+    has nothing of the user's above cash, and the line that submitted the
+    work is on another thread."""
+    roots = _machinery_roots()
+    frame = sys._getframe(1)
+    level = 1
+    while frame is not None:
+        if not _is_cash_frame(frame):
+            try:
+                path = os.path.abspath(frame.f_code.co_filename)
+            except (OSError, ValueError):
+                return level
+            if not path.startswith(roots):
+                return level
+        frame = frame.f_back
+        level += 1
+    return None
+
+
+def _warn_at(instance: Warning, level: int | None, fallback: tuple[str, int] | None) -> None:
+    """Warn *instance* at *level* frames out -- counted from the caller of this
+    function's caller -- or at *fallback* when there is no user frame."""
+    if level is None and fallback is not None:
+        warnings.warn_explicit(instance, type(instance), fallback[0], fallback[1])
+        return
+    if level is None:
+        level = _stacklevel_of_first_user_frame() - 1
+    warnings.warn(instance, stacklevel=level + 1)
+
 #: Every diagnostic code Cash can emit. Adding a warning means adding its code
 #: here AND a section in ``docs/warnings.md``. Once both exist, the bijection
 #: test at ``tests/docs/test_warning_codes_documented.py`` will fail if either
@@ -257,10 +305,7 @@ def warn_diagnostic(
     message = format_diagnostic(code, what, fix)   # raises on an unknown code
     instance = category(message)
     instance.code = code
-    level = (
-        _stacklevel_of_first_user_frame() if stacklevel is None else stacklevel + 1
-    )
-    warnings.warn(instance, stacklevel=level)
+    _warn_at(instance, _user_frame_level() if stacklevel is None else stacklevel + 1, None)
 
 
 def warn_diagnostic_explicit(
@@ -304,7 +349,8 @@ def warn_diagnostic_explicit(
 
 
 def warn_diagnostic_message(
-    category: type[Warning], code: str, message: str, *, stacklevel: int | None = None
+    category: type[Warning], code: str, message: str, *, stacklevel: int | None = None,
+    fallback: tuple[str, int] | None = None,
 ) -> None:
     """Emit an already-rendered *message* carrying *code*.
 
@@ -314,13 +360,11 @@ def warn_diagnostic_message(
     attribute and the registry check for that path.
 
     Blames the nearest frame outside Cash unless *stacklevel* overrides it, the
-    same as :func:`warn_diagnostic`.
+    same as :func:`warn_diagnostic` -- or, with no frame of the user's on this
+    thread's stack (a pool worker), the ``(filename, lineno)`` in *fallback*.
     """
     if code not in DIAGNOSTIC_CODES:
         raise KeyError(f"unknown diagnostic code: {code!r}")
     instance = category(message)
     instance.code = code
-    level = (
-        _stacklevel_of_first_user_frame() if stacklevel is None else stacklevel + 1
-    )
-    warnings.warn(instance, stacklevel=level)
+    _warn_at(instance, _user_frame_level() if stacklevel is None else stacklevel + 1, fallback)

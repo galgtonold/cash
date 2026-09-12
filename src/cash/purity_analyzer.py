@@ -61,7 +61,14 @@ from .notebook.cacheability import (
     _is_open_write_mode,
 )
 from .notebook.function_tracker import is_local_module
-from .purity_flow import LogOnlyFlow, fresh_name_nodes, is_log_helper, receiver_is_fresh
+from .purity_flow import (
+    LogOnlyFlow,
+    fresh_name_nodes,
+    is_log_helper,
+    is_log_line,
+    is_read_only_sql,
+    receiver_is_fresh,
+)
 from .notebook.purity import (
     _AMBIENT_ARG_VALUES,
     _AMBIENT_READ_CALLS,
@@ -652,6 +659,11 @@ class _PurityVisitor(ast.NodeVisitor):
             # carries its module, so a method named `now` on the user's own
             # object is not this.
             ambient = _ambient_call(node, self._namespace)
+            if (ambient is not None and isinstance(func_node, ast.Name) and self._namespace
+                    and _clock_helper_read(self._namespace.get(func_node.id)) is not None):
+                # A clock helper is still the user's code: walked, so an edit
+                # to it reaches the key like any helper's.
+                self.called_callable_nodes.append(node)
             if ambient is not None and id(node) in self._log_only:
                 return          # only ever printed or logged: cannot reach a result
             if ambient is not None:
@@ -667,6 +679,9 @@ class _PurityVisitor(ast.NodeVisitor):
                     line=line,
                 ))
                 return
+
+            if is_log_line(node):
+                return      # a diagnostic line: a hit skipping it is what caching means
 
             if dotted in _IMPURE_MODULE_CALLS or func_name in _IMPURE_FUNCTION_CALLS:
                 # Special case: open() in read mode is not impure.
@@ -690,6 +705,7 @@ class _PurityVisitor(ast.NodeVisitor):
                 and func_node.attr in _WRITE_METHODS
                 and not self._receiver_is_local_owned(func_node.value)
                 and not self._is_module_function_named_like_a_mutator(func_node)
+                and not is_read_only_sql(node)
             ):
                 base = _get_base_name(func_node.value)
                 base_str = f"{base}." if base else ""
@@ -777,7 +793,8 @@ class _PurityVisitor(ast.NodeVisitor):
         return obj is time.sleep
 
     def visit_Expr(self, node: ast.Expr) -> None:  # noqa: N802
-        if isinstance(node.value, ast.Call) and self._discard_is_expected(node.value.func):
+        if isinstance(node.value, ast.Call) and (
+                self._discard_is_expected(node.value.func) or is_log_line(node.value)):
             self.generic_visit(node)
             return
         if isinstance(node.value, ast.Call):
@@ -1344,7 +1361,53 @@ def _ambient_call(node: ast.Call, namespace: dict[str, Any] | None) -> str | Non
                 and isinstance(node.args[0].value, str)
                 and node.args[0].value.strip().lower() in _AMBIENT_ARG_VALUES):
             return f"{canonical}({node.args[0].value!r})"
+    if len(chain) == 1:
+        inner = _clock_helper_read(namespace[chain[0]])
+        if inner is not None:
+            shown = inner if inner.endswith(")") else f"{inner}()"
+            return f"{chain[0]}() (which returns {shown})"
     return None
+
+
+def _clock_helper_read(value: Any) -> str | None:
+    """The ambient read a CLOCK HELPER returns, or None.
+
+    A clock helper is a function of the user's whose body is log lines and one
+    ``return <ambient read>``: ``def mark(name): print(..., file=sys.stderr);
+    return time.perf_counter()``. Calling it IS the ambient read, so it is
+    judged where it is called -- where ``t0 = mark("step")`` handed only to a
+    ``done(name, t0)`` that prints it cannot reach a result (round 20: a
+    KEY-AMBIENT-READ per step, every run). Inside the helper it is not
+    reported at all when the helper is reached from a cached function.
+    """
+    code = getattr(value, "__code__", None)
+    if not isinstance(value, types.FunctionType) or code is None:
+        return None
+    if code in _CLOCK_HELPER_CACHE:
+        return _CLOCK_HELPER_CACHE[code]
+    _CLOCK_HELPER_CACHE[code] = None          # a helper that calls itself
+    found = None
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(value)))
+        func_def = tree.body[0] if tree.body else None
+        body = list(getattr(func_def, "body", []))
+        if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            body = body[1:]
+        if (body and isinstance(body[-1], ast.Return) and isinstance(body[-1].value, ast.Call)
+                and all(isinstance(s, ast.Expr) and isinstance(s.value, ast.Call)
+                        and is_log_line(s.value) for s in body[:-1])):
+            found = _ambient_call(body[-1].value, _build_namespace(value))
+    except SOURCE_RETRIEVAL_ERRORS + (SyntaxError, ValueError):
+        found = None
+    if len(_CLOCK_HELPER_CACHE) >= 4096:
+        _CLOCK_HELPER_CACHE.clear()
+    _CLOCK_HELPER_CACHE[code] = found
+    return found
+
+
+#: code object -> the ambient read that clock helper returns, or None.
+_CLOCK_HELPER_CACHE: dict[Any, str | None] = {}
 
 
 def is_mock(obj: Any) -> bool:
@@ -1355,7 +1418,16 @@ def is_mock(obj: Any) -> bool:
     read as set. Never imports ``unittest.mock`` itself.
     """
     module = sys.modules.get("unittest.mock")
-    return module is not None and isinstance(obj, module.NonCallableMock)
+    if module is None:
+        return False
+    if isinstance(obj, module.NonCallableMock):
+        return True
+    # `create_autospec` / `patch(..., autospec=True)` on a function makes a
+    # real function that carries its mock. Walked as code, it led into the
+    # TEST's side_effect, analysed as production code -- an `__import__` in a
+    # fake raised CashImpureFunctionError out of the test (round 20).
+    return (isinstance(obj, types.FunctionType)
+            and isinstance(obj.__dict__.get("mock"), module.NonCallableMock))
 
 
 def _binding_path(caller: Any, chain: tuple[str, ...] | None) -> tuple[str, tuple[str, ...]] | None:
@@ -1802,6 +1874,9 @@ class PurityAnalyzer:
             )
             visitor.visit(func_def)
             visitor.finalize_taint()
+            if depth > 0 and _clock_helper_read(func) is not None:
+                # Judged where it is called (`_clock_helper_read`).
+                visitor.issues = [i for i in visitor.issues if i.kind != ISSUE_AMBIENT_READ]
             all_issues.extend(visitor.issues)
 
             # Flag reads of module globals that are reassigned/mutated somewhere

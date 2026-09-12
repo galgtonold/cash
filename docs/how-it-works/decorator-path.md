@@ -71,7 +71,7 @@ Modules, plain callables (already tracked as helpers) and classes are excluded
 from the globals fold. A capture or global that can't be hashed warns once and is
 skipped rather than silently pretending it doesn't exist.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @2aa37575 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @7a383ad6 -->
 The `args` segment resolves each argument through its own ladder, and the order
 is deliberate:
 

@@ -307,7 +307,7 @@ for the cases this model *can't* see.
 
 ### What else is in the key — the ones that cost a recompute
 
-<!-- claim: cash/core.py:Cash._fold_defaults @6339036d, cash/core.py:Cash._hash_arg_payload @2aa37575, cash/dependency_state.py:DependencyStateHasher.compute @f2914199 -->
+<!-- claim: cash/core.py:Cash._fold_defaults @6339036d, cash/core.py:Cash._hash_arg_payload @7a383ad6, cash/dependency_state.py:DependencyStateHasher.compute @f2914199 -->
 None of these gives a wrong answer. Each one costs a recompute you might not
 expect, measured across fresh processes:
 
@@ -626,7 +626,7 @@ def build(schema):
 build(Schema)                    # edit Schema, call again -> used to return the old answer
 ```
 
-<!-- claim: cash/core.py:Cash._fold_code_args @f9032430, cash/core.py:Cash._iter_code_carriers @af06e195 -->
+<!-- claim: cash/core.py:Cash._fold_code_args @a7362464, cash/core.py:Cash._iter_code_carriers @af06e195 -->
 Your code reached through the arguments now folds into `state_hash`, so editing
 it invalidates. cash finds it in a class, a function, an instance (through its
 class), any of those nested in a list/tuple/set/dict, and an instance whose
@@ -706,7 +706,7 @@ flowchart TD
     F -->|Yes| G[Return cached value]
 ```
 
-<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @f9032430 -->
+<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @a7362464 -->
 The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
 
 - `state_hash` folds in the function's own source hash + every
@@ -949,7 +949,7 @@ adding or tightening a predicate, drop what was stored under the old rule with
 
 ### `strict=` and `assume_safe=` — purity gates
 
-<!-- claim: cash/core.py:Cash._surface_purity @d82e451e, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @f30def74, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 By default, `@cash.cache` runs a static analyzer on the function body
 (and module-bounded helpers) on first call. What it does depends on what it finds:
 
@@ -1289,7 +1289,7 @@ columns), 50 ms for a 100 MB numpy array. What cash does about it:
   treated the same way; without it, every call hashes.)
 - **In a notebook**, `%cash_on` tracks every assignment and mutation, and cash
   uses that instead of hashing a tracked object again.
-- <!-- claim: cash/core.py:_plain_key_part @9a45a6aa, cash/_plain_data.py:is_plain @8aff6fb8, cash/_plain_data.py:dict_rows @39223208, cash/_plain_data.py:pickle_unshared @b031ef6e -->
+- <!-- claim: cash/core.py:_plain_key_part @9a45a6aa, cash/_plain_data.py:is_plain @8aff6fb8, cash/_plain_data.py:dict_rows @39223208, cash/_plain_data.py:pickle_unshared @841b27ff -->
   **Lists and tuples of plain values** — the rows a parser returns, including
   `date`, `datetime`, `timedelta` and `Decimal` columns — and **lists of dicts**
   that share their keys (`csv.DictReader` rows, JSON records) are recognised

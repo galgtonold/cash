@@ -81,12 +81,12 @@ def _fetch_audited(url):
 
 
 def _marker_then_fetch(url):
-    print("marker", file=sys.stderr)
+    print("marker")  # stdout: a stderr line is a log line, not a finding
     return _fetch(url)
 
 
 def _audited_marker_then_audited_fetch(url):
-    print("marker", file=sys.stderr)  # @cash:assume-safe
+    print("marker")  # @cash:assume-safe
     return _fetch_audited(url)
 
 

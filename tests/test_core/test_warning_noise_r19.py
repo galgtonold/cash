@@ -102,7 +102,7 @@ def test_a_line_inside_a_wraps_wrapper_is_numbered_in_its_own_file(tmp_path, mon
                 @functools.wraps(fn)
                 def wrapper(*args, **kwargs):
                     out = fn(*args, **kwargs)
-                    print("[timed]", file=sys.stderr)  # line 8
+                    print("[timed]")  # line 8
                     return out
                 return wrapper
         """,

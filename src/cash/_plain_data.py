@@ -14,6 +14,7 @@ falls back to its general walk.
 """
 from __future__ import annotations
 
+import copyreg
 import datetime
 import decimal
 import io
@@ -37,20 +38,72 @@ SEQS = (list, tuple)
 MAX_LEVELS = 16
 
 
+def _fake_clock() -> tuple[tuple, dict]:
+    """``(leaf types, pickler dispatch entries)`` for a loaded clock test double.
+
+    Under freezegun, ``date(2025, 10, 1)`` written in a module is a
+    ``freezegun.api.FakeDate``: equal to the real date, but pickled under its
+    own class -- so every key holding one moved, and a frozen run never shared
+    an entry with a real one (round 20). Reduced as the real class reduces,
+    it is keyed as the value it is.
+    """
+    mod = sys.modules.get("freezegun.api")
+    if mod is None:
+        return (), {}
+    known = _FAKE_CLOCK.get(id(mod))
+    if known is not None and known[0] is mod:
+        return known[1]
+    leaves: list[type] = []
+    table: dict[type, Any] = {}
+    for name, base in (("FakeDate", datetime.date), ("FakeDatetime", datetime.datetime)):
+        cls = getattr(mod, name, None)
+        if isinstance(cls, type) and issubclass(cls, base):
+            leaves.append(cls)
+            table[cls] = lambda obj, base=base: (base, base.__reduce_ex__(obj, 2)[1])
+    _FAKE_CLOCK.clear()
+    _FAKE_CLOCK[id(mod)] = (mod, (tuple(leaves), table))
+    return tuple(leaves), table
+
+
+#: id(freezegun.api) -> (the module, what `_fake_clock` found in it)
+_FAKE_CLOCK: dict[int, tuple[Any, tuple[tuple, dict]]] = {}
+
+
+def _dump(value: Any, fast: bool) -> bytes:
+    buf = io.BytesIO()
+    pickler = pickle.Pickler(buf, protocol=pickle.DEFAULT_PROTOCOL)
+    pickler.fast = fast
+    table = _fake_clock()[1]
+    if table:
+        pickler.dispatch_table = {**copyreg.dispatch_table, **table}
+    pickler.dump(value)
+    return buf.getvalue()
+
+
+def key_dumps(value: Any) -> bytes:
+    """``pickle.dumps(value)`` for a cache key: a clock test double's date
+    pickles as the date (`_fake_clock`)."""
+    if not _fake_clock()[1]:
+        return pickle.dumps(value)
+    return _dump(value, fast=False)
+
+
 def _levels(value: Any):
     """Yield ``(flat, types)`` for each level below *value*; stop at leaves.
 
     ``flat`` is every item one level down, ``types`` their exact types. Raises
     ``_NotPlain`` as soon as a level holds anything but leaves and sequences.
     """
+    fakes = _fake_clock()[0]
+    leaves = LEAF_TYPES + fakes if fakes else LEAF_TYPES
     level = [value]
     for _ in range(MAX_LEVELS):
         flat = list(chain.from_iterable(level))
         types = set(map(type, flat))
         yield flat, types
-        if all(t in LEAF_TYPES for t in types):
+        if all(t in leaves for t in types):
             return
-        if not all(t in LEAF_TYPES or t in SEQS for t in types):
+        if not all(t in leaves or t in SEQS for t in types):
             raise _NotPlain
         level = flat if all(t in SEQS for t in types) else [
             x for x in flat if type(x) in SEQS]
@@ -173,11 +226,7 @@ def pickle_unshared(value: Any) -> bytes:
     has no cycle (`_levels` gives up on one), which is the one thing the memo
     was needed for.
     """
-    buf = io.BytesIO()
-    pickler = pickle.Pickler(buf, protocol=pickle.DEFAULT_PROTOCOL)
-    pickler.fast = True
-    pickler.dump(value)
-    return buf.getvalue()
+    return _dump(value, fast=True)
 
 
 #: A level with more items than this is sized from `SIZE_SAMPLE` of them.

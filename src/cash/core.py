@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 from .backends.serialization import get_serializer
 from .config import CashConfig, get_config
 from .data_source import DataSource
+from ._clock import perf_counter as _perf_counter
 from .dependency_state import (
     STATE_LEDGER,
     DependencyStateHasher,
@@ -2286,9 +2287,13 @@ class Cash:
         """
         parts: list[str] = []
         seen_carriers: set[int] = set()
+        # A clock test double's date is the date, not code (`_fake_clock`).
+        fake_dates = _plain_data._fake_clock()[0]
         try:
             for param, value in (*((None, a) for a in args), *kwargs.items()):
                 for carrier in self._iter_code_carriers(value):
+                    if fake_dates and (type(carrier) in fake_dates or carrier in fake_dates):
+                        continue
                     # Dedup ACROSS arguments too, not just within one walk:
                     # `f(a, b, c)` with three instances of one class reaches
                     # `_is_opaque` + `_code_surface_hash` once instead of three
@@ -2952,7 +2957,7 @@ class Cash:
             result = func(*args, **kwargs)
             self._log_decorator_call(
                 func_name, cache_hit=False,
-                execution_time=time.perf_counter() - call_start,
+                execution_time=_perf_counter() - call_start,
                 args_hash='unkeyable', cache_key='', miss_detail=unkeyable,
             )
             return (_CACHE_MISS, result, 'unkeyable')
@@ -2973,7 +2978,7 @@ class Cash:
                 # An unhashable default: we cannot tell whether it changed, so
                 # caching at all risks a stale result. Run uncached.
                 result = func(*args, **kwargs)
-                self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash='unhashable', cache_key='')
+                self._log_decorator_call(func_name, cache_hit=False, execution_time=_perf_counter() - call_start, args_hash='unhashable', cache_key='')
                 return (_CACHE_MISS, result, 'unhashable')
             current_state_hash = folded_defaults
             chain.append(current_state_hash)
@@ -3032,7 +3037,7 @@ class Cash:
                     fix=suggestion,
                 )
                 result = func(*args, **kwargs)
-                self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash='unhashable', cache_key='')
+                self._log_decorator_call(func_name, cache_hit=False, execution_time=_perf_counter() - call_start, args_hash='unhashable', cache_key='')
                 return (_CACHE_MISS, result, 'unhashable')
             cache_key = self._compute_cache_key(func_name, current_state_hash, dynamic_state_hash, args_hash)
             return (cache_key, current_state_hash, args_hash)
@@ -3063,7 +3068,7 @@ class Cash:
                 fix=hint,
             )
             result = func(*args, **kwargs)
-            self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash='error', cache_key='')
+            self._log_decorator_call(func_name, cache_hit=False, execution_time=_perf_counter() - call_start, args_hash='error', cache_key='')
             return (_CACHE_MISS, result, 'error')
 
     def _explain_call(
@@ -3483,7 +3488,7 @@ class Cash:
             self._last_key[func_name] = cache_key
             self._log_decorator_call(
                 func_name, cache_hit=True,
-                execution_time=time.perf_counter() - call_start,
+                execution_time=_perf_counter() - call_start,
                 args_hash=args_hash, cache_key=cache_key,
                 time_saved=(metadata.saves_seconds if metadata.saves_seconds is not None
                             else metadata.execution_time) or 0.0,
@@ -3758,7 +3763,7 @@ class Cash:
         run computed and kept in RAM only (see `_remember_ram_only`). Read
         through a memo on the file's (mtime, size), because every miss asks.
         """
-        empty: dict[str, dict[str, list]] = {"keys": {}, "ram_only": {}, "states": {}}
+        empty: dict[str, dict[str, list]] = {"keys": {}, "ram_only": {}, "states": {}, "warned": {}}
         path = self._stored_keys_path(func_name)
         if path is None:
             return empty
@@ -3788,7 +3793,7 @@ class Cash:
     def _memo_stored_doc(self, path: str, st: os.stat_result, data: Any) -> dict[str, dict[str, list]]:
         """Keep *data* as the record at *path* as of *st*; return a copy."""
         doc = {}
-        for kind in ("keys", "ram_only", "states"):
+        for kind in ("keys", "ram_only", "states", "warned"):
             value = data.get(kind) if isinstance(data, dict) else None
             doc[kind] = value if isinstance(value, dict) else {}
         if len(self._stored_doc_memo) >= 256:
@@ -3807,7 +3812,8 @@ class Cash:
             return
         for kind, most in (("keys", self._STORED_KEYS_MAX),
                            ("ram_only", self._STORED_KEYS_MAX),
-                           ("states", self._STORED_STATES_MAX)):
+                           ("states", self._STORED_STATES_MAX),
+                           ("warned", self._STORED_STATES_MAX * 4)):
             entries = doc.setdefault(kind, {})
             while len(entries) > most:
                 entries.pop(next(iter(entries)))
@@ -4097,11 +4103,11 @@ class Cash:
             fresh = True
             for path, recorded in snap.items():
                 is_remote = isinstance(recorded, dict) and recorded.get("remote")
-                started = time.perf_counter()
+                started = _perf_counter()
                 is_fresh, reason = file_dep_is_fresh(
                     dep_path_for_this_process(path, recorded), recorded, full_hash_max)
                 if not is_remote:
-                    local_seconds += time.perf_counter() - started
+                    local_seconds += _perf_counter() - started
                     local_count += 1
                 if not is_fresh:
                     logger.debug("[FILE_DEP] stale (%s): %s", reason, path)
@@ -4256,7 +4262,7 @@ class Cash:
 
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            call_start = time.perf_counter()
+            call_start = _perf_counter()
 
             if func_name not in self._analyzed:
                 # Double-checked under a per-function lock: the key is built
@@ -4274,7 +4280,7 @@ class Cash:
             # not the user's work. Two perf_counter pairs measured at 196ns
             # against a 25.5us floor for the cheapest possible cached call --
             # 0.8%, so this is not gated behind a heuristic.
-            overhead_t0 = time.perf_counter()
+            overhead_t0 = _perf_counter()
             key_result = self._resolve_cache_key(func, func_name, dynamic_depends_on, args, kwargs, call_start)
             # Snapshot into a LOCAL immediately: a nested cached call would
             # overwrite the instance scratch before this body finishes (CAS-270).
@@ -4286,7 +4292,7 @@ class Cash:
             raw_metadata, cached_data = self.backend.get(cache_key)
             metadata = CacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
             hit = self._try_get_cached(cache_key, metadata, cached_data, call_start, args_hash, func_name, ttl)
-            cash_overhead = time.perf_counter() - overhead_t0
+            cash_overhead = _perf_counter() - overhead_t0
             if hit is not _CACHE_MISS:
                 self._note_effectiveness(
                     func_name, cash_overhead,
@@ -4316,7 +4322,7 @@ class Cash:
                 body_seconds: float | None = None
                 with tracker, observer:
                     threads_at_start = _THREADS_IN_CALLS[0]
-                    body_t0 = time.perf_counter()
+                    body_t0 = _perf_counter()
                     nested = [0.0]
                     nested_token = _NESTED_CASH_SECONDS.set(nested)
                     try:
@@ -4329,7 +4335,7 @@ class Cash:
                     # The user's own work, isolated. Everything cash does sits
                     # outside this pair, which is the whole point: it is the
                     # only number that can answer "did caching pay?".
-                    body_seconds = max(0.0, time.perf_counter() - body_t0 - tracker.read_hash_seconds - nested[0])
+                    body_seconds = max(0.0, _perf_counter() - body_t0 - tracker.read_hash_seconds - nested[0])
                     saves_seconds = body_seconds / max(threads_at_start, _THREADS_IN_CALLS[0], 1)
                     rng_new = self._note_rng_draw(func_name, rng_pre)
                     is_iter = _is_one_shot_iterator(res)
@@ -4351,7 +4357,7 @@ class Cash:
                     # the manifest, which is what a later hit reports as saved.
                     self._log_decorator_call(
                         func_name, cache_hit=False,
-                        execution_time=time.perf_counter() - call_start,
+                        execution_time=_perf_counter() - call_start,
                         args_hash=args_hash, cache_key=cache_key,
                     )
                     return _StreamingCachedIterator(self._stream_and_store(
@@ -4372,7 +4378,7 @@ class Cash:
                 auto_file_deps = self._snapshot_tracked_deps(tracker, func.__module__)
 
                 # Non-iterator return: existing single-blob path.
-                execution_time = time.perf_counter() - call_start
+                execution_time = _perf_counter() - call_start
 
                 refusal = self._store_refusal(
                     func, func_name, res, rng_new, cache_if, tracker, capture_watch,
@@ -4393,7 +4399,7 @@ class Cash:
                     )
                 # Everything that was not the body: the key and lookup before
                 # it, the checks and the store after it.
-                miss_overhead = max(cash_overhead, time.perf_counter() - call_start - body_seconds)
+                miss_overhead = max(cash_overhead, _perf_counter() - call_start - body_seconds)
                 self._log_decorator_call(
                     func_name, cache_hit=False,
                     execution_time=execution_time,
@@ -4433,7 +4439,7 @@ class Cash:
 
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            call_start = time.perf_counter()
+            call_start = _perf_counter()
 
             if func_name not in self._analyzed:
                 # Double-checked under a per-function lock: the key is built
@@ -4447,7 +4453,7 @@ class Cash:
 
             # See the sync wrapper: this span is cash's own cost, not the
             # user's work.
-            overhead_t0 = time.perf_counter()
+            overhead_t0 = _perf_counter()
             key_result = self._resolve_cache_key(
                 func, func_name, dynamic_depends_on, args, kwargs, call_start
             )
@@ -4469,7 +4475,7 @@ class Cash:
                 cache_key, metadata, cached_data, call_start,
                 args_hash, func_name, ttl,
             )
-            cash_overhead = time.perf_counter() - overhead_t0
+            cash_overhead = _perf_counter() - overhead_t0
             if hit is not _CACHE_MISS:
                 self._note_effectiveness(
                     func_name, cash_overhead,
@@ -4527,7 +4533,7 @@ class Cash:
                 body_seconds: float | None = None
                 with tracker, observer:
                     threads_at_start = _THREADS_IN_CALLS[0]
-                    body_t0 = time.perf_counter()
+                    body_t0 = _perf_counter()
                     nested = [0.0]
                     nested_token = _NESTED_CASH_SECONDS.set(nested)
                     try:
@@ -4537,7 +4543,7 @@ class Cash:
                         raise
                     finally:
                         _NESTED_CASH_SECONDS.reset(nested_token)
-                    body_seconds = max(0.0, time.perf_counter() - body_t0 - tracker.read_hash_seconds - nested[0])
+                    body_seconds = max(0.0, _perf_counter() - body_t0 - tracker.read_hash_seconds - nested[0])
                     saves_seconds = body_seconds / max(threads_at_start, _THREADS_IN_CALLS[0], 1)
                     rng_new = self._note_rng_draw(func_name, rng_pre)
                     is_iter = _is_one_shot_iterator(res)
@@ -4557,7 +4563,7 @@ class Cash:
                     # the manifest, which is what a later hit reports as saved.
                     self._log_decorator_call(
                         func_name, cache_hit=False,
-                        execution_time=time.perf_counter() - call_start,
+                        execution_time=_perf_counter() - call_start,
                         args_hash=args_hash, cache_key=cache_key,
                     )
                     return _StreamingCachedIterator(self._stream_and_store(
@@ -4578,7 +4584,7 @@ class Cash:
                 auto_file_deps = self._snapshot_tracked_deps(tracker, func.__module__)
 
                 # Non-iterator return: single-blob path (unchanged).
-                execution_time = time.perf_counter() - call_start
+                execution_time = _perf_counter() - call_start
 
                 refusal = self._store_refusal(
                     func, func_name, res, rng_new, cache_if, tracker, capture_watch,
@@ -4598,7 +4604,7 @@ class Cash:
                     )
                 # Everything that was not the body: the key and lookup before
                 # it, the checks and the store after it.
-                miss_overhead = max(cash_overhead, time.perf_counter() - call_start - body_seconds)
+                miss_overhead = max(cash_overhead, _perf_counter() - call_start - body_seconds)
                 self._log_decorator_call(
                     func_name, cache_hit=False,
                     execution_time=execution_time,
@@ -7783,9 +7789,9 @@ class Cash:
 
         def timed(label: str, value: Any) -> Any:
             nonlocal costliest
-            t0 = time.perf_counter()
+            t0 = _perf_counter()
             digest = get_arg_hash(value)
-            seconds = time.perf_counter() - t0
+            seconds = _perf_counter() - t0
             if costliest is None or seconds > costliest[1]:
                 producer = getattr(value, "_cash_lineage_producer", None)
                 if producer is None and self._frozen_arrays and id(value) in self._frozen_arrays:
@@ -7809,7 +7815,7 @@ class Cash:
                    [(f"#{i}", a) for i, a in enumerate(args)] + list(kwargs.items()),
                    list(hashed_args) + list(hashed_kwargs.values()))
                if digest is value and type(value) not in _CODELESS_PRIMS]
-        payload_t0 = time.perf_counter()
+        payload_t0 = _perf_counter()
 
         payload: Any = (hashed_args, hashed_kwargs)
         # A set/frozenset pickles in PYTHONHASHSEED-dependent iteration
@@ -7830,9 +7836,9 @@ class Cash:
             payload = _stable_key_repr(payload)
         else:
             payload = _canonicalize_dict_order(payload)
-        args_bytes = pickle.dumps(payload)
+        args_bytes = _plain_data.key_dumps(payload)
         if raw:
-            payload_seconds = time.perf_counter() - payload_t0
+            payload_seconds = _perf_counter() - payload_t0
             if costliest is None or payload_seconds > costliest[1]:
                 label, value = max(raw, key=lambda r: len(r[1]) if hasattr(r[1], "__len__")
                                    else sys.getsizeof(r[1]))
@@ -8486,7 +8492,7 @@ class Cash:
         """
         self._log_decorator_call(
             func_name, cache_hit=False,
-            execution_time=time.perf_counter() - call_start,
+            execution_time=_perf_counter() - call_start,
             args_hash='raised', cache_key='',
             miss_detail=f"{type(exc).__name__}: {str(exc)[:80]}",
         )
@@ -8992,9 +8998,17 @@ class Cash:
         code: str,
         fix: str,
         stacklevel: int | None = None,
+        once_per_version: bool = False,
     ) -> None:
         """Emit a coded diagnostic at most once per
         ``(category, func_name, arg_type_name)`` for this Cash instance.
+
+        ``once_per_version``: and once per CACHE for the same text -- which
+        names the lines and the code it found them in -- so a later process
+        records it in ``cache_info()['warnings']`` without printing it. For
+        the static findings a source reading makes, which were the same 32
+        lines in a nightly job's log every night (round 20); an edit that
+        changes what they say shows them again.
 
         ``message`` is one sentence of *what happened*; ``fix`` is one
         imperative sentence; ``code`` is the diagnostic code from
@@ -9042,7 +9056,43 @@ class Cash:
             log.append(entry)
             if len(log) > self._func_warnings_max:
                 del log[: len(log) - self._func_warnings_max]
-        warn_diagnostic_message(category, code, rendered, stacklevel=stacklevel)
+        if once_per_version and not self._first_showing(func_name, rendered):
+            entry['shown_by_an_earlier_run'] = True
+            return
+        warn_diagnostic_message(category, code, rendered, stacklevel=stacklevel,
+                                fallback=self._definition_site(func_name))
+
+    def _first_showing(self, func_name: str, rendered: str) -> bool:
+        """Has no earlier run on this cache shown *rendered*? Records that one
+        has. True whenever the cache keeps no record -- when in doubt, show."""
+        try:
+            self.backend    # the first call is about to build it for its lookup anyway
+        except Exception:  # noqa: BLE001 - no backend, no record: show it
+            return True
+        if self._stored_keys_path(func_name) is None:
+            return True
+        digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16]
+        try:
+            with self._stored_doc_lock:
+                doc = self._stored_doc(func_name)
+                shown = doc.setdefault("warned", {})
+                if digest in shown:
+                    return False
+                shown[digest] = time.time()
+                self._write_stored_doc(func_name, doc)
+        except Exception:  # noqa: BLE001 - a diagnostic aid: show it
+            logger.debug("could not record a shown warning for %s", func_name, exc_info=True)
+        return True
+
+    def _definition_site(self, func_name: str) -> tuple[str, int] | None:
+        """Where *func_name* is defined: what a warning blames when the call
+        runs on a pool thread, whose stack holds nothing of the user's."""
+        fn = self.functions.get(func_name)
+        try:
+            code = getattr(inspect.unwrap(fn), "__code__", None) if fn is not None else None
+        except ValueError:          # a wrapper chain that loops
+            return None
+        return (code.co_filename, code.co_firstlineno) if code is not None else None
 
     def drain_decorator_calls(self) -> list[dict[str, Any]]:
         """Return and clear all recorded decorator call events.
@@ -9610,13 +9660,13 @@ class Cash:
             # measured 294ms -> 1521ms on a 200k-item iterator before this.
             with tracker, observer:
                 while True:
-                    started = time.perf_counter()
+                    started = _perf_counter()
                     try:
                         item = next(source)
                     except StopIteration:
-                        produced_seconds += time.perf_counter() - started
+                        produced_seconds += _perf_counter() - started
                         break
-                    produced_seconds += time.perf_counter() - started
+                    produced_seconds += _perf_counter() - started
 
                     buffer.append(item)
                     buffer_bytes += estimate_object_size(item)
@@ -10179,7 +10229,7 @@ class Cash:
         if cost is not None and cost[2] > self._MUTATION_CHECK_BUDGET_S:
             self._mutation_check_too_costly.add(func_name)
             return None
-        started = time.perf_counter()
+        started = _perf_counter()
         try:
             canon_args, canon_kwargs = self._normalize_call_args(func_name, args, kwargs)
         except Exception:  # noqa: BLE001 - best effort, like the check itself
@@ -10198,7 +10248,7 @@ class Cash:
                 snapshot[name] = self._hash_arg_payload((value,), {})
             except Exception:  # noqa: BLE001 - unhashable: the whole-args check still runs
                 continue
-        if time.perf_counter() - started > self._MUTATION_CHECK_BUDGET_S:
+        if _perf_counter() - started > self._MUTATION_CHECK_BUDGET_S:
             self._mutation_check_too_costly.add(func_name)
         return snapshot
 
@@ -10280,7 +10330,7 @@ class Cash:
                 return
         if func_name in self._mutation_check_too_costly:
             return
-        started = time.perf_counter()
+        started = _perf_counter()
         try:
             after = self._serialize_args(func_name, args, kwargs)
         except Exception:                                    # noqa: BLE001
@@ -10288,7 +10338,7 @@ class Cash:
             # not twice (a generator drained by the body, say) is not evidence
             # of mutation, and must not be reported as such.
             return
-        if time.perf_counter() - started > self._MUTATION_CHECK_BUDGET_S:
+        if _perf_counter() - started > self._MUTATION_CHECK_BUDGET_S:
             self._mutation_check_too_costly.add(func_name)
         if after is None or after == args_hash:
             return
@@ -10518,6 +10568,7 @@ class Cash:
                     "-- so it reaches the cache key and a new value means a new "
                     "entry. If freezing it is what you want, say so with "
                     "`# @cash:assume-safe` on that line.",
+                once_per_version=True,
             )
         if not issues:
             return
@@ -10551,6 +10602,7 @@ class Cash:
                 "waives the whole function instead, including anything added "
                 "to it later. The first annotation changes the function's key "
                 "once: @cash: directives are part of its source identity."),
+            once_per_version=True,
         )
 
     def register_file_handler(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]) -> None:

@@ -442,7 +442,7 @@ what to cache based on purity). The same machinery now runs on
 cleanly to "I want a warning", "I want it silent", and "I want it to
 fail CI".
 
-<!-- claim: cash/core.py:Cash._surface_purity @d82e451e, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @f30def74, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 ### Default: warn at first call
 
 <!-- test:expect-warning reason="this section exists to demonstrate the first-call impurity warning" -->
@@ -720,15 +720,17 @@ won't flag on it, and any function whose body calls
 
 ### What the analyzer looks at
 
-<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @362cb183 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @25beed4f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
+<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @a63770e5 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @25beed4f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
 The decorator-side analyzer walks the function body AND
 **module-bounded helpers** (functions defined in the same top-level
 package, or any non-installed-library code) and any **closure-bound
 helpers** reachable through `__globals__` / `__closure__`. For each,
 it flags:
 
-- **Impure calls** — `requests.post`, `os.system`, file writes,
-  `logging.*`, pandas `inplace=True`, …
+- **Impure calls** — `requests.post`, `os.system`, file writes, a `print` to
+  stdout, pandas `inplace=True`, … Log lines — `print(..., file=sys.stderr)`,
+  `logging.*`, `logger.info(...)` — are not: a hit skipping them is what
+  caching means.
 - **Dynamic patterns** — code chosen at runtime, which cash cannot fold
   into the key. Two severities, because two different things are at stake:
     - **Raises** (see the warning box above): `eval`/`exec`/`compile`,
@@ -774,7 +776,7 @@ it flags:
   it via `depends_on=`/`dynamic_depends_on=`. The detection is scope-aware: a
   local that merely shares a name with a global doesn't trip it.
 
-<!-- claim: cash/purity_flow.py:fresh_name_nodes @4d3c37b6, cash/purity_flow.py:_fresh @07e37614 -->
+<!-- claim: cash/purity_flow.py:fresh_name_nodes @6d3f600d, cash/purity_flow.py:_fresh @9605b9f4 -->
 In-place mutation of a **fresh local** is *not* flagged. An object the
 function made itself — a list/dict/set literal or comprehension, a known
 constructor or reader like `[]`, `dict()`, `np.zeros(...)`,
@@ -788,7 +790,14 @@ in order, so these are recognised too:
 - a name rebound to a new object before it is changed:
   `df = load(p); df = df[df.qty > 0]; df = df.merge(ref); df["x"] = ...` —
   a boolean filter and pandas methods like `merge`, `dropna` and `assign`
-  return new frames.
+  return new frames;
+- an element of a container the function filled only with objects of its own:
+  `by_user[k].append(x)` on a local `defaultdict(list)`,
+  `acc = out.get(k); acc[0] += 1`, `for u, stamps in by_user.items():
+  stamps.sort()` — as long as nothing else could have put an argument's
+  object in (the container is not aliased, not passed to a call that might,
+  and every value stored in it is fresh or immutable);
+- a row `csv.reader` or `csv.DictReader` just produced.
 
 Mutating a parameter, an alias or a view of one (`x = data; x.append(...)`,
 `inner = arr[1:]`), a helper's result *before* it is copied, an element of a

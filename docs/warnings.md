@@ -23,7 +23,7 @@ Handlers can branch on the code rather than the wording, which is free to change
     if any(getattr(w.message, "code", None) == "CACHE-THRASH" for w in caught):
         ...
 
-<!-- claim: cash/diagnostics.py:warn_diagnostic_explicit @8c8ea21a, cash/diagnostics.py:warn_diagnostic @4b561034 -->
+<!-- claim: cash/diagnostics.py:warn_diagnostic_explicit @8c8ea21a, cash/diagnostics.py:warn_diagnostic @32fe7b40 -->
 **That recipe does not reach every warning.** `.code` is an attribute set on a
 warning *object*, and the three notebook-side diagnostics are raised through
 `warnings.warn_explicit`, which takes a message *string* and offers no way to
@@ -675,7 +675,7 @@ row posted to a service, the dict the caller inspects afterwards — the program
 is correct on the run that filled the cache and quietly different on every run
 after it.
 
-<!-- claim: cash/core.py:Cash._store_refusal @c3dac710, cash/core.py:Cash._argument_snapshot @d9b85c3f -->
+<!-- claim: cash/core.py:Cash._store_refusal @c3dac710, cash/core.py:Cash._argument_snapshot @3c1c8cad -->
 `argument mutation` is handled differently, because it is the one that caught
 people out: an object the caller still holds would stop being changed. A call
 seen changing an argument is **not stored** — the line names the argument, and
@@ -764,7 +764,7 @@ it is rarely what you want.
 
 ## IMPURE-SIDE-EFFECTS {#impure-side-effects}
 
-<!-- claim: cash/core.py:Cash._surface_purity @d82e451e -->
+<!-- claim: cash/core.py:Cash._surface_purity @f30def74 -->
 **What happened.** Before the first call, Cash reads the source of your function
 and of the helpers it calls, looking for shapes that make a cached result
 questionable. It found some. The message lists each one with its line number and
@@ -772,17 +772,32 @@ a short label in square brackets, and the label is the part that tells you how
 much to care:
 
 <!-- claim: cash/core.py:Cash._mutable_global_is_keyed @0e737db3 -->
-- `impure_call` — a call whose job is a side effect: `print`, `input`,
-  `open(..., "w")`, `os.remove`, `subprocess.run`, `requests.post`,
-  `logging.info`, `json.dump`, or a write-shaped method on a receiver the
-  function did not create itself — `df.to_csv(...)`, `fig.savefig(...)`,
-  `session.post(...)`, `cursor.execute(...)`, `RESULTS.append(...)`. The
-  "did not create itself" part matters: `rows.append(x)` on a list the function
-  built a line earlier is not flagged, and neither is `a, b = [], []` followed
-  by `a.append(...)`, a view of a local array (`inner = u[1:-1]; inner[m] = 0`),
+- `impure_call` — a call whose job is a side effect: `print` to stdout,
+  `input`, `open(..., "w")`, `os.remove`, `subprocess.run`, `requests.post`,
+  `json.dump`, or a write-shaped method on a receiver the function did not
+  create itself — `df.to_csv(...)`, `fig.savefig(...)`, `session.post(...)`,
+  `cursor.execute("INSERT ...")`, `RESULTS.append(...)`. The "did not create
+  itself" part matters: `rows.append(x)` on a list the function built a line
+  earlier is not flagged, and neither is `a, b = [], []` followed by
+  `a.append(...)`, a view of a local array (`inner = u[1:-1]; inner[m] = 0`),
   or a frame rebound to a copy before it is changed
   (`df = load(p); df = df[mask]; df["x"] = ...`). The same frame changed
   *before* the copy is still flagged: it may be the helper's own object.
+
+<!-- claim: cash/purity_flow.py:_FreshFlow._check_insertion @e358f5d7, cash/purity_flow.py:_FreshFlow._loop_targets @38092866, cash/purity_flow.py:is_log_line @9a65b406, cash/purity_flow.py:is_read_only_sql @e845f859 -->
+  The same goes for the elements of a container the function built and filled
+  only with objects of its own — the per-key accumulator every parser writes:
+  `by_user[k].append(x)` on a local `defaultdict(list)`,
+  `by_path.setdefault(p, []).append(ms)`, `acc = out.get(k); acc[0] += 1`,
+  `for user, stamps in by_user.items(): stamps.sort()` — and for the rows
+  `csv.reader` and `csv.DictReader` hand out. Once such a container has been
+  given an argument's object, or passed to a function that could put one in,
+  its elements are reported again. Log lines are not side effects:
+  `print(..., file=sys.stderr)`, `logger.info(...)`, `logging.warning(...)`
+  and `sys.stderr.write(...)` are what a hit is supposed to skip, since the
+  work they report on did not happen. A `print` to stdout is still reported:
+  stdout may be the program's output. A literal `execute("SELECT ...")` is a
+  read, not a write.
 - `scope_mutation` — a `global` or `nonlocal` statement, or an assignment to
   someone else's attribute or subscript: `obj.attr = ...`, `d[k] = ...`.
 - `discarded_call` — a call whose return value is thrown away, which usually
@@ -846,13 +861,20 @@ not stored and runs every time (see [argument mutation](#impure-observed-effects
 — correct, but uncached. Return a modified copy instead
 (`feats = feats.copy(); feats["x"] = ...; return feats`) and it caches.
 
-**When it is safe to ignore.** When every line it names is a `print`, a
-`logging` call or a progress bar. That is far and away the commonest reason this
-fires, and it is as harmless as it looks: you lose the printout on cache hits
-and nothing else. Even then, the per-line comment is a better response than a
-warning filter, because it leaves the rest of the function watched. Do not
-ignore a `mutable_global` or a `dynamic_pattern` line — those two are the
-stale-result kinds, and nothing else will tell you when they bite.
+**When it is safe to ignore.** When every line it names is a `print` to stdout
+or a progress bar. It is as harmless as it looks: you lose the printout on
+cache hits and nothing else. (Log lines — to stderr, or through `logging` — are
+no longer reported at all.) Even then, the per-line comment is a better
+response than a warning filter, because it leaves the rest of the function
+watched. Do not ignore a `mutable_global` or a `dynamic_pattern` line — those
+two are the stale-result kinds, and nothing else will tell you when they bite.
+
+<!-- claim: cash/core.py:Cash._first_showing @3b86c46a -->
+This warning and [KEY-AMBIENT-READ](#key-ambient-read) are shown **once per
+cache**, not once per process: the next run on the same cache, finding the
+same lines, records them in `f.cache_info()["warnings"]` without printing them
+again. A change that alters what the message says — a new finding, a line
+that moved — shows it again.
 
 ## KEY-AMBIENT-READ {#key-ambient-read}
 
@@ -871,7 +893,7 @@ normal.
 out, which is when they read the clock; `time.strftime("%Y-%m", t)` and
 `time.localtime(ts)` only format or convert the time you give them.
 
-<!-- claim: cash/purity_analyzer.py:_ambient_call @4e16239d -->
+<!-- claim: cash/purity_analyzer.py:_ambient_call @1bf20f48 -->
 It is recognised by what the names refer to, not by how they are spelled:
 `import datetime as _dt; _dt.datetime.now()`, `from datetime import datetime as
 DateTime; DateTime.now()`, `import time as _time` and `from time import time as
@@ -887,6 +909,14 @@ dict or list on the way (`logger.info(json.dumps({"ts": time.time()}))`).
 `t = time.perf_counter()` feeding an elapsed-time line is the usual case. Once
 the value is returned, stored, tested in a condition or passed to any other
 call, it is reported.
+
+<!-- claim: cash/purity_analyzer.py:_clock_helper_read @1ba81264 -->
+The same holds for a timing helper of your own whose body is log lines and a
+`return` of the clock — `def mark(name): print(..., file=sys.stderr); return
+time.perf_counter()`. Calling it counts as reading the clock where it is called,
+so `t0 = mark("step")` handed only to a `done("step", t0)` that prints it is
+not reported, and `return x, mark("step")` is — naming `mark()` and what it
+returns. The helper is still part of the key like any other.
 
 **Why it matters.** That value is an *input* to your result, and it is not one
 Cash can see: it does not arrive as an argument, so it is not in the cache key.
