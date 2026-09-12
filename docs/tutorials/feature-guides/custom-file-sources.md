@@ -55,7 +55,7 @@ The pandas entry is the glob `read_*`, expanded by `_find_patch_targets` against
 
 A reader may be given its path positionally or by keyword — `pd.read_csv(filepath_or_buffer=p)`, `np.load(file=p)`, `pq.read_table(source=p)` — and both are tracked. pyarrow reads files in C++, so none of its reads pass through `open()`; before its readers were registered, a function that switched to `pyarrow.csv` for speed recorded no dependency at all and kept returning the old file's answer. `pyarrow.parquet.ParquetFile` and `pyarrow.dataset` are not wrapped (one is a class, the other enumerates directories); read through them and name the files with `file_depends_on=`.
 
-<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._create_open_handler @1da1f7d2 -->
+<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._create_open_handler @48e610ee -->
 For `open()`, the wrapper records the path as a *dependency* only when the mode contains `'r'` or `'+'` (read or read/write) — see `_create_open_handler`. An `open(path, 'w')` for output does **not** become a dependency, which is what you want: folding a file the function writes into its own cache key would invalidate the entry on its own output.
 
 A write is not ignored, though — it is an *effect*, and it is reported as one. The same wrapper hands a write-mode open to the [effect observer](purity-decorators.md#observed-effects-what-the-first-call-actually-did), which warns once if the first call wrote a file the static analyzer never saw. That matters because every cache hit from then on skips the write.

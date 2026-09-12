@@ -19,6 +19,7 @@ import os
 import pathlib
 import sys
 import threading
+import time
 from collections.abc import Callable
 from typing import Any, Optional
 
@@ -231,14 +232,19 @@ def _is_cash_internal(path: str) -> bool:
     return absolute.startswith(dirs)
 
 
-#: ``code -> files read while a frame of it was on the stack``, process-wide.
-#: A memo (``functools.lru_cache``, a module dict) hands a later call the
-#: product of an earlier read, and the later call reads nothing -- so its entry
-#: recorded no file and kept serving after the file changed (round 19). What a
-#: helper read once is what `credited_reads` answers when a call reaches it
-#: again. A code past `_READS_PER_CODE_MAX` files is marked ``None``: it reads
-#: per argument, and every file it ever read is no one call's dependency.
-_READS_BY_CODE: dict[Any, set[str] | None] = {}
+#: ``code -> {file: its stat when last read}`` for files read while a frame of
+#: that code was on the stack, process-wide. A memo (``functools.lru_cache``, a
+#: module dict) hands a later call the product of an earlier read, and the
+#: later call reads nothing -- so its entry recorded no file and kept serving
+#: after the file changed (round 19). What a helper read once is what
+#: `credited_reads` answers when a call reaches it again, and the stat says
+#: WHICH version it read: a memo filled before the file changed hands back the
+#: old version's data (round 20). Reads outside any cached call count too
+#: (`_note_untracked_read`) -- `main()` logging its settings through the memo
+#: before the first cached call is the ordinary way to fill one. A code past
+#: `_READS_PER_CODE_MAX` files is marked ``None``: it reads per argument, and
+#: every file it ever read is no one call's dependency.
+_READS_BY_CODE: dict[Any, dict[str, Any] | None] = {}
 _READS_BY_CODE_MAX = 4096
 _READS_PER_CODE_MAX = 16
 _CASH_PACKAGE_DIR = os.path.normcase(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -265,39 +271,131 @@ def _is_user_file(filename: str) -> bool:
     return verdict
 
 
+def _record_read(code: Any, abs_path: str, stat: Any) -> None:
+    """Remember that *code* read *abs_path*, as it was (*stat*)."""
+    reads = _READS_BY_CODE.get(code, ())
+    if reads is None:
+        return
+    if code not in _READS_BY_CODE:
+        if len(_READS_BY_CODE) >= _READS_BY_CODE_MAX:
+            return
+        reads = _READS_BY_CODE[code] = {}
+    if abs_path not in reads and len(reads) >= _READS_PER_CODE_MAX:
+        _READS_BY_CODE[code] = None
+    else:
+        reads[abs_path] = stat          # the LATEST read: a memo refilled is current again
+
+
+def _is_cash_wrapper(filename: str) -> bool:
+    norm = os.path.normcase(filename)
+    return norm.endswith(os.path.join("cash", "core.py")) and norm.startswith(_CASH_PACKAGE_DIR)
+
+
 def _credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
     """Credit a read to the user code on the stack, up to the cached call."""
     try:
         frame = sys._getframe(1)
     except ValueError:
         return
+    stat = tracker.read_stats.get(abs_path)
     depth = 0
     while frame is not None and depth < 64:
         code = frame.f_code
         filename = code.co_filename
-        if os.path.normcase(filename).endswith(os.path.join("cash", "core.py")) and \
-                os.path.normcase(filename).startswith(_CASH_PACKAGE_DIR):
+        if _is_cash_wrapper(filename):
             break                    # the cached call's own wrapper: the walk ends
         if _is_user_file(filename):
             tracker._note_reading_code(code)
-            reads = _READS_BY_CODE.get(code, ())
-            if reads is not None and abs_path not in reads:
-                if code not in _READS_BY_CODE:
-                    if len(_READS_BY_CODE) >= _READS_BY_CODE_MAX:
-                        frame, depth = frame.f_back, depth + 1
-                        continue
-                    reads = _READS_BY_CODE[code] = set()
-                if len(reads) >= _READS_PER_CODE_MAX:
-                    _READS_BY_CODE[code] = None
-                else:
-                    reads.add(abs_path)
+            _record_read(code, abs_path, stat)
         frame, depth = frame.f_back, depth + 1
 
 
-def credited_reads(code: Any) -> set[str] | None:
-    """Files read while *code* was on the stack; None when it reads per argument."""
+_UNTRACKED_REALPATH: dict[str, str] = {}
+_UNTRACKED_STAT: dict[str, tuple[float, Any]] = {}
+_FRAME_KIND: dict[str, str] = {}
+
+
+def _note_untracked_read(path: Any) -> None:
+    """A read made outside every cached call, credited to the user code on the stack.
+
+    Only a read that user code started: a read by cash itself or by a library
+    with no user frame above it (an import, a font cache) is nobody's input.
+    Never raises -- it runs inside every ``open`` in the process.
+    """
+    try:
+        frame = sys._getframe(2)
+        codes = []
+        depth = 0
+        while frame is not None and depth < 64:
+            filename = frame.f_code.co_filename
+            kind = _FRAME_KIND.get(filename)
+            if kind is None:
+                kind = ("wrapper" if _is_cash_wrapper(filename)
+                        else "cash" if filename and os.path.normcase(filename).startswith(_CASH_PACKAGE_DIR)
+                        else "user" if _is_user_file(filename) else "other")
+                if len(_FRAME_KIND) < 8192:
+                    _FRAME_KIND[filename] = kind
+            if kind == "wrapper":
+                break
+            if kind == "cash" and not codes:
+                return               # cash reading its own files
+            if kind == "user":
+                codes.append(frame.f_code)
+            frame, depth = frame.f_back, depth + 1
+        if not codes:
+            return
+        raw = os.fsdecode(path) if isinstance(path, bytes) else os.fspath(path)
+        if not isinstance(raw, str) or _is_pseudo_fs(raw) or is_remote_url(raw):
+            return
+        # `realpath` is 60us on Windows, most of what this costs; resolved once
+        # per absolute path (so a chdir still resolves anew).
+        absolute = os.path.abspath(raw)
+        abs_path = _UNTRACKED_REALPATH.get(absolute)
+        if abs_path is None:
+            abs_path = normalize_path(os.path.realpath(absolute))
+            if len(_UNTRACKED_REALPATH) >= 4096:
+                _UNTRACKED_REALPATH.clear()
+            _UNTRACKED_REALPATH[absolute] = abs_path
+        if _is_pseudo_fs(abs_path) or _is_cash_internal(abs_path):
+            return
+        # A stat is 15us, and a loop re-reading one file pays it every time.
+        # Reusing one taken in the last second can only be too OLD, and an old
+        # stat that differs from the file makes a store refused, never a stale
+        # answer served (`Cash._credit_remembered_reads`).
+        now = time.monotonic()
+        seen = _UNTRACKED_STAT.get(abs_path)
+        if seen is not None and now - seen[0] < 1.0:
+            stat = seen[1]
+        else:
+            stat = _regular_file_stat(abs_path)
+            if len(_UNTRACKED_STAT) >= 4096:
+                _UNTRACKED_STAT.clear()
+            _UNTRACKED_STAT[abs_path] = (now, stat)
+        if stat is None:
+            return
+        for code in codes:
+            _record_read(code, abs_path, stat)
+    except Exception:  # noqa: BLE001 - attribution is an aid, never a failure
+        logger.debug("[TRACKER] could not note an untracked read of %r", path, exc_info=True)
+
+
+def credited_reads(code: Any) -> dict[str, Any] | None:
+    """``{file: stat when read}`` for files read while *code* was on the stack;
+    None when it reads per argument."""
     reads = _READS_BY_CODE.get(code, ())
-    return None if reads is None else set(reads)
+    return None if reads is None else dict(reads)
+
+
+def install_read_watch() -> None:
+    """Install the read patches now rather than at the first cached call.
+
+    A memo is usually filled before any cached call runs -- ``main()`` logging
+    its settings -- and a read the patches were not there to see is a read no
+    entry can depend on. Called when a function is decorated.
+    """
+    with _install_lock:
+        FileAccessTracker()._apply_patches()
+    _ensure_import_hook_installed()
 
 
 def _dispatch_track(path: Any) -> None:
@@ -580,6 +678,8 @@ class FileDependencyRegistry:
                 _tracker = _active_tracker.get()
                 if _tracker is not None:
                     _tracker._track_path(file)
+                elif isinstance(file, (str, bytes, os.PathLike)):
+                    _note_untracked_read(file)
             elif any(ch in mode for ch in ('w', 'a', 'x')):
                 # Not a dependency -- a WRITE is an effect, not an input, and
                 # folding it into the key would invalidate a function on its
@@ -615,6 +715,8 @@ class FileDependencyRegistry:
                 _tracker = _active_tracker.get()
                 if _tracker is not None:
                     _tracker._track_path(target)
+                else:
+                    _note_untracked_read(target)
             return original_func(*args, **kwargs)
         return tracked_func
 
@@ -813,6 +915,9 @@ class FileAccessTracker:
         # The user code that read a file in THIS block (see
         # `_credit_read_to_stack`): its recorded reads are live, not remembered.
         self.reading_codes: set[Any] = set()
+        # Files a memo handed this block data from that was read from an
+        # EARLIER version of the file (see `Cash._credit_remembered_reads`).
+        self.stale_memo_reads: set[str] = set()
 
     def __enter__(self):
         # Install permanent dispatcher patches. Each (module/dict, name)

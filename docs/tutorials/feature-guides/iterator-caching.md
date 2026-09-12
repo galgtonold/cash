@@ -63,7 +63,7 @@ If the caller abandons the iterator, or the producer raises, step 5 never runs: 
 
 On exhaust, Cash writes a **manifest entry** at the canonical `cache_key` carrying `iterator_storage="chunked"`, `n_chunks`, and `total_items`. The manifest is what the hit path reads first.
 
-<!-- claim: cash/core.py:Cash.cache @2431dc44 broad="the defaults are keyword arguments of the decorator itself" -->
+<!-- claim: cash/core.py:Cash.cache @dfdf76ac broad="the defaults are keyword arguments of the decorator itself" -->
 Defaults:
 
 - `chunk_max_items = 1_000_000`

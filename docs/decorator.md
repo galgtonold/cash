@@ -385,7 +385,7 @@ counted.
 
 ### File reads are tracked automatically
 
-<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21, cash/notebook/file_tracker.py:FileDependencyRegistry @db1cd112 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
+<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21, cash/notebook/file_tracker.py:FileDependencyRegistry @c80ce55f broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
 You usually don't need to declare files at all: cash intercepts file reads
 *inside* a cached function — `pd.read_csv`, `np.load`, `open()`, `joblib.load`,
 … — and folds each file's fingerprint into the entry, so changing the file on
@@ -416,7 +416,7 @@ to a `ThreadPoolExecutor`, or name the file with `file_depends_on=`. A
 *process* pool's reads happen in another process and are not seen either —
 `file_depends_on=` again.
 
-<!-- claim: cash/core.py:Cash._credit_remembered_reads @883260d2, cash/notebook/file_tracker.py:_credit_read_to_stack @58e9c25c -->
+<!-- claim: cash/core.py:Cash._credit_remembered_reads @a2e433e7, cash/notebook/file_tracker.py:_credit_read_to_stack @7be631ab -->
 A read your code **memoises** counts for every call that uses it. With
 `parse = functools.lru_cache()(parse_csv)` — or a module-level dict of parsed
 files — only the first cached function to call `parse(path)` actually opens
@@ -424,10 +424,20 @@ the file; the next one gets the stored rows and reads nothing. cash remembers
 which of your functions read which file, and when a later call reaches one of
 them without it reading, adds what it read then — just `path`, when the memo is
 keyed by a path this call was given. Before 0.10.1 the second consumer recorded
-no file at all and kept its result after the file changed. Two limits: a memo
-filled before any cached call ran (at import, say) was never seen reading, and a
-helper that has read more than 16 different files is taken to read per argument
-and is not attributed — name those files with `file_depends_on=`.
+no file at all and kept its result after the file changed.
+
+<!-- claim: cash/notebook/file_tracker.py:_note_untracked_read @c99048a2, cash/notebook/file_tracker.py:install_read_watch @16286f03 -->
+That holds wherever the memo was filled: in a cached call, or before any ran —
+`main()` printing its settings through the memo at start-up — because cash
+watches your reads from the moment a function is decorated. And cash remembers
+which *version* of the file the memo read. In a long-running process whose
+memo still holds an older version after the file changed, a cached call that
+uses it returns what the memo gives, as the program would without cash, but its
+result is **not stored**: it answers for the old file, not the one on disk. The
+next process, whose memo starts empty, computes it from the file as it is.
+
+One limit: a helper that has read more than 16 different files is taken to read
+per argument and is not attributed — name those files with `file_depends_on=`.
 
 ### Module globals a function reads
 
@@ -715,7 +725,7 @@ parameters below. And when a miss (or a suspicious hit) mystifies you,
 For the cases the automatic model above can't see — plus
 expiry, opt-outs, and the purity gates. All keyword-only and optional.
 
-<!-- claim: cash/core.py:Cash.cache @2431dc44 -->
+<!-- claim: cash/core.py:Cash.cache @dfdf76ac -->
 | Param | What it does |
 |---|---|
 | `depends_on=` | List of `Callable` or `DataSource` that contributes to the cache key |
@@ -897,7 +907,7 @@ business invariants — its job is purely "should this be cached".
 result fits in a single chunk. For multi-chunk results, the predicate
 is bypassed (warning fires) — see the iterator section below.
 
-<!-- claim: cash/core.py:Cash._store_refusal @a4eb6aab -->
+<!-- claim: cash/core.py:Cash._store_refusal @c3dac710 -->
 **It decides what is written, not what is served.** `cache_if` is not part of
 the key, so adding it to a function that already has entries changes nothing
 about those entries: a `None` stored before you added

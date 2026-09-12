@@ -115,7 +115,7 @@ switched off.
 
 ## CACHE-ASYNC-GENERATOR {#cache-async-generator}
 
-<!-- claim: cash/core.py:Cash.cache @2431dc44 -->
+<!-- claim: cash/core.py:Cash.cache @dfdf76ac -->
 **What happened.** You put `@cash.cache` on an async generator — an `async def`
 function that `yield`s. Cash does not cache those in this release, so the
 decorator handed your function straight back, unwrapped.
@@ -635,7 +635,7 @@ row posted to a service, the dict the caller inspects afterwards — the program
 is correct on the run that filled the cache and quietly different on every run
 after it.
 
-<!-- claim: cash/core.py:Cash._store_refusal @a4eb6aab, cash/core.py:Cash._argument_snapshot @d9b85c3f -->
+<!-- claim: cash/core.py:Cash._store_refusal @c3dac710, cash/core.py:Cash._argument_snapshot @d9b85c3f -->
 `argument mutation` is handled differently, because it is the one that caught
 people out: an object the caller still holds would stop being changed. A call
 seen changing an argument is **not stored** — the line names the argument, and

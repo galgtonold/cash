@@ -2477,6 +2477,18 @@ class Cash:
         # all, and the hazard being warned about is a frozen cached value.
         self._warn_unseeded_randomness(func, func_name, allow_random)
 
+        # Watch reads from now, not from the first miss: a memo the cached
+        # function will use is usually filled before it is first called
+        # (`main()` logging its settings), and a read nobody saw is an input
+        # no entry records (round 20). Not when caching is off: that promises
+        # nothing is patched or analysed.
+        if not self.config.disable:
+            try:
+                from cash.notebook.file_tracker import install_read_watch
+                install_read_watch()
+            except Exception:  # noqa: BLE001 - the first miss installs them anyway
+                logger.debug("[CORE] could not install the read watch at decoration", exc_info=True)
+
         if inspect.iscoroutinefunction(func):
             wrapper = self._make_async_wrapper(
                 func, func_name, dynamic_depends_on, ttl, cache_if,
@@ -3607,6 +3619,10 @@ class Cash:
             refusal = "the result is tied to the identity of an object in memory"
         if refusal is None and self._inputs_moved_during_call(func_name, tracker):
             refusal = "a file it read changed while it ran"
+        stale_memo = getattr(tracker, "stale_memo_reads", None)
+        if refusal is None and stale_memo:
+            refusal = (f"a memoised helper handed it data read from an earlier version of "
+                       f"{sorted(stale_memo)[0]}; a fresh process reads the file as it is now")
         if refusal is None and self._code_moved_since_keyed(func, func_name):
             refusal = "its code changed on disk after this process keyed it"
         if refusal is None and getattr(observer, "mock_called", False):
@@ -8123,6 +8139,13 @@ class Cash:
         path when it is among them; a memo of a fixed file adds what it read.
         The cached function's own history is left out -- it is per argument --
         and so is a function that read too many files to attribute.
+
+        A remembered read also says which version of the file it was. When the
+        file has changed since, the memo handed this call the OLD version's
+        data -- right for this process until it refills, but not an answer
+        for the file as it is now, which is what the entry would be stored
+        against (round 20). Such a path goes into ``stale_memo_reads``, and the
+        store is refused.
         """
         from cash.notebook.file_tracker import credited_reads
         func = self.functions.get(func_name)
@@ -8137,16 +8160,19 @@ class Cash:
             if code is None or code is own or code in live:
                 continue
             remembered = credited_reads(code)
-            if not remembered or remembered <= have:
+            if not remembered or remembered.keys() <= have:
                 continue
             if arg_paths is None:
                 arg_paths = self._argument_paths(args, kwargs)
             # Chosen BEFORE what is already tracked is taken away: `have` grows
             # as files are added, and a remainder that misses the arguments
             # would read as a memo of a fixed file.
-            chosen = (remembered & arg_paths) or remembered
+            chosen = (remembered.keys() & arg_paths) or set(remembered)
             for path in sorted(chosen - have):
                 tracker._add_tracked(path)
+                then = remembered[path]
+                if then is not None and tracker.read_stats.get(path, then) != then:
+                    tracker.stale_memo_reads.add(path)
 
     @staticmethod
     def _argument_paths(args: tuple, kwargs: dict) -> set[str]:

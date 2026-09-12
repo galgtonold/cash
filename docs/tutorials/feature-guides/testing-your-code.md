@@ -160,7 +160,7 @@ wants. It holds for a mock the function reaches by name: a helper of yours, a
 library function patched where it lives (`mock.patch("requests.get")`), or a
 whole module swapped out (`mock.patch("mylib.requests", MagicMock())`).
 
-<!-- claim: cash/effect_observer.py:_hook_mock_calls @d4677a09, cash/core.py:Cash._store_refusal @a4eb6aab -->
+<!-- claim: cash/effect_observer.py:_hook_mock_calls @d4677a09, cash/core.py:Cash._store_refusal @c3dac710 -->
 A mock deeper down — `mock.patch("requests.Session.request")`,
 `HTTPAdapter.send`, or a `MagicMock` swapped into a module-level session
 after the function first ran — is not part of the key, so cash cannot tell
