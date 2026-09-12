@@ -498,8 +498,9 @@ def file_dep_is_fresh(
     i.e. for fully-hashed (<= cap) files, which keep the touch-tolerant path.
 
     ``stale_reason`` is ``None`` when fresh, else one of
-    ``'unreadable' | 'size' | 'content' | 'mtime' | 'mtime-sampled' |
-    'remote-changed' | 'remote-unresolved'`` for debug attribution.
+    ``'unreadable' | 'size' | 'content' | 'hash-mode' | 'mtime' |
+    'mtime-sampled' | 'ctime-sampled' | 'remote-changed' |
+    'remote-unresolved'`` for debug attribution.
 
     **Remote dependencies** short-circuit to :func:`remote_dep_is_fresh`: the
     "path" is a URL, so there is nothing to stat, and the store's own validator
@@ -530,6 +531,14 @@ def file_dep_is_fresh(
             full_hash_max = _full_hash_max_bytes()
         cur_hash = file_content_hash(resolved_path, st.st_size, full_hash_max)
         if cur_hash != stored_hash:
+            # Recorded in one regime and checked in the other -- the size is
+            # the same, so `file_hash_full_max_bytes` moved across it. The
+            # two digests are not comparable, and "content changed" blamed
+            # the data for a setting (round 20). Only sampled snapshots
+            # record a ctime.
+            recorded_sampled = "ctime_ns" in stored or "ctime" in stored
+            if recorded_sampled != (st.st_size > full_hash_max):
+                return False, "hash-mode"
             return False, "content"
         # Full-hashed file: content is authoritative, mtime ignored.
         if st.st_size <= full_hash_max:

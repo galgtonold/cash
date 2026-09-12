@@ -38,7 +38,12 @@ if TYPE_CHECKING:
 from .backends.serialization import get_serializer
 from .config import CashConfig, get_config
 from .data_source import DataSource
-from .dependency_state import DependencyStateHasher, SysModulesHelperResolver
+from .dependency_state import (
+    STATE_LEDGER,
+    DependencyStateHasher,
+    SysModulesHelperResolver,
+    ledger_note,
+)
 from .diagnostics import (
     format_diagnostic,
     log_diagnostic,
@@ -1033,6 +1038,10 @@ _CASH_LEVEL_SET: int | None = None
 #: Results no lineage tag can be attached to, and that cost nothing to hash.
 _UNTAGGABLE_SCALARS = (int, float, complex, bool, str, bytes, type(None))
 
+#: Result types seen to refuse an attribute (dict, list, ndarray, ...): not
+#: tried again (`Cash._attach_lineage`).
+_UNTAGGABLE_TYPES: set[type] = set()
+
 
 def _real_handlers(logger: logging.Logger) -> list[logging.Handler]:
     """Handlers that would PRINT a record from *logger*, walking up like logging.
@@ -1107,6 +1116,10 @@ class _StandDownWhenTheAppLogs(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        # The exit summary is only logged when the application has a handler
+        # for it, and written to stderr directly otherwise.
+        if record.name == "cash.summary":
+            return False
         return not _app_would_emit(record.levelno)
 
 
@@ -1126,6 +1139,22 @@ MISS_KEY_FAILED = "key could not be built"
 MISS_MOCKED = "a helper is a mock"
 MISS_RAISED = "raised"
 
+#: Separates a "code or state changed" detail from WHAT changed, which the
+#: summary tallies on its own line.
+_WHAT_CHANGED = " -- "
+
+#: What each link of the state chain folds (`_resolve_cache_key_now`), for a
+#: change that no named part of the ledger accounts for.
+_STATE_STAGES = (
+    "its code", "a variable it captures", "a parameter default",
+    "the instance it is bound to", "a global it reads", "the random-seed epoch",
+    "the class of an argument", "a function or class passed as an argument",
+)
+
+#: When this process started: keys the stored-key record holds from before it
+#: were written by earlier runs.
+_PROCESS_STARTED = time.time()
+
 #: Set by `_log_raised` in this context (thread or asyncio task), consumed by the
 #: stats wrapper, so a call that raised is counted without re-counting the
 #: previous call's entry.
@@ -1143,6 +1172,8 @@ _STALE_REASON_TEXT = {
     'mtime': 'mtime changed',
     'mtime-sampled': 'mtime changed (sampled file)',
     'ctime-sampled': 'the file was written (sampled file)',
+    'hash-mode': ('fingerprinted under a different file_hash_full_max_bytes, so '
+                  'it could not be compared -- the file itself may be unchanged'),
     'appeared': 'a file the call looked for and did not find now exists',
     'remote-changed': 'remote object changed',
     'remote-unresolved': 'remote object could not be checked',
@@ -1181,10 +1212,64 @@ def _describe_file_deps(deps: dict[str, Any] | None) -> dict[str, str]:
         parts = ["remote"] if rec.get("remote") else []
         if rec.get("size") is not None:
             parts.append(f"{rec['size']} bytes")
-        if rec.get("hash"):
+        if rec.get("hash") and _is_sampled_dep(rec):
+            # Printed like a full hash, it read as proof of content that it is
+            # not (round 20).
+            parts.append(f"sampled hash {str(rec['hash'])[:12]} (head, middle and "
+                         f"tail only; the rest is trusted to its timestamps)")
+        elif rec.get("hash"):
             parts.append(f"hash {str(rec['hash'])[:12]}")
         out[path] = ", ".join(parts) or "recorded"
     return out
+
+
+def _is_sampled_dep(rec: Any) -> bool:
+    """Was this file fingerprinted by sampling (larger than
+    ``file_hash_full_max_bytes``)? Only such snapshots record a ctime."""
+    return isinstance(rec, dict) and ("ctime_ns" in rec or "ctime" in rec)
+
+
+def _describe_state_change(old: dict[str, str], new: dict[str, str]) -> str | None:
+    """What differs between two flattened state ledgers, in words, or None.
+
+    Named parts first -- its source, each helper and cached function it calls,
+    each global it reads. When none of them moved, the first link of the state
+    chain that did says which fold changed (a capture, a default, ...).
+    """
+    def named(ledger: dict[str, str]) -> dict[str, str]:
+        return {k: v for k, v in ledger.items() if not k.startswith("@")}
+
+    before, after = named(old), named(new)
+    gone = [k for k in before if k not in after]
+    added = [k for k in after if k not in before]
+    phrases: list[str] = []
+    # A helper whose code arrived under another name: moved, not edited.
+    for name in list(gone):
+        if not name.startswith("helper "):
+            continue
+        twin = next((k for k in added if k.startswith("helper ")
+                     and after[k] == before[name]), None)
+        if twin is not None:
+            gone.remove(name)
+            added.remove(twin)
+            phrases.append(f"{name} moved to {twin.split(' ', 1)[1]}")
+    for name in after:
+        if name in before and before[name] != after[name]:
+            phrases.append("its own source changed" if name == "source"
+                           else f"{name} changed")
+    phrases += [f"it no longer uses {name}" for name in gone]
+    phrases += [f"it now uses {name}" for name in added]
+    if not phrases:
+        links = sorted((k for k in new if k.startswith("@")), key=lambda k: int(k[1:]))
+        for link in links:
+            i = int(link[1:])
+            if old.get(link) != new[link] and i < len(_STATE_STAGES):
+                return f"{_STATE_STAGES[i]} changed"
+        return None
+    shown = phrases[:3]
+    if len(phrases) > 3:
+        shown.append(f"and {len(phrases) - 3} more")
+    return "; ".join(shown)
 
 
 def entry_id_of(cache_key: str) -> str:
@@ -1592,8 +1677,15 @@ class Cash:
         self._local_binding_cache: dict[Any, tuple | None] = {}
         self._carrier_verdicts: dict[int, tuple[Any, bool]] = {}
         self._stored_doc_memo: dict[str, tuple[tuple[int, int], dict]] = {}
+        # (func_name, state segment) -> the ledger of the key build that first
+        # produced it (`_keep_state_ledger`).
+        self._state_ledgers: dict[tuple[str, str], dict] = {}
         self._ram_only_pending: dict[str, dict[str, list]] = {}
         self._ram_only_lock = threading.Lock()
+        # Serialises this process's reads and rewrites of the stored-key
+        # record: on Windows a read that overlaps the rewrite's rename fails,
+        # and a pool's misses read an empty record as "new arguments".
+        self._stored_doc_lock = threading.RLock()
         # (first_param, self_attrs, uses_super) per code object; see
         # _analyze_method_self_deps.
         self._method_self_dep_cache: dict = {}
@@ -2811,14 +2903,24 @@ class Cash:
         call_start: float,
     ) -> Any:
         """`_resolve_cache_key_now`, with one plain-data census per argument
-        shared across the key it builds (`_plain_census`)."""
+        shared across the key it builds (`_plain_census`), and a ledger of
+        what its state segment is made of (`STATE_LEDGER`)."""
         previous = getattr(_PLAIN_CENSUS, "memo", None)
         _PLAIN_CENSUS.memo = {}
+        ledger: dict = {}
+        ledger_token = STATE_LEDGER.set(ledger)
         try:
-            return self._resolve_cache_key_now(
+            resolved = self._resolve_cache_key_now(
                 func, func_name, dynamic_depends_on, args, kwargs, call_start)
         finally:
+            STATE_LEDGER.reset(ledger_token)
             _PLAIN_CENSUS.memo = previous
+        if resolved[0] is not _CACHE_MISS and ledger:
+            # resolved[1] is the state segment of the key (`_compute_cache_key`).
+            slot = (func_name, resolved[1])
+            if slot not in self._state_ledgers:
+                self._keep_state_ledger(slot, ledger)
+        return resolved
 
     def _resolve_cache_key_now(
         self,
@@ -2855,10 +2957,17 @@ class Cash:
             )
             return (_CACHE_MISS, result, 'unkeyable')
         try:
+            # The state after each fold, in `_STATE_STAGES` order: when no
+            # named part moved, the first stage whose output did is the one
+            # that changed (`_describe_state_change`).
+            chain: list[str] = []
+            ledger_note("@chain", chain)
             current_state_hash = self._state_hasher.compute(
-                func_name, own_source_override=self._pin_own_source(func),
+                func_name, own_source_override=self._pin_own_source(func), note=True,
             )
+            chain.append(current_state_hash)
             current_state_hash = self._fold_closure(func, func_name, current_state_hash)
+            chain.append(current_state_hash)
             folded_defaults = self._fold_defaults(func, func_name, current_state_hash)
             if folded_defaults is None:
                 # An unhashable default: we cannot tell whether it changed, so
@@ -2867,14 +2976,19 @@ class Cash:
                 self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash='unhashable', cache_key='')
                 return (_CACHE_MISS, result, 'unhashable')
             current_state_hash = folded_defaults
+            chain.append(current_state_hash)
             current_state_hash = self._fold_bound_self(func, func_name, current_state_hash)
+            chain.append(current_state_hash)
             current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
             current_state_hash = self._fold_helper_read_globals(func, func_name, current_state_hash)
             current_state_hash = self._fold_dependency_read_globals(
                 func, func_name, current_state_hash,
             )
+            chain.append(current_state_hash)
             current_state_hash = self._fold_rng_epoch(func_name, current_state_hash)
+            chain.append(current_state_hash)
             current_state_hash = self._fold_method_class_deps(func, args, current_state_hash)
+            chain.append(current_state_hash)
             # ONE canonicalisation, fed to both the code channel and the value
             # channel. `_fold_code_args` on the RAW arguments saw a class
             # passed explicitly but not the identical class arriving as a
@@ -2888,6 +3002,7 @@ class Cash:
                 self._warn_if_seed_is_none(func, func_name, args, kwargs)
             current_state_hash = self._fold_code_args(
                 *normalized_args, current_state_hash, func_name=func_name)
+            chain.append(current_state_hash)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._serialize_args(func_name, args, kwargs, normalized=normalized_args)
             self._note_arg_cost(func_name)
@@ -3372,6 +3487,7 @@ class Cash:
                 args_hash=args_hash, cache_key=cache_key,
                 time_saved=(metadata.saves_seconds if metadata.saves_seconds is not None
                             else metadata.execution_time) or 0.0,
+                file_deps=metadata.auto_file_deps,
             )
             return cached_data
         except CacheExpiredError:
@@ -3471,9 +3587,25 @@ class Cash:
                 old_parts = key.rsplit(":", 3)
                 if (len(old_parts) == 4 and old_parts[2:] == new_parts[2:]
                         and old_parts[1] != new_parts[1]):
-                    return MISS_CODE, ("the function's code, a helper it calls, or a "
-                                       "value it reads changed since an earlier run "
-                                       "stored it")
+                    return MISS_CODE, self._code_changed_detail(
+                        func_name, old_parts[1], new_parts[1], doc,
+                        "since an earlier run stored it")
+            # Earlier runs stored entries, and none under the state this
+            # process computes: every one of them is out of date, whatever the
+            # arguments. A changed DEFAULT moves the arguments too (they are
+            # keyed with defaults applied), so the match above cannot see it,
+            # and the call-to-call comparison below called 3 of 4 such misses
+            # "new arguments" (round 20).
+            earlier = {key: value for kind in ("keys", "ram_only")
+                       for key, value in doc[kind].items()
+                       if value and isinstance(value[0], (int, float))
+                       and value[0] < _PROCESS_STARTED}
+            states = {key.rsplit(":", 3)[1] for key in earlier if key.count(":") >= 3}
+            if states and new_parts[1] not in states:
+                newest = max(earlier, key=lambda key: earlier[key][0])
+                return MISS_CODE, self._code_changed_detail(
+                    func_name, newest.rsplit(":", 3)[1], new_parts[1], doc,
+                    "since an earlier run stored its entries, so none of them applies")
         if previous is None or previous == cache_key:
             others = [key for key in record if key != cache_key]
             if previous is None and others:
@@ -3488,9 +3620,11 @@ class Cash:
         if len(old) != 4 or len(new) != 4:
             return MISS_FIRST, "no entry for this key"
         moved = []
+        what = None
         if old[1] != new[1]:
             moved.append((MISS_CODE, "the function's code, a helper it calls, or "
                                      f"a value it reads changed {since}"))
+            what = self._what_changed(func_name, old[1], new[1], doc)
         if old[2] != new[2]:
             moved.append((MISS_DYNAMIC, "a dynamic_depends_on source changed"))
         if old[3] != new[3]:
@@ -3499,7 +3633,72 @@ class Cash:
                                         else "in the last run")))
         if not moved:
             return MISS_FIRST, "no entry for this key"
-        return moved[0][0], "; and ".join(detail for _, detail in moved)
+        detail = "; and ".join(detail for _, detail in moved)
+        return moved[0][0], detail + (f"{_WHAT_CHANGED}{what}" if what else "")
+
+    def _code_changed_detail(self, func_name: str, old_state: str, new_state: str,
+                             doc: dict, since: str) -> str:
+        """A "code or state changed" detail, naming what changed when known."""
+        detail = ("the function's code, a helper it calls, or a value it reads "
+                  f"changed {since}")
+        what = self._what_changed(func_name, old_state, new_state, doc)
+        return detail + (f"{_WHAT_CHANGED}{what}" if what else "")
+
+    def _keep_state_ledger(self, slot: tuple[str, str], ledger: dict) -> None:
+        """Keep the ledger of the first key build that produced this
+        ``(func_name, state)``."""
+        ledgers = self._state_ledgers
+        ledgers[slot] = ledger
+        if len(ledgers) > 512:
+            try:
+                ledgers.pop(next(iter(ledgers)))
+            except (RuntimeError, StopIteration, KeyError):
+                pass  # another thread trimmed it first
+
+    def _flat_ledger(self, func_name: str, state: str, doc: dict | None = None) -> dict[str, str] | None:
+        """``{part: short digest}`` for *state*: this process's ledger, else the record's."""
+        ledger = self._state_ledgers.get((func_name, state))
+        if ledger is None:
+            recorded = (doc or {}).get("states", {}).get(state)
+            return recorded if isinstance(recorded, dict) else None
+
+        def short(value: Any) -> str:
+            return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:10]
+
+        flat: dict[str, str] = {}
+        grouped: dict[str, list] = {}
+        for label, value in list(ledger.items()):
+            if label == "@chain":
+                for i, link in enumerate(value):
+                    flat[f"@{i}"] = short(link)
+            elif label == "source":
+                flat["source"] = short(value)
+            elif isinstance(label, tuple) and label[0] == "globals":
+                via = f" (read by {label[1]})" if label[1] else ""
+                for name, digest in value:
+                    # `X#carried`, `X#cls:C`: more of what global X is.
+                    grouped.setdefault(f"global {name.split('#', 1)[0]}{via}", []).append(
+                        (name, digest))
+            elif isinstance(label, tuple):
+                kind = "cached function" if label[0] == "calls" else label[0]
+                flat[f"{kind} {label[1]}"] = short(value)
+        for name, parts in grouped.items():
+            flat[name] = short(sorted(parts))
+        return flat
+
+    def _what_changed(self, func_name: str, old_state: str, new_state: str,
+                      doc: dict | None = None) -> str | None:
+        """Name what moved between two states of *func_name*, or None if unknown.
+
+        "code or state changed" alone sent every round-20 tester to diff their
+        own edits: a moved helper, an edited constant, a changed default, a
+        path whose case differed by launch mode all read the same.
+        """
+        old = self._flat_ledger(func_name, old_state, doc)
+        new = self._flat_ledger(func_name, new_state, doc)
+        if not old or not new:
+            return None
+        return _describe_state_change(old, new)
 
     @staticmethod
     def _stale_file_deps(metadata: CacheMetadata) -> dict[str, str]:
@@ -3559,28 +3758,37 @@ class Cash:
         run computed and kept in RAM only (see `_remember_ram_only`). Read
         through a memo on the file's (mtime, size), because every miss asks.
         """
-        empty: dict[str, dict[str, list]] = {"keys": {}, "ram_only": {}}
+        empty: dict[str, dict[str, list]] = {"keys": {}, "ram_only": {}, "states": {}}
         path = self._stored_keys_path(func_name)
         if path is None:
             return empty
         from cash.notebook.file_tracker import untracked
-        try:
-            st = os.stat(path)
-        except OSError:
-            return empty
-        memo = self._stored_doc_memo.get(path)
-        if memo is not None and memo[0] == (st.st_mtime_ns, st.st_size):
-            return {kind: dict(value) for kind, value in memo[1].items()}
-        try:
-            # Cash's own bookkeeping: a nested call reads this while the OUTER
-            # call's file tracker is live, and it must not become that entry's
-            # dependency.
-            with untracked(), open(path, encoding="utf-8") as fh:
-                data = json.load(fh)
-        except (OSError, ValueError):
-            return empty
+        with self._stored_doc_lock:
+            try:
+                st = os.stat(path)
+            except OSError:
+                return empty
+            memo = self._stored_doc_memo.get(path)
+            if memo is not None and memo[0] == (st.st_mtime_ns, st.st_size):
+                return {kind: dict(value) for kind, value in memo[1].items()}
+            try:
+                # Cash's own bookkeeping: a nested call reads this while the
+                # OUTER call's file tracker is live, and it must not become
+                # that entry's dependency.
+                with untracked(), open(path, encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except (OSError, ValueError):
+                # Another process mid-rewrite: the last record read beats none,
+                # which reads every miss as "new arguments".
+                if memo is not None:
+                    return {kind: dict(value) for kind, value in memo[1].items()}
+                return empty
+            return self._memo_stored_doc(path, st, data)
+
+    def _memo_stored_doc(self, path: str, st: os.stat_result, data: Any) -> dict[str, dict[str, list]]:
+        """Keep *data* as the record at *path* as of *st*; return a copy."""
         doc = {}
-        for kind in ("keys", "ram_only"):
+        for kind in ("keys", "ram_only", "states"):
             value = data.get(kind) if isinstance(data, dict) else None
             doc[kind] = value if isinstance(value, dict) else {}
         if len(self._stored_doc_memo) >= 256:
@@ -3597,9 +3805,11 @@ class Cash:
         path = self._stored_keys_path(func_name)
         if path is None:
             return
-        for kind in ("keys", "ram_only"):
+        for kind, most in (("keys", self._STORED_KEYS_MAX),
+                           ("ram_only", self._STORED_KEYS_MAX),
+                           ("states", self._STORED_STATES_MAX)):
             entries = doc.setdefault(kind, {})
-            while len(entries) > self._STORED_KEYS_MAX:
+            while len(entries) > most:
                 entries.pop(next(iter(entries)))
         from cash.backends.file_backend import recreate_cache_dir
         from cash.notebook.file_tracker import untracked
@@ -3607,10 +3817,12 @@ class Cash:
         recreate_cache_dir(os.path.dirname(keys_dir))
         os.makedirs(keys_dir, exist_ok=True)
         tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
-        with untracked():
+        with self._stored_doc_lock, untracked():
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump({"func": func_name, **doc}, fh)
             os.replace(tmp, path)
+            # What this process just wrote is what its next miss reads.
+            self._memo_stored_doc(path, os.stat(path), doc)
 
     def _remember_ram_only(self, func_name: str, cache_key: str, why: str) -> None:
         """Note a result this process kept in RAM only, for the NEXT run's reason.
@@ -3634,12 +3846,14 @@ class Cash:
             pending, self._ram_only_pending = self._ram_only_pending, {}
         for func_name, entries in pending.items():
             try:
-                doc = self._stored_doc(func_name)
-                for key, value in entries.items():
-                    doc["keys"].pop(key, None)       # its disk copy is gone: this run recomputed it
-                    doc["ram_only"].pop(key, None)
-                    doc["ram_only"][key] = value
-                self._write_stored_doc(func_name, doc)
+                with self._stored_doc_lock:
+                    doc = self._stored_doc(func_name)
+                    for key, value in entries.items():
+                        doc["keys"].pop(key, None)   # its disk copy is gone: this run recomputed it
+                        doc["ram_only"].pop(key, None)
+                        doc["ram_only"][key] = value
+                        self._record_state(func_name, key, doc)
+                    self._write_stored_doc(func_name, doc)
             except Exception:  # noqa: BLE001 - a diagnostic aid
                 logger.debug("could not record RAM-only keys for %s", func_name, exc_info=True)
 
@@ -3647,22 +3861,42 @@ class Cash:
         """Remember that *cache_key* reached disk, for the next process's reasons.
 
         One small file per function, rewritten on each persisted store (the
-        compute that just ran dwarfs it). Concurrent writers race to the last
-        rename; the loser's key is missing from the record, which costs a
-        vaguer reason, never a wrong answer. Never raises.
+        compute that just ran dwarfs it). A pool's threads take turns (see
+        ``_stored_doc_lock``); concurrent PROCESSES race to the last rename,
+        and the loser's key is missing from the record, which costs a vaguer
+        reason, never a wrong answer. Never raises.
         """
         if self._stored_keys_path(func_name) is None:
             return
         with self._ram_only_lock:
             self._ram_only_pending.get(func_name, {}).pop(cache_key, None)
         try:
-            doc = self._stored_doc(func_name)
-            doc["ram_only"].pop(cache_key, None)
-            doc["keys"].pop(cache_key, None)
-            doc["keys"][cache_key] = [time.time(), ttl]
-            self._write_stored_doc(func_name, doc)
+            with self._stored_doc_lock:
+                doc = self._stored_doc(func_name)
+                doc["ram_only"].pop(cache_key, None)
+                doc["keys"].pop(cache_key, None)
+                doc["keys"][cache_key] = [time.time(), ttl]
+                self._record_state(func_name, cache_key, doc)
+                self._write_stored_doc(func_name, doc)
         except Exception:  # noqa: BLE001 - a diagnostic aid; the store succeeded
             logger.debug("could not record the stored key for %s", func_name, exc_info=True)
+
+    #: States whose ledger the record keeps per function, most recent last.
+    _STORED_STATES_MAX = 8
+
+    def _record_state(self, func_name: str, cache_key: str, doc: dict) -> None:
+        """Put the ledger of *cache_key*'s state in *doc*, for the next run's
+        "what changed". Once per state; kept most recent last."""
+        parts = cache_key.rsplit(":", 3)
+        if len(parts) != 4:
+            return
+        states = doc.setdefault("states", {})
+        if parts[1] in states:
+            states[parts[1]] = states.pop(parts[1])
+            return
+        flat = self._flat_ledger(func_name, parts[1])
+        if flat:
+            states[parts[1]] = flat
 
     def _remember_outcome(self, cache_key: str, outcome: dict[str, Any]) -> None:
         outcome.setdefault("at", time.time())
@@ -4431,6 +4665,8 @@ class Cash:
                   # disk: the two things "1 miss" alone could not tell anyone.
                   'miss_reasons': Counter(), 'not_persisted': Counter(),
                   'not_stored': Counter(),
+                  # For "code or state changed" misses: WHAT changed.
+                  'changed': Counter(),
                   # Calls that went straight through because caching is off.
                   'bypassed': 0}
         # Shared by reference with the end-of-run summary, which otherwise has
@@ -4449,8 +4685,10 @@ class Cash:
                         else:
                             _stats['misses'] += 1
                             _stats['miss_overhead_seconds'] += call.get('cash_seconds') or 0.0
-                            kind = (call.get('miss_reason') or (MISS_FIRST, ""))[0]
+                            kind, detail = call.get('miss_reason') or (MISS_FIRST, "")
                             _stats['miss_reasons'][kind] += 1
+                            if kind == MISS_CODE and _WHAT_CHANGED in detail:
+                                _stats['changed'][detail.split(_WHAT_CHANGED, 1)[1]] += 1
                             if call.get('not_stored'):
                                 _stats['not_stored'][call['not_stored']] += 1
                             elif call.get('not_persisted'):
@@ -4564,7 +4802,7 @@ class Cash:
             _stats['misses'] = 0
             _stats['total_time_saved'] = 0.0
             _stats['bypassed'] = 0
-            for tally in ('miss_reasons', 'not_persisted', 'not_stored'):
+            for tally in ('miss_reasons', 'not_persisted', 'not_stored', 'changed'):
                 _stats[tally].clear()
             self._delete_backend_entries(func_name)
             with self._decorator_call_log_lock:
@@ -6420,6 +6658,10 @@ class Cash:
             func, func_name, g, learned=learned_mutating, watch=watch))
         self._pending_capture_watch.update(watch)
         parts.extend(self._local_binding_parts(func))
+        # By name, for a miss that has to say which global moved. A helper's
+        # or a called function's reads are labelled with the reader.
+        ledger_note(("globals", None if owner_code is None
+                     else getattr(func, "__qualname__", None)), parts)
         if not parts:
             return state_hash
         payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
@@ -8034,6 +8276,8 @@ class Cash:
             except (AttributeError, TypeError, ValueError):
                 pass
             return
+        if not frozen and type(result) in _UNTAGGABLE_TYPES:
+            return
         lineage = self._lineage_hash(cache_key, auto_file_deps)
         try:
             # Say who wrote it: nothing will move this tag when the value is
@@ -8093,7 +8337,12 @@ class Cash:
             try:
                 result._cash_lineage_hash = lineage
             except (AttributeError, TypeError):
-                logger.debug("Cannot attach _cash_lineage_hash to %s", type_name)
+                # Once per type, then never tried again: it logged on every
+                # call returning a dict or an array, and meant nothing to the
+                # user reading CASH_DEBUG (round 20).
+                _UNTAGGABLE_TYPES.add(type(result))
+                logger.debug("results of type %s cannot carry a lineage tag, so a "
+                             "cached function taking one hashes its content", type_name)
 
         except (AttributeError, TypeError):
             logger.debug("Failed to attach lineage hash to %s result", type(result).__name__)
@@ -8109,6 +8358,7 @@ class Cash:
         miss_detail: str = "",
         body_seconds: float | None = None,
         cash_seconds: float | None = None,
+        file_deps: dict | None = None,
     ) -> None:
         """Record a decorator call event for notebook integration.
 
@@ -8169,11 +8419,19 @@ class Cash:
             entry['not_stored'] = outcome.get('not_stored')
         with self._decorator_call_log_lock:
             self._decorator_call_log.append(entry)
-        # Asked for, not merely permitted: an application that turned the
-        # `cash` logger up to INFO did not ask for a line per call.
-        if (self.verbose or self.debug or getattr(self.config, "verbose", False)) \
-                and _calls_logger.isEnabledFor(logging.INFO):
+        if self._per_call_lines():
+            if file_deps:
+                # Only for the line: a hit pays nothing for it otherwise.
+                entry['sampled_files'] = tuple(
+                    path for path, rec in file_deps.items() if _is_sampled_dep(rec))
             _calls_logger.info("%s", self._describe_call(entry))
+
+    def _per_call_lines(self) -> bool:
+        """Is the one-line-per-call log on? Asked for, not merely permitted: an
+        application that turned the `cash` logger up to INFO did not ask for a
+        line per call."""
+        return bool(self.verbose or self.debug or getattr(self.config, "verbose", False)) \
+            and _calls_logger.isEnabledFor(logging.INFO)
 
     @staticmethod
     def _describe_call(entry: dict[str, Any]) -> str:
@@ -8190,8 +8448,19 @@ class Cash:
             # saved" while warm runs were 9x slower than uncached (round 19).
             if lookup >= 0.01 and lookup >= 0.1 * saved:
                 verdict = "; a net loss" if lookup > saved else ""
-                return f"HIT  {name}{tag}  (saved {saved:.2f}s; the lookup took {lookup:.2f}s{verdict})"
-            return f"HIT  {name}{tag}  (saved {saved:.2f}s)"
+                line = f"HIT  {name}{tag}  (saved {saved:.2f}s; the lookup took {lookup:.2f}s{verdict})"
+            else:
+                line = f"HIT  {name}{tag}  (saved {saved:.2f}s)"
+            sampled = entry.get('sampled_files')
+            if sampled:
+                # Larger than file_hash_full_max_bytes: the HIT rests on the
+                # timestamps, and "when it does not recompute I need to be sure
+                # it was right not to" had no way to see that (round 20).
+                shown = ", ".join(os.path.basename(p) for p in sampled[:3])
+                more = f" and {len(sampled) - 3} more" if len(sampled) > 3 else ""
+                line += (f"  -- trusts the timestamps of {shown}{more} (sampled: "
+                         f"larger than file_hash_full_max_bytes)")
+            return line
         kind, detail = entry.get('miss_reason') or (MISS_FIRST, "")
         if kind == MISS_RAISED:
             return (f"RAISE {name}  {detail}; nothing stored  "
@@ -9644,6 +9913,8 @@ class Cash:
         if reasons:
             out.append("      missed: " + ", ".join(
                 f"{n} {kind}" for kind, n in sorted(reasons.items(), key=lambda r: -r[1])))
+        for what, n in (stat.get('changed') or {}).items():
+            out.append(f"      {MISS_CODE} ({n}x): {what}")
         for why, n in (stat.get('not_stored') or {}).items():
             out.append(f"      not stored ({n}x): {why}")
         for why, n in (stat.get('not_persisted') or {}).items():
@@ -9689,8 +9960,17 @@ class Cash:
                 # whose output goes through dictConfig never saw the summary.
                 # Otherwise to stderr -- once: both, with cash's own handler
                 # passing it on as well, printed it three times (round 19).
-                if _app_would_emit(logging.INFO):
-                    logging.getLogger("cash.summary").info("%s", text)
+                # Through the application's handlers whenever it has one that
+                # takes INFO -- past the level filters, as CASH_DEBUG's lines
+                # are: CASH_SUMMARY asked for it. Gated on the levels, the
+                # block came through the app's formatter at INFO and raw at
+                # WARNING, two shapes for a log shipper to parse (round 20).
+                cash_logger = logging.getLogger("cash")
+                if any(h.level <= logging.INFO for h in _real_handlers(cash_logger)):
+                    summary_logger = logging.getLogger("cash.summary")
+                    summary_logger.handle(summary_logger.makeRecord(
+                        summary_logger.name, logging.INFO, "(cash summary)", 0,
+                        "%s", (text,), None))
                 else:
                     sys.stderr.write(text + "\n")
                     sys.stderr.flush()

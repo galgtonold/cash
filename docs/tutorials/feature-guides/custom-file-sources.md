@@ -115,7 +115,7 @@ load_features.explain()
 #   changed_files: {'data/features.csv': 'content changed'}
 ```
 
-The `file_changed` reason and the `changed_files` dict are emitted by `Cash._explain_call`. The `changed_files` values are short human-readable strings: `'content changed'`, `'size changed'`, `'file missing'`, `'mtime changed'` and `'mtime changed (sampled file)'`, `'the file was written (sampled file)'`, `'a file the call looked for and did not find now exists'`, or — for a remote source — `'remote object changed'` / `'remote object could not be checked'`.
+The `file_changed` reason and the `changed_files` dict are emitted by `Cash._explain_call`. The `changed_files` values are short human-readable strings: `'content changed'`, `'size changed'`, `'file missing'`, `'mtime changed'` and `'mtime changed (sampled file)'`, `'the file was written (sampled file)'`, `'a file the call looked for and did not find now exists'`, or — for a remote source — `'remote object changed'` / `'remote object could not be checked'`. After `file_hash_full_max_bytes` moves across a file's size, its entry was fingerprinted one way and is now checked the other, and the two cannot be compared: that reads `'fingerprinted under a different file_hash_full_max_bytes, so it could not be compared -- the file itself may be unchanged'`, and the entry recomputes once. `file_deps` labels a fingerprint of a file above that size `sampled hash`, since only its head, middle and tail were hashed.
 
 `explain()` decides freshness through the same content-authoritative `file_dep_is_fresh` helper a real lookup uses, so it cannot disagree with the call: a **touch** (identical bytes, bumped mtime) explains as `hit`, exactly as it behaves. See [Debugging and Monitoring](debugging-and-monitoring.md) for the full `explain()` story.
 
@@ -300,7 +300,7 @@ A matching size *and* a matching content hash is fresh, **regardless of the mtim
 
 ### Large files are sampled, not fully hashed
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @6c0592fa, cash/notebook/file_dep_snapshot.py:file_content_hash @81f99180, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @e571c25f, cash/notebook/file_dep_snapshot.py:file_content_hash @81f99180, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
 Hashing a multi-GB parquet on every lookup would defeat the point of caching, so the hash is size-bounded (`file_content_hash`), at a threshold you can move (`file_hash_full_max_bytes`):
 
 - Files **≤ 256 MiB** (`_HASH_FULL_MAX_BYTES`) are hashed **in full**.

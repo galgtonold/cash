@@ -142,7 +142,7 @@ A notebook shows a badge on every statement. A script shows nothing by
 default, which makes it easy to assume caching is working when it isn't — so
 there are several ways to look.
 
-<!-- claim: cash/core.py:Cash.run_summary @325d5774, cash/core.py:Cash._summary_reasons @edbfd060, cash/core.py:Cash._print_run_summary @3c207d6e -->
+<!-- claim: cash/core.py:Cash.run_summary @325d5774, cash/core.py:Cash._summary_reasons @44027910, cash/core.py:Cash._print_run_summary @54975534 -->
 **What recomputed just now, and why?** Set `CASH_SUMMARY=1` and a
 per-function table prints to **stderr** when the process exits — stderr, so it
 never lands in a report, a pipe or a JSON response your program writes to
@@ -161,6 +161,9 @@ cash: 4 of 6 calls restored, 41.2s saved
   model.build_grid      1 hit,    1 miss      0.3s saved
       missed: 1 no entry yet
       kept in RAM only (1x): under the 0.1s persistence floor; a new process recomputes it
+  model.score           0 hits,   2 misses    -
+      missed: 2 code or state changed
+      code or state changed (2x): global THRESHOLD changed
 ```
 
 Under each row: why its calls missed, and anything that was computed but not
@@ -189,7 +192,7 @@ line per call to stderr — a hit, or a miss and why:
 cash.calls: MISS model.build_grid  [3f9a1c2b7e04]  no entry yet: the first call with these arguments in this process, and no earlier run stored one  (ran 0.05s; kept in RAM only -- under the 0.1s persistence floor -- so another process will recompute it)
 cash.calls: HIT  model.build_grid  [3f9a1c2b7e04]  (saved 0.05s)
 cash.calls: MISS model.build_grid  [8c21d05e9a13]  new arguments: called with arguments not seen on the last call  (ran 0.05s)
-cash.calls: MISS model.ray_component  [b7e4410c2d88]  code or state changed: the function's code, a helper it calls, or a value it reads changed since an earlier run stored it  (ran 9.8s)
+cash.calls: MISS model.ray_component  [b7e4410c2d88]  code or state changed: the function's code, a helper it calls, or a value it reads changed since an earlier run stored it -- helper model._smooth moved to dsp._smooth  (ran 9.8s)
 cash.calls: RAISE model.load_prices  ValueError: no rows for 2026-09-10; nothing stored  (ran 1.20s)
 ```
 
@@ -198,7 +201,7 @@ The id in brackets is the one `cash inspect --function` lists and
 `CASH_VERBOSE=1` or `verbose = true` give these lines without the other debug
 records.
 
-<!-- claim: cash/core.py:Cash._absent_entry_reason @8f62826d, cash/core.py:Cash._remember_ram_only @17341e53 -->
+<!-- claim: cash/core.py:Cash._absent_entry_reason @977d0aa9, cash/core.py:Cash._remember_ram_only @17341e53 -->
 A reason is not limited to what this process saw: each function's recently
 stored keys are recorded beside the cache (in `.keys/`), so the first call of a
 new run can still say that the code changed, that the arguments are new, that
@@ -206,18 +209,37 @@ an earlier run's entry expired under its `ttl`, or that it was evicted or
 cleared. Results a run kept in RAM only are recorded there too, when it exits,
 so the next run says `not stored last time: an earlier run computed it but kept
 it in RAM only (under the 0.1s persistence floor)` instead of calling the same
-arguments new. After a code edit, every call whose arguments an earlier run
-stored says `code or state changed`, not just the first. The time in brackets
-is the body's own, the number the persistence floor is judged on.
+arguments new. After a code edit, every call says `code or state changed`, not
+just the first — including after a changed parameter default, which moves the
+arguments as well because they are keyed with defaults applied.
 
-<!-- claim: cash/core.py:_StandDownWhenTheAppLogs.filter @534664a0, cash/core.py:Cash._print_run_summary @3c207d6e -->
+<!-- claim: cash/core.py:_describe_state_change @5cb0cb4e, cash/core.py:Cash._flat_ledger @1a0c7d70 -->
+After `--` it says *what* changed: `its own source changed`, `global
+THRESHOLD changed`, `helper model._rank changed`, `cached function
+model.load changed`, `it now uses global DATA_DIR`, or `helper model._smooth
+moved to dsp._smooth` for a helper whose code arrived unchanged under another
+module. When none of those moved, it names the part of the key that did: `a
+variable it captures`, `a parameter default`, `the instance it is bound to`, `a
+function or class passed as an argument`. The summary counts them on their own
+line. A moved helper is still a miss: the key holds where the code lives as well
+as what it says.
+
+The time in brackets is the body's own, the number the persistence floor is
+judged on. A hit that rests on a file larger than `file_hash_full_max_bytes`
+says so — `-- trusts the timestamps of big.npy (sampled: ...)` — because only
+three regions of such a file are hashed and the rest is trusted to its
+timestamps ([why](known-limitations.md)).
+
+<!-- claim: cash/core.py:_StandDownWhenTheAppLogs.filter @1f08254a, cash/core.py:Cash._print_run_summary @54975534 -->
 With `CASH_DEBUG` they come with cash's other debug records. If your program configures `logging`
 itself, those records go to your handlers in your format instead, and no
 stderr handler is added. That holds when it configures logging *after*
 `import cash`, the usual order in a command-line tool: from the first record
-your handlers take, cash's own stops printing, so nothing appears twice — the
-exit summary included, which goes to your log if it would print at INFO and
-to stderr otherwise. `Cash(verbose=True)` gives the per-call lines alone.
+your handlers take, cash's own stops printing, so nothing appears twice. The
+exit summary goes to your handlers, in your format, whenever one of them takes
+INFO records — whatever level the root or `cash` logger is set to, since
+`CASH_SUMMARY` asked for it — and to stderr when none does.
+`Cash(verbose=True)` gives the per-call lines alone.
 
 Two things your logging setup does not reach. A **worker process** started by
 `multiprocessing`, `ProcessPoolExecutor` or joblib on the `spawn` start method
@@ -262,7 +284,7 @@ Worth understanding before any parameter. With a bare `@cash.cache` and nothing
 configured, a cached result is discarded and recomputed when **any** of these
 change:
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @58f96079, cash/core.py:Cash._analyze_dependencies @d32aeb90 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @f2914199, cash/core.py:Cash._analyze_dependencies @d32aeb90 -->
 | What changed | How it's detected |
 |---|---|
 | The **arguments** | Hashed by *content* — so DataFrames and arrays work, and two equal-but-distinct objects share one entry |
@@ -285,7 +307,7 @@ for the cases this model *can't* see.
 
 ### What else is in the key — the ones that cost a recompute
 
-<!-- claim: cash/core.py:Cash._fold_defaults @6339036d, cash/core.py:Cash._hash_arg_payload @2aa37575, cash/dependency_state.py:DependencyStateHasher.compute @58f96079 -->
+<!-- claim: cash/core.py:Cash._fold_defaults @6339036d, cash/core.py:Cash._hash_arg_payload @2aa37575, cash/dependency_state.py:DependencyStateHasher.compute @f2914199 -->
 None of these gives a wrong answer. Each one costs a recompute you might not
 expect, measured across fresh processes:
 
@@ -464,7 +486,7 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @f292bb77, cash/core.py:Cash._fold_dependency_read_globals @fbbbd0b2 -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @d65d16fd, cash/core.py:Cash._fold_dependency_read_globals @fbbbd0b2 -->
 Only globals that are **read** participate — and that includes globals read
 on someone else's behalf: by a **helper**, so a helper returning a module-level
 `CONFIG` invalidates its caller when that config changes, and by another
@@ -786,7 +808,7 @@ After the TTL elapses, the next call recomputes and replaces the entry.
 Entries whose calls never come back stay on disk until you reclaim them —
 call `cash.cleanup()`, or run `python -m cash clear` from the CLI.
 
-<!-- claim: cash/core.py:Cash._entry_ttl @3cf07e88, cash/core.py:Cash._absent_entry_reason @8f62826d -->
+<!-- claim: cash/core.py:Cash._entry_ttl @3cf07e88, cash/core.py:Cash._absent_entry_reason @977d0aa9 -->
 An entry remembers the `ttl` it was written with, and the decorator's
 current `ttl` applies too, so the **shorter** of the two wins. Lengthening
 `ttl=60` to `ttl=3600` does not rescue entries already written under 60 s:
@@ -1172,7 +1194,7 @@ Keys:
 
 ### `func.cache_clear()`
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @ab3f1cfc -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @af0faafb -->
 Wipe backend entries whose key starts with this function's name. Also
 resets stats, drops the warnings log, and forgets the `_warn_once`
 dedup marks (so the next misbehavior re-warns instead of being silent).

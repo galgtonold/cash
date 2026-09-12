@@ -22,6 +22,7 @@ after the hasher is constructed is still seen.
 """
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import sys
 from collections.abc import Callable, Mapping
@@ -32,7 +33,25 @@ if TYPE_CHECKING:
     from .graph import DependencyGraph
     from .purity_analyzer import PurityReport
 
-__all__ = ["DependencyStateHasher", "HelperResolver", "SysModulesHelperResolver"]
+__all__ = ["DependencyStateHasher", "HelperResolver", "SysModulesHelperResolver",
+           "STATE_LEDGER", "ledger_note"]
+
+#: What the state segment of the key being built is made of, by name: the
+#: function's own source, each cached function and helper it calls, the
+#: globals it reads, its captures and defaults. Filled while a decorator key
+#: is built, so a "code or state changed" miss can say WHICH of them moved --
+#: every round-20 tester got the same unexplained reason. ``None`` whenever no
+#: key is being built. Values are kept raw (the fold's own digests and part
+#: lists); they are only formatted on a miss, never on the hit path.
+STATE_LEDGER: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "_cash_state_ledger", default=None)
+
+
+def ledger_note(label: Any, value: Any) -> None:
+    """Record one named part of the state being keyed, if a key is being built."""
+    ledger = STATE_LEDGER.get()
+    if ledger is not None:
+        ledger[label] = value
 
 
 @runtime_checkable
@@ -136,6 +155,7 @@ class DependencyStateHasher:
         visited: set[str] | None = None,
         *,
         own_source_override: str | None = None,
+        note: bool = False,
     ) -> str:
         """Return the dependency state hash for *node*.
 
@@ -151,6 +171,9 @@ class DependencyStateHasher:
         identity (and two same-qualname lambdas collide outright).
         Recursive dependency calls never receive the override, so helper
         and dependency state stays live.
+
+        ``note`` records the root's parts in `STATE_LEDGER`; only the
+        decorator's key build asks, never a nested identity lookup.
         """
         if visited is None:
             visited = set()
@@ -186,9 +209,15 @@ class DependencyStateHasher:
             )
             hashes.append(live if live is not None else self._declared_dep_snapshots[node])
 
+        if note and hashes:
+            ledger_note("source", hashes[0])
+
         # 2. Dependencies' state, sorted for determinism.
         for dep in sorted(self._graph.get_dependencies(node)):
-            hashes.append(self.compute(dep, visited))
+            state = self.compute(dep, visited)
+            hashes.append(state)
+            if note:
+                ledger_note(("calls", dep), state)
 
         # 3. Transitive helper source hashes, re-resolved live per call.
         #    The node's own qualname is skipped (its source is already in
@@ -199,8 +228,9 @@ class DependencyStateHasher:
             for qual in sorted(report.helper_source_hashes):
                 if qual == node:
                     continue
-                hashes.append(
-                    f"helper:{qual}:{current.get(qual, report.helper_source_hashes[qual])}"
-                )
+                helper = current.get(qual, report.helper_source_hashes[qual])
+                hashes.append(f"helper:{qual}:{helper}")
+                if note:
+                    ledger_note(("helper", qual), helper)
 
         return hashlib.sha256(":".join(hashes).encode("utf-8")).hexdigest()

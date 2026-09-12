@@ -700,7 +700,7 @@ Two large objects that differ only outside the sampled region therefore hash ide
 
 ## A very large file, edited in place, with its timestamp put back
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @6c0592fa, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @e571c25f, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
 Files up to `file_hash_full_max_bytes` (**256 MiB** by default) are hashed in
 full, so their content decides and none of this applies. Above that, the hash
 covers three 256 KiB regions — head, middle and tail — and the file's

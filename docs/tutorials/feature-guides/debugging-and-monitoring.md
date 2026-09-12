@@ -33,7 +33,7 @@ That's the decorator path. In a notebook the equivalents are `%cash_debug on`, `
 
 ## In a script: `CASH_SUMMARY` and `CASH_DEBUG`
 
-<!-- claim: cash/core.py:Cash._print_run_summary @3c207d6e, cash/core.py:Cash._log_decorator_call @c1540ce6 -->
+<!-- claim: cash/core.py:Cash._print_run_summary @54975534, cash/core.py:Cash._log_decorator_call @9cd86d9d -->
 A script shows nothing about the cache by default. Two environment variables
 change that without touching the code:
 
@@ -56,7 +56,8 @@ cash: 1 of 4 calls restored, 0.4s saved
 
 The `cache:` line is the directory the run used; check it first when a run
 that should have been warm was not. A "kept in RAM only" line names results
-the next run will compute again.
+the next run will compute again, and a `code or state changed` line names what
+changed — `global THRESHOLD changed`, `helper model._rank moved to dsp._rank`.
 
 `CASH_DEBUG` logs each call with the entry id `cash inspect --function` lists:
 
@@ -98,7 +99,7 @@ The return value is a `CacheExplanation` dataclass (`would_hit`, `reason`, `func
 | `key_uncomputable` | The args couldn't be hashed (unpicklable type, custom hasher needed). | `arg_type`, `error`, `hint` |
 | `disabled` | Caching is off (`disable=True` / `CASH_DISABLE`), so every call runs the function. | `hint` |
 
-`Cash._explain_call` walks the same code path as a real call up to "would I get a hit?", then returns the verdict instead of executing. Its file-dependency arm delegates to the shared content-authoritative `file_dep_is_fresh`, the same helper the real lookup uses, so the explanation and the call cannot disagree — a **touch** (identical bytes, bumped mtime) explains as `hit`. The `changed_files` values are short human-readable strings: `'content changed'`, `'size changed'`, `'file missing'`, `'mtime changed'` and `'mtime changed (sampled file)'`, `'the file was written (sampled file)'`, `'a file the call looked for and did not find now exists'`, or — for a remote source — `'remote object changed'` / `'remote object could not be checked'`.
+`Cash._explain_call` walks the same code path as a real call up to "would I get a hit?", then returns the verdict instead of executing. Its file-dependency arm delegates to the shared content-authoritative `file_dep_is_fresh`, the same helper the real lookup uses, so the explanation and the call cannot disagree — a **touch** (identical bytes, bumped mtime) explains as `hit`. The `changed_files` values are short human-readable strings: `'content changed'`, `'size changed'`, `'file missing'`, `'mtime changed'` and `'mtime changed (sampled file)'`, `'the file was written (sampled file)'`, `'a file the call looked for and did not find now exists'`, `'fingerprinted under a different file_hash_full_max_bytes, ...'` after that setting moved across the file's size, or — for a remote source — `'remote object changed'` / `'remote object could not be checked'`.
 
 ## Tool 2: `%cash_debug on` / `%cash_debug off`
 
