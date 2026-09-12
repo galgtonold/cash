@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @357b6b10, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @5bc9f88c, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 The one exception is the import-time notice from `cash.experimental`: it is a
@@ -163,7 +163,7 @@ the caching.
 
 ## CACHE-DIR-MOVED {#cache-dir-moved}
 
-<!-- claim: cash/config.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @7f3408d4 -->
+<!-- claim: cash/config.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @54c8ba02 -->
 **What happened.** Cash resolves its default cache directory next to the code
 being run -- the project the running script belongs to -- rather than next to
 wherever the process was launched from. This run found a cache in the current
@@ -553,7 +553,7 @@ though then the line is better deleted.
 
 ## CONFIG-TOML-UNREADABLE {#config-toml-unreadable}
 
-<!-- claim: cash/config.py:_load_toml_config @b8d9cdd1, cash/config.py:_warn_toml_unreadable @d0af8e40 -->
+<!-- claim: cash/config.py:_load_toml_config @b8d9cdd1, cash/config.py:_warn_toml_unreadable @8336db9c -->
 **What happened.** Cash found a config file — `pyproject.toml` with a
 `[tool.cash]` section, or the XDG user config — and has nothing that can parse
 it. A TOML parser entered the standard library in **Python 3.11** (`tomllib`);
@@ -574,7 +574,7 @@ all.
 **What to do.** Any one of:
 
 ```bash
-pip install tomli          # the parser 3.10 is missing
+pip install tomli          # the parser 3.10 is missing (cash-lib[toml], included in [all])
 ```
 
 or set the same values through the environment, which needs no parser:
@@ -589,6 +589,35 @@ or run on Python 3.11 or newer, where the parser ships with the interpreter.
 — a `pyproject.toml` that carries `[tool.cash]` for a different deployment, say.
 The warning fires once per process, and only when a config file is actually
 there.
+
+## CONFIG-FILE-MISSING {#config-file-missing}
+
+<!-- claim: cash/config.py:_resolve_config @1454eab2 -->
+**What happened.** Your code passed `Cash(config_path=...)` naming a file that
+does not exist. Cash resolved its configuration from the other layers —
+defaults, the user and project files, `CASH_*` variables — as if the argument
+were not there.
+
+**Why it matters.** A file named in code was meant to be read. The usual cause
+is a packaged tool whose wheel did not include its config file, or a path
+written relative to the working directory rather than to the module, so it
+works from the project root and nowhere else. Every setting in it — a cache
+lifetime, a `cache_dir` — silently stops applying.
+
+**What to do.** Locate the file relative to the module that uses it, and make
+sure the package ships it:
+
+<!-- test:skip reason="illustrative: a packaged tool's layout" -->
+```python
+from pathlib import Path
+app = cash.Cash(config_path=Path(__file__).parent / "cash.toml")
+```
+
+The file may hold the settings under `[tool.cash]`, under `[cash]`, or at the
+top level. `cash info --config PATH` shows what it resolves to.
+
+**When it is safe to ignore.** When the file is optional by design — but then
+check for it before passing it, so the warning keeps meaning something.
 
 ## CACHE-WRITE-ABANDONED {#cache-write-abandoned}
 
@@ -1790,7 +1819,7 @@ not affected: the reloaded code is keyed afresh.
 result to the cache failed. The message names the backend and the exception.
 Nothing was stored.
 
-<!-- claim: cash/core.py:Cash._store_in_cache @683385bf -->
+<!-- claim: cash/core.py:Cash._store_in_cache @4608a62b -->
 **Why it matters.** The result you received is correct — the failure is on the
 storage side only, and Cash deliberately reports it rather than raising it into
 your code. If this happens once, it costs one recompute. If it happens on every

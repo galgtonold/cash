@@ -20,7 +20,7 @@ most convenient — explicit code for one-off scripts, `pyproject.toml`
 for team defaults, env vars for deployment overrides, the XDG file for
 personal cross-project defaults.
 
-<!-- claim: cash/config.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @7f3408d4 -->
+<!-- claim: cash/config.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @54c8ba02 -->
 ### What paths are relative to
 
 Where a relative `cache_dir` points depends on who wrote it, and the rule is
@@ -159,7 +159,7 @@ cost model declined to write to disk.
 | Field | Env var | Default | Description |
 |---|---|---|---|
 | `smart_persistence` | `CASH_SMART_PERSISTENCE` | `true` | Use the cost-model promotion policy. If `false`, falls back to `_default_promotion_policy` (same rule, 1.0 s floor). |
-| `persist_all` | `CASH_PERSIST_ALL` | `false` | Cache **every** statement, bypassing the cost-aware floors (same as `%cash_persist on`). Flippable at runtime via `cash.configure(persist_all=True)`. |
+| `persist_all` | `CASH_PERSIST_ALL` | `false` | Cache **every** notebook statement, bypassing the cost-aware floors (same as `%cash_persist on`). Flippable at runtime via `cash.configure(persist_all=True)`. Notebook only: it does not change what a `@cash.cache` function stores, which the other fields in this table decide. |
 | `min_execution_time_to_cache_seconds` | `CASH_MIN_EXECUTION_TIME_TO_CACHE_SECONDS` | `0.01` | "Too cheap to cache at all" floor — statements faster than this never get a cache entry. |
 | `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | Required savings fraction for promotion — used by both the notebook Gate A and the tier promotion policy. |
 | `min_cache_fixed_budget_seconds` | `CASH_MIN_CACHE_FIXED_BUDGET_SECONDS` | `0.05` | Notebook path: always allow caching when predicted restore is below this. |
@@ -325,11 +325,12 @@ additionally overridable element-by-element with `CASH_TIER_<N>_<FIELD>`.
 
 ### Per-script overrides via `config_path`
 
+<!-- test:expect-warning reason="the example names a file the docs harness does not create, so CONFIG-FILE-MISSING (described below) is exactly what cash should say" -->
 ```python
 cash = Cash(config_path="./my_special_config.toml")
 ```
 
-<!-- claim: cash/config.py:_resolve_config @a54cbbca -->
+<!-- claim: cash/config.py:_resolve_config @1454eab2 -->
 Loads the named TOML above the user and project files — a file named in code
 outranks the `pyproject.toml` found by walking up from wherever the process
 started — and below environment variables and constructor kwargs. That is how
@@ -337,6 +338,25 @@ an installed package can carry its own cash settings: a `pyproject.toml` is not
 installed with the package, so ship a TOML file inside it and name it here
 (`Path(__file__).with_name("cash.toml")`). Until 0.10.1 the launching
 project's `pyproject.toml` overrode it.
+
+The file may hold its settings under `[tool.cash]`, under `[cash]`, or as
+top-level keys. A relative `cache_dir` in it is resolved against the file's
+own directory, and a leading `~` is your home directory — so a tool that wants
+its cache outside site-packages writes `cache_dir = "~/.cache/mytool"`.
+
+<!-- claim: cash/config.py:_resolve_config @1454eab2 -->
+A path that does not exist is not silently skipped: cash warns
+[`CONFIG-FILE-MISSING`](../warnings.md#config-file-missing) and runs on the
+other layers. The usual cause is a wheel that did not include the file — list
+it as package data. To see what a tool's file resolves to, without running the
+tool:
+
+```bash
+cash info --config path/to/cash.toml
+```
+
+On Python 3.10, reading any TOML file needs `tomli`; install
+`cash-lib[toml]` (or `[all]`) to get it.
 
 <!-- claim: cash/config.py:_marks_project @2991b315 -->
 A `pyproject.toml` marks a project only when it has a `[project]`,

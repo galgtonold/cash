@@ -664,6 +664,10 @@ class CacheMetadata:
     size: int | None = None
     storage: list[str] | None = None
     ttl: int | None = None
+    # The ttl came from the decorator (``ttl=``), not from a tier's
+    # ``default_ttl``: a lowered tier default shortens only the latter, and
+    # ``cash inspect`` / ``cash clear --expired`` need to tell them apart.
+    ttl_declared: bool | None = None
     execution_time: float | None = None
     # The function's OWN time, excluding everything cash did around it.
     # ``execution_time`` is measured from the top of the wrapper and so

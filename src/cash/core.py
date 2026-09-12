@@ -9210,6 +9210,7 @@ class Cash:
             # backend drops an expired entry on read, so the next miss can only
             # say "expired" -- rather than "evicted or cleared" -- if this
             # process and the stored-key record know it (round 19).
+            ttl_declared = ttl is not None or None
             if ttl is None:
                 ttl = self._tier_default_ttl()
             meta = CacheMetadata(
@@ -9230,6 +9231,7 @@ class Cash:
                 saves_seconds=saves_seconds,
                 serializer_cls=type(serializer),
                 ttl=ttl,
+                ttl_declared=ttl_declared,
                 args_hash=args_hash,
                 state_hash=state_hash,
                 # Each entry: path -> {'mtime': float, 'size': int}.

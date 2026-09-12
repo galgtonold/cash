@@ -96,7 +96,7 @@ def cmd_version(args: argparse.Namespace) -> None:
 def cmd_info(args: argparse.Namespace) -> None:
     """Show cash configuration."""
     from cash.config import get_config
-    config = get_config()
+    config = get_config(config_path=getattr(args, "config", None))
 
     from cash.config import format_size
     origins = getattr(config, "_origins", {})
@@ -254,6 +254,32 @@ def _function_of(key: str) -> str:
     return key.split(':', 1)[0] if ':' in key else '(unknown)'
 
 
+def _tier_default_ttl() -> int | None:
+    """The ``default_ttl`` of the first configured tier that has one, now."""
+    try:
+        from cash.config import get_config
+        for tier in get_config().tiers or ():
+            if getattr(tier, "default_ttl", None) is not None:
+                return int(tier.default_ttl)
+    except Exception:  # noqa: BLE001 - a listing must not fail over config
+        logger.debug("Could not read the tiers' default_ttl", exc_info=True)
+    return None
+
+
+def _effective_ttl(metadata: dict, tier_default: int | None) -> int | None:
+    """The ttl an entry is served under, by the rule reads apply.
+
+    The decorator's ``ttl=`` as written; otherwise the SHORTER of the ttl it
+    was written with and the tier's ``default_ttl`` as configured now -- so a
+    lowered default shows here as it takes effect, rather than as the day the
+    entry was written with (round 20).
+    """
+    written = metadata.get('ttl')
+    if metadata.get('ttl_declared') or tier_default is None:
+        return written
+    return tier_default if written is None else min(written, tier_default)
+
+
 def _scan_entries(cache_path: Path) -> list[_Entry]:
     """Read every entry's metadata in *cache_path*.
 
@@ -262,6 +288,7 @@ def _scan_entries(cache_path: Path) -> list[_Entry]:
     of small ones.
     """
     entries: list[_Entry] = []
+    tier_default = _tier_default_ttl()
     for entry_file in cache_path.glob(f'*{ENTRY_SUFFIX}'):
         try:
             metadata, _ = read_entry(str(entry_file), with_payload=False)
@@ -281,8 +308,8 @@ def _scan_entries(cache_path: Path) -> list[_Entry]:
             uses=int(metadata.get('access_count') or 0),
             outputs=tuple(str(o) for o in outputs),
             reads=tuple(str(p) for p in (metadata.get('auto_file_deps') or {})),
-            expires=(float(metadata.get('created_at') or stat.st_mtime) + float(metadata['ttl'])
-                     if metadata.get('ttl') is not None else None),
+            expires=(float(metadata.get('created_at') or stat.st_mtime) + float(ttl)
+                     if (ttl := _effective_ttl(metadata, tier_default)) is not None else None),
         ))
     return entries
 
@@ -560,6 +587,28 @@ def _clear_entry(cache_dir: str, wanted: str) -> None:
           f"({_format_bytes(entry.size)} freed)")
 
 
+def _clear_expired(cache_dir: str) -> None:
+    """Delete the entries whose ttl has run out, and say what that freed.
+
+    An expired entry is never served, but it stays on disk until something
+    writes over it: lowering a tier's ``default_ttl`` to make room freed
+    nothing (round 20).
+    """
+    cache_path = Path(cache_dir)
+    if not cache_path.is_dir():
+        print(f"No cache directory at {cache_dir}")
+        sys.exit(1)
+    now = time.time()
+    expired = [e for e in _scan_entries(cache_path) if e.expires is not None and e.expires <= now]
+    for entry in expired:
+        _remove_entry_files(cache_path, entry.stem)
+    if expired:
+        _bump_generation(cache_path)
+    print(f"Cleared {len(expired)} expired "
+          f"entr{'y' if len(expired) == 1 else 'ies'} from {cache_path} "
+          f"({_format_bytes(sum(e.size for e in expired))} freed)")
+
+
 def _bump_generation(cache_path: Path) -> None:
     """Tell running processes that entries were removed under them.
 
@@ -653,12 +702,22 @@ def cmd_clear(args: argparse.Namespace) -> None:
         sys.exit(2)
 
     only_entry = getattr(args, "entry", None)
+    only_function = getattr(args, "function", None)
+    if getattr(args, "expired", False):
+        if only_entry or only_function:
+            # --function would otherwise win and delete the live entries too.
+            print("cash clear: --expired clears across the whole cache; it cannot "
+                  "be combined with --function or --entry.")
+            sys.exit(2)
+        target = args.path if (args.path and os.path.isdir(args.path)) else _target_dir(args)
+        _clear_expired(target)
+        return
+
     if only_entry:
         target = args.path if (args.path and os.path.isdir(args.path)) else _target_dir(args)
         _clear_entry(target, only_entry)
         return
 
-    only_function = getattr(args, "function", None)
     if only_function:
         target = args.path if (args.path and os.path.isdir(args.path)) else _target_dir(args)
         _clear_function(target, only_function)
@@ -823,6 +882,9 @@ def main() -> None:
 
     # info
     sub_info = subparsers.add_parser('info', help='Show cash configuration')
+    sub_info.add_argument('--config', default=None, metavar='PATH',
+                          help='Resolve as a program that passes Cash(config_path=PATH) '
+                               "would -- a packaged tool's own config file.")
     sub_info.set_defaults(func=cmd_info)
 
     # inspect
@@ -853,6 +915,10 @@ def main() -> None:
                            help='Clear one entry by id, as listed by '
                                 '`cash inspect --function NAME`. Any unambiguous '
                                 'prefix works. Takes precedence over --function.')
+    sub_clear.add_argument('--expired', action='store_true',
+                           help='Clear only the entries whose ttl has run out -- by '
+                                'the rule reads apply, a lowered default_ttl included. '
+                                'Frees the disk they hold; nothing else is touched.')
     sub_clear.add_argument('--tool', default=None, metavar='NAME',
                            help='Act on the per-user cache of the installed console '
                                 'script NAME instead of the cache in use. On its own it '

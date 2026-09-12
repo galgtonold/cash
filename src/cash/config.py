@@ -545,8 +545,9 @@ def _warn_toml_unreadable(path: Path) -> None:
             f"library has no TOML parser, and `tomli` is not installed. Every "
             f"setting in that file is being ignored, including cache_dir -- so "
             f"cash is running on defaults that the file was written to change.",
-            "pip install tomli (cash keeps no required dependencies, so it "
-            "cannot install one for you), or set the values through CASH_* "
+            "pip install tomli -- or cash-lib[toml], which `cash-lib[all]` "
+            "includes (cash keeps no required dependencies, so a bare install "
+            "cannot pull one in for you) -- or set the values through CASH_* "
             "environment variables instead, or run on Python 3.11+ where the "
             "parser is in the standard library.",
         )
@@ -1199,6 +1200,9 @@ def _anchor_cache_dir(cache_dir: Any, origin: Path | object) -> Any:
     """
     if not isinstance(cache_dir, str) or not cache_dir:
         return cache_dir
+    # `~/crunch-cache` in a shipped config file became a directory literally
+    # named `~` beside that file, inside site-packages (round 20).
+    cache_dir = os.path.expanduser(cache_dir)
     if origin is _CALLER_RELATIVE or os.path.isabs(cache_dir):
         return cache_dir
     if not isinstance(origin, Path):
@@ -1225,12 +1229,20 @@ def _warn_if_cache_moved(resolved: str, relative: str) -> None:
     if _MOVE_NOTICE_GIVEN:
         return
     try:
-        previous = Path.cwd() / relative
-        if os.path.normcase(str(previous)) == os.path.normcase(resolved):
+        if os.path.exists(resolved):
             return
-        if os.path.exists(resolved) or not previous.is_dir():
-            return
-        if not any(previous.iterdir()):
+        # Where the cache was before: the directory a process ran from, or --
+        # before a project marker was added above it -- the running script's
+        # own directory. Only the first was looked at, so adding a
+        # pyproject.toml moved a package's cache without a word (round 20).
+        candidates = [Path.cwd() / relative]
+        script_dir = _running_script_dir()
+        if script_dir is not None:
+            candidates.append(script_dir / relative)
+        previous = next((c for c in candidates
+                         if os.path.normcase(str(c)) != os.path.normcase(resolved)
+                         and c.is_dir() and any(c.iterdir())), None)
+        if previous is None:
             return
     except OSError:
         return
@@ -1370,6 +1382,19 @@ def _resolve_config(
     # overridden by the pyproject.toml of whatever project launched it
     # (round 19). Environment variables and Cash(...) arguments still win.
     if config_path is not None:
+        if not Path(config_path).exists():
+            # Named in code, so it was meant to exist: a tool that forgot to
+            # ship its config file ran on defaults -- its cache lifetime gone
+            # -- and nothing said so (round 20).
+            _config_notice(
+                "CONFIG-FILE-MISSING",
+                f"Cash(config_path=...) names {config_path}, a file that does not "
+                f"exist, so none of its settings apply: cash is running on the "
+                f"other layers and its defaults.",
+                "check the path -- for a packaged tool, that the file is included "
+                "in the package (package data) and located relative to the module "
+                "(Path(__file__).parent / 'cash.toml'), not the working directory.",
+            )
         override_data = file_layer("config_path", config_path)
         if override_data:
             _merge(merged, override_data)

@@ -147,6 +147,10 @@ viz = [
     "matplotlib>=3.5,<4",
     "ipywidgets>=7.0,<9",
 ]
+# Reading `[tool.cash]` needs a TOML parser, which the standard library has only
+# from Python 3.11. Without it a 3.10 install ignored its whole config file
+# (CONFIG-TOML-UNREADABLE says so) even under `cash-lib[all]` (round 20).
+toml = ["tomli>=1.1; python_version < '3.11'"]
 # `all` = every user-facing extra, composed by reference (PEP 631 self-referential
 # extras) rather than by hand-copying each requirement. Do NOT expand these back
 # into a literal list: the hand-maintained version silently drifted out of sync
@@ -158,7 +162,7 @@ viz = [
 # `dev` and `docs` are deliberately absent: they are contributor tooling, not part
 # of what a user means by "everything".
 all = [
-    "cash-lib[cloudpickle,ipynbname,memory,notebook,pandas,polars,redis,s3,sqlite,viz]",
+    "cash-lib[cloudpickle,ipynbname,memory,notebook,pandas,polars,redis,s3,sqlite,toml,viz]",
 ]
 docs = [
     "mkdocs>=1.5",

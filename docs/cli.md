@@ -10,15 +10,15 @@ canonical reference.
 as `cash = "cash.__main__:main"` in `pyproject.toml`). Running `cash` with no
 subcommand prints help and exits 0.
 
-<!-- claim: cash/__main__.py:main @92b1b60e broad="the quick-reference table is a claim about the whole subcommand set" -->
+<!-- claim: cash/__main__.py:main @6c4baf93 broad="the quick-reference table is a claim about the whole subcommand set" -->
 ## Quick reference
 
 | Subcommand | Purpose | Destructive? |
 |---|---|---|
 | [`cash version`](#cash-version) | Print the installed cash version. | No |
-| [`cash info`](#cash-info) | Show the effective merged configuration. | No |
+| [`cash info [--config PATH]`](#cash-info) | Show the effective merged configuration. | No |
 | [`cash inspect [path] [--function NAME] [--tool NAME]`](#cash-inspect-path) | Summarise a cache directory or notebook; drill into one function. | No |
-| [`cash clear [path] [--all] [--function NAME] [--entry ID] [--tool NAME]`](#cash-clear-path-all) | Delete a cache directory, one function's entries, or a single entry. | **Yes** — no confirmation prompt |
+| [`cash clear [path] [--all] [--function NAME] [--entry ID] [--expired] [--tool NAME]`](#cash-clear-path-all) | Delete a cache directory, one function's entries, a single entry, or the expired entries. | **Yes** — no confirmation prompt |
 | [`cash autoload on`](#cash-autoload-on) | Install the IPython startup hook. | No (refuses to clobber by default) |
 | [`cash autoload off`](#cash-autoload-off) | Remove the startup hook. | Yes (deletes one file) |
 
@@ -149,7 +149,12 @@ cash version
 
 Print the effective merged configuration.
 
-**Usage:** `cash info`
+**Usage:** `cash info [--config PATH]`
+
+- `--config PATH` — *Optional.* Resolve the configuration as a program calling
+  `Cash(config_path=PATH)` would: the TOML file a packaged tool ships, layered
+  above the user and project files. The way to check what an installed tool's
+  file sets without running the tool.
 
 **Output fields:**
 
@@ -327,7 +332,7 @@ REPL, `python -c`, or a notebook kernel.
 
 ## Clearing caches
 
-<!-- claim: cash/__main__.py:cmd_clear @9e608a46 -->
+<!-- claim: cash/__main__.py:cmd_clear @66d03200 -->
 ### `cash clear [path] [--all] [--function NAME]` { #cash-clear-path-all }
 
 Delete a cache directory, or just one function's entries.
@@ -382,6 +387,14 @@ Delete a cache directory, or just one function's entries.
   `cash inspect --function NAME`. Any unambiguous prefix works, like a short
   commit hash; an ambiguous one lists the matches and deletes nothing. Takes
   precedence over `--function`.
+- `--expired` — *Optional.* Delete only the entries whose ttl has run out,
+  and print how much disk that freed. An expired entry is never served, but it
+  stays on disk until something overwrites it, so lowering a tier's
+  `default_ttl` frees nothing by itself; this does. Expiry follows the rule
+  reads apply: an entry stored under a tier default expires by the tier's
+  *current* `default_ttl` when that is lower, while a `ttl=` given on the
+  decorator is kept as written. `cash inspect` shows the same expiry. Cannot
+  be combined with `--function` or `--entry` (exit 2).
 - `--tool NAME` — *Optional.* Act on the per-user cache of the installed
   console script `NAME` instead of the cache in use. On its own it clears
   that tool's whole cache; with `--function` or `--entry`, only those
@@ -390,6 +403,7 @@ Delete a cache directory, or just one function's entries.
 **Examples:**
 
 ```bash
+cash clear --expired                   # free what will never be served again
 cash clear --entry a1b2c3              # drop one entry
 cash clear --function ray.build_grid   # drop one function, keep the rest
 cash clear --function notebook         # drop the notebook statements only
@@ -401,7 +415,7 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 **Behaviour notes:**
 
-- If none of `path`, `--all` or `--function` is supplied, cash prints the
+- If none of `path`, `--all`, `--function`, `--entry` or `--expired` is supplied, cash prints the
   `cash clear` help and exits 2 without touching anything.
 - `--all` together with a `path` also exits 2, naming both commands you might
   have meant.
@@ -436,12 +450,12 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 ---
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @c8efcbea -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @e8be873d -->
 ## Exit codes
 
 | Code | When |
 |---|---|
 | `0` | The command succeeded, including no-op outcomes ("nothing to clear", "autoload not installed at ..."). |
 | `1` | User-error refusals: `cash inspect` when the resolved cache directory does not exist and no path was given; `cash clear <missing-path>`; `cash clear` asked to remove a directory that is not a cash cache (without `--force`), or the current directory or one containing it; `cash autoload on` refusing to overwrite without `--force`; `cash autoload off` refusing to delete a non-cash file without `--force`. |
-| `2` | `cash clear` with none of `path`, `--all` or `--function`, or with `--all` *and* a path — argparse's own "bad invocation" code. Nothing is touched. |
+| `2` | `cash clear` with none of `path`, `--all`, `--function` or `--expired`, with `--all` *and* a path, or with `--expired` and `--function` or `--entry` — argparse's own "bad invocation" code. Nothing is touched. |
 | traceback | Uncaught exceptions bubble up as Python tracebacks — `main()` does not wrap dispatch in `try/except`. If you see one, treat it as a bug and please file an issue. |
