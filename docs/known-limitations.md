@@ -743,11 +743,41 @@ on every platform:
 cash.configure(file_hash_full_max_bytes=512 * 1024 * 1024)   # or CASH_FILE_HASH_FULL_MAX_BYTES
 ```
 
-The price is a full read of the file on every cached call that checks it —
-about 0.72 ms per MiB, so 370 ms for a 512 MiB input; the checks one call makes
-(its own and its nested cached calls') share one read. If that trade goes
+The price is a full read of the file the first time a process checks it —
+about 0.72 ms per MiB, so 370 ms for a 512 MiB input — and again at most every
+five seconds while it keeps being checked; in between, a check is a `stat`
+(see [the next section](#an-edit-that-keeps-size-and-timestamps-in-a-running-process)
+for what that window means). If that trade goes
 bad, [`CACHE-FRESHNESS-COST`](warnings.md#cache-freshness-cost) says so with
 both numbers.
+
+---
+
+## An edit that keeps size and timestamps, in a running process
+
+<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == 5.0, cash/notebook/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0, cash/notebook/file_dep_snapshot.py:file_content_hash @81f99180 -->
+Within one process, a data file's content hash is reused for **up to five
+seconds** while the file's size, modification time and inode change time stay
+the same — and only for a file that had not been touched for ten seconds
+before. That is what keeps an aggregate over fifty inputs, or a loop over one
+large input, from re-reading them on every call.
+
+The edit that gets through: one that leaves every one of those fields as it
+was. On Linux and macOS any write moves the inode change time, so there is
+none. On **Windows** there are two — a write through `np.memmap(mode="r+")`,
+which moves no timestamp at all, and an in-place write followed by `os.utime`
+putting the old modification time back. A cached call made within those five
+seconds in the **same process** is served the result for the file as it was.
+The next check after the window reads the file and recomputes, and nothing
+wrong is stored for later: an entry records the file as its function read it,
+so a new process always compares against the right version.
+
+If your long-running process has another program patching its inputs this way
+and must see the change on the very next call, clear the function
+(`f.cache_clear()`) after the patch, or name the file with `file_depends_on=`
+and bump its modification time when you write it. Making every call re-read
+the file instead was tried and reverted: it cost a loop over a 200 MB input
+about 0.14 s per iteration.
 
 ---
 

@@ -76,7 +76,7 @@ _ABSENT_MARKER = "absent"
 #
 # 256 MiB, not the 8 MiB this shipped with: the sampled regime has a hole (see
 # ``file_dep_is_fresh``) that cost two round-16 testers a wrong answer each,
-# and the memo below makes the full hash a once-per-call cost rather than a
+# and the memo below makes the full hash a once-per-window cost rather than a
 # per-check one -- which is what makes covering the ordinary CSV affordable.
 # Raised from 64 MiB in round 19: an 80 MiB .npy written through np.memmap on
 # Windows changes neither its size nor any timestamp, so above the cap only
@@ -164,31 +164,19 @@ _HASH_READ_CHUNK = 1024 * 1024                # 1 MiB streaming chunk
 #: entries mid-pass and re-hashes them. Measured with a one-second window, a
 #: 50-file 400 MiB pass fell back to 151 ms from 49 ms.
 #:
-#: 3. And only within ONE outermost cached call (`_HASH_CALL`). Five seconds was
-#:    still a window: a long-lived process whose input was edited in place with
-#:    its size and mtime unchanged -- an ``np.memmap`` write, a write with the
-#:    mtime put back -- served the old result on its next call (round 20). The
-#:    docs promise that under the full-hash cap the content decides, so every
-#:    call hashes such a file again; the burst the memo exists for is the
-#:    checks one call makes, and those still share a digest.
-_HASH_MEMO: dict[tuple[str, int, int, int, int, int], tuple[float, str, object]] = {}
+#: The window is a documented limitation, not an oversight (known-limitations:
+#: "an edit that keeps size and timestamps, in a running process"). Round 20
+#: found it -- on Windows an ``np.memmap`` write, or a write with the mtime put
+#: back, leaves every key field alone, and a call within the window got the
+#: old result in that process -- and closing it was tried: re-hashing on every
+#: call made a loop over a 200 MB input pay ~144 ms per iteration, minutes per
+#: thousand calls, to catch an edit that is seen five seconds later anyway and
+#: never reaches a stored entry (the fingerprint an entry is stored with is
+#: taken when the body reads the file). Reverted.
+_HASH_MEMO: dict[tuple[str, int, int, int, int, int], tuple[float, str]] = {}
 _HASH_MEMO_MAX = 4096
 _HASH_MEMO_TTL_SECONDS = 5.0
 _HASH_MEMO_MIN_AGE_SECONDS = 10.0
-_HASH_CALL: contextvars.ContextVar[object | None] = contextvars.ContextVar(
-    "_cash_hash_call", default=None)
-
-
-def enter_hash_call() -> contextvars.Token | None:
-    """Start a digest-sharing scope, unless one is already open (a nested call)."""
-    if _HASH_CALL.get() is not None:
-        return None
-    return _HASH_CALL.set(object())
-
-
-def exit_hash_call(token: contextvars.Token | None) -> None:
-    if token is not None:
-        _HASH_CALL.reset(token)
 
 
 def file_content_hash(
@@ -217,12 +205,11 @@ def file_content_hash(
     it was guarding.
     """
     memo_key = None
-    call = _HASH_CALL.get()
     try:
         st = os.stat(path)
         if size is None:
             size = st.st_size
-        memoizable = call is not None and (time.time() - st.st_mtime) > _HASH_MEMO_MIN_AGE_SECONDS
+        memoizable = (time.time() - st.st_mtime) > _HASH_MEMO_MIN_AGE_SECONDS
         if memoizable:
             # st_dev/st_ino: the FILE's identity, not only the path's. A path
             # through a re-pointed junction names a different file with the same
@@ -231,7 +218,7 @@ def file_content_hash(
             memo_key = (path, st.st_dev, st.st_ino, size, st.st_mtime_ns,
                         getattr(st, "st_ctime_ns", 0))
             cached = _HASH_MEMO.get(memo_key)
-            if cached is not None and cached[2] is call and (
+            if cached is not None and (
                 time.monotonic() - cached[0]
             ) < _HASH_MEMO_TTL_SECONDS:
                 return cached[1]
@@ -261,10 +248,8 @@ def file_content_hash(
                     f.seek(off)
                     h.update(f.read(_HASH_SAMPLE_REGION_BYTES))
         digest = h.hexdigest()
-        if memo_key is not None:
-            if len(_HASH_MEMO) >= _HASH_MEMO_MAX:
-                _HASH_MEMO.clear()           # entries of finished calls are dead weight
-            _HASH_MEMO[memo_key] = (time.monotonic(), digest, call)
+        if memo_key is not None and len(_HASH_MEMO) < _HASH_MEMO_MAX:
+            _HASH_MEMO[memo_key] = (time.monotonic(), digest)
         return digest
     except OSError:
         logger.debug("[FILE_DEP] Could not hash file for freshness: %s", path)

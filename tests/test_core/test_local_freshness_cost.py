@@ -63,10 +63,10 @@ def _reader(c, runs, path):
     return read
 
 
-def test_checks_inside_one_call_share_a_digest(cash_instance, tmp_path, monkeypatch):
+def test_a_burst_of_checks_shares_a_digest(cash_instance, tmp_path, monkeypatch):
     """The memo, asserted where it is decided rather than by a stopwatch: an
-    aggregate whose cached helpers all depend on one input hashes it once per
-    call, not once per helper (the round-16 pipeline: fifty inputs, ten
+    aggregate whose cached helpers all depend on one input hashes it at most
+    once, not once per helper (the round-16 pipeline: fifty inputs, ten
     helpers)."""
     import hashlib
     import types
@@ -86,14 +86,18 @@ def test_checks_inside_one_call_share_a_digest(cash_instance, tmp_path, monkeypa
         sha256=lambda *a: hashed.append(1) or hashlib.sha256(*a)))
     aggregate(3)
     assert len(runs) == 3, "the helpers did not hit"
-    assert len(hashed) == 1, f"one call hashed its one input {len(hashed)} times"
+    assert len(hashed) <= 1, f"one burst hashed its one input {len(hashed)} times"
 
 
-def test_each_call_rehashes_a_file_under_the_cap(cash_instance, tmp_path):
-    """Round 20 (r20s5): a long-lived process served a stale result for a
-    <=256 MiB file edited in place with its size and mtime unchanged (an
-    np.memmap write; a write + os.utime back) -- the memo trusted the stat for
-    five seconds. Under the cap, the content decides on every call."""
+def test_an_edit_that_keeps_size_and_mtime_is_seen_once_the_window_passes(
+        cash_instance, tmp_path, monkeypatch):
+    """Round 20 (r20s5), and a documented limitation: in a running process, an
+    edit that leaves the size and every timestamp alone (an np.memmap write on
+    Windows; a write + os.utime back) is not seen while the digest is being
+    reused -- five seconds. Re-hashing on every call instead cost a loop over a
+    200 MB input ~144 ms per iteration, and was reverted. What must hold is the
+    bound: once the window has passed, the content decides."""
+    monkeypatch.setattr(file_dep_snapshot, "_HASH_MEMO_TTL_SECONDS", 0.05)
     path = _aged_file(tmp_path)
     runs: list[str] = []
 
@@ -111,7 +115,8 @@ def test_each_call_rehashes_a_file_under_the_cap(cash_instance, tmp_path):
     os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
     assert os.stat(path).st_size == before.st_size
 
-    assert first_byte("a") == b"Z", "served the old content for an edited file"
+    time.sleep(0.1)                            # the (shortened) window passes
+    assert first_byte("a") == b"Z", "the old content was served after the window"
     assert len(runs) == 2
 
 
@@ -137,6 +142,9 @@ def test_a_file_changed_during_the_call_is_recorded_as_the_body_read_it(cash_ins
         return got
 
     assert first_byte("a") == b"x"               # it read the old byte
+    # What a later process starts with: no digests (in this one, the documented
+    # five-second window applies -- see the test above).
+    file_dep_snapshot._HASH_MEMO.clear()
     assert first_byte("a") == b"Z", "the entry recorded the new file for the old result"
 
 

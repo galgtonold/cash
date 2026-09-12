@@ -46,7 +46,7 @@ Two fixes, and CI wants both:
 
 ## Turning caching off: `CASH_DISABLE=1`
 
-<!-- claim: cash/config.py:CashConfig.disable == False, cash/core.py:Cash._wrap_with_stats @67271b5f -->
+<!-- claim: cash/config.py:CashConfig.disable == False, cash/core.py:Cash._wrap_with_stats @fb716d84 -->
 ```bash
 CASH_DISABLE=1 pytest
 ```
