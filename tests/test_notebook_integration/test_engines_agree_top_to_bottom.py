@@ -63,6 +63,11 @@ CELLS = [
     "noise = rng.normal(size=len(df))\n"
     "def score(frame):\n"
     "    return float((frame['spend'] > THRESHOLD).mean())\n"
+    # the result is named after an attribute the helper uses (`m.forecast(h)`
+    # assigned to `forecast` in a round-21 notebook)
+    "def top_spend(frame):\n"
+    "    return frame.spend.nlargest(3)\n"
+    "spend = top_spend(df)\n"
     "totals = {}\n"
     "for region, part in df.groupby('region'):\n"
     "    totals[region] = float(part['spend'].sum())\n",
@@ -84,7 +89,7 @@ CELLS = [
     # the report: reads nearly everything above
     "report = {'before': before, 'after': after, 'score': score(df),\n"
     "          'totals': totals, 'noise': round(float(noise.sum()), 6),\n"
-    "          'mode': os.environ['PROJECT_MODE']}\n"
+    "          'mode': os.environ['PROJECT_MODE'], 'spend': float(spend.sum())}\n"
     "(OUT / 'report.json').write_text(json.dumps(report))\n"
     "print('REPORT', json.dumps(report, sort_keys=True))\n",
 ]

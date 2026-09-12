@@ -9,6 +9,7 @@ See ``copilot-instructions.md`` for the full architectural invariant.
 
 import ast
 import builtins
+import dis
 import hashlib
 import logging
 import types
@@ -173,6 +174,7 @@ def called_function_dependencies(
     seen: set[str] = set()
     stack = [name for name in inputs]
     referenced: set[str] = set()
+    attribute_only: set[str] = set()
 
     while stack:
         name = stack.pop()
@@ -182,6 +184,7 @@ def called_function_dependencies(
         code_obj = getattr(user_ns.get(name), '__code__', None)
         if code_obj is None:
             continue
+        attrs = _attribute_only_names(code_obj)
         for ref in code_obj.co_names:
             if ref in seen or ref in ('get_ipython', '__builtins__'):
                 continue
@@ -189,12 +192,44 @@ def called_function_dependencies(
             # Modules carry their own key component; builtins are constant.
             if not isinstance(value, types.ModuleType) and not hasattr(builtins, ref):
                 referenced.add(ref)
+            if ref in attrs:
+                attribute_only.add(ref)
+                continue
             stack.append(ref)
 
     referenced -= set(inputs)
+    # A name the callees use ONLY as an attribute (``m.forecast(h)``) reads no
+    # global, so it keeps the constant it always contributed -- even when a
+    # notebook variable shares it. ``forecast = run_forecast(...)`` keyed
+    # ``forecast:ABSENT`` before its first run and ``forecast:<lineage>``
+    # after, so the simulation never found the entry and re-ran it (round 21).
+    attribute_only -= {ref for name in seen
+                       for ref in _global_names(getattr(user_ns.get(name), '__code__', None))}
     return sorted(
-        f"{ref}:{variable_lineage.get(ref, 'ABSENT')}" for ref in referenced
+        f"{ref}:{'ABSENT' if ref in attribute_only else variable_lineage.get(ref, 'ABSENT')}"
+        for ref in referenced
     )
+
+
+_ATTRIBUTE_OPS = frozenset({
+    'LOAD_ATTR', 'LOAD_METHOD', 'STORE_ATTR', 'DELETE_ATTR', 'LOAD_SUPER_ATTR',
+})
+
+
+def _global_names(code_obj: Any) -> set[str]:
+    """``co_names`` entries *code_obj* uses as something other than an attribute."""
+    if code_obj is None:
+        return set()
+    try:
+        return {ins.argval for ins in dis.get_instructions(code_obj)
+                if ins.opname not in _ATTRIBUTE_OPS and isinstance(ins.argval, str)
+                and ins.argval in code_obj.co_names}
+    except (TypeError, ValueError):
+        return set(code_obj.co_names)      # unknown: treat every name as a global
+
+
+def _attribute_only_names(code_obj: Any) -> set[str]:
+    return set(code_obj.co_names) - _global_names(code_obj)
 
 
 def _process_input_var(
