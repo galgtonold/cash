@@ -284,6 +284,50 @@ class ControlStructureProcessor:
         Returns:
             ControlStructureResult with metrics
         """
+        state = getattr(self.statement_processor, '_tracking_state', None)
+        outcomes = getattr(state, 'control_outcomes', None)
+        if parent_context is not None or not isinstance(outcomes, dict):
+            return self._dispatch(node, ttl, silent, parent_context, raw_cell,
+                                  inherited_annotation, prev_node)
+        # Record what this structure left behind, for the simulation -- see
+        # TrackingState.control_outcomes.
+        lineage = state.variable_lineage
+        code = ast.unparse(node)
+        try:
+            from ..analysis import CodeAnalyzer
+            reads, writes = CodeAnalyzer.analyze_code_block(code)
+        except (SyntaxError, ValueError, TypeError):
+            reads, writes = set(), set()
+        entry = {n: lineage[n] for n in reads if n in lineage}
+        before = dict(lineage)
+        reads_before = dict(state.statement_file_reads)
+        result = self._dispatch(node, ttl, silent, parent_context, raw_cell,
+                                inherited_annotation, prev_node)
+        if result.success:
+            left = {v: h for v, h in lineage.items() if before.get(v) != h or v in writes}
+            # A file the body read changes nothing above, so the entry lineages
+            # cannot see it: keep the files behind what it left, and their state.
+            files: set[str] = set()
+            for var in left:
+                files.update(state.executed_file_deps.get(var, ()))
+            for key, (local, _remote) in state.statement_file_reads.items():
+                if reads_before.get(key, (None,))[0] is not local:
+                    files.update(local)
+            from ..statement.file_deps import compute_file_hash_component
+            outcomes[hashlib.sha256(code.encode('utf-8')).hexdigest()] = (
+                entry, left, frozenset(files), compute_file_hash_component(files))
+        return result
+
+    def _dispatch(
+        self,
+        node: ast.AST,
+        ttl: int | None,
+        silent: bool,
+        parent_context: dict[str, Any] | None,
+        raw_cell: str | None,
+        inherited_annotation: 'CacheAnnotation | None',
+        prev_node: ast.stmt | None,
+    ) -> ControlStructureResult:
         if isinstance(node, ast.For):
             # For loops with break/continue must be executed as single units
             if contains_break_or_continue(node.body):

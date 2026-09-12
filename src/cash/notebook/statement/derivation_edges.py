@@ -125,6 +125,36 @@ def detect_derivation_edges(
     """
     _detect_numpy_view_edge(derivation_edges, out, value, user_ns)
     _detect_pandas_refholder_edge(derivation_edges, out, value, user_ns)
+    _detect_matplotlib_figure_edge(derivation_edges, out, value, user_ns)
+
+
+def _detect_matplotlib_figure_edge(
+    derivation_edges: dict[str, set[str]], out: str, value: Any, user_ns: dict,
+) -> None:
+    """``out`` is part of a named Figure (an Axes, or an array of them):
+    drawing on it draws on the figure, so a mutation of ``out`` bumps it.
+
+    ``ax.bar(names, totals)`` changes what ``fig.savefig`` writes, with no
+    value edge from ``totals`` to ``fig``. Until round 21 a chart re-drew after
+    an upstream edit only because ``fig`` ALSO drifted for no reason (it had
+    recorded matplotlib's fonts, and its own PNG, as file dependencies); with
+    that gone, this edge is the dependency.
+    """
+    artist_mod = _imported("matplotlib.artist")
+    if artist_mod is None:
+        return
+    probe = value
+    np = _imported("numpy")
+    if np is not None and isinstance(value, np.ndarray) and value.dtype == object and value.size:
+        probe = value.flat[0]              # plt.subplots(1, 2) -> array of Axes
+    if not isinstance(probe, artist_mod.Artist):
+        return
+    fig = getattr(probe, "figure", None)
+    if fig is None:
+        return
+    nm = _find_name_by_identity(user_ns, fig)
+    if nm is not None and nm != out:
+        derivation_edges.setdefault(out, set()).add(nm)
 
 
 

@@ -96,7 +96,7 @@ structure; see the report for the numbers and why they matter for CAS-262.)
 
 CAS-262 confound, found while calibrating this module
 ---------------------------------------------------------
-The existing xfailed probe for CAS-262 (``test_zzprobe_codeleads.py::
+The probe for CAS-262 (``test_zzprobe_codeleads.py::
 test_unrelated_upstream_edit_reruns_loop``) uses a bare-expression loop body
 (``results.append(i * i)``, no function call). Every unrelated-edit case in
 this module measures 0 real calls, so none of them reproduces CAS-262.
@@ -109,13 +109,14 @@ be helping -- still shows 0 recomputation after an unrelated upstream edit
 (6 real calls cold, 6 after the edit; had the body re-executed it would read
 12). Statement-level restore is what absorbs it.
 
-CAS-262 itself still fails on HEAD under ``--runxfail``, so it is real: it is
-over-invalidation at the PLANNING level, detected by inspecting
-``UPSTREAM_DEBUG`` output. This module counts WORK. Both instruments are
-valid and they answer different questions -- which is precisely how CAS-262
-came to be filed at a severity ("an edit to an unrelated cell costs a full
-loop re-run") that measurement does not support. The ticket now carries that
-scope correction and was lowered High -> Medium.
+CAS-262 was real: it was over-invalidation at the PLANNING level, detected by
+inspecting ``UPSTREAM_DEBUG`` output. This module counts WORK. Both
+instruments are valid and they answer different questions -- which is
+precisely how CAS-262 came to be filed at a severity ("an edit to an
+unrelated cell costs a full loop re-run") that measurement does not support.
+It was fixed in round 21, when the simulation began reusing the lineages the
+runtime recorded for the loop (``TrackingState.control_outcomes``) instead of
+a formula the runtime never used; the probe is an ordinary test now.
 
 Failure policy
 --------------

@@ -6,8 +6,7 @@ Tests cover:
 - _check_lineage_based
 - _resolve_input_lineage
 - _resolve_virtual_input_lineages
-- _compute_module_source_hash
-- _hash_module_with_deps
+- lineage_formula.module_source_component (the simulator's module component)
 - _resolve_fallback_cache_idx / _reset_advanced_lineages
 - _handle_downstream_advancement_fallback
 - _stat_file_deps
@@ -643,35 +642,30 @@ class TestHandleDownstreamAdvancementFallback:
 
 
 # ===========================================================================
-# _compute_module_source_hash
+# Module source component (shared with the runtime via lineage_formula)
 # ===========================================================================
 
-class TestComputeModuleSourceHash:
-    """Test module source hash computation."""
+class TestModuleSourceComponent:
+    """The simulator's module component is the runtime's: one function."""
+
+    @staticmethod
+    def _component(tracker, value, name, code="x = 1"):
+        from cash.notebook.lineage_formula import module_source_component
+        return module_source_component(tracker, value, name, code)
 
     def test_no_function_tracker(self):
-        checker = _make_checker()
-        checker.function_tracker = None
-        result = checker.simulator._virtual_lineage._compute_module_source_hash({"os"})
-        assert result == ""
+        assert self._component(None, os, "os") == ""
 
     def test_non_module_output(self):
-        checker = _make_checker(user_ns={"x": 42})
-        mock_tracker = MagicMock()
-        checker.function_tracker = mock_tracker
-        result = checker.simulator._virtual_lineage._compute_module_source_hash({"x"})
-        assert result == ""
+        assert self._component(MagicMock(), 42, "x") == ""
 
     def test_module_not_tracked(self):
         """Module in user_ns but not in function_tracker._tracked_modules."""
         mod = types.ModuleType("fake_mod")
         mod.__file__ = "/nonexistent/fake_mod.py"
-        checker = _make_checker(user_ns={"fake_mod": mod})
-        mock_tracker = MagicMock()
-        mock_tracker._tracked_modules = set()
-        checker.function_tracker = mock_tracker
-        result = checker.simulator._virtual_lineage._compute_module_source_hash({"fake_mod"})
-        assert result == ""
+        tracker = MagicMock()
+        tracker._tracked_modules = set()
+        assert self._component(tracker, mod, "fake_mod") == ""
 
     def test_module_with_source(self, tmp_path):
         """Module with trackable source file should return hash."""
@@ -679,61 +673,50 @@ class TestComputeModuleSourceHash:
         mod_file.write_text("def hello(): return 42")
         mod = types.ModuleType("my_module")
         mod.__file__ = str(mod_file)
-        checker = _make_checker(user_ns={"my_module": mod})
-        mock_tracker = MagicMock()
-        mock_tracker._tracked_modules = {"my_module"}
-        mock_tracker._dep_file_to_parents = {}
-        # function_tracker is consulted by the simulator, set it there.
-        checker.simulator._virtual_lineage.function_tracker = mock_tracker
-        result = checker.simulator._virtual_lineage._compute_module_source_hash({"my_module"})
-        assert result.startswith(":mod_src:")
+        tracker = MagicMock()
+        tracker._tracked_modules = {"my_module"}
+        tracker._dep_file_to_parents = {}
+        assert self._component(tracker, mod, "my_module").startswith(":mod_src:")
 
-    def test_module_none_in_user_ns(self):
-        checker = _make_checker(user_ns={"x": None})
-        mock_tracker = MagicMock()
-        checker.simulator._virtual_lineage.function_tracker = mock_tracker
-        result = checker.simulator._virtual_lineage._compute_module_source_hash({"x"})
-        assert result == ""
-
-
-# ===========================================================================
-# _hash_module_with_deps
-# ===========================================================================
-
-class TestHashModuleWithDeps:
-    """Test module hashing with transitive dependency files."""
-
-    def test_basic_module_hash(self, tmp_path):
-        mod_file = tmp_path / "mod.py"
-        mod_file.write_text("x = 1")
-        checker = _make_checker()
-        mock_tracker = MagicMock()
-        mock_tracker._dep_file_to_parents = {}
-        result = checker.simulator._virtual_lineage._hash_module_with_deps("mod", str(mod_file), mock_tracker)
-        assert result.startswith(":mod_src:")
-        assert len(result) > 10
+    def test_value_none(self):
+        assert self._component(MagicMock(), None, "x") == ""
 
     def test_hash_includes_dep_files(self, tmp_path):
         mod_file = tmp_path / "mod.py"
         mod_file.write_text("from helper import util")
         dep_file = tmp_path / "helper.py"
         dep_file.write_text("def util(): pass")
-        checker = _make_checker()
-        mock_tracker = MagicMock()
-        mock_tracker._dep_file_to_parents = {str(dep_file): {"mod"}}
-        h1 = checker.simulator._virtual_lineage._hash_module_with_deps("mod", str(mod_file), mock_tracker)
-        # Change dep file
+        mod = types.ModuleType("mod")
+        mod.__file__ = str(mod_file)
+        tracker = MagicMock()
+        tracker._tracked_modules = {"mod"}
+        tracker._dep_file_to_parents = {str(dep_file): {"mod"}}
+        h1 = self._component(tracker, mod, "mod")
         dep_file.write_text("def util(): return 42")
-        h2 = checker.simulator._virtual_lineage._hash_module_with_deps("mod", str(mod_file), mock_tracker)
-        assert h1 != h2
+        assert h1 != self._component(tracker, mod, "mod")
 
     def test_missing_module_file(self, tmp_path):
-        checker = _make_checker()
-        mock_tracker = MagicMock()
-        mock_tracker._dep_file_to_parents = {}
-        result = checker.simulator._virtual_lineage._hash_module_with_deps("mod", str(tmp_path / "nofile.py"), mock_tracker)
-        assert result == ""
+        mod = types.ModuleType("mod")
+        mod.__file__ = str(tmp_path / "nofile.py")
+        tracker = MagicMock()
+        tracker._tracked_modules = {"mod"}
+        tracker._dep_file_to_parents = {}
+        assert self._component(tracker, mod, "mod") == ""
 
+    def test_a_name_from_a_tracked_module_carries_its_source(self, tmp_path, monkeypatch):
+        """`from helpers import clean` -- the case the simulator used to miss."""
+        import sys
+        mod_file = tmp_path / "zz_helpers_mod.py"
+        mod_file.write_text("def clean(x): return x\nTHRESHOLD = 3\n")
+        mod = types.ModuleType("zz_helpers_mod")
+        mod.__file__ = str(mod_file)
+        exec(mod_file.read_text(), mod.__dict__)
+        monkeypatch.setitem(sys.modules, "zz_helpers_mod", mod)
+        tracker = MagicMock()
+        tracker._tracked_modules = {"zz_helpers_mod"}
+        code = "from zz_helpers_mod import clean, THRESHOLD"
+        assert self._component(tracker, mod.clean, "clean", code).startswith(":from_mod_src:")
+        assert self._component(tracker, 3, "THRESHOLD", code).startswith(":from_mod_src:")
 
 # ===========================================================================
 # UpstreamChecker initialization

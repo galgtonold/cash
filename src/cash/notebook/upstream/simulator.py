@@ -19,7 +19,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
-from .._trace import trace_event
+from .._trace import is_tracing, trace_event
 from ..analysis import CodeAnalyzer
 from ..cacheability import analyze_statement, consumed_input_names
 from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
@@ -140,7 +140,6 @@ class NotebookSimulator:
     _iter_body_nodes = VirtualLineage._iter_body_nodes
     _update_virtual_lineage = VirtualLineage._update_virtual_lineage
     _resolve_input_lineage = VirtualLineage._resolve_input_lineage
-    _compute_module_source_hash = VirtualLineage._compute_module_source_hash
 
     # --- Narrow public API for UpstreamChecker (avoid private reach-ins) ---
 
@@ -745,6 +744,15 @@ class NotebookSimulator:
             notebook_cells, current_cell_idx,
         )
         trace_event("broken_after_pass2", broken=broken_vars, tainted=vars_tainted)
+        if is_tracing():
+            # Every variable the two engines disagree on, relevant or not. In a
+            # plain top-to-bottom run there must be none: each one is a spurious
+            # "changed" waiting for a cell that reads it (round 21).
+            recorded = self.variable_lineage
+            trace_event("lineage_disagreement", cell_idx=current_cell_idx, vars={
+                v: [str(virtual_lineage[v])[:12], str(recorded[v])[:12]]
+                for v in sorted(virtual_lineage.keys() & recorded.keys())
+                if virtual_lineage[v] != recorded[v]})
 
         self._mark_stale_value_inputs_broken(
             required_inputs, current_cell_reassigned, broken_vars,

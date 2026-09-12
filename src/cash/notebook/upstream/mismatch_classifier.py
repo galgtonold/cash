@@ -259,7 +259,10 @@ class MismatchClassifier:
         # Skip loop-derived vars when upstream is unchanged AND producing code
         # is on disk (not overridden by unsaved edit). FAST MODE can't track
         # per-iteration lineage, so we trust in-memory state.
-        if var_name in vars_derived_from_loops and not upstream_has_modifications and not loop_derived_trust_overridden:
+        # ...unless a file behind it changed: nothing upstream shows that, and
+        # trusting memory then serves the value read from the old file.
+        if (var_name in vars_derived_from_loops and not upstream_has_modifications
+                and not loop_derived_trust_overridden and var_name not in vars_with_stale_files):
             # Don't trust if the variable was overwritten by a downstream cell.
             # Check that executed_cell_codes for this var matches an upstream statement.
             overwritten_downstream = False

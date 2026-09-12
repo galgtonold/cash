@@ -193,19 +193,11 @@ def test_unsaved_extension_with_user_function_rejected(nb_runner):
 # 5. loop-mutation-lineage-formula-divergence-runtime-vs-sim
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CAS-262: pre-existing, shape-independent defect -- an unrelated "
-        "upstream edit re-executes a decomposed loop's body. It predates "
-        "this branch (the two-statement spelling already re-ran on main); "
-        "the accumulator fast path merely masked it for the one-statement "
-        "spelling by routing that shape to the whole-loop unit, and CAS-259 "
-        "removed that fast path. strict=True: this must fail loudly as "
-        "XPASS once CAS-262 is fixed."
-    ),
-)
 def test_unrelated_upstream_edit_reruns_loop(nb_runner):
+    """CAS-262, fixed in round 21: an unrelated upstream edit re-planned a
+    decomposed loop, because the simulation modelled the loop's outputs with a
+    formula the runtime never used, so they always disagreed. It now reuses the
+    lineages the runtime recorded (``TrackingState.control_outcomes``)."""
     nb_runner.create_notebook([
         "base = 1",
         "results = []\nfor i in range(6):\n    results.append(i * i)",

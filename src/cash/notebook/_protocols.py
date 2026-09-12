@@ -215,6 +215,29 @@ class TrackingState:
     # ``executed_file_deps`` for fast direct-file staleness detection.
     executed_file_mtimes: dict[str, dict[str, float]] = field(default_factory=dict)
 
+    # Written by StatementLineageBuilder; read by VirtualLineage. Maps a
+    # statement's cache key -> (files, object-storage URLs) that statement ITSELF
+    # read on its last execution. The simulation must hash exactly these, with
+    # the same function, to arrive at the lineage the runtime recorded.
+    # ``executed_file_deps`` cannot stand in: it also holds what a variable
+    # inherited from its inputs, so ``df = clean(raw)`` got a file component in
+    # the simulation only, and everything downstream "changed" (round 21).
+    statement_file_reads: dict[str, tuple[frozenset[str], frozenset[str]]] = field(default_factory=dict)
+
+    # Written by ControlStructureProcessor; read by VirtualLineage. Maps
+    # sha256(``ast.unparse`` of a top-level if/for/while/with/try) ->
+    # ({input: lineage at entry}, {var: lineage it left behind}, files behind
+    # those, ``compute_file_hash_component`` of them then). The runtime
+    # records a control structure's outputs by a VALUE-based formula
+    # (``update_mutated_variable_lineages``) the simulation cannot reproduce
+    # from code, so an untaken ``if FLAG: df = df.head(3)`` left ``df``
+    # disagreeing forever and every later reader re-ran df's producers
+    # (round 21). Reached again with the same input lineages and the same
+    # file state, the simulation takes what the runtime recorded; otherwise
+    # it re-plans.
+    control_outcomes: dict[str, tuple[dict[str, str], dict[str, str], frozenset[str], str]] = field(
+        default_factory=dict)
+
     # Written by StatementLineageBuilder when a tracked module is re-imported.
     # Read by module_invalidator. Maps module_name -> {var_names} whose stored
     # input lineages need refreshing once the import statement re-executes.

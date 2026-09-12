@@ -43,6 +43,7 @@ from ..cache_key import (
 )
 from ..cache_status import CacheStatus
 from ..control_structures import extract_target_names, get_control_structure_type, is_control_structure
+from ..lineage_formula import callable_source_component, module_source_component, output_lineage
 from ..randomness import (
     observed_rng_reads,
     hidden_lineage_reads,
@@ -50,6 +51,7 @@ from ..randomness import (
     hidden_write_lineage,
 )
 from ..statement.derivation_edges import bump_derived_lineages
+from ..statement.file_deps import compute_file_hash_component
 from ..statement.processor import _is_control_body
 from ._types import (
     IncrementalStartResult as _IncrementalStartResult,
@@ -1065,7 +1067,7 @@ class VirtualLineage:
         """
         try:
             if is_control_structure(node):
-                self._simulate_control_structure(node, virtual_lineage, virtual_modules, simulation_trace, stmt_lookup_times, vars_mutated_by_loops, loop_target_vars=loop_target_vars)
+                self._simulate_control_structure(node, virtual_lineage, virtual_modules, simulation_trace, stmt_lookup_times, vars_mutated_by_loops, loop_target_vars=loop_target_vars, vars_with_stale_files=vars_with_stale_files)
                 return
 
             stmt_code = ast.unparse(node)
@@ -1343,7 +1345,8 @@ class VirtualLineage:
         stmt_lookup_times: dict[str, float],
         vars_mutated_by_loops: set[str] = None,
         parent_context: dict[str, Any] | None = None,
-        loop_target_vars: set[str] = None
+        loop_target_vars: set[str] = None,
+        vars_with_stale_files: set[str] | None = None,
     ) -> None:
         """
         Simulate execution of a control structure as a single unit.
@@ -1373,10 +1376,10 @@ class VirtualLineage:
 
         The practical consequence, worth knowing before reasoning about loop
         cache keys: for a decomposed loop the key computed here corresponds to
-        no entry the runtime ever writes, so it simply misses. That is why an
-        unrelated upstream edit can mark such a loop for re-planning while
-        costing zero real recomputation -- the statement cache absorbs it
-        (CAS-262).
+        no entry the runtime ever writes, so it simply misses. What keeps an
+        unrelated upstream edit from re-planning such a loop (CAS-262) is the
+        outcome the runtime recorded for it -- see
+        ``TrackingState.control_outcomes`` in ``_simulate_one_control_unit``.
         """
         if vars_mutated_by_loops is None:
             vars_mutated_by_loops = set()
@@ -1406,12 +1409,14 @@ class VirtualLineage:
                 for half in halves:
                     self._simulate_one_control_unit(
                         half, virtual_lineage, virtual_modules, simulation_trace,
-                        stmt_lookup_times, vars_mutated_by_loops, loop_target_vars)
+                        stmt_lookup_times, vars_mutated_by_loops, loop_target_vars,
+                        vars_with_stale_files)
                 return
 
         self._simulate_one_control_unit(
             node, virtual_lineage, virtual_modules, simulation_trace,
-            stmt_lookup_times, vars_mutated_by_loops, loop_target_vars)
+            stmt_lookup_times, vars_mutated_by_loops, loop_target_vars,
+            vars_with_stale_files)
 
     def _loop_split_k(self, node: ast.AST) -> int | None:
         """Persisted split point for *node*, or ``None`` if it is not split.
@@ -1446,6 +1451,7 @@ class VirtualLineage:
         stmt_lookup_times: dict[str, float],
         vars_mutated_by_loops: set[str],
         loop_target_vars: set[str],
+        vars_with_stale_files: set[str] | None = None,
     ) -> None:
         """Simulate ONE control structure as a single statement.
 
@@ -1479,6 +1485,23 @@ class VirtualLineage:
         )
 
         all_outputs = outputs | extra_outputs
+
+        # The runtime ran this very structure with these very inputs: what it
+        # left behind is the answer, not a formula it never used (see
+        # TrackingState.control_outcomes).
+        recorded = self._tracking_state.control_outcomes.get(
+            hashlib.sha256(stmt_code.encode('utf-8')).hexdigest())
+        if recorded is not None and recorded[0] == input_hashes:
+            if compute_file_hash_component(recorded[2]) == recorded[3]:
+                virtual_lineage.update(recorded[1])
+                all_outputs = all_outputs | set(recorded[1])
+            else:
+                # Same inputs, but a file behind its outputs changed: the one
+                # change the entry lineages cannot show. Say so, or the loop
+                # trust keeps the stale value.
+                files_stale = True
+                if vars_with_stale_files is not None:
+                    vars_with_stale_files.update(all_outputs | set(recorded[1]))
 
         if self.debug:
             cs_type = get_control_structure_type(node) if node else 'unknown'
@@ -1553,56 +1576,6 @@ class VirtualLineage:
         except (TypeError, ValueError):
             logger.debug("[UPSTREAM] Failed to compute hash for input '%s'", inp)
             return None
-
-    def _hash_module_with_deps(self, out: str, mod_file: str, function_tracker: Any) -> str:
-        """Hash the source of module *out* plus its tracked dependency files.
-
-        Returns a lineage component string like ``:mod_src:<hex>`` on success,
-        or an empty string on I/O failure.
-        """
-        try:
-            hasher = hashlib.sha256()
-            with open(mod_file, 'rb') as mf:
-                hasher.update(mf.read())
-            dep_files: set = set()
-            for dep_path, parent_mods in getattr(function_tracker, '_dep_file_to_parents', {}).items():
-                if out in parent_mods:
-                    dep_files.add(dep_path)
-            for dep_path in sorted(dep_files):
-                if os.path.isfile(dep_path):
-                    try:
-                        with open(dep_path, 'rb') as df:
-                            hasher.update(df.read())
-                    except OSError:
-                        logger.debug("Cannot read dependency file for module hash: %s", dep_path)
-            return f":mod_src:{hasher.hexdigest()}"
-        except OSError:
-            logger.debug("Cannot read module file for source hash: %s", mod_file)
-            return ""
-
-    def _compute_module_source_hash(self, outputs: set[str]) -> str:
-        """Return a module-source lineage component string for module outputs.
-
-        Scans *outputs* for module-type objects whose source is tracked by the
-        function_tracker and hashes their file contents (plus transitive deps).
-        """
-        function_tracker = self.function_tracker if hasattr(self, 'function_tracker') else None
-        if function_tracker is None:
-            return ""
-
-        for out in outputs:
-            val = self.shell.user_ns.get(out)
-            if val is None or not isinstance(val, types.ModuleType):
-                continue
-            mod_file = getattr(val, '__file__', None)
-            if not mod_file or not os.path.isfile(mod_file):
-                continue
-            if out not in getattr(function_tracker, '_tracked_modules', set()):
-                continue
-            result = self._hash_module_with_deps(out, mod_file, function_tracker)
-            if result:
-                return result
-        return ""
 
     def _resolve_virtual_input_lineages(
         self, stmt_code: str, inputs: set[str], virtual_lineage: dict[str, str], virtual_modules: set[str]
@@ -1698,7 +1671,7 @@ class VirtualLineage:
         )
         if is_import:
             for out in outputs:
-                if out in virtual_modules and out not in self.variable_lineage:
+                if out not in self.variable_lineage:
                     lineage_val = output_lineages.get(out)
                     if lineage_val:
                         self._restores.record_restore(var_name=out, lineage_hash=lineage_val)
@@ -1826,36 +1799,39 @@ class VirtualLineage:
             return ":" + hashlib.sha256(",".join(file_components).encode('utf-8')).hexdigest()
         return ""
 
-    def _compute_virtual_output_lineage(
+    def _compute_virtual_output_lineages(
         self,
         source_hash: str,
         input_lineages_all: list[str],
         file_hash_component: str,
         inputs: set[str],
         outputs: set[str],
-    ) -> str:
-        """Compute the output lineage hash for a simulated statement.
+        stmt_code: str,
+        tree: ast.Module | None = None,
+    ) -> dict[str, str]:
+        """The lineage of each output of a simulated statement.
 
-        Includes function source hashes and module source hashes to match
-        the lineage computation in statement_processor._capture_variables.
+        Built by the runtime's own formula (``lineage_formula``), one output at
+        a time as the runtime does: a module-source component belongs to the
+        name that came from the module. This used to be a second copy that
+        gave every output one hash and knew only ``import X`` -- so every name
+        from ``from helpers import clean`` disagreed with the runtime, and so
+        did everything computed from it (round 21).
         """
-        # Function source hashes for callable inputs
-        func_lineage_component = ""
-        function_tracker = self.function_tracker if hasattr(self, 'function_tracker') else None
-        if function_tracker is not None:
-            try:
-                func_source_hashes = function_tracker.get_callable_source_hashes(inputs, self.shell.user_ns)
-                if func_source_hashes:
-                    func_parts = [f"{k}:{v}" for k, v in sorted(func_source_hashes.items())]
-                    func_lineage_component = ":" + ":".join(func_parts)
-            except (TypeError, ValueError, AttributeError):
-                logger.debug("[UPSTREAM] Failed to compute function source hashes for capture")
-
-        # Module source hash for module outputs
-        module_lineage_component = self._compute_module_source_hash(outputs)
-
-        lineage_str = f"{source_hash}:{':'.join(sorted(input_lineages_all))}{file_hash_component}{func_lineage_component}{module_lineage_component}"
-        return hashlib.sha256(lineage_str.encode('utf-8')).hexdigest()
+        function_tracker = getattr(self, 'function_tracker', None)
+        user_ns = self.shell.user_ns
+        try:
+            func_component = callable_source_component(function_tracker, inputs, user_ns)
+        except (TypeError, ValueError, AttributeError):
+            logger.debug("[UPSTREAM] Failed to compute function source hashes for capture")
+            func_component = ""
+        return {
+            out: output_lineage(
+                source_hash, input_lineages_all, file_hash_component, func_component,
+                module_source_component(function_tracker, user_ns.get(out), out, stmt_code, tree),
+            )
+            for out in outputs
+        }
 
     def _collect_session_file_deps(self, outputs: set[str]) -> set[str]:
         """Return file dependencies from the current session for *outputs*."""
@@ -1866,11 +1842,32 @@ class VirtualLineage:
                     file_deps.update(self.executed_file_deps[out])
         return file_deps
 
+    def _bound_modules(self, outputs: set[str], tree: ast.Module | None) -> set[str]:
+        """The names an import statement binds to a MODULE.
+
+        ``import x`` always binds one. ``from m import name`` usually binds a
+        function or a constant, and the runtime's key builder decides by the
+        value (``is_module_like``): a function goes in as an input with its
+        source hash. Counting every imported name as a module gave
+        ``df = clean(raw)`` a different key in the simulation, so the
+        simulation never found that statement's entry (round 21). A name not
+        bound yet keeps the old answer; the runtime has no key for it either.
+        """
+        if tree is None:
+            return set(outputs)
+        from_bound = {alias.asname or alias.name
+                      for node in tree.body if isinstance(node, ast.ImportFrom)
+                      for alias in node.names}
+        user_ns = self.shell.user_ns
+        return {out for out in outputs
+                if out not in from_bound or out not in user_ns
+                or isinstance(user_ns[out], types.ModuleType)}
+
     def _propagate_import_lineage(
         self,
         outputs: set[str],
         virtual_modules: set[str],
-        lineage_hash: str,
+        lineage_by_out: dict[str, str],
     ) -> None:
         """Propagate module lineages to ``self.variable_lineage`` for import statements.
 
@@ -1878,13 +1875,16 @@ class VirtualLineage:
         ``compute_cache_key`` can find the module in ``variable_lineage`` and
         include it in the module component â€” preventing cache key mismatches.
         """
+        # Every name the import binds, not only modules: an import the runtime
+        # SKIPPED leaves its names without a lineage otherwise, and a statement
+        # reading one is then not cached ("input variable missing lineage").
         for out in outputs:
-            if out in virtual_modules and out not in self.variable_lineage:
-                self._restores.record_restore(var_name=out, lineage_hash=lineage_hash)
+            if out not in self.variable_lineage and out in lineage_by_out:
+                self._restores.record_restore(var_name=out, lineage_hash=lineage_by_out[out])
                 if self.debug:
                     logger.debug(
                         "[LINEAGE_DEBUG] Propagated module '%s' lineage to variable_lineage: %s...",
-                        out, lineage_hash[:12],
+                        out, lineage_by_out[out][:12],
                     )
         # Mid-simulation drain: subsequent statements' compute_cache_key reads
         # variable_lineage to include module components, so the write must be
@@ -1944,7 +1944,7 @@ class VirtualLineage:
             stripped = stmt_code.strip()
             is_import = stripped.startswith(('import ', 'from '))
             if is_import:
-                virtual_modules.update(outputs)
+                virtual_modules.update(self._bound_modules(outputs, mutation_tree))
 
             # ADR-018: RNG state is a hidden lineage variable. A draw READS it
             # (fold into the key + the output-lineage inputs, so a re-seed both
@@ -2036,10 +2036,18 @@ class VirtualLineage:
 
             # Build file hash component
             file_hash_component = self._build_file_hash_component(file_deps_to_check, stmt_file_deps)
+            own_reads = self._tracking_state.statement_file_reads.get(cache_key)
+            if own_reads is not None:
+                # The runtime hashed the files THIS statement read -- not the
+                # ones its outputs inherited -- with compute_file_hash_component.
+                # Same files, same function: an unchanged file gives the
+                # runtime's lineage, a changed one a different lineage.
+                file_hash_component = compute_file_hash_component(*own_reads)
 
-            # Compute output lineage hash
-            lineage_hash = self._compute_virtual_output_lineage(
-                source_hash, input_lineages_all, file_hash_component, inputs, outputs
+            # Compute output lineage hashes
+            lineage_by_out = self._compute_virtual_output_lineages(
+                source_hash, input_lineages_all, file_hash_component, inputs, outputs,
+                stmt_code, mutation_tree,
             )
 
             if self.debug and ('sort' in stmt_code or 'VolAdj' in stmt_code or 'read_csv' in stmt_code or 'exists' in stmt_code):
@@ -2047,11 +2055,10 @@ class VirtualLineage:
                 logger.debug("[LINEAGE_CALC]   source_hash: %s...", source_hash[:16])
                 logger.debug("[LINEAGE_CALC]   sorted(input_lineages_all): %s", [h[:12]+'...' for h in sorted(input_lineages_all)])
                 logger.debug("[LINEAGE_CALC]   file_hash_component: %s...", file_hash_component[:20] if file_hash_component else '(empty)')
-                logger.debug("[LINEAGE_CALC]   => lineage_hash: %s...", lineage_hash[:16])
+                logger.debug("[LINEAGE_CALC]   => lineages: %s", {v: h[:16] for v, h in lineage_by_out.items()})
 
             # Update virtual state
-            for out in outputs:
-                virtual_lineage[out] = lineage_hash
+            virtual_lineage.update(lineage_by_out)
 
             # Mirror the runtime derivation-alias bump: when
             # a base/frame is mutated in place, bump its live-alias derivatives.
@@ -2077,7 +2084,7 @@ class VirtualLineage:
             # Without this, compute_cache_key won't find the module in variable_lineage
             # and will exclude it from module_component, causing key mismatches.
             if is_import:
-                self._propagate_import_lineage(outputs, virtual_modules, lineage_hash)
+                self._propagate_import_lineage(outputs, virtual_modules, lineage_by_out)
 
             return outputs, cache_lookup_time, files_stale, stmt_file_deps
 
@@ -2616,11 +2623,11 @@ class VirtualLineage:
              # function-source component. A hand-rolled sha256(code)+input_lineages
              # omitted it, so any function-routed edit always projected != recorded
              # and was wrongly discarded. [layer 1]
-             projected_hash = self._compute_virtual_output_lineage(
-                 source_hash, input_lineages, "", inputs, outputs
+             projected = self._compute_virtual_output_lineages(
+                 source_hash, input_lineages, "", inputs, outputs, code
              )
 
-             return projected_hash == actual_lineage
+             return actual_lineage in projected.values()
 
         except (KeyError, TypeError, ValueError, SyntaxError):
             return False

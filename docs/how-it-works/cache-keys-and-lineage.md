@@ -175,7 +175,7 @@ c.register_hasher(MyModel, lambda model: model.get_fingerprint())
 See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full API, including class-hierarchy matching and versioned hashers.
 
 !!! warning "`register_hasher` is a decorator-path feature"
-    <!-- claim: cash/core.py:Cash.register_hasher @eed1ca57, cash/notebook/object_hashing.py:compute_hash @61e351a4 -->
+    <!-- claim: cash/core.py:Cash.register_hasher @eed1ca57, cash/notebook/object_hashing.py:compute_hash @2027fef7 -->
     Registered hashers are consulted when hashing `@cash.cache` **call arguments**. The
     notebook path hashes fallback values through `cash.notebook.object_hashing.compute_hash`,
     a pure function with no registry, so a registered hasher does **not** change a
@@ -198,7 +198,7 @@ The two paths answer "what is this object's fingerprint?" differently, and the o
 
 Content beats the lineage attribute, and that ordering is the fix for a real bug: a notebook variable's `_cash_lineage_hash` is re-derived in every kernel session and is not reproducible across a restart, so keying a persisted decorator entry on it made `train_model(X_train, ...)` miss after a restart and re-train the model. Pinned by `tests/test_core/test_arg_hash_restart_stable.py`.
 
-<!-- claim: cash/notebook/lineage_store.py:LineageStore.resolve @f1dc058b, cash/notebook/object_hashing.py:_hash_dataframe_or_series @3cb5309c, cash/notebook/object_hashing.py:_hash_collection @f3ff9c8e, cash/notebook/object_hashing.py:compute_hash @61e351a4 -->
+<!-- claim: cash/notebook/lineage_store.py:LineageStore.resolve @f1dc058b, cash/notebook/object_hashing.py:_hash_dataframe_or_series @39c8fe50, cash/notebook/object_hashing.py:_hash_collection @f3ff9c8e, cash/notebook/object_hashing.py:compute_hash @2027fef7 -->
 **Notebook — resolving a statement input** (`LineageStore.resolve`):
 
 1. **Virtual lineage** — the simulated value, when an upstream simulation is in flight.
@@ -210,11 +210,21 @@ Content beats the lineage attribute, and that ordering is the fix for a real bug
 `compute_hash` itself ends at `sha256(str(id(obj)))` for an object that cannot be pickled. That does not corrupt anything — the statement executes normally and the result is stored — but the key is then tied to a memory address, so the entry is effectively per-session and will not restore after a kernel restart.
 
 ??? note "Under the hood"
-    <!-- claim: cash/notebook/statement/lineage.py:StatementLineageBuilder.capture_and_track_variables @a1f1d54b -->
+    <!-- claim: cash/notebook/statement/lineage.py:StatementLineageBuilder.capture_and_track_variables @a114bc6a, cash/notebook/lineage_formula.py:output_lineage @988eddb7, cash/notebook/lineage_formula.py:module_source_component @5672689a -->
     All statement keys are built by `compute_cache_key()` in
-    `cash.notebook.cache_key` — a single source of truth shared by runtime
-    execution and upstream simulation, so the two can never diverge. Output
-    lineages are built by `StatementLineageBuilder.capture_and_track_variables`
-    in `cash.notebook.statement.lineage`, and all lineage reads and writes go
-    through `LineageStore`, which writes the dict entry and the value's
-    `_cash_lineage_hash` attribute together so they cannot drift.
+    `cash.notebook.cache_key`, and every output lineage by the functions in
+    `cash.notebook.lineage_formula` — both shared by runtime execution
+    (`StatementLineageBuilder.capture_and_track_variables`) and upstream
+    simulation. Sharing the code is necessary but was not enough: in round 21
+    the two still disagreed wherever they fed it different ingredients (a name
+    from `from helpers import clean` counted as a module in the simulation
+    only; the simulation hashed files a variable inherited rather than the
+    ones its statement read), and every disagreement re-ran statements with
+    nothing changed. A control structure's outputs the runtime derives from
+    their *values*, which the simulation cannot reproduce, so the runtime
+    records what each one left behind and the simulation reuses it when the
+    same code is reached with the same inputs and the same file state. A test
+    runs an ordinary project notebook top to bottom and asserts the two agree
+    on every variable. All lineage reads and writes go through `LineageStore`,
+    which writes the dict entry and the value's `_cash_lineage_hash` attribute
+    together so they cannot drift.

@@ -24,23 +24,21 @@ dict references and has no ``set_tracking_state`` re-wiring step.
 from __future__ import annotations
 
 import ast
-import hashlib
 import logging
-import os
 import pickle
-import sys
 import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ..cache_key import is_cash_instrumentation, is_module_like
+from ..lineage_formula import callable_source_component, module_source_component, output_lineage
 from ..randomness import hidden_lineage_reads
 from .derivation_edges import (
     bump_derived_lineages,
     clear_edges_for,
     detect_derivation_edges,
 )
-from .file_deps import compute_file_hash_component, read_module_source_hash
+from .file_deps import compute_file_hash_component
 
 if TYPE_CHECKING:
     from .._protocols import ShellProtocol, TrackingState
@@ -106,6 +104,9 @@ class StatementLineageBuilder:
             file_hash_component = compute_file_hash_component(
                 accessed_files or set(), accessed_remote
             )
+        if cache_key:
+            tracking_state.statement_file_reads[cache_key] = (
+                frozenset(accessed_files or ()), frozenset(accessed_remote or ()))
 
         # A draw READS its module's hidden RNG variable (ADR-018): fold that
         # variable's lineage into every output's lineage so a re-seed upstream
@@ -120,6 +121,16 @@ class StatementLineageBuilder:
         # beside it -- measured, it broke even the first clean run.
         lineage_inputs = inputs | hidden_lineage_reads(code)
 
+        # Derivation-alias edges. A fresh rebind (``g = ...`` — output not also
+        # read as an input) drops the var's stale edges before we re-detect; an
+        # in-place mutation (``df.iloc[...] = ...`` — output IS an input) keeps
+        # them. All outputs are cleared BEFORE any is detected: clearing ``fig``
+        # also drops edges INTO it, so ``fig, ax = plt.subplots()`` would lose
+        # ``ax -> fig`` whenever the set happened to yield ``ax`` first.
+        for var_name in outputs:
+            if var_name in user_ns and var_name not in inputs:
+                clear_edges_for(tracking_state.derivation_edges, var_name)
+
         for var_name in outputs:
             if var_name not in user_ns:
                 continue
@@ -129,31 +140,20 @@ class StatementLineageBuilder:
             input_lineage_hashes, input_lineage_map = self._build_input_lineages(tracking_state, lineage_inputs, user_ns)
             tracking_state.executed_input_lineages[var_name] = input_lineage_map
 
-            func_lineage_component = ""
-            func_source_hashes = self.function_tracker.get_callable_source_hashes(inputs, user_ns)
-            if func_source_hashes:
-                func_parts = [f"{k}:{v}" for k, v in sorted(func_source_hashes.items())]
-                func_lineage_component = ":" + ":".join(func_parts)
-
-            # Include tracked module source hash in lineage.
-            module_lineage_component = self._compute_module_lineage_component(
-                tracking_state, value, var_name, code, tree
+            # The formula and its ingredients are shared with the simulator
+            # (lineage_formula), which must arrive at the same hash.
+            output_lineage_hash = output_lineage(
+                source_hash,
+                input_lineage_hashes,
+                file_hash_component,
+                callable_source_component(self.function_tracker, inputs, user_ns),
+                self._compute_module_lineage_component(tracking_state, value, var_name, code, tree),
             )
-
-            # Compute lineage hash for the output variable
-            lineage_str = f"{source_hash}:{':'.join(sorted(input_lineage_hashes))}{file_hash_component}{func_lineage_component}{module_lineage_component}"
-            output_lineage_hash = hashlib.sha256(lineage_str.encode('utf-8')).hexdigest()
 
             # Record via LineageStore so the dict entry and ``_cash_lineage_hash``
             # are written together and cannot drift.
             tracking_state.lineage.record(var_name, output_lineage_hash, value=value)
 
-            # Derivation-alias edges. A fresh rebind
-            # (``g = ...`` — output not also read as an input) drops the var's
-            # stale edges before we re-detect; an in-place mutation
-            # (``df.iloc[...] = ...`` — output IS an input) keeps them.
-            if var_name not in inputs:
-                clear_edges_for(tracking_state.derivation_edges, var_name)
             detect_derivation_edges(
                 tracking_state.derivation_edges, var_name, value, user_ns
             )
@@ -303,85 +303,14 @@ class StatementLineageBuilder:
         code: str,
         tree: ast.Module | None = None,
     ) -> str:
-        """Compute the module source hash component for lineage tracking.
+        """The ``:mod_src:`` / ``:from_mod_src:`` fragment for *var_name*.
 
-        Handles three cases:
-        1. Direct module import (``import X``): hash the module source + deps.
-        2. Callable from a tracked module (``from X import func``): hash its
-           source module.
-        3. Non-callable from a tracked module (``from X import CONST``): parse
-           the AST to discover the source module and hash it.
-
-        Returns a lineage string fragment like ``:mod_src:<hash>`` or ``""``.
+        See :func:`~cash.notebook.lineage_formula.module_source_component`;
+        the runtime also records where a ``from`` import came from, for
+        module invalidation.
         """
-        if isinstance(value, types.ModuleType):
-            mod_file = getattr(value, '__file__', None)
-            if not (mod_file and os.path.isfile(mod_file) and var_name in self.function_tracker._tracked_modules):
-                return ""
-            dep_files = {
-                dep_path
-                for dep_path, _ in self.function_tracker._dep_file_to_parents.items()
-                if var_name in self.function_tracker._dep_file_to_parents[dep_path]
-            }
-            mod_source_hash = read_module_source_hash(mod_file, dep_files)
-            return f":mod_src:{mod_source_hash}" if mod_source_hash else ""
-
-        if callable(value):
-            obj_module = getattr(value, '__module__', None)
-            if not (obj_module and obj_module in self.function_tracker._tracked_modules):
-                return ""
-            tracking_state.from_import_sources[var_name] = obj_module
-            mod_obj = sys.modules.get(obj_module)
-            mod_file = getattr(mod_obj, '__file__', None) if mod_obj else None
-            if not (mod_file and os.path.isfile(mod_file)):
-                return ""
-            mod_source_hash = read_module_source_hash(mod_file)
-            if not mod_source_hash:
-                return ""
-            if self.debug:
-                logger.debug("[CACHE DEBUG] Including module source hash for '%s' from '%s': %s...", var_name, obj_module, mod_source_hash[:12])
-            return f":from_mod_src:{mod_source_hash}"
-
-        # Non-callable: parse the AST to find the source module.
-        return self._resolve_import_module_lineage(tracking_state, var_name, code, tree)
-
-    def _lookup_from_import_mod_hash(self, tracking_state: 'TrackingState', var_name: str, from_mod: str) -> str:
-        """Return a ``:from_mod_src:<hash>`` lineage fragment for a tracked from-import module."""
-        tracking_state.from_import_sources[var_name] = from_mod
-        if from_mod not in self.function_tracker._tracked_modules:
-            return ""
-        mod_obj = sys.modules.get(from_mod)
-        mod_file = getattr(mod_obj, '__file__', None) if mod_obj else None
-        if not (mod_file and os.path.isfile(mod_file)):
-            return ""
-        mod_source_hash = read_module_source_hash(mod_file)
-        if not mod_source_hash:
-            return ""
-        if self.debug:
-            logger.debug("[CACHE DEBUG] Including module source hash for constant '%s' from '%s': %s...", var_name, from_mod, mod_source_hash[:12])
-        return f":from_mod_src:{mod_source_hash}"
-
-    def _resolve_import_module_lineage(
-        self,
-        tracking_state: 'TrackingState',
-        var_name: str,
-        code: str,
-        tree: ast.Module | None = None,
-    ) -> str:
-        """Resolve module lineage for a non-callable ``from X import Y``."""
-        try:
-            tree_check = tree if tree is not None else ast.parse(code.strip())
-        except SyntaxError:
-            if self.debug:
-                logger.debug("[PROCESSOR] Failed to parse import for '%s'", var_name)
-            return ""
-
-        for node in tree_check.body:
-            if not (isinstance(node, ast.ImportFrom) and node.module):
-                continue
-            for alias in node.names:
-                imported_name = alias.asname or alias.name
-                if imported_name != var_name:
-                    continue
-                return self._lookup_from_import_mod_hash(tracking_state, var_name, node.module)
+        return module_source_component(
+            self.function_tracker, value, var_name, code, tree,
+            note_from_import=tracking_state.from_import_sources.__setitem__,
+        )
         return ""

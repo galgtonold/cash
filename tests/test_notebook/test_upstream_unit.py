@@ -29,7 +29,6 @@ class TestUpstreamCheckerImport:
         expected_helpers = [
             "_validate_file_freshness",
             "_resolve_input_lineage",
-            "_compute_module_source_hash",
         ]
         for name in expected_helpers:
             assert hasattr(NotebookSimulator, name), (
