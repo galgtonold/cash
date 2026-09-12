@@ -134,6 +134,13 @@ If your cache used to live wherever you happened to run from, the first run
 after upgrading says so ([`CACHE-DIR-MOVED`](warnings.md#cache-dir-moved)) and
 recomputes once.
 
+**Your test suite uses the same cache.** `pytest` anchors to the project too,
+so tests read entries the application wrote, and the application reads what the
+tests stored — a fake answer from a test included. Give the suite a cache of
+its own (`CASH_CACHE_DIR="$(mktemp -d)" pytest`, or the one-fixture version in
+[isolating the suite's cache](tutorials/feature-guides/testing-your-code.md#isolating-the-suites-cache)),
+and run it once with `CASH_DISABLE=1` to see that it passes on the code's merits.
+
 ---
 
 ## Seeing what it did
@@ -402,8 +409,8 @@ inside a function to defer its cost is never imported early.
 value — `map(inner, xs)`, `pool.map(inner, xs)`, `joblib.delayed(inner)`,
 `for fn in [inner]`, a `fn=inner` default, a `partial(inner)` — so editing
 `inner` or anything it calls recomputes the caller too. This is the usual way
-to spread a cached step across a pool, and before 0.10.1 only the call form
-counted.
+to spread a cached step across a pool, and only the call form
+used to count.
 
 ### File reads are tracked automatically
 
@@ -431,7 +438,7 @@ relative name resolves into a directory that has one.
 <!-- claim: cash/notebook/file_tracker.py:_patch_thread_pool_submit @e0f54e32 -->
 Reads in a **thread pool** the function starts count too:
 `ThreadPoolExecutor(4).map(np.load, shards)` records every shard, the same as a
-serial loop would — before 0.10.1 it recorded none of them. A thread you start
+serial loop would — it used to record none of them. A thread you start
 yourself with `threading.Thread(target=...)` begins with nothing cash can see,
 so a file read only there is not tracked; read it in the function, hand the work
 to a `ThreadPoolExecutor`, or name the file with `file_depends_on=`.
@@ -453,7 +460,7 @@ files — only the first cached function to call `parse(path)` actually opens
 the file; the next one gets the stored rows and reads nothing. cash remembers
 which of your functions read which file, and when a later call reaches one of
 them without it reading, adds what it read then — just `path`, when the memo is
-keyed by a path this call was given. Before 0.10.1 the second consumer recorded
+keyed by a path this call was given. The second consumer used to record
 no file at all and kept its result after the file changed.
 
 <!-- claim: cash/notebook/file_tracker.py:_note_untracked_read @c99048a2, cash/notebook/file_tracker.py:install_read_watch @16286f03 -->
@@ -1345,6 +1352,82 @@ An object that can't be pickled and has no hasher can't be keyed unless it is
 frozen, so a call receiving one runs uncached
 ([`KEY-UNHASHABLE-ARG`](warnings.md#key-unhashable-arg)).
 
+### When a cached function changes what it was given
+
+<!-- claim: cash/core.py:Cash._argument_identities @a5383878, cash/_plain_data.py:identity_changed @7f213b41 -->
+A call that sorts, appends to or rewrites an argument in place makes a change
+the caller sees — and a hit would not make it. Cash checks for that after each
+miss, and a call it catches is not stored: it runs every time, as it would
+uncached. How far the check reaches depends on the argument:
+
+- a list or tuple of plain values — parsed rows, of any size — is compared by
+  the identities of what it holds, which is cheap: `rows.sort()`, an append, a
+  `del`, `rows[i] = ...` and `for r in rows: r[3] = ...` are all caught, also
+  on a `frozen=True` producer's result (which is then no longer trusted as
+  frozen);
+- anything else is re-hashed, and only when that takes under about 50 ms: a big
+  array or frame changed in place is **not** caught, and the static finding
+  ("changes the argument '…' in place") is all you get.
+
+The fix is the same either way: return a modified copy
+(`rows = sorted(rows)`, `df = df.assign(...)`) and let the caller keep its
+object. See [argument mutation](warnings.md#impure-observed-effects).
+
+### Millions of rows: cache what you compute from them
+
+Passing a big parsed input *into* cached functions makes each of them pay to
+key it. The design that pays is the other way round: key the results by the
+**file path**, and parse only when some result misses:
+
+<!-- test:skip reason="illustrative: parse() and the aggregates belong to the reader's project" -->
+```python
+import functools
+
+@functools.lru_cache(maxsize=4)          # one parse per process, shared by the misses
+def _orders(path):
+    return parse_orders(path)
+
+@cash.cache
+def revenue_by_country(orders_path):
+    return aggregate_revenue(_orders(orders_path))
+
+@cash.cache
+def top_customers(orders_path, n=10):
+    return rank_customers(_orders(orders_path), n)
+```
+
+The file read inside `_orders` is a dependency of every function that uses the
+rows, including those that found them already parsed (see
+[file reads](#file-reads-are-tracked-automatically)), so an edit to the file
+recomputes them all. Measured on a 214 MB log in round-20 testing: with the rows
+passed into cached consumers, a warm run was 1.3–3.6× *slower* than no cache;
+keyed by path, it was 18× faster.
+
+### Writing one function's results to disk however cheap
+
+<!-- claim: cash/backends/file_backend.py:FileBackend @93221d88 broad="a bare FileBackend has no promotion policy: the claim is about the class as a whole" -->
+A result that took milliseconds is kept in memory only
+([why](cost-model.md)) — and a cheap aggregate over rows another call already
+parsed looks exactly like that, though a new process must parse the file again
+to recompute it. There is no per-function switch; give such functions an
+instance of their own on a plain `FileBackend`, which writes everything it is
+given:
+
+<!-- test:skip reason="illustrative: aggregate_revenue and _orders come from the example above" -->
+```python
+import cash
+from cash.backends.file_backend import FileBackend
+
+aggregates = cash.Cash(backend=FileBackend(cache_dir=".cash_agg"))
+
+@aggregates.cache
+def revenue_by_country(orders_path):
+    return aggregate_revenue(_orders(orders_path))
+```
+
+`cash inspect .cash_agg` and `cash clear .cash_agg` reach that cache like any
+other.
+
 ---
 
 ## Common gotchas
@@ -1440,6 +1523,33 @@ If that's what you want (memoizing an API call where the network
 roundtrip is the "side effect"), `assume_safe=True` silences the
 warning. If it isn't, refactor: separate the pure compute from the
 side effect, and only cache the pure part.
+
+### A cached GET goes stale
+
+`requests.get(url)` is reported with the side effects, but for a read that is
+the smaller half of the story: what the server returns is an **input**, and
+it is not in the key. The first answer is stored and served on every later
+call, in every later process, until something changes the key. Give a cached
+network read a freshness plan before it ships:
+
+<!-- test:skip reason="illustrative: needs a live endpoint" -->
+```python
+@cash.cache(ttl=3600)                    # an hour old at most
+def rates():
+    return requests.get("https://api.example.com/rates").json()
+
+@cash.cache
+def rates_on(day):                       # or: what makes it new is an argument
+    return requests.get(f"https://api.example.com/rates/{day}").json()
+```
+
+`ttl=` suits data that drifts; an argument that changes (a date, a version, an
+ETag you fetched cheaply) suits data that is published in versions. A file read
+by URL through a tracked reader — `pd.read_parquet("s3://...")`,
+`pd.read_csv("https://...")` — is the exception: cash asks the store for the
+object's ETag or version on every hit
+([remote objects](tutorials/feature-guides/custom-file-sources.md#remote-objects-tracked-by-the-stores-own-validator)).
+A `requests.get` is not a file read, and is never checked.
 
 ### A function returning a matplotlib `Figure` is never cached
 

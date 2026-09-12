@@ -568,7 +568,7 @@ nothing, because there is nothing of cash's in it to ignore.
 them — so cash runs on the defaults the file was written to change. Nothing
 fails and nothing looks wrong: you get a working cache in the wrong place, with
 the wrong caps, and a `[tool.cash] cache_dir` that appears to do nothing. This
-was a debug-level log line until 0.10.1, which is to say it had no symptom at
+used to be a debug-level log line, which is to say it had no symptom at
 all.
 
 **What to do.** Any one of:
@@ -713,8 +713,8 @@ a proof of purity — this supplements the source scan behind
 [IMPURE-SIDE-EFFECTS](#impure-side-effects) rather than replacing it. The two
 can appear together. An effect of a kind the source scan already listed for
 the function (a file write beside an `open(..., "w")` finding, say) is left
-out of this one, but an effect of another kind is reported. Until 0.10.1 the
-whole warning stayed quiet once the source scan had said anything, so a
+out of this one, but an effect of another kind is reported. The
+whole warning used to stay quiet once the source scan had said anything, so a
 finding about a `print` hid a network read in the same function.
 
 **When it is safe to ignore.** When everything on the list is bookkeeping nobody
@@ -1234,7 +1234,7 @@ first time the function was called.
 <!-- claim: cash/source_norm.py:_pyc_proves_unchanged @7faf61ff -->
 That includes a replacement that keeps an older timestamp — `shutil.copy2`,
 `cp -p`, `rsync -a`, robocopy, a drag-and-drop copy in Explorer all do — which
-before 0.10.1 looked untouched. cash no longer takes the file's time as proof on
+used to look untouched. cash no longer takes the file's time as proof on
 its own: the module's `.pyc` has to agree that this is the file the process
 imported, or cash compares the compiled file with the running code.
 
