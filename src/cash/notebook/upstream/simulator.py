@@ -628,7 +628,7 @@ class NotebookSimulator:
             # store a plain set/list of paths -- accept either shape.
             paths.update(dep.keys() if hasattr(dep, 'keys') else dep)
 
-        def _collect(src: str) -> None:
+        def _collect(src: str, outputs=()) -> None:
             nonlocal fully_known
             try:
                 clean = CodeAnalyzer.strip_magics(src.replace('\r\n', '\n'))
@@ -640,6 +640,17 @@ class NotebookSimulator:
                 r = statement_read_paths(clean, namespace=user_ns)
             except (SyntaxError, ValueError, TypeError):
                 r = None
+            if r is None and outputs and all(o in efd for o in outputs):
+                # Not resolvable from the code (``pd.read_csv(f)`` over a glob
+                # result), but the statement ran this session and the tracker
+                # recorded what fed its outputs -- a superset of what it read.
+                # Without this one comprehension switched the scope gate off
+                # for the whole notebook, and a chart nothing reads was re-drawn
+                # for every downstream cell (round 21, R5).
+                r = set()
+                for o in outputs:
+                    dep = efd[o]
+                    r.update(dep.keys() if hasattr(dep, 'keys') else dep)
             if r is None:
                 fully_known = False
             else:
@@ -648,7 +659,15 @@ class NotebookSimulator:
         for entry in simulation_trace:
             code = entry[0]
             if 'read' in code or 'open(' in code or 'load' in code:
-                _collect(code)
+                _collect(code, entry[1])
+            # What the tracker recorded behind this statement's outputs counts
+            # too, whatever the code looks like: a reader static analysis does
+            # not recognise (``PIL.Image.open(p)``) must not make its file look
+            # unread now that more write paths resolve.
+            for o in entry[1]:
+                dep = efd.get(o)
+                if dep:
+                    paths.update(dep.keys() if hasattr(dep, 'keys') else dep)
 
         if notebook_cells and current_cell_idx is not None and 0 <= current_cell_idx < len(notebook_cells):
             _collect(notebook_cells[current_cell_idx])

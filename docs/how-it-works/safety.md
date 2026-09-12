@@ -74,17 +74,24 @@ The first can be re-derived from the statement that made it; the second cannot.
 has no store target to give the receiver a fresh lineage. So Cash classifies
 method-call receivers in tiers, in this order:
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @4528ef14, cash/notebook/cacheability.py:KNOWN_PURE_METHODS @6ebfef8a, cash/notebook/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @d0495812, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @81f477db -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @313f3d13, cash/notebook/cacheability.py:KNOWN_PURE_METHODS @6ebfef8a, cash/notebook/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @d0495812, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @81f477db -->
 
 - **Excluded outright.** A module receiver is a plain function call, not a
   mutation: `np.foo()`, `time.sleep()`, `plt.title()`. So is a receiver-pure
   writer — `df.to_csv(path)` *reads* the frame and writes a file, so it must
   never bump `df`'s lineage — and so is anything on the known-pure list
-  (`head`, `describe`, `value_counts`, `plot`, …).
+  (`head`, `describe`, `value_counts`, `plot`, …). pandas' plotting entry
+  points count as pure on a pandas receiver however they are spelled —
+  `df.plot.bar(...)`, `df.groupby(k)[c].mean().plot(...)`, `df.hist()` — they
+  draw on an Axes and leave the data alone.
 - **Always mutating.** A method call on a live matplotlib `Figure`/`Axes` draws
   on it whatever it returns. This tier is tested *before* the known-pure list,
   which is what makes `ax.hist(...)` behave exactly like `ax.bar(...)` even
-  though `hist` is itself a known-pure name on any other receiver.
+  though `hist` is itself a known-pure name on any other receiver. A live
+  `Axes`/`Figure` handed to a call is drawn on too — `df.plot(ax=ax)`,
+  `sns.barplot(data=df, ax=ax)` — so it becomes the statement's mutated output
+  and the statement always runs, never restoring from cache (a restored draw
+  call draws nothing).
 - **Observed.** Everything else is content-hashed before and after the call. If
   the content changed, the receiver mutated. Receivers that can only be
   *sampled* rather than hashed whole (DataFrames, Series, ndarrays, collections

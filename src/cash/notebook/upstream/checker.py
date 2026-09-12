@@ -1907,7 +1907,14 @@ class UpstreamChecker:
                     if not ctrl_result.success:
                         raise ctrl_result.error or RuntimeError("Error in upstream control structure")
                 else:
-                    result = process_callback(stmt_code, global_ttl, silent=False)
+                    # Silent, like the control-structure branch above: this is
+                    # ANOTHER cell's statement, and its output belongs to that
+                    # cell -- a plain run of this cell never prints it. Re-running
+                    # a figure's history (``print('panels', len(axes))`` among
+                    # its fills) put that line into an unrelated cell's output
+                    # (round 21, replay acceptance corpus). A failure still
+                    # surfaces: the processor reports it in ``result['error']``.
+                    result = process_callback(stmt_code, global_ttl, silent=True)
                     if self.debug:
                         logger.debug("[UPSTREAM] Callback result for '%s...': %s", stmt_code[:20], result)
                     if result:

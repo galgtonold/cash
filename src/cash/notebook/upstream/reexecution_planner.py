@@ -11,11 +11,15 @@ from ...diagnostics import warn_diagnostic
 from ...exceptions import CashWarning
 from ...utils import resolve_file_dep_path
 from ..analysis import CodeAnalyzer
-from ..cacheability import consumed_input_names, statement_saves_current_pyplot_figure
+from ..cacheability import (
+    consumed_input_names,
+    statement_saves_current_pyplot_figure,
+    statement_writes_files,
+)
 from ..cache_key import write_provenance_key
 from ..file_dep_snapshot import file_dep_is_fresh
 from .._trace import trace_event
-from .stateful_carriers import stateful_carrier_kind
+from .stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
 
 if TYPE_CHECKING:
     from .mismatch_classifier import MismatchClassifier
@@ -76,6 +80,61 @@ def _control_body_touches(code: str, sibling_names: set[str]) -> bool:
                     and sub.func.value.id in sibling_names):
                 return True
     return False
+
+
+def _root_name(node: ast.AST) -> str | None:
+    """``axes[0]`` / ``ax.twinx()`` / ``*axs`` -> the name they are reached from."""
+    while isinstance(node, (ast.Attribute, ast.Subscript, ast.Starred, ast.Call)):
+        node = node.func if isinstance(node, ast.Call) else node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _passes_carrier_to_a_call(code: str, sibling_names: set[str]) -> bool:
+    """True when the statement calls into one of *sibling_names* or hands it to a call.
+
+    Two ways to draw on a figure that its recorded outputs do not show:
+
+    * a call on a PART of it -- ``axes[1].set_xlabel(...)``,
+      ``ax.xaxis.set_major_formatter(...)``: the receiver is reached from the
+      carrier, but is not a bare name;
+    * a call on SOMETHING ELSE that receives it -- ``tot.plot(ax=axes[0])``,
+      ``imp.plot.barh(..., ax=ax)``, ``sns.barplot(data=df, ax=ax)``,
+      ``draw_panel(ax)``. The outputs name the receiver (``tot``, ``imp``),
+      never ``ax``.
+
+    Missing either re-drew the figure without it: round 21's blank chart
+    (r21s2), and again in the replay acceptance corpus. A call that merely
+    reads the axes is re-run too: within the carrier's own history, one
+    statement too many is harmless; one too few writes a wrong file.
+    """
+    if not sibling_names:
+        return False
+    try:
+        tree = ast.parse(textwrap.dedent(code))
+    except (SyntaxError, ValueError, TypeError):
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _root_name(node.func) in sibling_names:
+            return True
+        for arg in [*node.args, *(kw.value for kw in node.keywords)]:
+            if _root_name(arg) in sibling_names:
+                return True
+    return False
+
+
+def _fills_carrier(entry, sibling_names: set[str]) -> bool:
+    """Is trace *entry* part of the history of a carrier co-produced as *sibling_names*?
+
+    One predicate for both the pass that completes a carrier's history and the
+    guard that refuses a write whose history is incomplete -- when they
+    disagreed, the guard let a blank chart through that the pass never saw.
+    """
+    code = entry[0]
+    return bool(set(entry[1]) & sibling_names
+                or _control_body_touches(code, sibling_names)
+                or _passes_carrier_to_a_call(code, sibling_names))
 
 
 class ReexecutionPlanner:
@@ -479,10 +538,12 @@ class ReexecutionPlanner:
                         kind = stateful_carrier_kind(user_ns.get(v))
                     except (TypeError, ValueError, AttributeError, RecursionError):
                         kind = None
-                    if kind is None:
-                        continue
                     p = self._latest_producer(simulation_trace, v, i)
-                    if p is None:
+                    if kind is None and v not in user_ns and p is not None:
+                        # No live object after a restart: recognise the carrier
+                        # by the code that makes it.
+                        kind = carrier_kind_from_producer(simulation_trace[p][0])
+                    if kind is None or p is None:
                         continue
                     pending = set()
                     if p not in scheduled:
@@ -496,9 +557,12 @@ class ReexecutionPlanner:
                         # carrier, so the body has to be inspected directly or
                         # the figure is rebuilt from a subset of its history
                         #.
-                        if (set(simulation_trace[j][1]) & sibling_names
-                                or _control_body_touches(
-                                    simulation_trace[j][0], sibling_names)):
+                        entry = simulation_trace[j]
+                        if not _fills_carrier(entry, sibling_names):
+                            continue
+                        # A second savefig is not a fill; the write gates decide
+                        # whether it re-fires.
+                        if set(entry[1]) & sibling_names or not statement_writes_files(entry[0]):
                             pending.add(j)
                     if not pending:
                         continue
@@ -571,13 +635,22 @@ class ReexecutionPlanner:
         missing variable and is fixed by running the cell, whereas a duplicated
         append is silent and permanent.
         """
-        from ..cacheability import statement_writes_files
+        user_ns = getattr(getattr(self._virtual_lineage, 'shell', None), 'user_ns', None) or {}
+        recorded = getattr(self._virtual_lineage, 'variable_lineage', None) or {}
 
         extra: set[int] = set()
         frontier = list(pending)
         while frontier:
             j = frontier.pop()
+            expected = simulation_trace[j][3] or {}  # input lineages at j
             for name in simulation_trace[j][2]:  # inputs
+                # A value that is live and still what this statement read needs
+                # no producer: the fill can run as it is. Without this, the
+                # wider fill rule pulled `imp.plot.barh(..., ax=ax)` in and then
+                # re-fitted the whole model chain behind a perfectly good `imp`
+                # (replay acceptance corpus, round 21).
+                if name in user_ns and name in expected and recorded.get(name) == expected[name]:
+                    continue
                 producer = self._latest_producer(simulation_trace, name, j)
                 if producer is None:
                     continue
@@ -771,8 +844,9 @@ class ReexecutionPlanner:
             sibling_names = set(simulation_trace[producer][1])
             fills = [
                 j for j in range(producer + 1, w)
-                if (set(simulation_trace[j][1]) & sibling_names
-                    or _control_body_touches(simulation_trace[j][0], sibling_names))
+                if _fills_carrier(simulation_trace[j], sibling_names)
+                and not (statement_writes_files(simulation_trace[j][0])
+                         and not set(simulation_trace[j][1]) & sibling_names)
             ]
             if all(j in scheduled for j in fills):
                 continue  # rebuilt coherently -- allow
@@ -1011,9 +1085,13 @@ class ReexecutionPlanner:
             # Scope gate: skip a writer whose output file no relevant consumer
             # reads. Its write runs when the user runs its own
             # cell; reconstruction of an unrelated cell must never re-fire it.
-            if self._writer_output_unread(
+            unread = self._writer_output_unread(
                 stmt_code, relevant_read_paths, relevant_read_paths_known,
-            ):
+            )
+            trace_event("writer_considered", stmt=stmt_code[:80], unread=unread,
+                        read_paths_known=relevant_read_paths_known,
+                        read_paths=sorted(relevant_read_paths or ())[:20])
+            if unread:
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM] File-writer output read by no relevant "
@@ -1124,11 +1202,20 @@ class ReexecutionPlanner:
         if not written:
             return False  # unresolvable target -> stay conservative
         read_forms: set[str] = set()
+        read_dirs: list[str] = []
         for rp in relevant_read_paths:
             read_forms |= self._normalize_path_forms(rp)
+            resolved = resolve_file_dep_path(rp) or rp
+            if os.path.isdir(resolved):
+                # A listed / globbed folder: whatever is written inside it is
+                # read by the next listing.
+                read_dirs.append(os.path.normcase(os.path.abspath(resolved)) + os.sep)
         for wp in written:
             if self._normalize_path_forms(wp) & read_forms:
                 return False  # this output IS read by a relevant consumer
+            where = os.path.normcase(os.path.abspath(resolve_file_dep_path(wp) or wp))
+            if any(where.startswith(d) for d in read_dirs):
+                return False
         return True
 
     def _writer_output_already_fresh(

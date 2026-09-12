@@ -441,6 +441,8 @@ from ..cacheability import (
     RECEIVER_READONLY_WRITE_METHODS,
     StatementAnalysis,
     analyze_statement,
+    is_pandas_plot_call,
+    top_level_call_argument_bases,
     assigned_method_call_receivers,
     called_function_global_mutations,
     function_arg_mutations,
@@ -2751,7 +2753,7 @@ class StatementProcessor:
                 # Figure is idempotent + load-bearing for chart coherence.
                 pre_route.add(base)
                 continue
-            if method in KNOWN_PURE_METHODS:
+            if method in KNOWN_PURE_METHODS or is_pandas_plot_call(method, receiver):
                 continue
             if verdict is not None:
                 if base in verdict:
@@ -2780,6 +2782,10 @@ class StatementProcessor:
                 continue
             if receiver_is_identity_coupled(receiver):
                 pre_route.add(base)
+        # An Axes/Figure handed to a call is drawn on (``df.plot(ax=ax)``).
+        for name in top_level_call_argument_bases(tree):
+            if name not in pre_route and receiver_is_identity_coupled(self.shell.user_ns.get(name)):
+                pre_route.add(name)
         record_verdict = verdict is None and bool(observe or assumed)
         return pre_route - outputs, observe, assumed, record_verdict
 

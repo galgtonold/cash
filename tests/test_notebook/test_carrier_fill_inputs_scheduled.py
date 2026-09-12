@@ -22,10 +22,10 @@ from the namespace the fill cannot run.
 
 Why it took so long to reproduce: ``fig``, ``ax`` and ``sub`` come from the same
 cell, so they are normally all present or all absent — and both extremes are
-harmless. `fig` absent means the pass never fires (it classifies carriers from
-the live object); `sub` present means the fill just runs. Only a state that
-separates them reaches this, which is why every "restart and re-run" attempt
-came back clean.
+harmless. `fig` absent meant the pass never fired (it classified carriers from
+the live object; since round 21 it also recognises them by their producer's
+code); `sub` present means the fill just runs. Only a state that separates them
+reaches this, which is why every "restart and re-run" attempt came back clean.
 """
 from __future__ import annotations
 
@@ -144,13 +144,15 @@ def test_a_file_writing_producer_is_never_dragged_in(live_figure):
     )
 
 
-def test_the_pass_is_still_inert_without_a_live_carrier():
-    """Unchanged behaviour: no live `fig`, no carrier classification.
-
-    Pinned because it is the OTHER half of this defect -- the post-restart case
-    is handled by the unfilled-figure-write guard, not here, and the two must
-    not quietly swap responsibilities.
+def test_without_a_live_carrier_the_history_is_completed_from_the_code():
+    """After a restart there is no live `fig`, so the pass used to stay inert
+    and the unfilled-figure-write guard REFUSED the write, leaving the user to
+    run the cell themselves. Round 21 (Phase 2) decided the other way: cash
+    re-runs what the notebook needs. The carrier is recognised by the code that
+    made it (`plt.subplots(...)`), and the whole history comes back -- the
+    producer, both fills, and the data the first fill reads -- in order. The
+    guard remains as the last resort when a history cannot be completed.
     """
     planner = _planner({})
     kept, _ = planner._complete_stateful_carrier_history([5], _trace(), [])
-    assert kept == [5]
+    assert kept == [0, 1, 2, 3, 4, 5]

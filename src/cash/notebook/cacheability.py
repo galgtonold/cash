@@ -689,7 +689,49 @@ def _resolve_literal_path(node: ast.AST, namespace: dict[str, Any] | None) -> st
                 return os.fspath(val)
             except TypeError:
                 return None
+    # The spellings notebooks actually use: ``OUT / 'chart.png'``,
+    # ``Path(OUT, 'chart.png')``, ``os.path.join(OUT, name)``,
+    # ``f'{OUT}/chart.png'``. Until round 21 only a literal or a bare name
+    # resolved, so ``fig.savefig(OUT / 'chart.png')`` was "unresolvable" and the
+    # scope gate never suppressed it: a chart nothing reads was re-drawn for
+    # every downstream cell (R5). Each part must itself resolve, so anything
+    # genuinely computed still returns None.
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        left = _resolve_literal_path(node.left, namespace)
+        right = _resolve_literal_path(node.right, namespace)
+        if left is not None and right is not None:
+            return os.path.join(left, right)
+        return None
+    if isinstance(node, ast.Call) and not node.keywords and node.args and (
+            _is_path_constructor(node.func) or _is_os_path_join(node.func)):
+        parts = [_resolve_literal_path(a, namespace) for a in node.args]
+        if all(p is not None for p in parts):
+            return os.path.join(*parts)
+        return None
+    if isinstance(node, ast.JoinedStr) and namespace is not None:
+        pieces: list[str] = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                pieces.append(value.value)
+                continue
+            if (isinstance(value, ast.FormattedValue) and value.conversion == -1
+                    and value.format_spec is None and isinstance(value.value, ast.Name)):
+                val = namespace.get(value.value.id, _UNBOUND)
+                if isinstance(val, (str, int, os.PathLike)) and not isinstance(val, bool):
+                    pieces.append(os.fspath(val) if isinstance(val, os.PathLike) else str(val))
+                    continue
+            return None
+        return "".join(pieces)
     return None
+
+
+_UNBOUND = object()
+
+
+def _is_os_path_join(func: ast.AST) -> bool:
+    """``os.path.join`` / ``path.join`` (``from os import path``)."""
+    return (isinstance(func, ast.Attribute) and func.attr == 'join'
+            and isinstance(func.value, ast.Attribute) and func.value.attr == 'path')
 
 
 def _is_path_constructor(func: ast.AST) -> bool:
@@ -3350,8 +3392,63 @@ def standalone_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple
             continue
         base = _extract_receiver_base_name(call.func.value)
         if base:
-            calls.add((base, call.func.attr))
+            method = call.func.attr
+            # ``df.plot.bar(...)``: label it by the accessor, so the classifiers
+            # can tell pandas' plotting from a method named ``bar``.
+            if isinstance(call.func.value, ast.Attribute) and call.func.value.attr == 'plot':
+                method = f'plot.{method}'
+            calls.add((base, method))
     return frozenset(calls)
+
+
+def _argument_root(node: ast.AST) -> str | None:
+    while isinstance(node, (ast.Attribute, ast.Subscript, ast.Starred)):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def top_level_call_argument_bases(tree: ast.Module | None) -> frozenset[str]:
+    """Names handed as arguments to the top-level call of each statement.
+
+    ``tot.plot(ax=axes[0])`` -> ``{'axes'}``; ``bars = df.plot.bar(ax=ax)`` ->
+    ``{'ax'}``. The runtime and the simulation route such an argument as
+    MUTATED when it is a live Axes/Figure: a plotting call draws on the axes
+    it is given. Keyed on the receiver alone, ``imp.plot.barh(..., ax=ax)``
+    looked like a pure call on ``imp``, was served from cache during a replay,
+    and the re-created figure was saved blank (round 21, replay corpus).
+    """
+    if tree is None:
+        return frozenset()
+    names: set[str] = set()
+    for node in tree.body:
+        value = node.value if isinstance(node, (ast.Expr, ast.Assign, ast.AnnAssign)) else None
+        if not isinstance(value, ast.Call):
+            continue
+        for arg in [*value.args, *(kw.value for kw in value.keywords)]:
+            root = _argument_root(arg)
+            if root:
+                names.add(root)
+    return frozenset(names)
+
+
+_PANDAS_PLOT_METHODS = frozenset({'plot', 'hist', 'boxplot'})
+
+
+def is_pandas_plot_call(method: str, receiver: object) -> bool:
+    """``df.plot(...)``, ``df.plot.bar(...)``, ``df.hist()``, ``df.boxplot()``
+    on a pandas object: it draws on an Axes and leaves the data alone.
+
+    A DataFrame cannot be content-observed (its hash samples), so any unknown
+    method on one was ASSUMED to mutate it. That bumped ``data``'s lineage for
+    ``data.groupby('region')['churn'].mean().plot.bar(ax=ax)``, and every cell
+    reading ``data`` above it then re-ran its producers with nothing changed
+    (round 21: r21s1's last cell, 9 statements). The Axes it draws on is what
+    changes, and the carrier-history pass follows it through ``ax=``.
+    Shared by the runtime and the simulation, which must decide identically.
+    """
+    if not (method in _PANDAS_PLOT_METHODS or method.startswith('plot.')):
+        return False
+    return (type(receiver).__module__ or '').startswith('pandas')
 
 
 def assigned_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple[str, str]]:

@@ -28,6 +28,8 @@ from ..cacheability import (
     RECEIVER_READONLY_WRITE_METHODS,
     assigned_method_call_receivers,
     called_function_global_mutations,
+    is_pandas_plot_call,
+    top_level_call_argument_bases,
     function_arg_mutations,
     standalone_call_arg_targets,
     standalone_method_call_receivers,
@@ -306,7 +308,7 @@ class VirtualLineage:
             if receiver_is_identity_coupled(receiver):
                 receivers.add(base)  # Axes/Figure draw method mutates it
                 continue
-            if method in KNOWN_PURE_METHODS:
+            if method in KNOWN_PURE_METHODS or is_pandas_plot_call(method, receiver):
                 continue
             if verdict is not None:
                 if base in verdict:
@@ -327,6 +329,10 @@ class VirtualLineage:
                 continue
             if receiver_is_identity_coupled(receiver):
                 receivers.add(base)
+        # Mirror the runtime: an Axes/Figure handed to a call is drawn on.
+        for name in top_level_call_argument_bases(tree):
+            if name not in receivers and receiver_is_identity_coupled(self.shell.user_ns.get(name)):
+                receivers.add(name)
         return receivers | fam
 
     def reset_caches(self) -> None:
@@ -1118,8 +1124,16 @@ class VirtualLineage:
             # reader depends on: without a trace entry the planner can never
             # schedule an edited/stale writer. Empty outputs keep
             # the backward scan indifferent to the entry.
+            #
+            # Same for a bare CALL (``tot.plot(ax=axes[0])``): it may draw on an
+            # object it was handed, which only the carrier-history pass can see
+            # (``_fills_carrier``). The runtime's recorded mutation verdict
+            # usually gives it an output, but that record dies with the
+            # kernel, so after a restart the call vanished from the trace and
+            # a figure was rebuilt without it (round 21, replay corpus).
             from ..cacheability import statement_writes_files
-            if statement_writes_files(stmt_code):
+            if statement_writes_files(stmt_code) or (
+                    isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
                 simulation_trace.append(_TraceEntry(stmt_code, outputs, inputs, input_hashes, {}, files_stale))
 
     def _simulate_one_cell(
