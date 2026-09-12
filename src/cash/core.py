@@ -3609,6 +3609,12 @@ class Cash:
             refusal = "a file it read changed while it ran"
         if refusal is None and self._code_moved_since_keyed(func, func_name):
             refusal = "its code changed on disk after this process keyed it"
+        if refusal is None and getattr(observer, "mock_called", False):
+            # Wherever the mock sat -- below the library call the body makes,
+            # or swapped in after the key's bindings were read -- the result
+            # may be a test's fake, and the next real run would be served it
+            # (round 20). Not waivable: no audit makes a fake the answer.
+            refusal = "a unittest.mock object was called while it ran, so the result may be a test's fake"
         mutated = getattr(observer, "mutated_args", None)
         if refusal is None and mutated and self._purity_modes.get(func_name, "warn") != "silent":
             # A hit returns the stored value and leaves the caller's object as

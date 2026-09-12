@@ -635,7 +635,7 @@ row posted to a service, the dict the caller inspects afterwards — the program
 is correct on the run that filled the cache and quietly different on every run
 after it.
 
-<!-- claim: cash/core.py:Cash._store_refusal @4aec04ce, cash/core.py:Cash._argument_snapshot @d9b85c3f -->
+<!-- claim: cash/core.py:Cash._store_refusal @a4eb6aab, cash/core.py:Cash._argument_snapshot @d9b85c3f -->
 `argument mutation` is handled differently, because it is the one that caught
 people out: an object the caller still holds would stop being changed. A call
 seen changing an argument is **not stored** — the line names the argument, and

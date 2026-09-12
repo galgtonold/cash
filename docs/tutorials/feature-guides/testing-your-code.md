@@ -156,9 +156,20 @@ A `unittest.mock` object (`mock.patch(..., return_value=...)`, `MagicMock`,
 `pytest-mock`'s `mocker`) has no code for cash to key, and its answer is
 whatever the test configured, so a call that reaches one **runs uncached**,
 and nothing it returns is stored. That is usually what a test with a mock
-wants. It holds wherever the mock sits: a helper of yours, a library function
-patched where it lives (`mock.patch("requests.get")`), or a whole module
-swapped out (`mock.patch("mylib.requests", MagicMock())`).
+wants. It holds for a mock the function reaches by name: a helper of yours, a
+library function patched where it lives (`mock.patch("requests.get")`), or a
+whole module swapped out (`mock.patch("mylib.requests", MagicMock())`).
+
+<!-- claim: cash/effect_observer.py:_hook_mock_calls @d4677a09, cash/core.py:Cash._store_refusal @a4eb6aab -->
+A mock deeper down — `mock.patch("requests.Session.request")`,
+`HTTPAdapter.send`, or a `MagicMock` swapped into a module-level session
+after the function first ran — is not part of the key, so cash cannot tell
+the call apart from a real one before it runs. It can tell afterwards: a call
+during which any `unittest.mock` object was called is **not stored**, so a
+fake never reaches a later real run. What that cannot prevent is the other
+direction: if a real run already stored an entry, the mocked call is a hit
+and gets the real answer. A test that must see its own mock needs the
+fixture above.
 
 What cash cannot see is a library that intercepts calls deeper down without
 replacing the function you call: `responses`, `requests-mock`, `vcrpy`,

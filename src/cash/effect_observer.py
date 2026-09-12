@@ -174,6 +174,43 @@ def _describe_argv(args: Any) -> str:
     return str(args)[:80]
 
 
+#: Calls made on any ``unittest.mock`` object since `_hook_mock_calls` ran.
+#: Only its movement across a body is read, so a lost increment between two
+#: threads cannot hide one.
+_mock_calls = 0
+_mock_hooked = False
+
+
+def _hook_mock_calls() -> None:
+    """Count every call on a ``unittest.mock`` object, once the module exists.
+
+    A mock stands in for the real thing wherever it was put: one level below
+    what the body calls (``requests.Session.request``, ``HTTPAdapter.send``)
+    or swapped into a global after the key's bindings were read. No binding
+    the key reads can show those (round 20), but a mock that RAN cannot hide
+    that it did: every call on one goes through
+    ``CallableMixin._increment_mock_call``. Never imports ``unittest.mock``
+    itself -- a program that has not imported it has no mocks.
+    """
+    global _mock_hooked
+    if _mock_hooked:
+        return
+    module = sys.modules.get("unittest.mock")
+    real = getattr(getattr(module, "CallableMixin", None), "_increment_mock_call", None)
+    if real is None:
+        return
+
+    def counted(self: Any, *args: Any, **kwargs: Any) -> Any:
+        global _mock_calls
+        _mock_calls += 1
+        return real(self, *args, **kwargs)
+
+    counted._cash_effect_patch = True          # type: ignore[attr-defined]
+    counted._original_func = real              # type: ignore[attr-defined]
+    module.CallableMixin._increment_mock_call = counted
+    _mock_hooked = True
+
+
 class EffectObserver:
     """Records side effects performed on this context while the block runs.
 
@@ -196,10 +233,16 @@ class EffectObserver:
         # make every cached function look impure.
         self._exclude = os.path.abspath(exclude_under) if exclude_under else None
         self._tokens: list[contextvars.Token] = []
+        #: A ``unittest.mock`` object was called while the block ran: the
+        #: result may be a test's fake, and must not be stored as the answer.
+        self.mock_called = False
+        self._mock_calls_at: list[int] = []
 
     # -- lifecycle ---------------------------------------------------------
     def __enter__(self) -> "EffectObserver":
         _install_patches()
+        _hook_mock_calls()
+        self._mock_calls_at.append(_mock_calls)
         self._tokens.append(_active_observer.set(self))
         self._outer.append(sys._getframe(1))
         return self
@@ -209,6 +252,8 @@ class EffectObserver:
             _active_observer.reset(self._tokens.pop())
         if self._outer:
             self._outer.pop()           # a frame must not outlive its call
+        if self._mock_calls_at and self._mock_calls_at.pop() != _mock_calls:
+            self.mock_called = True
         return False
 
     def suspend(self):

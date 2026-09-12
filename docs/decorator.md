@@ -335,7 +335,8 @@ rebinding that name at runtime (`monkeypatch.setattr(app, "_sieve", fake)`,
 `mock.patch.object(...)`, a plugin swapping an implementation) changes the key
 as well, and putting the original back returns to the original entry. A binding
 to a `unittest.mock` object has no code to key, so a call that reaches one runs
-uncached. See [mocking in tests](tutorials/feature-guides/testing-your-code.md#mocking-and-monkeypatching).
+uncached, and a call during which any mock was called, however deep, is not
+stored. See [mocking in tests](tutorials/feature-guides/testing-your-code.md#mocking-and-monkeypatching).
 
 <!-- claim: cash/purity_analyzer.py:callable_layers @856b9999 -->
 **A decorated helper is every function it runs.** Behind `@timed def clean(x)`
@@ -896,7 +897,7 @@ business invariants — its job is purely "should this be cached".
 result fits in a single chunk. For multi-chunk results, the predicate
 is bypassed (warning fires) — see the iterator section below.
 
-<!-- claim: cash/core.py:Cash._store_refusal @4aec04ce -->
+<!-- claim: cash/core.py:Cash._store_refusal @a4eb6aab -->
 **It decides what is written, not what is served.** `cache_if` is not part of
 the key, so adding it to a function that already has entries changes nothing
 about those entries: a `None` stored before you added

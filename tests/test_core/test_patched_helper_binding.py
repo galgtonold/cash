@@ -331,6 +331,55 @@ def test_a_module_global_replaced_by_a_mock_is_not_cached(c, mods, real_first):
     assert _check(app.total, '{"v": 2}') == 20, "the mock's answer was stored"
 
 
+@pytest.mark.parametrize("real_first", [False, True], ids=["patched-first", "real-first"])
+def test_a_mock_below_the_library_function_is_not_cached(c, mods, real_first):
+    """Round 20 (r20s1): `mock.patch("requests.Session.request")` and
+    `HTTPAdapter.send` sit one level below the `requests.get` the body calls,
+    where no binding the key reads can show them. `json.loads` calls the
+    default decoder's `decode`, which stands in.
+
+    Real-first, the mocked call is a hit on the real entry: a mock that never
+    runs cannot be seen, which is why tests want the isolation fixture. What
+    must never happen is the other direction -- the fake stored for later."""
+    import json.decoder
+    app = _json_app(c, mods)
+    if real_first:
+        assert _check(app.total, '{"v": 2}') == 20
+    with mock.patch.object(json.decoder.JSONDecoder, "decode", return_value={"v": 9}):
+        assert app.total('{"v": 2}') == (20 if real_first else 90)
+    assert _check(app.total, '{"v": 2}') == 20, "the mock's answer was stored"
+
+
+def test_an_instance_global_mocked_after_a_real_call_is_not_cached(c, mods):
+    """Round 20 (r20s1): a module-level `SESSION = requests.Session()` swapped
+    for a MagicMock after one ordinary call -- the state of every pytest
+    session -- had its answer stored under the real key."""
+    (app,) = mods({"app": """
+        import json
+        DECODER = json.JSONDecoder()
+        def total(text):
+            return DECODER.decode(text)["v"] * 10
+    """}, "app")
+    app.total = c.cache(app.total)
+    assert _check(app.total, '{"v": 1}') == 10
+    fake = mock.MagicMock()
+    fake.decode.return_value = {"v": 4}
+    with mock.patch.object(app, "DECODER", fake):
+        assert app.total('{"v": 2}') == 40
+    assert _check(app.total, '{"v": 2}') == 20, "the mock's answer was stored"
+
+
+def test_a_call_that_ran_a_mock_says_so(c, mods):
+    """The miss that ran a mock is not stored, and the next call's reason says
+    why rather than claiming there was never an entry."""
+    import json.decoder
+    app = _json_app(c, mods)
+    with mock.patch.object(json.decoder.JSONDecoder, "decode", return_value={"v": 9}):
+        app.total('{"v": 2}')
+    outcome = next(iter(c._store_outcomes.values()))
+    assert "mock" in (outcome.get("not_stored") or ""), outcome
+
+
 # -- a patched helper built by a factory (round 19, r19s3 F4) ----------------
 
 import datetime as _dt  # noqa: E402
