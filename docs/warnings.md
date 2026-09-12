@@ -643,9 +643,18 @@ that call runs every time, as it would uncached. Only an object can change this
 way: rebinding an `int` or `str` parameter inside the body (`n -= 1`) is
 invisible to the caller and never counts. The price is the caching itself, so
 the fix below is still worth making; `assume_safe=True` on the decorator stores
-such a call anyway. An argument that takes more than ~50 ms to hash is not
-checked -- the check would hash it twice more on every miss -- so for a big
-one, the static findings are what you have.
+such a call anyway.
+
+<!-- claim: cash/core.py:Cash._argument_identities @a5383878, cash/_plain_data.py:identity_changed @7f213b41 -->
+A list or tuple of plain values — parsed rows, of any size — is checked by
+the identities of what it holds, level by level, which costs a fraction of
+hashing it: `rows.sort()`, an append, a `del`, `rows[i] = ...` or a field
+rewritten in every row (`for r in rows: r[3] = ...`) is caught however big
+`rows` is, and also when `rows` came from a `frozen=True` function — which
+then stops being trusted as frozen, with
+[`KEY-FROZEN-MUTATED`](#key-frozen-mutated). Anything else that takes more
+than ~50 ms to hash is not checked — the check would hash it twice more on
+every miss — so for a big one, the static findings are what you have.
 
 **What to do.** Decide whether the effect is part of the result. If it is, split
 the function: cache the computation that produces the data, and do the writing,
@@ -715,7 +724,7 @@ it is rarely what you want.
 
 ## IMPURE-SIDE-EFFECTS {#impure-side-effects}
 
-<!-- claim: cash/core.py:Cash._surface_purity @81b928f4 -->
+<!-- claim: cash/core.py:Cash._surface_purity @d82e451e -->
 **What happened.** Before the first call, Cash reads the source of your function
 and of the helpers it calls, looking for shapes that make a cached result
 questionable. It found some. The message lists each one with its line number and
@@ -1023,7 +1032,10 @@ it was modified and not yet audited, a cached function receiving it could be
 served the result it computed for the unmodified object. From the audit on,
 that object is keyed by its contents, so later calls are correct. The audit
 runs at the object's 8th use as an argument and every 64th after that, and at
-every use under `CASH_DEBUG=1` — so the window can be wide.
+every use under `CASH_DEBUG=1` — so the window can be wide. A frozen **list or
+tuple** has no window when a cached call is what modifies it: that call's own
+argument check sees it (see [argument mutation](#impure-observed-effects)), the
+call is not stored, and the object is keyed by its contents from then on.
 
 **What to do.** Find what modifies it — `model.fit(...)` on a model a frozen
 step trained is the usual one — and either take `frozen=True` off the producer

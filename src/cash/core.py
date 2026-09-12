@@ -4033,6 +4033,7 @@ class Cash:
                 # to observe and nothing to pay for.
                 observer = self._make_effect_observer()
                 observer.arg_snapshot = self._argument_snapshot(func_name, args, kwargs)
+                observer.arg_identities = self._argument_identities(func_name, args, kwargs)
                 # Watch the global RNG across the call: a draw inside the body is
                 # an input the key cannot see statically.
                 rng_pre = self._capture_rng_pre_state()
@@ -4236,6 +4237,7 @@ class Cash:
                                              hash_on_read=True)
                 observer = self._make_effect_observer()
                 observer.arg_snapshot = self._argument_snapshot(func_name, args, kwargs)
+                observer.arg_identities = self._argument_identities(func_name, args, kwargs)
                 rng_pre = self._capture_rng_pre_state()
                 body_seconds: float | None = None
                 with tracker, observer:
@@ -9842,6 +9844,45 @@ class Cash:
             self._mutation_check_too_costly.add(func_name)
         return snapshot
 
+    def _argument_identities(self, func_name: str, args: tuple,
+                             kwargs: dict) -> dict[str, tuple[Any, list]]:
+        """``{parameter: (value, identity snapshot)}`` for the plain lists and
+        tuples a call receives, before the body runs.
+
+        The hash snapshot below is retired for a big argument and never covers
+        a frozen one, which is exactly where ``rows.sort()`` on a million
+        parsed rows, or a field rewritten in every row of a frozen result, got
+        stored (round 20). Identities cost a fraction of a hash, so they are
+        taken whatever the size (`_plain_data.identity_snapshot`).
+        """
+        try:
+            canon_args, canon_kwargs = self._normalize_call_args(func_name, args, kwargs)
+        except Exception:  # noqa: BLE001 - best effort, like the check itself
+            return {}
+        found: dict[str, tuple[Any, list]] = {}
+        named = [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
+        for name, value in named:
+            if type(value) is list or type(value) is tuple:
+                snapshot = _plain_data.identity_snapshot(value)
+                if snapshot is not None and any(level is not None for level in snapshot):
+                    found[name] = (value, snapshot)
+        return found
+
+    def _forget_frozen_container(self, obj: Any) -> None:
+        """Stop trusting a frozen result a call was just seen to change."""
+        entry = self._frozen_containers.get(id(obj))
+        if entry is None or entry[0] is not obj:
+            return
+        self._frozen_containers.pop(id(obj), None)
+        warn_diagnostic(
+            CashImpurityWarning, "KEY-FROZEN-MUTATED",
+            f"a {type(obj).__name__} returned by {entry[1]}, which is declared "
+            f"@cash.cache(frozen=True), was modified in place by a cached call. "
+            f"From now on it is keyed by its contents.",
+            f"take frozen=True off {entry[1]} if its result is meant to be "
+            f"modified, or modify a copy (`obj = copy.deepcopy(obj)`) instead.",
+        )
+
     def _check_argument_mutation(
         self, func_name: str, args: tuple, kwargs: dict,
         args_hash: str | None, observer: Any,
@@ -9865,6 +9906,20 @@ class Cash:
         """
         if args_hash is None or observer is None:
             return
+        identities = getattr(observer, "arg_identities", None)
+        if identities:
+            moved = [name for name, (value, snapshot) in identities.items()
+                     if _plain_data.identity_changed(value, snapshot)]
+            if moved:
+                for name in moved:
+                    self._forget_frozen_container(identities[name][0])
+                observer.mutated_args = moved
+                observer.record(
+                    "argument mutation",
+                    f"the call changed {', '.join(repr(n) for n in moved)} in place -- "
+                    f"the result was not stored, so this call runs every time",
+                )
+                return
         if func_name in self._mutation_check_too_costly:
             return
         started = time.perf_counter()
@@ -10130,7 +10185,8 @@ class Cash:
             code="IMPURE-SIDE-EFFECTS",
             fix=(("for a line that changes an argument in place, return a "
                   "modified copy instead -- the caller keeps its object "
-                  "whether the call hits or misses. " if "changes the argument" in summary
+                  "whether the call hits or misses. "
+                  if "changes the argument" in summary or "element of the argument" in summary
                   else "")
                  + "go down the list and put `# @cash:assume-safe` on each line "
                 "you have audited, or refactor; @cash.cache(assume_safe=True) "

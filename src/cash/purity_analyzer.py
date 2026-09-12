@@ -390,6 +390,9 @@ class _PurityVisitor(ast.NodeVisitor):
         # once every local assignment in the body is known.
         self._subscript_call_nodes: list[ast.Call] = []
         self._param_names = param_names
+        #: Loop variables over a parameter (``for r in rows``): changing one
+        #: changes an element of the caller's object.
+        self._param_elements: dict[str, str] = {}
         self._qualname = qualname
         # When source comes from inspect.getsource on a method, line
         # numbers in the parsed AST are 1-based relative to the
@@ -690,9 +693,16 @@ class _PurityVisitor(ast.NodeVisitor):
             ):
                 base = _get_base_name(func_node.value)
                 base_str = f"{base}." if base else ""
+                what = "write method"
+                if func_node.attr in self._MUTATOR_NAMES:
+                    # `rows.sort()` on a parameter changes the caller's list:
+                    # say so, rather than the label a local's `.sort()` gets.
+                    kind = self._mutation_kind(base, "method")
+                    if kind != "method mutation":
+                        what = kind
                 self.issues.append(PurityIssue(
                     kind=ISSUE_IMPURE_CALL,
-                    description=f"{base_str}{func_node.attr}() - write method",
+                    description=f"{base_str}{func_node.attr}() - {what}",
                     where=self._qualname,
                     line=line,
                 ))
@@ -905,7 +915,26 @@ class _PurityVisitor(ast.NodeVisitor):
             return (f"{kind} mutation that changes the argument '{root}' in place; "
                     f"a cache hit would not make that change, so a call that makes "
                     f"it is not stored and runs every time")
+        if root and root in self._param_elements:
+            return (f"{kind} mutation that changes an element of the argument "
+                    f"'{self._param_elements[root]}' in place; a cache hit would not "
+                    f"make that change, so a call that makes it is not stored and "
+                    f"runs every time")
         return f"{kind} mutation"
+
+    def visit_For(self, node: ast.For) -> None:
+        """Note loop variables over a parameter, then walk the loop as usual."""
+        iterable, target = node.iter, node.target
+        if (isinstance(iterable, ast.Call) and isinstance(iterable.func, ast.Name)
+                and iterable.func.id == "enumerate" and iterable.args
+                and isinstance(target, ast.Tuple) and len(target.elts) == 2):
+            iterable, target = iterable.args[0], target.elts[1]
+        if (isinstance(iterable, ast.Name) and iterable.id in self._param_names
+                and isinstance(target, ast.Name)):
+            self._param_elements[target.id] = iterable.id
+        self.generic_visit(node)
+
+    visit_AsyncFor = visit_For
 
 
 def _defining_module(obj: Any) -> Any:

@@ -442,7 +442,7 @@ what to cache based on purity). The same machinery now runs on
 cleanly to "I want a warning", "I want it silent", and "I want it to
 fail CI".
 
-<!-- claim: cash/core.py:Cash._surface_purity @81b928f4, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @d82e451e, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 ### Default: warn at first call
 
 <!-- test:expect-warning reason="this section exists to demonstrate the first-call impurity warning" -->
@@ -689,7 +689,9 @@ Two limits worth stating:
 - **It runs only while it stays cheap.** A re-hash over ~50 ms retires the
   check for that function rather than taxing every later miss, and an argument
   that already took longer than that to hash for the cache key is not checked
-  at all -- checking it would hash it twice more on every miss.
+  at all -- checking it would hash it twice more on every miss. The exception is
+  a list or tuple of plain values (parsed rows), which is compared by the
+  identities of what it holds instead of rehashed, at any size.
 - **A library mutating its OWN module state stays invisible.** None of it is
   reachable from the caller's arguments, and snapshotting a dependency's
   globals would be both expensive and noisy. If a library keeps a registry you
@@ -718,7 +720,7 @@ won't flag on it, and any function whose body calls
 
 ### What the analyzer looks at
 
-<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @a866faaf broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @25beed4f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
+<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @362cb183 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @25beed4f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
 The decorator-side analyzer walks the function body AND
 **module-bounded helpers** (functions defined in the same top-level
 package, or any non-installed-library code) and any **closure-bound
