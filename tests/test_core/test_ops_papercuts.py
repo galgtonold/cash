@@ -116,6 +116,46 @@ def test_a_clear_reaches_a_process_that_started_with_no_cache(tmp_path, monkeypa
     assert calls == [1, 1], "the RAM tier served a result cleared from disk"
 
 
+def test_a_clear_during_a_call_begun_inside_the_check_window_is_seen(tmp_path, monkeypatch):
+    """Round 20 (r20s4): a job that started cold wrote its first stamp, began
+    a long call less than a second later (so no check ran), and `cash clear
+    --all` landed during it. The long call's own store re-created the
+    directory with a NEW stamp, which the next check took for the one this
+    process had written: the cleared value was served for the rest of the run,
+    7 times in 10."""
+    # Whichever writes into the cleared directory first stamps it: the
+    # stored-key record (a stamp this process did not write, always noticed),
+    # or the entry's own write -- the case that was not, about 2 runs in 5.
+    # Several trials, so the second happens.
+    for trial in range(8):
+        cache_dir = tmp_path / f"trial{trial}" / ".cash"
+        c = Cash(cache_dir=str(cache_dir), register_magic=False)
+        monkeypatch.setattr(type(c.backend), "_GENERATION_CHECK_EVERY", 3600.0)
+        disk = c.backend.backends[-1]
+        calls = []
+
+        @c.cache
+        def rate(x):
+            calls.append(x)
+            time.sleep(0.15)
+            return x * 2
+
+        @c.cache
+        def long_report(x):
+            disk._writes.wait_all()
+            shutil.rmtree(cache_dir)             # the operator's clear, mid-call
+            time.sleep(0.15)
+            return x
+
+        rate(1)
+        long_report(1)                           # its store re-creates the directory
+        disk._writes.wait_all()
+        monkeypatch.setattr(type(c.backend), "_GENERATION_CHECK_EVERY", 0.0)
+        rate(1)
+        assert calls == [1, 1], f"trial {trial}: the RAM tier served a result cleared from disk"
+        c.shutdown()
+
+
 def test_a_directory_recreated_by_a_sidecar_write_gets_its_gitignore_and_stamp(tmp_path):
     """Round 19: after a clear, the stored-key record re-created the cache
     directory with a bare makedirs, and the entry written next found it there:

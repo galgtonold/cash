@@ -236,10 +236,17 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         # the pre-clear answer from RAM (round 19).
         known = self._generation
         writes = getattr(disk, "stamp_writes", 0)
+        # This process writing the stamp AGAIN is itself the evidence: it
+        # stamps a directory only when it finds none, so a second stamp means
+        # the first was taken away in between -- by `cash clear --all`, while a
+        # long call ran that began inside the one-second window after the
+        # first write and so was never checked (round 20: 7 of 10).
+        restamped = writes > self._stamp_writes_seen and (
+            self._stamp_writes_seen >= 1 or writes - self._stamp_writes_seen >= 2)
         if known in (_UNSEEN, None) and writes != self._stamp_writes_seen:
             known = getattr(disk, "written_stamp", None)
         self._stamp_writes_seen = writes
-        if known not in (_UNSEEN, None) and token != known:
+        if restamped or (known not in (_UNSEEN, None) and token != known):
             for faster in self.backends[:self.backends.index(disk)]:
                 try:
                     faster.clear()
