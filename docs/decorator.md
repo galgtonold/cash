@@ -487,14 +487,16 @@ normally.
 The same rule applies to variables a closure captures, not just module
 globals.
 
-<!-- claim: cash/core.py:Cash._carried_global_hash @6bd504f4 -->
+<!-- claim: cash/core.py:Cash._carried_global_hash @55782eb2 -->
 **A callable built from data counts as that data.** A global that is a
 library callable carrying values — `SMOOTH = partial(ndimage.gaussian_filter,
 sigma=SIGMA)`, `POLY = np.poly1d(COEFFS)`, `CAL = interp1d(X, Y)`,
-`LOOKUP = RATES.get`, `PREDICT = model.predict` — is keyed by what it was built
-with, so editing `SIGMA` or the table recomputes, whether you import the
-name or read it as `cfg.SMOOTH`. A callable wrapping *your* code is followed
-as a helper instead. A bound write or log method (`record = RESULTS.append`,
+`LOOKUP = RATES.get`, `PREDICT = model.predict`, `KEY =
+operator.itemgetter("total", "region")` — is keyed by what it was built
+with, so editing `SIGMA`, the table or the sort key recomputes, whether you
+import the name or read it as `cfg.SMOOTH`. A callable wrapping *your* code
+is followed as a helper instead, and what a library wrapper around it holds is
+keyed as well: the `k` of `np.vectorize(partial(scale, k=K))`. A bound write or log method (`record = RESULTS.append`,
 `log = logger.info`) is left out: what its object holds is the call's output.
 Some library callables change when called — a bound `rng.normal` advances its
 generator, `np.vectorize` fills a cache — and cash stops keying those after

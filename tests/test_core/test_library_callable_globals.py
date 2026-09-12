@@ -32,6 +32,16 @@ ROUND = partial(round, ndigits=K)          # a partial over a builtin
 POLY = np.poly1d([K, 0.0, 1.0])            # a library callable object holding data
 RATES = {{"a": K, "b": 10}}
 LOOKUP = RATES.get                         # a builtin bound method of a dict
+import operator
+PICK = operator.itemgetter(K)              # a C callable: state only via __reduce__
+PAD = operator.methodcaller("ljust", K + 1)
+
+
+def _scale(x, k):
+    return x * k
+
+
+VEC = np.vectorize(partial(_scale, k=K), otypes=[float])   # a library wrapper over a partial
 '''
 
 JOB = '''\
@@ -40,7 +50,7 @@ from functools import partial
 import numpy as np
 import cash
 import cfgmod
-from cfgmod import ROUND, POLY, LOOKUP
+from cfgmod import ROUND, POLY, LOOKUP, PICK, PAD, VEC
 
 SAME = partial(round, ndigits=cfgmod.K)    # built in the job's own module
 
@@ -80,11 +90,31 @@ def by_same_module(x):
     return SAME(x)
 
 
+@cash.cache
+def by_itemgetter(seq):
+    run("itemgetter")
+    return PICK(seq)
+
+
+@cash.cache
+def by_methodcaller(s):
+    run("methodcaller")
+    return len(PAD(s))
+
+
+@cash.cache
+def by_vectorize(x):
+    run("vectorize")
+    return float(VEC(x))
+
+
 print(by_from_import(3.14159), by_module_attr(3.14159), by_poly(2.0),
-      by_lookup("a"), by_same_module(3.14159))
+      by_lookup("a"), by_same_module(3.14159), by_itemgetter([10, 20, 30, 40]),
+      by_methodcaller("a"), by_vectorize(2.0))
 '''
 
-FORMS = {"from-import", "module-attr", "poly1d", "bound-method", "same-module"}
+FORMS = {"from-import", "module-attr", "poly1d", "bound-method", "same-module",
+         "itemgetter", "methodcaller", "vectorize"}
 
 
 def _run(proj):
@@ -102,11 +132,11 @@ def test_editing_what_a_library_callable_global_was_built_with_invalidates(tmp_p
     (tmp_path / "job.py").write_text(JOB, encoding="utf-8")
     (tmp_path / "cfgmod.py").write_text(CFG.format(K=2), encoding="utf-8")
 
-    assert _run(tmp_path) == ("3.14 3.14 9.0 2 3.14", FORMS)
-    assert _run(tmp_path) == ("3.14 3.14 9.0 2 3.14", set()), "an unedited run did not hit"
+    assert _run(tmp_path) == ("3.14 3.14 9.0 2 3.14 30 3 4.0", FORMS)
+    assert _run(tmp_path) == ("3.14 3.14 9.0 2 3.14 30 3 4.0", set()), "an unedited run did not hit"
     (tmp_path / "cfgmod.py").write_text(CFG.format(K=3), encoding="utf-8")
     out, ran = _run(tmp_path)
-    assert out == "3.142 3.142 13.0 3 3.142", "a callable's old arguments were served"
+    assert out == "3.142 3.142 13.0 3 3.142 40 4 6.0", "a callable's old arguments were served"
     assert ran == FORMS
 
 

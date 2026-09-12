@@ -98,6 +98,35 @@ _UNHASHABLE_GLOBAL_FIX = (
 )
 #: A logger's methods, bound into a global (`log = logger.info`): output sinks,
 #: never keyed as what the callable carries (`Cash._carried_global_hash`).
+def _reduced_state(value: Any) -> Any:
+    """What ``__reduce_ex__`` says *value* was built with, or None.
+
+    For a C callable with no ``__dict__`` -- ``operator.itemgetter("n")``
+    reduces to ``(itemgetter, ("n",))`` -- that is the only place its data
+    lives. None when the reduction is just a global name (``np.add``, ``len``:
+    nothing carried) or the object refuses to be reduced.
+    """
+    try:
+        reduced = value.__reduce_ex__(4)
+    except Exception:  # noqa: BLE001 - not reducible: nothing to fold
+        return None
+    if isinstance(reduced, str) or not isinstance(reduced, tuple) or len(reduced) < 2:
+        return None
+    return reduced[:3]
+
+
+def _held_partials(value: Any) -> list[tuple[tuple, dict]]:
+    """The arguments of the ``functools.partial`` objects a wrapper instance
+    holds as attributes (``np.vectorize.pyfunc``), for a wrapper that is not
+    itself a partial."""
+    if isinstance(value, functools.partial):
+        return []
+    state = getattr(value, "__dict__", None)
+    if not isinstance(state, dict):
+        return []
+    return [(p.args, dict(p.keywords)) for p in state.values() if isinstance(p, functools.partial)]
+
+
 _LOG_METHOD_NAMES = frozenset({
     "debug", "info", "warning", "warn", "error", "exception", "critical", "log",
 })
@@ -6400,6 +6429,11 @@ class Cash:
               and not is_mock(value)
               and self._is_user_class(type(value), self._own_package(type(value)))):
             payload = value
+        elif callable(value) and not is_mock(value) and _held_partials(value):
+            # A LIBRARY wrapper around the user's code keeps its own caches,
+            # but the partials it holds are data the user built it with:
+            # `np.vectorize(partial(scale, k=K))` ran with the old K (round 20).
+            payload = ("wrapped partials", _held_partials(value))
         else:
             return None
         try:
@@ -6458,24 +6492,45 @@ class Cash:
                 payload = ("method", method, owner)
             else:
                 state = getattr(value, "__dict__", None)
-                if not isinstance(state, dict) or not state:
-                    return None
                 cls = type(value)
-                payload = ("instance", cls.__module__, cls.__qualname__, state)
+                if isinstance(state, dict) and state:
+                    payload = ("instance", cls.__module__, cls.__qualname__, state)
+                else:
+                    # A C callable keeps what it was built with where only
+                    # `__reduce__` reaches it: `operator.itemgetter("n")`,
+                    # `attrgetter`, `methodcaller` -- changing the sort key
+                    # served the mis-sorted report (round 20). A reduce that
+                    # is just a global name (`np.add`, `len`) carries no data.
+                    reduced = _reduced_state(value)
+                    if reduced is None:
+                        return None
+                    payload = ("reduce", cls.__module__, cls.__qualname__, reduced)
             if verdict is None:
                 from .purity_analyzer import _own_code_is_user, callable_layers
                 runs_user_code = any(
                     _own_code_is_user(layer, root_module) for layer in callable_layers(value))
-                self._note_carrier_verdict(value, not runs_user_code)
                 if runs_user_code:
-                    return None
+                    # Its code is the helper walk's. What a LIBRARY wrapper
+                    # around that code holds besides is still data the user
+                    # built it with: `np.vectorize(partial(scale, k=K))` ran
+                    # with the old K (round 20). Only the partials: the
+                    # wrapper's own caches move when it is called.
+                    held = _held_partials(value)
+                    self._note_carrier_verdict(value, "partials" if held else False)
+                    if not held:
+                        return None
+                    payload = ("wrapped partials", held)
+                else:
+                    self._note_carrier_verdict(value, True)
+            elif verdict[1] == "partials":
+                payload = ("wrapped partials", _held_partials(value))
             stabilized = self._stabilize_for_global_hash(payload, self._hash_callable_source)
             return self._hash_arg_payload((stabilized,), {})
         except Exception:  # noqa: BLE001 - unkeyable before, never break a call over it
             self._note_carrier_verdict(value, False)
             return None
 
-    def _note_carrier_verdict(self, value: Any, keyable: bool) -> None:
+    def _note_carrier_verdict(self, value: Any, keyable: bool | str) -> None:
         # Holds the object, so its id cannot be reused while the entry stands.
         if len(self._carrier_verdicts) >= 4096:
             self._carrier_verdicts.clear()
