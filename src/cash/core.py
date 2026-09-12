@@ -309,8 +309,7 @@ def _stable_key_repr_of(value: Any, _depth: int, _stack: set) -> Any:
     return value
 
 
-def _canonicalize_dict_order(value: Any, _depth: int = 0,
-                             _keep: frozenset[int] = frozenset()) -> Any:
+def _canonicalize_dict_order(value: Any, _depth: int = 0) -> Any:
     """Rebuild every ``dict`` in *value* in canonical (sorted-key) order so that
     two dicts that are equal but for insertion order pickle to identical bytes
    . Recurses through ``dict``/``list``/``tuple``; other types pass
@@ -332,17 +331,13 @@ def _canonicalize_dict_order(value: Any, _depth: int = 0,
     # to reorder, and this runs once per element of every container argument.
     if type(value) in _CODELESS_PRIMS:
         return value
-    # A plain argument (`_is_plain`) has no dict inside either:
-    # returned as the same object, for `_hash_arg_payload` to key by content.
-    if _keep and id(value) in _keep:
-        return value
     if isinstance(value, dict):
         # A dict SUBCLASS keeps insertion order (it may be semantic) and is
         # tagged with its type; a plain dict is sorted (order-insensitive) and
         # untagged, so its key is byte-identical to before this change.
         subclass = type(value) is not dict
         items = [
-            (k, _canonicalize_dict_order(v, _depth + 1, _keep)) for k, v in value.items()
+            (k, _canonicalize_dict_order(v, _depth + 1)) for k, v in value.items()
         ]
         if not subclass:
             try:
@@ -355,10 +350,10 @@ def _canonicalize_dict_order(value: Any, _depth: int = 0,
         canon = dict(items)
         return _tag_subtype(value, dict, canon)
     if isinstance(value, list):
-        canon = [_canonicalize_dict_order(v, _depth + 1, _keep) for v in value]
+        canon = [_canonicalize_dict_order(v, _depth + 1) for v in value]
         return _tag_subtype(value, list, canon)
     if isinstance(value, tuple):
-        canon = tuple(_canonicalize_dict_order(v, _depth + 1, _keep) for v in value)
+        canon = tuple(_canonicalize_dict_order(v, _depth + 1) for v in value)
         return _tag_subtype(value, tuple, canon)
     return value
 
@@ -390,37 +385,45 @@ def _is_plain(value: Any) -> bool:
 _PLAIN_CENSUS = threading.local()
 
 
-def _plain_census(value: Any) -> bool:
-    """`_is_plain`, memoized for the key build in progress."""
+def _plain_census(value: Any) -> tuple[str, Any] | None:
+    """What kind of plain data *value* is, memoized for the key build in progress.
+
+    ``("plain", value)`` for lists and tuples of primitives (`_is_plain`),
+    ``("dict_rows", (keys, rows))`` for a list of dicts sharing their keys
+    (`_plain_data.dict_rows`), None for anything else.
+    """
     memo = getattr(_PLAIN_CENSUS, "memo", None)
     if memo is not None:
         hit = memo.get(id(value))
         if hit is not None and hit[0] is value:
             return hit[1]
-    plain = _is_plain(value)
+    found: tuple[str, Any] | None = None
+    if _is_plain(value):
+        found = ("plain", value)
+    else:
+        rows = _plain_data.dict_rows(value)
+        if rows is not None:
+            found = ("dict_rows", rows)
     if memo is not None:
-        memo[id(value)] = (value, plain)
-    return plain
+        memo[id(value)] = (value, found)
+    return found
 
 
-def _plain_payload_values(values: list[Any]) -> frozenset[int] | None:
-    """The ids of the plain arguments among *values*, if the fast path applies.
+def _plain_key_part(value: Any) -> Any:
+    """*value*, or -- for plain data -- a marker holding the digest of its content.
 
-    It applies when every value is a primitive (a digest the hashers returned
-    is a str) or plain data: the payload is then keyed by its content alone
-    (`_plain_data.pickle_unshared`). None otherwise, and when there is nothing
-    plain to keep.
+    Each plain argument is keyed by its content on its own, pickled without the
+    memo (`_plain_data.pickle_unshared`). It used to take the fast path only
+    when EVERY argument did: one small dict beside two million rows sent the
+    whole call down the general path, 8x the cost (round 20).
     """
-    keep: list[int] = []
-    for value in values:
-        if type(value) in _CODELESS_PRIMS:
-            continue
-        if not _plain_census(value):
-            return None
-        keep.append(id(value))
-    if not keep:
-        return None
-    return frozenset(keep)
+    if type(value) not in _PLAIN_SEQS:
+        return value
+    census = _plain_census(value)
+    if census is None:
+        return value
+    kind, data = census
+    return (f"__cash_{kind}__", hashlib.sha256(_plain_data.pickle_unshared(data)).hexdigest())
 
 
 def _contains_set(value: Any, _depth: int = 0, _seen: set[int] | None = None) -> bool:
@@ -2061,15 +2064,18 @@ class Cash:
         # is an exact-type test against a tuple rather than an isinstance.
         if type(value) in _CODELESS_PRIMS:
             return
-        # Plain data carries no code (`_is_plain`); walking two
-        # million rows to find that out was 14% of a warm hit.
-        if _depth == 0 and type(value) in _PLAIN_SEQS and _plain_census(value):
-            return
         # A frozen function's list/tuple/dict result is keyed by the call that
         # produced it (`_remember_frozen_container`), code inside it included:
         # walking two million rows for functions was most of a hit's cost.
+        # Checked BEFORE the plain-data census below, which is itself a walk:
+        # in that order frozen=True on a list still cost a linear pass per call
+        # (round 20, r20s2 F5).
         if self._frozen_containers and id(value) in self._frozen_containers \
                 and self._frozen_containers[id(value)][0] is value:
+            return
+        # Plain data carries no code (`_is_plain`); walking two
+        # million rows to find that out was 14% of a warm hit.
+        if _depth == 0 and type(value) in _PLAIN_SEQS and _plain_census(value) is not None:
             return
         if _seen is None:
             _seen = set()
@@ -7576,19 +7582,13 @@ class Cash:
         # args equal but for insertion order share a key. This is
         # byte-identical for already-sorted dicts (the normalised top-level
         # kwargs), so only out-of-order dict values change their key.
-        keep = _plain_payload_values(list(hashed_args) + list(hashed_kwargs.values()))
-        if keep is not None:
-            # Every argument is a digest, a primitive or plain data: no set
-            # anywhere, nothing inside the plain ones to reorder, and no
-            # sharing the memo would have to record.
-            payload = _canonicalize_dict_order(payload, _keep=keep)
-            args_bytes = _plain_data.pickle_unshared(payload)
+        payload = (tuple(map(_plain_key_part, hashed_args)),
+                   {k: _plain_key_part(v) for k, v in hashed_kwargs.items()})
+        if _contains_set(payload):
+            payload = _stable_key_repr(payload)
         else:
-            if _contains_set(payload):
-                payload = _stable_key_repr(payload)
-            else:
-                payload = _canonicalize_dict_order(payload)
-            args_bytes = pickle.dumps(payload)
+            payload = _canonicalize_dict_order(payload)
+        args_bytes = pickle.dumps(payload)
         if raw:
             payload_seconds = time.perf_counter() - payload_t0
             if costliest is None or payload_seconds > costliest[1]:

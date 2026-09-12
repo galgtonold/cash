@@ -67,6 +67,9 @@ class InMemoryBackend(CacheBackend):
         #: Keys whose stored value holds only tuples and immutable primitives
         #: below its top: a hit copies the top list alone, with no new check.
         self._immutable_below: builtins.set[str] = set()
+        #: Keys whose stored value is a list of dicts of immutable values: a
+        #: hit copies each dict with ``map(dict, ...)`` instead of deepcopy.
+        self._dict_rows: builtins.set[str] = set()
 
     #: Types whose instances cannot be mutated, so SHARING one between the
     #: stored entry and the caller is safe. Exact-type membership, never
@@ -127,6 +130,8 @@ class InMemoryBackend(CacheBackend):
             if key in self._immutable_below:
                 # Checked when it was stored; the stored value is private.
                 return metadata, (list(value) if type(value) is list else value)
+            if key in self._dict_rows:
+                return metadata, list(map(dict, value))
             return metadata, self._safe_deep_copy(value, key)
         return None, None
 
@@ -139,12 +144,19 @@ class InMemoryBackend(CacheBackend):
         # Plain data is sized, checked and copied from ONE look at it: three
         # separate walks were most of promoting two million parsed rows here.
         plain = _plain_data.profile(value)
-        if plain is None:
+        dict_rows_size = None if plain is not None else _plain_data.dict_rows_profile(value)
+        if dict_rows_size is not None:
+            # csv.DictReader / JSON records with immutable values: a new dict
+            # per row is a complete copy, built in C (round 20: dict rows were
+            # 10x slower to cache than the same data as tuples).
+            size, immutable = dict_rows_size, False
+            stored = list(map(dict, value))
+        elif plain is None:
             size, immutable = self._get_object_size(value), False
             stored = self._safe_deep_copy(value, key)
         else:
-            size, immutable = plain
-            stored = _plain_data.copy_plain(value, immutable)[1]
+            size, immutable, levels = plain
+            stored = _plain_data.copy_plain(value, immutable, levels)[1]
         metadata['size'] = size
 
         # Byte-cap bookkeeping: on replacement, discount the old entry's size
@@ -156,6 +168,10 @@ class InMemoryBackend(CacheBackend):
             self._immutable_below.add(key)
         else:
             self._immutable_below.discard(key)
+        if dict_rows_size is not None:
+            self._dict_rows.add(key)
+        else:
+            self._dict_rows.discard(key)
         self._current_size_bytes += size
 
         # Check max_entries limit
@@ -174,6 +190,7 @@ class InMemoryBackend(CacheBackend):
     def _drop(self, key: str) -> None:
         """Remove *key*, keeping the byte-cap running total in sync."""
         self._immutable_below.discard(key)
+        self._dict_rows.discard(key)
         entry = self._store.pop(key, None)
         if entry is not None:
             self._current_size_bytes -= entry[0].get('size', 0)
@@ -184,6 +201,7 @@ class InMemoryBackend(CacheBackend):
     def clear(self) -> None:
         self._store.clear()
         self._immutable_below.clear()
+        self._dict_rows.clear()
         self._current_size_bytes = 0
         # Also try to free memory back to OS
         self._try_malloc_trim()

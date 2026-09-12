@@ -124,12 +124,12 @@ def test_a_warm_hit_on_many_rows_does_not_walk_them(tmp_path, monkeypatch):
 
 FAST = {"rows", "nested lists", "empty tuples inside", "kwargs", "a list and a scalar",
         "shared tuple inside", "shared across arguments", "the same list twice",
-        "bytearray leaves"}
+        "bytearray leaves", "a dict inside"}   # a list of one dict: dict rows
 
 
 @pytest.mark.parametrize("shape", sorted(SHAPES))
 def test_which_shapes_take_the_fast_path(tmp_path, monkeypatch, shape):
-    """Plain data is pickled without the memo; a dict, a set or a subclass
+    """Plain data is pickled without the memo; a set or a subclass
     takes the general path, which handles them."""
     c = Cash(cache_dir=str(tmp_path / "cache"))
     unshared = []
@@ -138,3 +138,54 @@ def test_which_shapes_take_the_fast_path(tmp_path, monkeypatch, shape):
                         lambda value: unshared.append(1) or real(value))
     c._hash_arg_payload(*_args(shape))
     assert bool(unshared) == (shape in FAST), shape
+
+
+# -- round 20: dates, dict rows, and one argument not sinking the rest -------
+
+import datetime as _dt  # noqa: E402
+import decimal as _decimal  # noqa: E402
+
+
+def test_rows_holding_dates_and_decimals_are_plain():
+    """r20s3: rows with a date column cost 16x their body per call to key --
+    a date took the whole list off the fast path."""
+    rows = [(_dt.date(2024, 1, 1 + i % 28), _decimal.Decimal("1.50"), i) for i in range(1000)]
+    assert core._is_plain(rows)
+    assert core._is_plain([[_dt.datetime(2024, 1, 1, 12), _dt.timedelta(hours=2)]])
+
+
+def test_date_rows_key_by_content(key):
+    a = [(_dt.date(2024, 1, 2), 1)]
+    assert key(a) == key([(_dt.date(2024, 1, 2), 1)])
+    assert key(a) != key([(_dt.date(2024, 1, 3), 1)])
+    assert key([(_decimal.Decimal("1.5"),)]) != key([(1.5,)])
+
+
+def test_dict_rows_key_by_content_whatever_the_insertion_order(key):
+    """r20s2 F10: csv.DictReader rows went down the general path, every dict
+    walked and rebuilt in Python -- ~10x the same data as tuples."""
+    rows = [{"id": i, "city": f"c{i % 5}"} for i in range(1000)]
+    same = [{"city": f"c{i % 5}", "id": i} for i in range(1000)]
+    assert core._plain_census(rows)[0] == "dict_rows"
+    assert key(rows) == key(same)
+    other = [dict(r) for r in rows]
+    other[500]["city"] = "elsewhere"
+    assert key(rows) != key(other)
+    assert key([{"a": 1}]) != key([(1,)]), "dict rows and tuple rows keyed alike"
+    assert key([{"a": 1}]) != key([{"b": 1}])
+
+
+def test_a_small_dict_beside_a_big_list_leaves_the_list_on_the_fast_path(tmp_path, monkeypatch):
+    """r20s2 F2: one tiny dict argument next to 2M tuples made the key 8x
+    slower -- the fast path applied only when every argument was plain."""
+    c = Cash(cache_dir=str(tmp_path / "cache"))
+    rows = [(i, str(i)) for i in range(50_000)]
+    unshared, walked = [], []
+    real_pickle, real_canon = _plain_data.pickle_unshared, core._canonicalize_dict_order
+    monkeypatch.setattr(_plain_data, "pickle_unshared",
+                        lambda v: unshared.append(v) or real_pickle(v))
+    monkeypatch.setattr(core, "_canonicalize_dict_order",
+                        lambda *a, **k: walked.append(1) or real_canon(*a, **k))
+    c._hash_arg_payload((rows,), {"opts": {"b": 1, "a": 2}})
+    assert any(v is rows for v in unshared), "the list was not keyed on its own"
+    assert len(walked) < 100, f"the general path walked the rows ({len(walked)} calls)"

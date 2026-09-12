@@ -91,3 +91,20 @@ def test_non_plain_data_takes_the_old_paths():
     assert _plain_data.copy_plain([{1, 2}]) == (False, None)
     assert not _plain_data.immutable_below([[1]])
     assert _plain_data.immutable_below([(1, (2, "x"))])
+
+
+def test_dict_rows_come_back_as_new_dicts_every_time():
+    """Round 20 (r20s2 F10): a list of dicts was deep-copied on every RAM hit;
+    with immutable values a new dict per row is the whole copy."""
+    b = InMemoryBackend()
+    rows = [{"id": i, "city": "x"} for i in range(1000)]
+    b.set("d", rows)
+    got = b.get("d")[1]
+    assert got == rows and got is not rows and got[0] is not rows[0]
+    got[0]["city"] = "caller's"
+    assert b.get("d")[1][0]["city"] == "x", "a caller's write reached the stored entry"
+    rows[1]["city"] = "the original's"
+    assert b.get("d")[1][1]["city"] == "x", "the stored entry shares the original's dicts"
+    assert "d" in b._dict_rows
+    b.set("nested", [{"a": [1]}])                  # a mutable value: the old path
+    assert "nested" not in b._dict_rows

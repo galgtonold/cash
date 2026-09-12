@@ -14,6 +14,8 @@ falls back to its general walk.
 """
 from __future__ import annotations
 
+import datetime
+import decimal
 import io
 import operator
 import pickle
@@ -22,10 +24,15 @@ import sys
 from itertools import chain
 from typing import Any
 
-#: Leaves: exact primitives. ``bytearray`` is one for keying (it pickles by
-#: value) but is mutable, so a value holding one is not `profile`'s immutable.
-LEAF_TYPES = (str, int, float, bool, type(None), bytes, complex, bytearray)
-IMMUTABLE_LEAF_TYPES = (str, int, float, bool, type(None), bytes, complex)
+#: Leaves: exact primitives, and the immutable value types a parser puts in a
+#: row -- a ``date`` column, a ``Decimal`` amount. Without those, rows holding a
+#: date left the fast path and cost 16x their body per call to key (round 20).
+#: ``bytearray`` is a leaf for keying (it pickles by value) but is mutable, so
+#: a value holding one is not `profile`'s immutable.
+_VALUE_TYPES = (datetime.date, datetime.datetime, datetime.time, datetime.timedelta,
+                decimal.Decimal)
+LEAF_TYPES = (str, int, float, bool, type(None), bytes, complex, bytearray, *_VALUE_TYPES)
+IMMUTABLE_LEAF_TYPES = (str, int, float, bool, type(None), bytes, complex, *_VALUE_TYPES)
 SEQS = (list, tuple)
 MAX_LEVELS = 16
 
@@ -64,6 +71,53 @@ def is_plain(value: Any) -> bool:
     except (_NotPlain, TypeError):      # TypeError: an unhashable type among them
         return False
     return True
+
+
+def dict_rows(value: Any) -> tuple[tuple, list] | None:
+    """``(sorted keys, rows as tuples)`` for a list of dicts, or None.
+
+    ``csv.DictReader`` rows and JSON records: dicts that share one set of
+    string (or int) keys, with plain values. Keyed as dicts they took the
+    general path -- every dict walked and rebuilt in Python to put its keys in
+    order -- about 10x the plain-rows cost (round 20). Their content is the
+    keys once and a tuple of values per row, which ``map(itemgetter(...))``
+    builds at C speed, in key order, so two lists equal but for their dicts'
+    insertion order have the same form.
+    """
+    if type(value) is not list or not value or set(map(type, value)) != {dict}:
+        return None
+    try:
+        orders = set(map(tuple, value))
+        if len({frozenset(o) for o in orders}) != 1:
+            return None
+        keys = tuple(sorted(next(iter(orders))))
+    except TypeError:                   # keys that do not sort together
+        return None
+    if not keys or not all(type(k) in (str, int) for k in keys):
+        return None
+    getter = operator.itemgetter(*keys)
+    rows = list(map(getter, value)) if len(keys) > 1 else [(v,) for v in map(getter, value)]
+    if not is_plain(rows):
+        return None
+    return keys, rows
+
+
+def dict_rows_profile(value: Any) -> int | None:
+    """The size of a list of dicts `dict_rows` accepts whose values are all
+    immutable, or None -- the case `list(map(dict, value))` copies completely."""
+    found = dict_rows(value)
+    if found is None:
+        return None
+    total = sys.getsizeof(value) + _level_size(value)
+    try:
+        for depth, (flat, types) in enumerate(_levels(found[1])):
+            if not all(t in IMMUTABLE_LEAF_TYPES or t is tuple for t in types):
+                return None
+            if depth:                   # the values; level 0 is the temporary tuples
+                total += _level_size(flat)
+    except (_NotPlain, TypeError):
+        return None
+    return total
 
 
 def identity_snapshot(value: Any) -> list[tuple | None] | None:
@@ -146,8 +200,8 @@ def _level_size(flat: list) -> int:
     return sum(map(sys.getsizeof, map(flat.__getitem__, picks))) * n // SIZE_SAMPLE
 
 
-def profile(value: Any) -> tuple[int, bool] | None:
-    """``(size, immutable)`` for plain data from one walk, else None.
+def profile(value: Any) -> tuple[int, bool, list[set]] | None:
+    """``(size, immutable, level types)`` for plain data from one walk, else None.
 
     *size* is ``sys.getsizeof`` summed over *value* and everything in it, an
     estimate for a memory cap: a leaf shared by many references (a small int,
@@ -164,14 +218,16 @@ def profile(value: Any) -> tuple[int, bool] | None:
         return None
     total = sys.getsizeof(value)
     immutable = True
+    levels: list[set] = []
     try:
         for flat, types in _levels(value):
             total += _level_size(flat)
+            levels.append(types)
             if immutable and not all(t in IMMUTABLE_LEAF_TYPES or t is tuple for t in types):
                 immutable = False
     except (_NotPlain, TypeError):
         return None
-    return total, immutable
+    return total, immutable, levels
 
 
 def size_of(value: Any) -> int | None:
@@ -193,13 +249,27 @@ def immutable_below(value: Any) -> bool:
     return True
 
 
-def copy_plain(value: Any, immutable: bool | None = None) -> tuple[bool, Any]:
+def level_types(value: Any) -> list[set] | None:
+    """The exact types found at each level below *value*, or None if not plain."""
+    if type(value) not in SEQS:
+        return None
+    try:
+        return [types for _flat, types in _levels(value)]
+    except (_NotPlain, TypeError):
+        return None
+
+
+def copy_plain(value: Any, immutable: bool | None = None,
+               levels: list[set] | None = None) -> tuple[bool, Any]:
     """``(True, copy)`` for plain data, ``(False, None)`` for anything else.
 
-    Tuples of immutables all the way down need a new top list at most; other
-    plain data (lists inside) is copied by a pickle round trip, which is exact
-    for these types and runs in C. *immutable* is for a caller that has
-    already profiled *value* and knows it is plain: it saves looking again.
+    Tuples of immutables all the way down need a new top list at most. Rows
+    that are LISTS of immutables -- ``csv.reader`` output with a field or two
+    converted -- need a new list per row, which ``map(list, rows)`` builds at C
+    speed: a pickle round trip was 4.8 s of a never-stored 2.5M-row parse
+    (round 20). Deeper nests, and ``bytearray`` leaves, still take the pickle
+    round trip, which is exact for these types and runs in C. *immutable* and
+    *levels* are for a caller that has already profiled *value*.
     """
     if immutable is None:
         immutable = immutable_below(value)
@@ -207,4 +277,12 @@ def copy_plain(value: Any, immutable: bool | None = None) -> tuple[bool, Any]:
             return False, None
     if immutable:
         return True, (list(value) if type(value) is list else value)
+    if levels is None:
+        levels = level_types(value)
+    if (levels is not None and len(levels) == 2
+            and all(t in IMMUTABLE_LEAF_TYPES for t in levels[1])
+            and all(t in SEQS or t in IMMUTABLE_LEAF_TYPES for t in levels[0])):
+        rows = (list(map(list, value)) if levels[0] == {list}
+                else [list(x) if type(x) is list else x for x in value])
+        return True, (tuple(rows) if type(value) is tuple else rows)
     return True, pickle.loads(pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL))
