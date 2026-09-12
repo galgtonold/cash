@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import contextvars
 import hashlib
+import io
 import logging
 import os
 import time
@@ -75,7 +76,7 @@ _ABSENT_MARKER = "absent"
 #
 # 256 MiB, not the 8 MiB this shipped with: the sampled regime has a hole (see
 # ``file_dep_is_fresh``) that cost two round-16 testers a wrong answer each,
-# and the memo below made the full hash a once-per-process cost rather than a
+# and the memo below makes the full hash a once-per-call cost rather than a
 # per-check one -- which is what makes covering the ordinary CSV affordable.
 # Raised from 64 MiB in round 19: an 80 MiB .npy written through np.memmap on
 # Windows changes neither its size nor any timestamp, so above the cap only
@@ -242,7 +243,10 @@ def file_content_hash(
             full_hash_max = _full_hash_max_bytes()
         h = hashlib.sha256()
         h.update(str(size).encode("ascii"))
-        with open(path, "rb") as f:
+        # FileIO, not `open`: cash's own read of a file must not be tracked as
+        # a read by the cached call it is checking on behalf of (which then
+        # hashed the file a second time to fingerprint that "read").
+        with io.FileIO(path, "rb") as f:
             if size <= full_hash_max:
                 for chunk in iter(lambda: f.read(_HASH_READ_CHUNK), b""):
                     h.update(chunk)
@@ -267,12 +271,18 @@ def file_content_hash(
         return None
 
 
-def snapshot_file_deps(paths: set[str]) -> dict[str, dict[str, Any]]:
+def snapshot_file_deps(
+    paths: set[str], known: dict[str, tuple[Any, str]] | None = None,
+) -> dict[str, dict[str, Any]]:
     """Return ``{path: {'mtime', 'size', 'hash'}}`` for paths that exist.
 
     ``hash`` is a content hash (see :func:`file_content_hash`) used as the
     authoritative freshness signal when the size is ambiguous. It is omitted
     only when the file cannot be read at snapshot time.
+
+    *known* maps a path to ``(stat when read, content hash when read)``: that
+    hash is used while the stat is still the same, so the entry describes the
+    file as the body read it (see ``FileAccessTracker.read_digests``).
     """
     snapshot: dict[str, dict[str, Any]] = {}
     full_hash_max = _full_hash_max_bytes()
@@ -282,7 +292,11 @@ def snapshot_file_deps(paths: set[str]) -> dict[str, dict[str, Any]]:
         except OSError:
             continue
         entry: dict[str, Any] = {"mtime": st.st_mtime, "size": st.st_size}
-        content_hash = file_content_hash(f, st.st_size, full_hash_max)
+        read = known.get(f) if known else None
+        if read is not None and read[0] == (st.st_size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0)):
+            content_hash = read[1]
+        else:
+            content_hash = file_content_hash(f, st.st_size, full_hash_max)
         if content_hash is not None:
             entry["hash"] = content_hash
         # The integer nanoseconds alongside the float. ``st_mtime`` is derived
@@ -357,6 +371,7 @@ def snapshot_dependencies(
     paths: Iterable[str],
     urls: Iterable[str] | None = None,
     absent: Iterable[str] | None = None,
+    known: dict[str, tuple[Any, str]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Snapshot everything a call read — local files and remote objects — as one dict.
 
@@ -367,7 +382,7 @@ def snapshot_dependencies(
     shape; keeping the *capture* side unified too means the discriminator is
     written in exactly one place.
     """
-    snapshot = snapshot_file_deps(set(paths)) if paths else {}
+    snapshot = snapshot_file_deps(set(paths), known) if paths else {}
     if urls:
         snapshot.update(snapshot_remote_deps(urls))
     if absent:

@@ -115,6 +115,31 @@ def test_each_call_rehashes_a_file_under_the_cap(cash_instance, tmp_path):
     assert len(runs) == 2
 
 
+def test_a_file_changed_during_the_call_is_recorded_as_the_body_read_it(cash_instance, tmp_path):
+    """Round 20 (r20s5): an np.memmap write landed while a cached step was
+    computing. The result, computed from the old bytes, was stored with the
+    fingerprint of the NEW file -- taken at store time, and the stat that
+    would have refused the store moved not at all -- so every later process
+    was served it. The entry must describe the file as the body read it."""
+    path = _aged_file(tmp_path)
+    before = os.stat(path)
+
+    @cash_instance.cache(assume_safe=True)
+    def first_byte(tag):
+        with open(path, "rb") as fh:
+            got = fh.read(1)
+        fd = os.open(path, os.O_RDWR)            # another writer, mid-call: same
+        try:                                     # size, and the mtime put back
+            os.write(fd, b"Z")
+        finally:
+            os.close(fd)
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        return got
+
+    assert first_byte("a") == b"x"               # it read the old byte
+    assert first_byte("a") == b"Z", "the entry recorded the new file for the old result"
+
+
 def test_an_edit_still_invalidates_with_the_memo_warm(cash_instance, tmp_path):
     """The control that matters: speed must not cost correctness."""
     path = _aged_file(tmp_path)

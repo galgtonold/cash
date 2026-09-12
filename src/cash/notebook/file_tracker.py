@@ -880,8 +880,20 @@ class FileAccessTracker:
     because the *output* of a statement is hashed directly, not the files it
     writes.
     """
-    def __init__(self, user_ns=None, propagate_to_parent: bool = False):
+    def __init__(self, user_ns=None, propagate_to_parent: bool = False,
+                 hash_on_read: bool = False):
         self.accessed_files = set()
+        # The content hash of each regular file WHEN IT WAS FIRST READ, for a
+        # caller that stores what the block read (the decorator). Taken at
+        # store time instead, a file changed mid-call by a writer that moves no
+        # timestamp -- an np.memmap write on Windows -- was fingerprinted as
+        # the NEW file next to a result computed from the old one, and served
+        # to every later process (round 20). Moving the hash here costs
+        # nothing extra: the snapshot reuses it while the stat is unchanged.
+        self._hash_on_read = hash_on_read
+        self.read_digests: dict[str, str] = {}
+        #: Time spent hashing inside the block, which is cash's, not the body's.
+        self.read_hash_seconds = 0.0
         # Remote URLs are kept in their own set, never in ``accessed_files``:
         # every consumer of that set stats/hashes its members, and a URL is not
         # a path. They are re-joined downstream as remote dependency entries.
@@ -1051,10 +1063,13 @@ class FileAccessTracker:
         except (TypeError, ValueError, OSError):
             logger.debug("[TRACKER] Could not record unresolved path for %r", path)
 
-    def _add_tracked(self, abs_path: str) -> None:
+    def _add_tracked(self, abs_path: str, digest: str | None = None) -> None:
         """Record *abs_path* on this tracker and, when propagation is enabled,
         on the enclosing tracker(s) too - so nested cached reads count as the
-        outer cached function's deps. Manual tracker nesting stays isolated."""
+        outer cached function's deps. Manual tracker nesting stays isolated.
+
+        *digest* is the content hash an inner tracker already took of the same
+        read, handed up so the outer one does not hash the file again."""
         self.accessed_files.add(abs_path)
         if abs_path not in self.read_stats and os.path.isabs(abs_path):
             # Absolute paths only: a relative twin is re-resolved against the
@@ -1063,11 +1078,27 @@ class FileAccessTracker:
             st = _regular_file_stat(abs_path)
             if st is not None:
                 self.read_stats[abs_path] = st
+                if self._hash_on_read:
+                    if digest is None:
+                        digest = self._digest_now(abs_path, st[0])
+                    if digest is not None:
+                        self.read_digests[abs_path] = digest
+        elif digest is None:
+            digest = self.read_digests.get(abs_path)
         if not self._propagate_to_parent:
             return
         parent = self._parent_stack[-1] if self._parent_stack else None
         if parent is not None and parent is not self:
-            parent._add_tracked(abs_path)
+            parent._add_tracked(abs_path, digest)
+
+    def _digest_now(self, abs_path: str, size: int) -> str | None:
+        """The file's content hash as the body is about to read it."""
+        from cash.notebook.file_dep_snapshot import file_content_hash
+        t0 = time.perf_counter()
+        try:
+            return file_content_hash(abs_path, size)
+        finally:
+            self.read_hash_seconds += time.perf_counter() - t0
 
     def _note_reading_code(self, code: Any) -> None:
         self.reading_codes.add(code)

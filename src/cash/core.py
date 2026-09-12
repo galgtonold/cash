@@ -3681,10 +3681,15 @@ class Cash:
             attach_code_relative,
             snapshot_dependencies,
         )
+        read_stats = getattr(tracker, "read_stats", {})
+        known = {path: (read_stats[path], digest)
+                 for path, digest in getattr(tracker, "read_digests", {}).items()
+                 if path in read_stats}
         deps = snapshot_dependencies(
             tracker.get_accessed_files(),
             tracker.get_accessed_remote_urls(),
             tracker.get_absent_files(),
+            known=known,
         )
         # A file beside the function's own code is part of this INSTALL, not a
         # fixed location: record where it sits relative to the code, so another
@@ -3717,7 +3722,10 @@ class Cash:
                 # The file THIS process would read -- another install's copy
                 # would give the enclosing entry the writer's path (CAS-108).
                 from cash.notebook.file_dep_snapshot import dep_path_for_this_process
-                tracker._add_tracked(dep_path_for_this_process(path, recorded))
+                # The hit just checked this file against the recorded hash, so
+                # that hash is the file as it is: no second read to take it.
+                digest = recorded.get("hash") if isinstance(recorded, dict) else None
+                tracker._add_tracked(dep_path_for_this_process(path, recorded), digest)
 
     def _auto_file_deps_fresh(self, metadata: CacheMetadata) -> bool:
         """Return True if every file recorded in ``metadata.auto_file_deps``
@@ -3975,7 +3983,8 @@ class Cash:
                 # are recorded as implicit cache dependencies - a later
                 # content change forces a recompute.
                 from cash.notebook.file_tracker import FileAccessTracker
-                tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
+                tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True,
+                                             hash_on_read=True)
                 # Watch for side effects the STATIC analyzer cannot see, which
                 # is anything happening inside an installed library. Only on
                 # this (missing) path: a hit runs no body, so there is nothing
@@ -3996,7 +4005,7 @@ class Cash:
                     # The user's own work, isolated. Everything cash does sits
                     # outside this pair, which is the whole point: it is the
                     # only number that can answer "did caching pay?".
-                    body_seconds = time.perf_counter() - body_t0
+                    body_seconds = time.perf_counter() - body_t0 - tracker.read_hash_seconds
                     rng_new = self._note_rng_draw(func_name, rng_pre)
                     is_iter = _is_one_shot_iterator(res)
 
@@ -4181,7 +4190,8 @@ class Cash:
 
             async def _compute_and_store() -> Any:
                 from cash.notebook.file_tracker import FileAccessTracker
-                tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
+                tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True,
+                                             hash_on_read=True)
                 observer = self._make_effect_observer()
                 observer.arg_snapshot = self._argument_snapshot(func_name, args, kwargs)
                 rng_pre = self._capture_rng_pre_state()
@@ -4193,7 +4203,7 @@ class Cash:
                     except Exception as exc:
                         self._log_raised(func_name, exc, call_start)
                         raise
-                    body_seconds = time.perf_counter() - body_t0
+                    body_seconds = time.perf_counter() - body_t0 - tracker.read_hash_seconds
                     rng_new = self._note_rng_draw(func_name, rng_pre)
                     is_iter = _is_one_shot_iterator(res)
 
