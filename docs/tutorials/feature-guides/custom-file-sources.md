@@ -55,8 +55,8 @@ The pandas entry is the glob `read_*`, expanded by `_find_patch_targets` against
 
 A reader may be given its path positionally or by keyword — `pd.read_csv(filepath_or_buffer=p)`, `np.load(file=p)`, `pq.read_table(source=p)` — and both are tracked. pyarrow reads files in C++, so none of its reads pass through `open()`; before its readers were registered, a function that switched to `pyarrow.csv` for speed recorded no dependency at all and kept returning the old file's answer. `pyarrow.parquet.ParquetFile` and `pyarrow.dataset` are not wrapped (one is a class, the other enumerates directories); read through them and name the files with `file_depends_on=`.
 
-<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._create_open_handler @48e610ee -->
-For `open()`, the wrapper records the path as a *dependency* only when the mode contains `'r'` or `'+'` (read or read/write) — see `_create_open_handler`. An `open(path, 'w')` for output does **not** become a dependency, which is what you want: folding a file the function writes into its own cache key would invalidate the entry on its own output.
+<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._create_open_handler @f38edb95 -->
+For `open()`, the wrapper records the path as a *dependency* only when the call can read what was there before: a mode containing `'r'`, or `'+'` without `'w'` or `'x'` (`'r+'`, `'a+'`) — see `_create_open_handler`. An `open(path, 'w')` for output does **not** become a dependency, which is what you want: folding a file the function writes into its own cache key would invalidate the entry on its own output. Nor does `'w+'` / `'x+'`, which start from an empty file — Pillow saves every image with `'w+b'`, so a `savefig` used to depend on the PNG it had just written.
 
 A write is not ignored, though — it is an *effect*, and it is reported as one. The same wrapper hands a write-mode open to the [effect observer](purity-decorators.md#observed-effects-what-the-first-call-actually-did), which warns once if the first call wrote a file the static analyzer never saw. That matters because every cache hit from then on skips the write.
 
@@ -128,6 +128,13 @@ The patch set is a curated list. Reads that go through anything else slip past t
 - **C extensions and subprocesses** — anything that opens a file descriptor outside the Python-level `open()` (e.g. a C library called via `ctypes`, a `subprocess.run` that reads the file) is invisible. The monkey-patch only intercepts Python-side dispatch.
 - **Database files** — `sqlite3.connect('db.sqlite')` or a SQLAlchemy engine pointed at a file URL doesn't open the file via the patched readers. The query itself goes through the driver and Cash sees nothing.
 - **Lazy scans you don't materialize** — `polars.scan_csv(...)` *is* tracked at scan time.
+
+### Reads that are ignored on purpose
+
+<!-- claim: cash/notebook/file_tracker.py:incidental_read @9ffa4b1a -->
+Some reads happen while your code runs but are not your data, and cash leaves them out: files of the **Python installation itself** (the standard library), **package metadata** lookups (`importlib.metadata`, `importlib.resources`, `pkg_resources` — the import system listing every `sys.path` folder, your working directory included, and reading `entry_points.txt` files), anything a library reads **while it is being imported** (matplotlib's style sheets and font cache), and files an installed library reads **from its own package folder** (matplotlib's fonts on first draw, scikit-learn's HTML template). They only happen the first time, so recording them gave the same statement a different key on its second run, and a new file anywhere next to a notebook invalidated everything after an `import`.
+
+A library reading a file **for you** is still tracked — `PIL.Image.open(p)`, `torch.load(p)` and `pd.read_csv(p)` read a path outside that library. So is your own module reading its configuration at import, and so is an installed tool reading data from its own package folder when the cached function belongs to that tool.
 
 Remote URLs are the exception to the "not tracked" list: `pd.read_parquet("s3://bucket/key")` **is** tracked, just not by fingerprinting bytes — see [Remote objects](#remote-objects-tracked-by-the-stores-own-validator) below.
 

@@ -151,6 +151,180 @@ def _is_pseudo_fs(path: str) -> bool:
     return str(path).replace("\\", "/").startswith(_PSEUDO_FS_PREFIXES)
 
 
+# ---------------------------------------------------------------------------
+# Reads made by the interpreter and by libraries for themselves
+# ---------------------------------------------------------------------------
+#
+# The tracker sits on the process-wide ``open`` / ``os.listdir``, so it also
+# saw what Python and libraries read for their OWN purposes while the user's
+# statement ran: the import system listing every ``sys.path`` directory
+# (including the notebook's own folder) and reading ~100 ``entry_points.txt``
+# files, matplotlib loading its style sheets and font cache on import and its
+# fonts on first draw, scikit-learn reading the template for an estimator's
+# HTML display. Round 21 traced every "code or state changed" with no change
+# to them: they happen only the FIRST time (the second run finds everything
+# loaded), so the same statement got a different lineage on a re-run; a new
+# file anywhere next to the notebook invalidated everything after an import;
+# and a figure that looked changed had its ``savefig`` replayed without its
+# plotting calls -- a blank chart. None of it is the user's data.
+#
+# What is NOT dropped: any read that could be the user's data. A library
+# opening a file for the user (``PIL.Image.open(p)``, ``torch.load(p)``) reads
+# a path outside that library, so it stays tracked; a user module reading its
+# config at import stays tracked; and an installed tool reading its own data
+# file stays tracked for that tool's own cached functions (``own_package``).
+
+#: Modules that look up package METADATA or RESOURCES -- never user data.
+_METADATA_MODULES: tuple[str, ...] = (
+    "importlib.metadata", "importlib_metadata", "importlib.resources",
+    "importlib_resources", "pkg_resources", "pkgutil",
+)
+
+#: Modules a read passes through between the code that asked for it and the OS.
+_READ_PLUMBING: tuple[str, ...] = (
+    "io", "_io", "codecs", "pathlib", "contextlib", "zipfile", "shutil",
+    "tempfile", "os", "posixpath", "ntpath", "genericpath", "fnmatch", "glob",
+    "cash",
+)
+
+
+def _in_modules(module: str, names: tuple[str, ...]) -> bool:
+    """Is *module* one of *names* or inside one of them (``os`` but not ``osgeo``)?"""
+    return any(module == n or module.startswith(n + ".") for n in names)
+
+
+def _nc(path: str) -> str:
+    """*path* case-folded where the OS is, with forward slashes.
+
+    ``normcase`` on Windows turns ``/`` back into ``\\``, so it has to come
+    first, or a directory prefix would never match a path under it.
+    """
+    return normalize_path(os.path.normcase(path))
+
+
+def _norm_dir(path: str) -> str:
+    return _nc(os.path.abspath(path)).rstrip("/") + "/"
+
+
+@functools.lru_cache(maxsize=1)
+def _interpreter_roots() -> tuple[str, ...]:
+    """The standard library, its compiled extensions and zipped stdlib."""
+    import sysconfig
+    roots: set[str] = set()
+    paths = sysconfig.get_paths()
+    for key in ("stdlib", "platstdlib"):
+        if paths.get(key):
+            roots.add(_norm_dir(paths[key]))
+    for prefix in {sys.base_prefix, sys.base_exec_prefix}:
+        roots.add(_norm_dir(os.path.join(prefix, "DLLs")))
+    for entry in sys.path:
+        if entry and entry.lower().endswith(".zip"):
+            roots.add(_norm_dir(entry))
+    return tuple(sorted(roots))
+
+
+@functools.lru_cache(maxsize=1)
+def _site_roots() -> tuple[str, ...]:
+    """Where installed third-party packages live (site-packages).
+
+    Often INSIDE the standard library directory (``Lib/site-packages`` on
+    Windows, ``lib/python3.X/site-packages`` in conda), so the interpreter
+    test has to exclude these, or it would swallow every installed package --
+    and with it the own-package exemption.
+    """
+    import site
+    import sysconfig
+    roots: set[str] = set()
+    paths = sysconfig.get_paths()
+    for key in ("purelib", "platlib"):
+        if paths.get(key):
+            roots.add(_norm_dir(paths[key]))
+    try:
+        for entry in site.getsitepackages():
+            roots.add(_norm_dir(entry))
+    except AttributeError:          # virtualenv's old site.py
+        pass
+    try:
+        roots.add(_norm_dir(site.getusersitepackages()))
+    except (AttributeError, TypeError):
+        pass
+    # On Windows `getsitepackages()` also lists the installation prefix itself.
+    # That is the standard library's parent -- or, for a venv created as the
+    # project folder, the user's whole project -- never a package directory.
+    prefixes = {_norm_dir(p) for p in (sys.prefix, sys.exec_prefix,
+                                       sys.base_prefix, sys.base_exec_prefix)}
+    return tuple(sorted(roots - prefixes))
+
+
+@functools.lru_cache(maxsize=1)
+def _installed_roots() -> tuple[str, ...]:
+    """Where installed packages live: site-packages and the standard library."""
+    return tuple(sorted(set(_interpreter_roots()) | set(_site_roots())))
+
+
+def _under(path_nc: str, roots: tuple[str, ...]) -> bool:
+    return any(path_nc.startswith(root) for root in roots)
+
+
+def _module_package_dir(module_name: str) -> str | None:
+    """The directory of *module_name*'s top-level package, or None."""
+    top = sys.modules.get(module_name.split(".")[0])
+    if top is None:
+        return None
+    paths = getattr(top, "__path__", None)
+    if paths:
+        try:
+            return _norm_dir(list(paths)[0])
+        except (TypeError, IndexError):
+            return None
+    file = getattr(top, "__file__", None)
+    return _norm_dir(os.path.dirname(file)) if file else None
+
+
+def incidental_read(path: str, own_package: str | None = None) -> str | None:
+    """Why the read of *path* happening now is not the user's data, or None.
+
+    Four cases, each measured in round 21: a file of the interpreter itself;
+    a package metadata or resource lookup; a library reading files while it is
+    being imported; and a library reading a file inside its own installed
+    package directory. *own_package* is the top-level package of the code
+    being cached -- its own files are its data, even when it is installed.
+    """
+    path_nc = _nc(path)
+    if _under(path_nc, _interpreter_roots()) and not _under(path_nc, _site_roots()):
+        return "interpreter"
+    installed = _installed_roots()
+    frame = sys._getframe(1)
+    reader_seen = False
+    while frame is not None:
+        module = frame.f_globals.get("__name__") or ""
+        if _in_modules(module, _METADATA_MODULES):
+            return "package metadata"
+        code = frame.f_code
+        top = module.split(".")[0]
+        # `__main__` is the user's notebook or script -- in a kernel its module
+        # object is the ipykernel launcher in site-packages, which must not make
+        # a notebook statement look like a library.
+        if top not in (own_package, "cash", "__main__", ""):
+            if code.co_name == "<module>":
+                # Only a module the import system is executing RIGHT NOW: a
+                # host that runs its main loop from module level (an execnet
+                # worker, a launcher) must not turn every read into one.
+                spec = frame.f_globals.get("__spec__")
+                origin = getattr(spec, "origin", None)
+                if (getattr(spec, "_initializing", False) and isinstance(origin, str)
+                        and _under(_nc(origin), installed)):
+                    return "library import"
+            if not reader_seen and not _in_modules(module, _READ_PLUMBING):
+                reader_seen = True
+                package_dir = _module_package_dir(module) if module else None
+                if (package_dir and _under(package_dir, installed)
+                        and path_nc.startswith(package_dir)):
+                    return "library resource"
+        frame = frame.f_back
+    return None
+
+
 #: Path segments that belong to cash's OWN storage, never to the user's data.
 #:
 #: A cache HIT reads the entry's ``.data`` file to deserialise it, and that read
@@ -774,7 +948,11 @@ class FileDependencyRegistry:
         """
         def tracked_open(file, *args, **kwargs):
             mode = args[0] if args else kwargs.get('mode', 'r')
-            if 'r' in mode or '+' in mode:
+            # `w+` and `x+` start from an empty file, so nothing the code reads
+            # back existed before it: a write, not an input. Pillow saves every
+            # image with "w+b", and round 21 found each `savefig` recorded as a
+            # dependency on its own output.
+            if 'r' in mode or ('+' in mode and 'w' not in mode and 'x' not in mode):
                 _tracker = _active_tracker.get()
                 if _tracker is not None:
                     _tracker._track_path(file)
@@ -983,6 +1161,12 @@ class FileAccessTracker:
     def __init__(self, user_ns=None, propagate_to_parent: bool = False,
                  hash_on_read: bool = False):
         self.accessed_files = set()
+        # The top-level package of the code being cached, when *user_ns* is a
+        # module's globals (the decorator): an installed tool's own files are
+        # its data. A notebook's namespace is `__main__` -- no package.
+        name = user_ns.get("__name__") if isinstance(user_ns, dict) else None
+        self._own_package = (name.split(".")[0] if isinstance(name, str)
+                             and name != "__main__" else None)
         # The content hash of each regular file WHEN IT WAS FIRST READ, for a
         # caller that stores what the block read (the decorator). Taken at
         # store time instead, a file changed mid-call by a writer that moves no
@@ -1129,6 +1313,10 @@ class FileAccessTracker:
             # or symlinked cache path is caught too.
             logger.debug("[TRACKER] Ignoring cash-internal read %r", abs_path)
             return
+        why = incidental_read(abs_path, self._own_package)
+        if why is not None:
+            logger.debug("[TRACKER] Ignoring %s read %r", why, abs_path)
+            return
         self._add_tracked(abs_path)
         try:
             _credit_read_to_stack(abs_path, self)
@@ -1242,6 +1430,11 @@ class FileAccessTracker:
                 pass
             if _is_pseudo_fs(normalized) or _is_cash_internal(normalized):
                 return
+        # A library probing for an optional file while it is imported
+        # (matplotlib looks for a `matplotlibrc` in the working directory) or
+        # inside its own package is not the user's question either.
+        if incidental_read(os.path.abspath(raw), self._own_package) is not None:
+            return
         self._add_tracked_absent(normalized)
 
     def _add_tracked_absent(self, path: str) -> None:
