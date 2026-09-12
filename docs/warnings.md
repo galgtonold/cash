@@ -1165,10 +1165,12 @@ answering it after the restart. Round 18 found the same for the cached function
 itself, in a worker that imported the old code and made its first call after
 the deploy landed.
 
-<!-- claim: cash/core.py:Cash._pin_own_source @7e56cf2e -->
+<!-- claim: cash/core.py:Cash._pin_own_source @36ccf85f -->
 So cash keys that code by what is **actually running** instead: a cached
 function by the source it was imported with (its identity is taken when the
-decorator runs, not at its first call), and a helper by its loaded bytecode.
+decorator runs, not at its first call — and by its loaded bytecode when even
+that was too late, because the file changed while the module was still
+importing), and a helper by its loaded bytecode.
 Results in this process are correct for the code it is running, and they are
 not reused once the process restarts on the new code.
 

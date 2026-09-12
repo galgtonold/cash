@@ -232,6 +232,56 @@ def test_an_edit_to_the_cached_function_itself_is_not_served_to_the_restart(tmp_
     assert "KEY-SOURCE-CHANGED" in a_err, "nothing said the file changed under A"
 
 
+IMPORT_WINDOW = textwrap.dedent('''
+    import os, sys, time
+    import cash
+
+    if os.environ.get("WAIT_IN_IMPORT"):     # a slow import above the def
+        open("ready", "w").close()
+        for _ in range(400):
+            if os.path.exists("go"):
+                break
+            time.sleep(0.025)
+
+
+    @cash.cache
+    def compute(x):
+        print("COMPUTE", file=sys.stderr, flush=True)  # @cash:assume-safe
+        time.sleep(0.25)  # @cash:assume-safe
+        return x * 14
+''')
+
+
+def test_an_edit_while_the_module_is_still_importing_is_not_served_to_the_restart(tmp_path):
+    """Round 20 (r20s1): the edit landed after Python compiled the module but
+    before its ``@cash.cache`` line ran, so the pin taken at decoration read the
+    NEW text for the OLD code. KEY-SOURCE-CHANGED fired, and the old body's
+    answer was stored under the new text's key anyway."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    app = proj / "app.py"
+    app.write_text(IMPORT_WINDOW, encoding="utf-8")
+    (proj / "main.py").write_text("from app import compute\nprint(compute(3))\n", encoding="utf-8")
+    env = _env(tmp_path)
+
+    a = subprocess.Popen([sys.executable, "main.py"], cwd=str(proj), text=True,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         env=dict(env, WAIT_IN_IMPORT="1"))
+    for _ in range(400):
+        if (proj / "ready").exists():
+            break
+        time.sleep(0.025)
+    assert (proj / "ready").exists(), "process A never reached the window"
+    _edit(app, IMPORT_WINDOW.replace("x * 14", "x * 3"))
+    (proj / "go").write_text("", encoding="utf-8")
+    a_out, a_err = a.communicate(timeout=60)
+    assert a_out.strip() == "42", "A runs the code it compiled"
+
+    b = _run(proj, env)
+    assert b.stdout.strip() == "9", "the restarted process was served the old body's answer"
+    assert "COMPUTE" in b.stderr
+
+
 def test_an_edit_elsewhere_in_the_same_file_still_hits_after_the_restart(tmp_path):
     """Control: the cached function did not change, so its entry stays valid and
     nothing is said. Guards against "fixing" this by refusing anything stored

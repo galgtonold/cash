@@ -2594,6 +2594,15 @@ class Cash:
                 self._own_pins_unverified.discard(key)
                 if not loaded_code_matches_disk(func):
                     _warn_source_changed_since_load(func)
+                    # The file changed before the decorator ran -- after the
+                    # module was compiled, while it was still importing -- so
+                    # the text the pin was read from is not the code that runs.
+                    # Keyed by what runs instead: the result belongs to the old
+                    # body, and a process running the new one keys by the new
+                    # text and recomputes (round 20).
+                    live = bytecode_identity(func)
+                    if live is not None:
+                        pin = self._own_pins[key] = live
             return pin
         at_decoration = source_hash is not None
         keyed_stat = _stat_code_file(func)
