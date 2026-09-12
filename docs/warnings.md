@@ -807,7 +807,7 @@ stale-result kinds, and nothing else will tell you when they bite.
 
 ## KEY-AMBIENT-READ {#key-ambient-read}
 
-<!-- claim: cash/notebook/purity.py:_AMBIENT_READ_CALLS @b18fb0f0, cash/purity_analyzer.py:_PurityVisitor.visit_Subscript @c9ab46b9 -->
+<!-- claim: cash/notebook/purity.py:_AMBIENT_READ_CALLS @2fbc7240, cash/purity_analyzer.py:_PurityVisitor.visit_Subscript @c9ab46b9 -->
 **What happened.** Reading the source of the function you decorated found a
 call that asks the world what time it is, what the environment says, where the
 process is running, or for a fresh UUID: `datetime.now()`, `date.today()`,
@@ -816,7 +816,13 @@ process is running, or for a fresh UUID: `datetime.now()`, `date.today()`,
 `pd.to_datetime("today")`. The named line ran, and the result was cached as
 normal.
 
-<!-- claim: cash/purity_analyzer.py:_ambient_call @67465e6f -->
+<!-- claim: cash/notebook/purity.py:_AMBIENT_WHEN_ARGS_OMITTED @a7bef856, cash/purity_analyzer.py:_reads_clock_when_omitted @86bd5a03 -->
+`time.strftime("%Y-%m")`, `time.asctime()`, `time.ctime()`,
+`time.localtime()` and `time.gmtime()` count when the time argument is left
+out, which is when they read the clock; `time.strftime("%Y-%m", t)` and
+`time.localtime(ts)` only format or convert the time you give them.
+
+<!-- claim: cash/purity_analyzer.py:_ambient_call @4e16239d -->
 It is recognised by what the names refer to, not by how they are spelled:
 `import datetime as _dt; _dt.datetime.now()`, `from datetime import datetime as
 DateTime; DateTime.now()`, `import time as _time` and `from time import time as

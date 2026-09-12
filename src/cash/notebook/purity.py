@@ -199,7 +199,6 @@ _AMBIENT_READ_CALLS = frozenset({
     'datetime.datetime.now', 'datetime.datetime.utcnow',
     'datetime.datetime.today', 'datetime.date.today', 'date.today',
     'time.time', 'time.time_ns', 'time.monotonic', 'time.perf_counter',
-    'time.localtime', 'time.gmtime',
     'os.getcwd', 'os.getenv', 'os.environ.get',
     'uuid.uuid1', 'uuid.uuid4',
     'pandas.Timestamp.now', 'pandas.Timestamp.today', 'pandas.Timestamp.utcnow',
@@ -211,6 +210,16 @@ _AMBIENT_WHEN_ARG_CALLS = frozenset({
     'pandas.to_datetime', 'pandas.Timestamp', 'numpy.datetime64',
 })
 _AMBIENT_ARG_VALUES = frozenset({'now', 'today'})
+
+#: Functions that read the clock when their time argument is LEFT OUT: called
+#: with at most this many positional arguments. ``time.strftime("%Y-%m")``
+#: froze a report's period with no warning (round 20), while
+#: ``time.strftime("%Y-%m", t)`` only formats ``t`` -- as ``time.localtime(ts)``
+#: only converts, which the flat list above used to warn about.
+_AMBIENT_WHEN_ARGS_OMITTED: dict[str, int] = {
+    'time.strftime': 1, 'time.asctime': 0, 'time.ctime': 0,
+    'time.localtime': 0, 'time.gmtime': 0,
+}
 
 #: Method names meaning "this call changed something outside the function".
 #:

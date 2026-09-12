@@ -40,6 +40,11 @@ SPELLINGS = {
     "os-alias-getcwd": "_os.getcwd()",
     "os-alias-environ": '_os.environ.get("HOME")',
     "canonical": "datetime.datetime.now()",
+    # Round 20 (r20s3): these read the clock when the time argument is left out.
+    "strftime": '_time.strftime("%Y-%m")',
+    "asctime": "_time.asctime()",
+    "ctime": "_time.ctime()",
+    "localtime": "_time.localtime()",
 }
 
 PANDAS_SPELLINGS = {
@@ -91,6 +96,9 @@ def test_a_pandas_clock_read_warns(tmp_path, monkeypatch, spelling):
     ("Clock().now()", "class Clock:\n    def now(self):\n        return 1\n"),
     ("Stamp.now()", "class Stamp:\n    @staticmethod\n    def now():\n        return 1\n"),
     ("pd.to_datetime('2024-01-01')", "import pandas as pd\n"),
+    ('_time.strftime("%Y-%m", _time.gmtime(n))', ""),   # formats the time it is given
+    ("_time.localtime(n)", ""),                         # converts a timestamp
+    ("_time.ctime(n)", ""),
 ])
 def test_a_now_that_is_not_the_clock_does_not_warn(tmp_path, monkeypatch, body, extra):
     """Control: resolution goes through what the name IS -- the user's own

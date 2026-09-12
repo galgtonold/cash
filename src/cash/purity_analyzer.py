@@ -66,6 +66,7 @@ from .notebook.purity import (
     _AMBIENT_ARG_VALUES,
     _AMBIENT_READ_CALLS,
     _AMBIENT_WHEN_ARG_CALLS,
+    _AMBIENT_WHEN_ARGS_OMITTED,
     _IMPURE_FUNCTION_CALLS,
     _IMPURE_MODULE_CALLS,
     _WRITE_METHODS,
@@ -1238,7 +1239,7 @@ def _ambient_roots() -> dict[int, tuple[Any, str]]:
     function an ambient-read spelling passes through (``datetime``,
     ``datetime.datetime``, ``time.time``, ``pandas.Timestamp``), among the
     modules loaded now. Rebuilt when that set changes."""
-    table = _AMBIENT_READ_CALLS | _AMBIENT_WHEN_ARG_CALLS
+    table = _AMBIENT_READ_CALLS | _AMBIENT_WHEN_ARG_CALLS | set(_AMBIENT_WHEN_ARGS_OMITTED)
     loaded = tuple(sorted({e.split(".", 1)[0] for e in table} & set(sys.modules)))
     if _AMBIENT_ROOTS["loaded"] == loaded:
         return _AMBIENT_ROOTS["roots"]
@@ -1265,6 +1266,13 @@ def _ambient_roots() -> dict[int, tuple[Any, str]]:
     return roots
 
 
+def _reads_clock_when_omitted(canonical: str, node: ast.Call) -> bool:
+    """``time.strftime(fmt)`` reads the clock; ``time.strftime(fmt, t)`` does not."""
+    most = _AMBIENT_WHEN_ARGS_OMITTED.get(canonical)
+    return (most is not None and len(node.args) <= most and not node.keywords
+            and not any(isinstance(a, ast.Starred) for a in node.args))
+
+
 def _ambient_call(node: ast.Call, namespace: dict[str, Any] | None) -> str | None:
     """The ambient read *node* makes, spelled canonically, or None.
 
@@ -1280,7 +1288,7 @@ def _ambient_call(node: ast.Call, namespace: dict[str, Any] | None) -> str | Non
     module = _get_call_module(func_node)
     if name:
         dotted = f"{module}.{name}" if module else name
-        if dotted in _AMBIENT_READ_CALLS:
+        if dotted in _AMBIENT_READ_CALLS or _reads_clock_when_omitted(dotted, node):
             return dotted
     chain = _callee_chain(func_node)
     if not namespace or not chain or chain[0] not in namespace:
@@ -1300,7 +1308,7 @@ def _ambient_call(node: ast.Call, namespace: dict[str, Any] | None) -> str | Non
         if hit is not None and hit[0] is obj:
             candidates.append(".".join((hit[1], *chain[i + 1:])))
     for canonical in reversed(candidates):
-        if canonical in _AMBIENT_READ_CALLS:
+        if canonical in _AMBIENT_READ_CALLS or _reads_clock_when_omitted(canonical, node):
             return canonical
         if (canonical in _AMBIENT_WHEN_ARG_CALLS and node.args
                 and isinstance(node.args[0], ast.Constant)
