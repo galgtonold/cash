@@ -1682,6 +1682,9 @@ class Cash:
         # produced it (`_keep_state_ledger`).
         self._state_ledgers: dict[tuple[str, str], dict] = {}
         self._ram_only_pending: dict[str, dict[str, list]] = {}
+        # func_name -> {digest: when} of warnings shown, not yet in the record
+        # (`_first_showing`); written with the record's next write.
+        self._warned_pending: dict[str, dict[str, float]] = {}
         self._ram_only_lock = threading.Lock()
         # Serialises this process's reads and rewrites of the stored-key
         # record: on Windows a read that overlaps the rewrite's rename fails,
@@ -3810,6 +3813,10 @@ class Cash:
         path = self._stored_keys_path(func_name)
         if path is None:
             return
+        with self._ram_only_lock:
+            shown = self._warned_pending.pop(func_name, None)
+        if shown:
+            doc.setdefault("warned", {}).update(shown)
         for kind, most in (("keys", self._STORED_KEYS_MAX),
                            ("ram_only", self._STORED_KEYS_MAX),
                            ("states", self._STORED_STATES_MAX),
@@ -3850,6 +3857,8 @@ class Cash:
         """Write what `_remember_ram_only` buffered. Never raises."""
         with self._ram_only_lock:
             pending, self._ram_only_pending = self._ram_only_pending, {}
+            for func_name in self._warned_pending:
+                pending.setdefault(func_name, {})   # its record takes the shown warnings
         for func_name, entries in pending.items():
             try:
                 with self._stored_doc_lock:
@@ -9072,16 +9081,14 @@ class Cash:
         if self._stored_keys_path(func_name) is None:
             return True
         digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16]
-        try:
-            with self._stored_doc_lock:
-                doc = self._stored_doc(func_name)
-                shown = doc.setdefault("warned", {})
-                if digest in shown:
-                    return False
-                shown[digest] = time.time()
-                self._write_stored_doc(func_name, doc)
-        except Exception:  # noqa: BLE001 - a diagnostic aid: show it
-            logger.debug("could not record a shown warning for %s", func_name, exc_info=True)
+        if digest in self._stored_doc(func_name).get("warned", {}):
+            return False
+        # Written with the record's next write, never now: this runs before
+        # the first call's lookup, and creating (and stamping) the cache
+        # directory here reordered the stamps the clear check reads -- a
+        # clear under a process that started cold went unnoticed on Linux.
+        with self._ram_only_lock:
+            self._warned_pending.setdefault(func_name, {})[digest] = time.time()
         return True
 
     def _definition_site(self, func_name: str) -> tuple[str, int] | None:
@@ -10709,6 +10716,6 @@ class Cash:
                 except Exception:  # noqa: BLE001 - -W error at exit, or teardown
                     pass
         if backend is not None:
-            if getattr(self, "_ram_only_pending", None):
+            if getattr(self, "_ram_only_pending", None) or getattr(self, "_warned_pending", None):
                 self._flush_ram_only_keys()
             backend.shutdown()

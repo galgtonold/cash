@@ -292,6 +292,7 @@ def test_a_static_finding_is_shown_once_per_cache_not_every_run(tmp_path):
     from cash import Cash
     first = Cash(cache_dir=str(tmp_path / "c"))
     assert _impure_shown(first, reports_to_stdout, 1)
+    first.shutdown()                                   # the end of that run
     later = Cash(cache_dir=str(tmp_path / "c"))        # the next run
     assert not _impure_shown(later, reports_to_stdout, 2)
     logged = later._func_warnings.get(f"{__name__}.reports_to_stdout") or []
@@ -301,7 +302,9 @@ def test_a_static_finding_is_shown_once_per_cache_not_every_run(tmp_path):
 def test_a_different_finding_is_shown_again(tmp_path):
     """Control: new findings are new text, and new text is shown."""
     from cash import Cash
-    assert _impure_shown(Cash(cache_dir=str(tmp_path / "c")), reports_to_stdout, 1)
+    first = Cash(cache_dir=str(tmp_path / "c"))
+    assert _impure_shown(first, reports_to_stdout, 1)
+    first.shutdown()
     assert _impure_shown(Cash(cache_dir=str(tmp_path / "c")), also_reports_to_stdout, 1)
 
 

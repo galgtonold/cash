@@ -869,7 +869,7 @@ response than a warning filter, because it leaves the rest of the function
 watched. Do not ignore a `mutable_global` or a `dynamic_pattern` line — those
 two are the stale-result kinds, and nothing else will tell you when they bite.
 
-<!-- claim: cash/core.py:Cash._first_showing @3b86c46a -->
+<!-- claim: cash/core.py:Cash._first_showing @583de56d -->
 This warning and [KEY-AMBIENT-READ](#key-ambient-read) are shown **once per
 cache**, not once per process: the next run on the same cache, finding the
 same lines, records them in `f.cache_info()["warnings"]` without printing them
