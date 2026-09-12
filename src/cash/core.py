@@ -1239,6 +1239,38 @@ _COW_PANDAS: bool | None = None
 #: argument alive after its caller dropped it.
 _ARG_COST = threading.local()
 
+#: The seconds cash spent inside the body of the cached call in progress, on
+#: its nested cached calls: their keys, lookups, stores. They belong to those
+#: calls, not to this body -- counted in, an outer function's "saved" was 4-9x
+#: what running it uncached costs (round 20). A one-element list, so a nested
+#: call adds to its caller's without resetting anything.
+_NESTED_CASH_SECONDS: contextvars.ContextVar[list | None] = contextvars.ContextVar(
+    "_cash_nested_seconds", default=None)
+
+#: Threads inside a cached call right now, and how deep each is. A hit's saving
+#: is the body time it stood in for, and sixteen 0.5 s hits on eight threads
+#: stood in for 1 s of waiting, not 8 s (round 20): the summary divides a
+#: hit's saving by how many threads were running cached calls with it.
+_CALL_DEPTH = threading.local()
+_THREADS_IN_CALLS = [0]
+_THREADS_IN_CALLS_LOCK = threading.Lock()
+
+
+def _enter_cached_call() -> None:
+    depth = getattr(_CALL_DEPTH, "depth", 0)
+    _CALL_DEPTH.depth = depth + 1
+    if depth == 0:
+        with _THREADS_IN_CALLS_LOCK:
+            _THREADS_IN_CALLS[0] += 1
+
+
+def _exit_cached_call() -> None:
+    depth = getattr(_CALL_DEPTH, "depth", 1) - 1
+    _CALL_DEPTH.depth = depth
+    if depth == 0:
+        with _THREADS_IN_CALLS_LOCK:
+            _THREADS_IN_CALLS[0] -= 1
+
 
 def _is_cow_pandas(value: Any) -> bool:
     """Is *value* a pandas DataFrame/Series under copy-on-write?
@@ -3329,7 +3361,8 @@ class Cash:
                 func_name, cache_hit=True,
                 execution_time=time.perf_counter() - call_start,
                 args_hash=args_hash, cache_key=cache_key,
-                time_saved=metadata.execution_time or 0.0,
+                time_saved=(metadata.saves_seconds if metadata.saves_seconds is not None
+                            else metadata.execution_time) or 0.0,
             )
             return cached_data
         except CacheExpiredError:
@@ -4039,16 +4072,22 @@ class Cash:
                 rng_pre = self._capture_rng_pre_state()
                 body_seconds: float | None = None
                 with tracker, observer:
+                    threads_at_start = _THREADS_IN_CALLS[0]
                     body_t0 = time.perf_counter()
+                    nested = [0.0]
+                    nested_token = _NESTED_CASH_SECONDS.set(nested)
                     try:
                         res = func(*args, **kwargs)
                     except Exception as exc:
                         self._log_raised(func_name, exc, call_start)
                         raise
+                    finally:
+                        _NESTED_CASH_SECONDS.reset(nested_token)
                     # The user's own work, isolated. Everything cash does sits
                     # outside this pair, which is the whole point: it is the
                     # only number that can answer "did caching pay?".
-                    body_seconds = time.perf_counter() - body_t0 - tracker.read_hash_seconds
+                    body_seconds = max(0.0, time.perf_counter() - body_t0 - tracker.read_hash_seconds - nested[0])
+                    saves_seconds = body_seconds / max(threads_at_start, _THREADS_IN_CALLS[0], 1)
                     rng_new = self._note_rng_draw(func_name, rng_pre)
                     is_iter = _is_one_shot_iterator(res)
 
@@ -4107,16 +4146,19 @@ class Cash:
                         cache_key, func_name, res, metadata, ttl,
                         current_state_hash, args_hash, execution_time,
                         auto_file_deps=auto_file_deps,
-                        body_seconds=body_seconds,
+                        body_seconds=body_seconds, saves_seconds=saves_seconds,
                     )
+                # Everything that was not the body: the key and lookup before
+                # it, the checks and the store after it.
+                miss_overhead = max(cash_overhead, time.perf_counter() - call_start - body_seconds)
                 self._log_decorator_call(
                     func_name, cache_hit=False,
                     execution_time=execution_time,
                     args_hash=args_hash, cache_key=cache_key,
-                    body_seconds=body_seconds,
+                    body_seconds=body_seconds, cash_seconds=miss_overhead,
                 )
                 self._note_effectiveness(
-                    func_name, cash_overhead,
+                    func_name, miss_overhead,
                     body_seconds=body_seconds, was_hit=False,
                 )
                 return res
@@ -4241,13 +4283,19 @@ class Cash:
                 rng_pre = self._capture_rng_pre_state()
                 body_seconds: float | None = None
                 with tracker, observer:
+                    threads_at_start = _THREADS_IN_CALLS[0]
                     body_t0 = time.perf_counter()
+                    nested = [0.0]
+                    nested_token = _NESTED_CASH_SECONDS.set(nested)
                     try:
                         res = await func(*args, **kwargs)
                     except Exception as exc:
                         self._log_raised(func_name, exc, call_start)
                         raise
-                    body_seconds = time.perf_counter() - body_t0 - tracker.read_hash_seconds
+                    finally:
+                        _NESTED_CASH_SECONDS.reset(nested_token)
+                    body_seconds = max(0.0, time.perf_counter() - body_t0 - tracker.read_hash_seconds - nested[0])
+                    saves_seconds = body_seconds / max(threads_at_start, _THREADS_IN_CALLS[0], 1)
                     rng_new = self._note_rng_draw(func_name, rng_pre)
                     is_iter = _is_one_shot_iterator(res)
 
@@ -4303,16 +4351,19 @@ class Cash:
                         cache_key, func_name, res, metadata, ttl,
                         current_state_hash, args_hash, execution_time,
                         auto_file_deps=auto_file_deps,
-                        body_seconds=body_seconds,
+                        body_seconds=body_seconds, saves_seconds=saves_seconds,
                     )
+                # Everything that was not the body: the key and lookup before
+                # it, the checks and the store after it.
+                miss_overhead = max(cash_overhead, time.perf_counter() - call_start - body_seconds)
                 self._log_decorator_call(
                     func_name, cache_hit=False,
                     execution_time=execution_time,
                     args_hash=args_hash, cache_key=cache_key,
-                    body_seconds=body_seconds,
+                    body_seconds=body_seconds, cash_seconds=miss_overhead,
                 )
                 self._note_effectiveness(
-                    func_name, cash_overhead,
+                    func_name, miss_overhead,
                     body_seconds=body_seconds, was_hit=False,
                 )
                 return res
@@ -4365,6 +4416,8 @@ class Cash:
           for that specific call (sync, even on async wrappers).
         """
         _stats = {'hits': 0, 'misses': 0, 'total_time_saved': 0.0, 'lookup_seconds': 0.0,
+                  # What the misses cost besides their bodies: key, checks, store.
+                  'miss_overhead_seconds': 0.0,
                   # What the misses were, and which results did not reach
                   # disk: the two things "1 miss" alone could not tell anyone.
                   'miss_reasons': Counter(), 'not_persisted': Counter(),
@@ -4386,6 +4439,7 @@ class Cash:
                             _stats['lookup_seconds'] += call.get('execution_time', 0.0)
                         else:
                             _stats['misses'] += 1
+                            _stats['miss_overhead_seconds'] += call.get('cash_seconds') or 0.0
                             kind = (call.get('miss_reason') or (MISS_FIRST, ""))[0]
                             _stats['miss_reasons'][kind] += 1
                             if call.get('not_stored'):
@@ -4416,12 +4470,14 @@ class Cash:
                     return await _bypass(args, kwargs)
                 token = ACTIVE_CONFIG.set(self.config)
                 hash_call = enter_hash_call()
+                _enter_cached_call()
                 try:
                     result = await wrapper(*args, **kwargs)
                 except BaseException:
                     _drain_raised()
                     raise
                 finally:
+                    _exit_cached_call()
                     exit_hash_call(hash_call)
                     ACTIVE_CONFIG.reset(token)
                 _drain_stats()
@@ -4442,12 +4498,14 @@ class Cash:
                 # cached calls' -- share one digest per file, and the next call
                 # hashes again (see `file_dep_snapshot._HASH_CALL`).
                 hash_call = enter_hash_call()
+                _enter_cached_call()
                 try:
                     result = wrapper(*args, **kwargs)
                 except BaseException:
                     _drain_raised()
                     raise
                 finally:
+                    _exit_cached_call()
                     exit_hash_call(hash_call)
                     ACTIVE_CONFIG.reset(token)
                 _drain_stats()
@@ -8054,6 +8112,7 @@ class Cash:
         time_saved: float = 0.0,
         miss_detail: str = "",
         body_seconds: float | None = None,
+        cash_seconds: float | None = None,
     ) -> None:
         """Record a decorator call event for notebook integration.
 
@@ -8070,12 +8129,22 @@ class Cash:
         latter - summing ``execution_time`` (the old behaviour) under-reported
         savings by orders of magnitude.
         """
+        # What cash spent on this call rather than the body: the whole of a
+        # hit, and what the miss path measured around a body. Added to the
+        # caller's tally when this call is nested in another cached call's
+        # body (`_NESTED_CASH_SECONDS`).
+        if cash_seconds is None:
+            cash_seconds = execution_time if cache_hit else 0.0
+        nested = _NESTED_CASH_SECONDS.get()
+        if nested is not None:
+            nested[0] += cash_seconds
         entry = {
             'func_name': func_name,
             'cache_hit': cache_hit,
             'execution_time': execution_time,
             'body_seconds': body_seconds,
             'time_saved': time_saved,
+            'cash_seconds': cash_seconds,
             'args_hash': args_hash,
             'cache_key': cache_key,
             'timestamp': time.time(),
@@ -9083,18 +9152,23 @@ class Cash:
         to, and deciding otherwise is the notebook cost model's job, not
         this one. See ``cash.effectiveness`` for when it speaks up.
 
-        ``overhead_seconds`` covers cache-key construction and lookup -- the
-        per-call costs. The one-off store is excluded, deliberately: it is
-        paid once per key rather than per call, and the workload this exists
-        to catch is one that pays a large key cost on every single call.
+        ``overhead_seconds`` is everything cash did around the body: the key and
+        lookup, and on a miss the store as well. The store used to be left out
+        as a once-per-key cost, but a result kept in RAM only is copied in
+        every process that computes it, and a 2.5M-row parse cost 4x its body
+        that way with nothing reporting it (round 20).
         """
+        culprit = self._arg_costs.get(func_name)
+        if culprit is not None and culprit[3] and culprit[3] in self._frozen_funcs:
+            # Already frozen: advising frozen=True on it (round 20) is noise.
+            culprit = (*culprit[:3], None, *culprit[4:])
         try:
             verdict = self._effectiveness.record(
                 func_name,
                 overhead_seconds=overhead_seconds,
                 body_seconds=body_seconds,
                 was_hit=was_hit,
-                culprit=self._arg_costs.get(func_name),
+                culprit=culprit,
             )
         except Exception:  # noqa: BLE001 - accounting must never break a call
             return
@@ -9123,6 +9197,7 @@ class Cash:
         execution_time: float = 0.0,
         auto_file_deps: dict[str, dict[str, float]] | None = None,
         body_seconds: float | None = None,
+        saves_seconds: float | None = None,
     ) -> None:
         try:
             serializer = get_serializer(result)
@@ -9156,6 +9231,7 @@ class Cash:
                 # measured from the top of the wrapper and includes the
                 # key hashing whose worth is the question.
                 body_seconds=body_seconds,
+                saves_seconds=saves_seconds,
                 serializer_cls=type(serializer),
                 ttl=ttl,
                 args_hash=args_hash,
@@ -9508,7 +9584,11 @@ class Cash:
         hits = sum(s['hits'] for _, s in rows)
         calls = hits + sum(s['misses'] for _, s in rows)
         saved = sum(s['total_time_saved'] for _, s in rows)
-        lookups = sum(s.get('lookup_seconds', 0.0) for _, s in rows)
+        # What cash cost: the hits' lookups AND the misses' keys, checks and
+        # stores. Counting the lookups alone reported a 24 s loss as 14 s, and
+        # a function that never hit as costing nothing (round 20).
+        spent = sum(s.get('lookup_seconds', 0.0) + s.get('miss_overhead_seconds', 0.0)
+                    for _, s in rows)
         width = min(44, max(len(name) for name, _ in rows))
 
         def _fit(name: str) -> str:
@@ -9519,12 +9599,12 @@ class Cash:
             return name if len(name) <= width else "..." + name[-(width - 3):]
 
         head = f"cash: {hits} of {calls} calls restored, {saved:.1f}s saved"
-        if lookups >= 0.1 and lookups >= 0.1 * saved:
-            # Saved is the compute the hits stood in for; the hits themselves
-            # cost this much. Left out, a run that got 9x SLOWER read as a win.
-            head += f" -- and {lookups:.1f}s spent on the hits' lookups"
-            if lookups > saved:
-                head += f", a net loss of {lookups - saved:.1f}s"
+        if spent >= 0.1 and spent >= 0.1 * saved:
+            # Saved is the compute the hits stood in for; cash itself cost
+            # this much. Left out, a run that got 9x SLOWER read as a win.
+            head += f" -- and {spent:.1f}s spent by cash on keys, lookups and stores"
+            if spent > saved:
+                head += f", a net loss of {spent - saved:.1f}s"
         lines = [head]
         where = self._summary_cache_dir()
         if where:
@@ -9543,9 +9623,9 @@ class Cash:
             miss_col = f"{stat['misses']} {'miss' if stat['misses'] == 1 else 'misses'}"
             saved_col = (f"{stat['total_time_saved']:.1f}s saved"
                          if stat['total_time_saved'] else "-")
-            lookup = stat.get('lookup_seconds', 0.0)
-            if lookup >= 0.1 and lookup >= 0.1 * stat['total_time_saved']:
-                saved_col += f", {lookup:.1f}s looking up"
+            cost = stat.get('lookup_seconds', 0.0) + stat.get('miss_overhead_seconds', 0.0)
+            if cost >= 0.1 and cost >= 0.1 * stat['total_time_saved']:
+                saved_col += f", {cost:.1f}s spent by cash"
             lines.append(f"  {_fit(name):<{width}}  {hit_col:<10}"
                          f"{miss_col:<12}{saved_col}")
             lines.extend(self._summary_reasons(stat))

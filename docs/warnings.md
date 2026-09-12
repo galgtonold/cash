@@ -360,12 +360,14 @@ something to fix right now.
 ## CACHE-NET-LOSS {#cache-net-loss}
 
 **What happened.** This is a measurement, not a guess and not an error. Cash
-times what it spends on each call building the cache key and looking the entry
-up, and compares that against how long your function's own body takes. For this
+times what it spends on each call — building the cache key, looking the entry
+up, and on a miss keeping the result (copying it into memory, writing it) — and
+compares that against how long your function's own body takes. For this
 function the account has been running for several calls and caching has come
 out behind. The message gives the numbers it used: how many calls, how much
-total time went on keys and lookups, the largest body time it has ever
-observed, and the net loss so far.
+total time went on keys, lookups and stores, the largest body time it has ever
+observed, and the net loss so far. When the key is cheap and the time goes on
+the result itself, it says which: loading it on a hit, or keeping it on a miss.
 
 <!-- claim: cash/effectiveness.py:CUMULATIVE_WASTE_SECONDS == 2.0 -->
 **Why it matters.** `@cash.cache` on this function is making your program
@@ -377,13 +379,22 @@ speaks up once the loss has accumulated past a couple of real seconds *and* its
 per-call overhead exceeds even the largest body time it has seen, so a function
 that is usually fast but occasionally very slow will not be flagged.
 
-<!-- claim: cash/effectiveness.py:EffectivenessLedger.final_verdicts @701e8440 -->
+<!-- claim: cash/effectiveness.py:EffectivenessLedger.final_verdicts @0f748126 -->
 It needs three calls of a function to judge during the run, and a command-line
 tool that calls each function once per process never gets there — so the same
 test runs again when the process exits, and there one call can count. The
 per-call log line says it as it happens (`saved 0.01s; the lookup took 1.07s;
-a net loss`), and the `CASH_SUMMARY=1` table gives the time the hits' lookups
-took next to the time they saved.
+a net loss`), and the `CASH_SUMMARY=1` table gives what cash spent on keys,
+lookups and stores next to the time the hits saved. A function that loses
+under the two-second bar is not warned about on its own, but when several of
+them together lose past it, one message at the end of the run names them all.
+
+<!-- claim: cash/core.py:_THREADS_IN_CALLS @00b4eabe, cash/core.py:_NESTED_CASH_SECONDS @19b66f07 -->
+What a hit "saved" is the time its body took when it was computed, net of the
+time cash spent inside it on nested cached calls, and divided by the number of
+threads that were running cached calls at the same time — sixteen 0.5 s calls
+on eight threads took one second to run, and their hits save one second, not
+eight.
 
 **What to do.** The message names the costliest argument. If a cached function
 produced it and nothing modifies it afterwards — a trained model, a lookup
@@ -1779,7 +1790,7 @@ not affected: the reloaded code is keyed afresh.
 result to the cache failed. The message names the backend and the exception.
 Nothing was stored.
 
-<!-- claim: cash/core.py:Cash._store_in_cache @fb8db9b1 -->
+<!-- claim: cash/core.py:Cash._store_in_cache @683385bf -->
 **Why it matters.** The result you received is correct — the failure is on the
 storage side only, and Cash deliberately reports it rather than raising it into
 your code. If this happens once, it costs one recompute. If it happens on every

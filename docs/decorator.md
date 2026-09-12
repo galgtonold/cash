@@ -142,7 +142,7 @@ A notebook shows a badge on every statement. A script shows nothing by
 default, which makes it easy to assume caching is working when it isn't — so
 there are several ways to look.
 
-<!-- claim: cash/core.py:Cash.run_summary @1bc3d713, cash/core.py:Cash._summary_reasons @edbfd060, cash/core.py:Cash._print_run_summary @3c207d6e -->
+<!-- claim: cash/core.py:Cash.run_summary @325d5774, cash/core.py:Cash._summary_reasons @edbfd060, cash/core.py:Cash._print_run_summary @3c207d6e -->
 **What recomputed just now, and why?** Set `CASH_SUMMARY=1` and a
 per-function table prints to **stderr** when the process exits — stderr, so it
 never lands in a report, a pipe or a JSON response your program writes to

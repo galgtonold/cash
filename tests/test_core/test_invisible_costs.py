@@ -171,5 +171,86 @@ def test_the_hit_line_and_the_summary_show_what_the_lookup_cost(tmp_path):
         "miss_reasons": Counter(), "not_persisted": Counter(), "not_stored": Counter(),
         "bypassed": 0}
     summary = c.run_summary()
-    assert "spent on the hits' lookups, a net loss of 2.1s" in summary, summary
-    assert "2.1s looking up" in summary, summary
+    assert "spent by cash on keys, lookups and stores, a net loss of 2.1s" in summary, summary
+    assert "2.1s spent by cash" in summary, summary
+
+    # Round 20 (r20s2): a function that never hit cost its keys and stores on
+    # every miss, and the summary said nothing about it.
+    c._function_stats["app.parse"] = {
+        "hits": 0, "misses": 3, "total_time_saved": 0.0, "lookup_seconds": 0.0,
+        "miss_overhead_seconds": 3.0, "miss_reasons": Counter({"no entry yet": 3}),
+        "not_persisted": Counter(), "not_stored": Counter(), "bypassed": 0}
+    summary = c.run_summary()
+    assert "a net loss of 5.1s" in summary, summary
+    assert "3.0s spent by cash" in summary, summary
+
+
+# -- round 20: what the numbers were wrong about ------------------------------
+
+def test_hits_on_several_threads_are_not_counted_as_serial_savings(tmp_path):
+    """r20s1: sixteen 0.5 s calls on eight threads claimed 8.0 s saved; the
+    warm run saved 1.0 s. A hit's saving is divided by the threads running
+    cached calls with it."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    c = Cash(cache_dir=str(tmp_path / "cache"))
+
+    @c.cache
+    def slow(i):
+        time.sleep(0.2)
+        return i * i
+
+    with ThreadPoolExecutor(8) as ex:
+        list(ex.map(slow, range(16)))
+    before = slow.cache_info()["total_time_saved"]
+    with ThreadPoolExecutor(8) as ex:
+        list(ex.map(slow, range(16)))
+    saved = slow.cache_info()["total_time_saved"] - before
+    assert 0 < saved < 0.75 * 16 * 0.2, f"claimed {saved:.2f}s for 16 x 0.2 s on 8 threads"
+
+
+def test_a_nested_cached_calls_overhead_is_not_the_outer_functions_saving(tmp_path):
+    """r20s3: an inner cached call over 200k rows cost 12x its body to key, and
+    that time was booked as the OUTER function's run -- its hits then claimed
+    to save it, 4-9x what running it uncached costs."""
+    c = Cash(cache_dir=str(tmp_path / "cache"))
+    rows = [(i, {"k": i}) for i in range(200_000)]          # a dict per row: the slow path
+
+    @c.cache
+    def inner(rows, n):
+        return len(rows) + n
+
+    @c.cache
+    def outer(n):
+        return sum(inner(rows, i) for i in range(3))
+
+    t0 = time.perf_counter()
+    outer(1)
+    first = time.perf_counter() - t0
+    outer(1)                                                   # a hit
+    saved = outer.cache_info()["total_time_saved"]
+    assert saved < 0.3 * first, f"outer's hit claimed {saved:.2f}s of a {first:.2f}s first call"
+
+
+def test_small_losses_across_functions_are_reported_together():
+    """r20s2: ten functions each losing 0.4-0.9 s never crossed the 2 s a single
+    warning waits for, and the run was 1.3x slower than no cache at all."""
+    ledger = EffectivenessLedger(waste_threshold_seconds=2.0)
+    for name in ("app.max_latency", "app.coupons", "app.parse_users"):
+        ledger.record(name, overhead_seconds=0.9, body_seconds=0.01, was_hit=False)
+    verdicts = ledger.final_verdicts()
+    assert len(verdicts) == 1, verdicts
+    what, fix = verdicts[0]
+    assert "across 3 functions" in what and "app.coupons" in what, what
+    assert "a net loss of about 2.7s" in what, what
+
+
+def test_a_function_that_never_hit_is_not_said_to_be_slow_to_load():
+    """r20s2 F8: 'it is loading the stored result' about a function whose
+    calls were all misses -- nothing was loaded; keeping the result was the
+    cost."""
+    ledger = EffectivenessLedger(waste_threshold_seconds=2.0)
+    culprit = ("path", "str", 0.0001, None, False)
+    ledger.record("app.parse", overhead_seconds=2.5, body_seconds=0.6, was_hit=False, culprit=culprit)
+    (what, _fix), = ledger.final_verdicts()
+    assert "keeping the result" in what and "loading" not in what, what

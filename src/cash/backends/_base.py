@@ -671,6 +671,10 @@ class CacheMetadata:
     # cost, useless for asking whether caching PAID, because the overhead
     # being judged is inside the number it would be judged against.
     body_seconds: float | None = None
+    # The wall time a hit stands in for: the body's time divided by the
+    # threads that were running cached calls alongside it. Sixteen 0.5 s calls
+    # on eight threads took 1 s to run, not 8 s (round 20).
+    saves_seconds: float | None = None
     outputs: list[str] | None = None
     lineage_hash: str | None = None
     source: str | None = None  # Backend source identifier (e.g. 'RAM', 'disk')

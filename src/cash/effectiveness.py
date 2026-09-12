@@ -75,6 +75,12 @@ class _FunctionLedger:
     calls: int = 0
     body_samples: deque = field(default_factory=lambda: deque(maxlen=_BODY_SAMPLES))
     warned: bool = False
+    #: The overhead split by where it was paid: a hit's is the lookup and the
+    #: restore, a miss's the key and the store. Which one dominates decides
+    #: what the message blames -- round 20 was told "loading the stored result"
+    #: about a function that had never hit.
+    hit_overhead: float = 0.0
+    miss_overhead: float = 0.0
 
 
 class EffectivenessLedger:
@@ -127,6 +133,10 @@ class EffectivenessLedger:
             self._culprits[func_name] = culprit
         led.calls += 1
         led.overhead_seconds += overhead_seconds
+        if was_hit:
+            led.hit_overhead += overhead_seconds
+        else:
+            led.miss_overhead += overhead_seconds
         led.body_samples.append(body_seconds)
         if was_hit:
             # A hit is the only time caching actually returns something: the
@@ -162,19 +172,38 @@ class EffectivenessLedger:
         the largest body time seen.
         """
         out: list[tuple[str, str]] = []
+        # Functions losing, each under the bar: ten of them losing 0.4-0.9 s
+        # apiece made a run 1.3x slower and nothing said so (round 20).
+        small: list[tuple[float, str]] = []
         for func_name, led in self._ledgers.items():
             if led.warned or not led.calls or not led.body_samples:
                 continue
             waste = led.overhead_seconds - led.saved_seconds
-            if waste < self._threshold:
-                continue
             per_call_overhead = led.overhead_seconds / led.calls
             best_case_saving = max(led.body_samples)
-            if per_call_overhead <= best_case_saving:
+            if per_call_overhead <= best_case_saving or waste <= 0:
+                continue
+            if waste < self._threshold:
+                small.append((waste, func_name))
                 continue
             led.warned = True
             out.append(_message(func_name, led, waste, per_call_overhead,
                                 best_case_saving, self._culprits.get(func_name)))
+        total = sum(w for w, _ in small)
+        if len(small) >= 2 and total >= self._threshold:
+            small.sort(reverse=True)
+            named = ", ".join(f"{name!r} ({waste:.1f}s)" for waste, name in small[:5])
+            more = f" and {len(small) - 5} more" if len(small) > 5 else ""
+            out.append((
+                f"@cash.cache cost more than it saved across {len(small)} functions "
+                f"in this run -- a net loss of about {total:.1f}s together, each "
+                f"under the {self._threshold:g}s a single warning waits for: "
+                f"{named}{more}. Each one's overhead per call is larger than the "
+                f"most its body ever took.",
+                "these are cheap functions over large arguments: leave them "
+                "uncached, or cache what they are computed from instead -- the "
+                "aggregate rather than the rows.",
+            ))
         return out
 
     def reset(self) -> None:
@@ -230,14 +259,20 @@ def _message(
         # Not the key: the lookup itself -- reading and rebuilding the stored
         # result. Blaming an argument sent round 19's tester after "'path'
         # (str), about 0ms to hash" for a parser whose hit was a 2M-row restore.
+        # And on misses there is nothing to load: the cost is keeping the
+        # result -- copying it into memory, writing it (round 20).
+        where = ("loading the stored result, which takes longer than running "
+                 "the function" if led.hit_overhead > led.miss_overhead else
+                 "keeping the result -- copying it into memory and writing it -- "
+                 "which takes longer than running the function")
         what = (
             f"@cash.cache on {func_name!r} is costing more than it saves. "
             f"Across {led.calls} calls cash spent {led.overhead_seconds:.2f}s on "
-            f"cache keys and lookups to avoid at most {best_case_saving * 1000:.0f}ms "
-            f"of work per call -- a net loss of about {waste:.1f}s so far. Almost "
-            f"none of it is the key (its costliest argument took about "
-            f"{key_seconds * 1000:.0f}ms to hash): it is loading the stored "
-            f"result, which takes longer than running the function."
+            f"cache keys, lookups and stores to avoid at most "
+            f"{best_case_saving * 1000:.0f}ms of work per call -- a net loss of "
+            f"about {waste:.1f}s so far. Almost none of it is the key (its "
+            f"costliest argument took about {key_seconds * 1000:.0f}ms to hash): "
+            f"it is {where}."
         )
         return what, (
             "a result that is slower to load than to compute is not worth "
