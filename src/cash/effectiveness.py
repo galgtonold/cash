@@ -81,6 +81,16 @@ class _FunctionLedger:
     #: about a function that had never hit.
     hit_overhead: float = 0.0
     miss_overhead: float = 0.0
+    hits: int = 0
+
+    def typical_overhead(self) -> float:
+        """What one call usually costs: a hit's overhead when there are hits,
+        a miss's otherwise. A miss pays its store once per key; averaged in, one
+        slow write under load made a hasher that was the whole cost of every
+        hit read as "almost none of it is the key"."""
+        if self.hits:
+            return self.hit_overhead / self.hits
+        return self.miss_overhead / max(1, self.calls)
 
 
 class EffectivenessLedger:
@@ -135,6 +145,7 @@ class EffectivenessLedger:
         led.overhead_seconds += overhead_seconds
         if was_hit:
             led.hit_overhead += overhead_seconds
+            led.hits += 1
         else:
             led.miss_overhead += overhead_seconds
         led.body_samples.append(body_seconds)
@@ -255,7 +266,7 @@ def _message(
         "registration needs override=True -- or drop the decorator here."
     )
     key_seconds = culprit[2] if culprit is not None else None
-    if key_seconds is not None and key_seconds < 0.25 * per_call_overhead:
+    if key_seconds is not None and key_seconds < 0.25 * led.typical_overhead():
         # Not the key: the lookup itself -- reading and rebuilding the stored
         # result. Blaming an argument sent round 19's tester after "'path'
         # (str), about 0ms to hash" for a parser whose hit was a 2M-row restore.

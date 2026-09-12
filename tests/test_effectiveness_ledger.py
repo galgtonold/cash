@@ -38,6 +38,35 @@ def test_it_fires_on_the_case_that_motivated_it():
     assert "register_hasher" in fix, "the warning must name a remedy that keeps caching"
 
 
+def test_one_slow_store_does_not_clear_the_key_of_blame():
+    """The key is judged against a hit, not against an average one write
+    inflated. Under suite load the single miss's store took ~20x a hit, and
+    a hasher that was the whole cost of every hit read as "almost none of it
+    is the key" -- the test that pins the wiring flaked on exactly that."""
+    ledger = EffectivenessLedger(waste_threshold_seconds=0.01)
+    culprit = ("payload", "Payload", 0.005, None, False)
+    ledger.record("f", overhead_seconds=0.120, body_seconds=0.0001, was_hit=False,
+                  culprit=culprit)
+    verdict = None
+    for _ in range(4):
+        verdict = verdict or ledger.record(
+            "f", overhead_seconds=0.006, body_seconds=0.0001, was_hit=True, culprit=culprit)
+    assert verdict is not None
+    assert "register_hasher" in verdict[1], verdict
+
+
+def test_a_slow_restore_still_is_not_blamed_on_the_key():
+    """Control: when the hits themselves are slow, the key is still cleared."""
+    ledger = EffectivenessLedger(waste_threshold_seconds=0.01)
+    culprit = ("path", "str", 0.0001, None, False)
+    verdict = None
+    for hit in (False, True, True, True):
+        verdict = verdict or ledger.record(
+            "f", overhead_seconds=0.2, body_seconds=0.01, was_hit=hit, culprit=culprit)
+    assert verdict is not None
+    assert "loading the stored result" in verdict[0], verdict
+
+
 def test_it_stays_quiet_below_the_cumulative_threshold():
     """The anti-spam control, and the reason the threshold is in seconds.
 
