@@ -9,6 +9,7 @@ automatically invalidates dependent cached results.
 """
 
 import builtins
+import concurrent.futures
 import contextvars
 import functools
 import importlib
@@ -520,6 +521,105 @@ def _patch_thread_pool_submit() -> None:
         if _active_tracker.get() is None or getattr(self, "_cash_internal", False):
             return original(self, fn, *args, **kwargs)
         return original(self, contextvars.copy_context().run, fn, *args, **kwargs)
+
+    submit._is_file_tracker_patch = True
+    submit._original_func = original
+    pool.submit = submit
+
+
+class _WorkerReads:
+    """What a task run in a worker process returned, and the files it read."""
+    __slots__ = ("value", "files", "absent")
+
+    def __init__(self, value: Any, files: list[str], absent: list[str]) -> None:
+        self.value, self.files, self.absent = value, files, absent
+
+    def __reduce__(self):
+        return (_WorkerReads, (self.value, self.files, self.absent))
+
+
+class _ReadsInWorker:
+    """A task sent to a worker process that brings back what it read.
+
+    Module-level so it pickles by reference: the worker imports this module
+    (0.14 s, once per worker) and runs the task under a tracker of its own.
+    A cached function the task calls there propagates its reads -- and on a
+    hit, its recorded ones -- into that tracker like into any outer call's.
+    """
+    __slots__ = ("fn",)
+
+    def __init__(self, fn: Callable[..., Any]) -> None:
+        self.fn = fn
+
+    def __reduce__(self):
+        return (_ReadsInWorker, (self.fn,))
+
+    def __call__(self, *args: Any, **kwargs: Any) -> _WorkerReads:
+        tracker = FileAccessTracker()
+        with tracker:
+            value = self.fn(*args, **kwargs)
+        return _WorkerReads(value, sorted(tracker.get_accessed_files()),
+                            sorted(tracker.get_absent_files()))
+
+
+class _RelayFuture(concurrent.futures.Future):
+    """The future a patched ``submit`` returns: the worker's plain result, and
+    the cancellation reaching the future that actually runs."""
+
+    def __init__(self, inner: concurrent.futures.Future) -> None:
+        super().__init__()
+        self._inner = inner
+
+    def cancel(self) -> bool:
+        return self._inner.cancel() and super().cancel()
+
+
+def _patch_process_pool_submit() -> None:
+    """Bring the files a ``ProcessPoolExecutor`` task read back to the submitter.
+
+    A cached orchestrator that fans work out to a process pool read its data in
+    the workers, where no tracker of the parent's can see: after a data fix in
+    one input it served the pre-fix report, while the thread-pool version beside
+    it invalidated (round 20). With a tracker active, ``submit`` (which
+    ``Executor.map`` calls, chunked or not) sends a `_ReadsInWorker` instead of
+    the bare function, and credits what it read to the submitting call when the
+    result comes back -- before the caller can see the result, so before the
+    call that waits on it is stored. ``multiprocessing.Pool`` and joblib are
+    not wrapped: their reads stay unseen, and ``file_depends_on=`` names them.
+    """
+    import concurrent.futures.process as cf_process
+
+    pool = cf_process.ProcessPoolExecutor
+    original = pool.__dict__.get("submit")
+    if original is None or getattr(original, "_is_file_tracker_patch", False):
+        return
+
+    @functools.wraps(original)
+    def submit(self, fn, /, *args, **kwargs):
+        tracker = _active_tracker.get()
+        if tracker is None or getattr(self, "_cash_internal", False):
+            return original(self, fn, *args, **kwargs)
+        inner = original(self, _ReadsInWorker(fn), *args, **kwargs)
+        outer = _RelayFuture(inner)
+
+        def relay(done: concurrent.futures.Future) -> None:
+            if done.cancelled():
+                outer.cancel()
+                return
+            error = done.exception()
+            if error is not None:
+                outer.set_exception(error)
+                return
+            result = done.result()
+            if isinstance(result, _WorkerReads):
+                for path in result.files:
+                    tracker._add_tracked(path)
+                tracker.absent_files.update(result.absent)
+                result = result.value
+            outer.set_result(result)
+
+        inner.add_done_callback(relay)
+        return outer
 
     submit._is_file_tracker_patch = True
     submit._original_func = original
@@ -1173,8 +1273,10 @@ class FileAccessTracker:
         # io.open patch above misses every pathlib read. See the function.
         _patch_pathlib_accessor()
 
-        # 2c. Work handed to a thread pool runs under the submitter's tracker.
+        # 2c. Work handed to a thread pool runs under the submitter's tracker,
+        # and work handed to a process pool reports what it read back to it.
         _patch_thread_pool_submit()
+        _patch_process_pool_submit()
 
         # 3. Patch Loaded Modules
         # Iterate over registered modules

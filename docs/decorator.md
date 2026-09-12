@@ -412,9 +412,17 @@ Reads in a **thread pool** the function starts count too:
 serial loop would — before 0.10.1 it recorded none of them. A thread you start
 yourself with `threading.Thread(target=...)` begins with nothing cash can see,
 so a file read only there is not tracked; read it in the function, hand the work
-to a `ThreadPoolExecutor`, or name the file with `file_depends_on=`. A
-*process* pool's reads happen in another process and are not seen either —
-`file_depends_on=` again.
+to a `ThreadPoolExecutor`, or name the file with `file_depends_on=`.
+
+<!-- claim: cash/notebook/file_tracker.py:_patch_process_pool_submit @9e495aaf, cash/notebook/file_tracker.py:_ReadsInWorker.__call__ @979f59d5 -->
+A **`ProcessPoolExecutor`** the function starts reads in other processes, and
+cash brings those reads back: each task runs in its worker under a tracker of
+its own and returns what it read with its result, so `ex.map(read_region,
+paths)` inside a cached orchestrator records every file its workers opened, and
+a data fix in one of them recomputes the orchestrator. It costs each worker one
+import of cash's file tracker. `multiprocessing.Pool` and joblib's workers are
+not wrapped: files read only there are not seen, so name them with
+`file_depends_on=`.
 
 <!-- claim: cash/core.py:Cash._credit_remembered_reads @a2e433e7, cash/notebook/file_tracker.py:_credit_read_to_stack @7be631ab -->
 A read your code **memoises** counts for every call that uses it. With
