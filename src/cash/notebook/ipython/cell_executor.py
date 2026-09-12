@@ -66,6 +66,7 @@ from ..annotations import get_statement_annotations
 from ..cache_status import CacheStatus
 from ..consumables import consumable_state, is_consumable_unrestorable
 from ..control_structures import contains_top_level_await, is_control_structure
+from ..file_dep_snapshot import enter_hash_call, exit_hash_call
 from ..randomness import get_drawing_rng_modules, rng_lineage_fingerprint
 from ..statement import ProcessResult
 
@@ -782,6 +783,37 @@ class CellExecutor:
         kwargs: dict | None = None,
         original_run_cell: Callable[..., Any] | None = None,
     ) -> _PipelineCompleted | _PipelineSyntaxError | _EarlyReturn:
+        """`_execute_cell`, with the file checks it makes sharing one digest per
+        file: a cell's statements and the upstream planner check the same
+        inputs, and the next cell hashes them again
+        (`file_dep_snapshot._HASH_CALL`)."""
+        hash_call = enter_hash_call()
+        try:
+            return self._execute_cell(raw_cell, args, kwargs, original_run_cell)
+        finally:
+            exit_hash_call(hash_call)
+
+    async def execute_cell_async(
+        self,
+        raw_cell: str,
+        args: tuple = (),
+        kwargs: dict | None = None,
+        original_run_cell: Callable[..., Any] | None = None,
+    ) -> _PipelineCompleted | _PipelineSyntaxError | _EarlyReturn:
+        """`_execute_cell_async`, in one digest-sharing scope like `execute_cell`."""
+        hash_call = enter_hash_call()
+        try:
+            return await self._execute_cell_async(raw_cell, args, kwargs, original_run_cell)
+        finally:
+            exit_hash_call(hash_call)
+
+    def _execute_cell(
+        self,
+        raw_cell: str,
+        args: tuple = (),
+        kwargs: dict | None = None,
+        original_run_cell: Callable[..., Any] | None = None,
+    ) -> _PipelineCompleted | _PipelineSyntaxError | _EarlyReturn:
         """Run *raw_cell* through the 7-phase cached-execution pipeline.
 
         Returns one of:
@@ -905,7 +937,7 @@ class CellExecutor:
         except (AttributeError, TypeError):  # pragma: no cover - defensive
             pass
 
-    async def execute_cell_async(
+    async def _execute_cell_async(
         self,
         raw_cell: str,
         args: tuple = (),

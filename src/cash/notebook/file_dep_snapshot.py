@@ -162,10 +162,32 @@ _HASH_READ_CHUNK = 1024 * 1024                # 1 MiB streaming chunk
 #: not refreshed on use, so a window shorter than the pass itself expires
 #: entries mid-pass and re-hashes them. Measured with a one-second window, a
 #: 50-file 400 MiB pass fell back to 151 ms from 49 ms.
-_HASH_MEMO: dict[tuple[str, int, int, int, int, int], tuple[float, str]] = {}
+#:
+#: 3. And only within ONE outermost cached call (`_HASH_CALL`). Five seconds was
+#:    still a window: a long-lived process whose input was edited in place with
+#:    its size and mtime unchanged -- an ``np.memmap`` write, a write with the
+#:    mtime put back -- served the old result on its next call (round 20). The
+#:    docs promise that under the full-hash cap the content decides, so every
+#:    call hashes such a file again; the burst the memo exists for is the
+#:    checks one call makes, and those still share a digest.
+_HASH_MEMO: dict[tuple[str, int, int, int, int, int], tuple[float, str, object]] = {}
 _HASH_MEMO_MAX = 4096
 _HASH_MEMO_TTL_SECONDS = 5.0
 _HASH_MEMO_MIN_AGE_SECONDS = 10.0
+_HASH_CALL: contextvars.ContextVar[object | None] = contextvars.ContextVar(
+    "_cash_hash_call", default=None)
+
+
+def enter_hash_call() -> contextvars.Token | None:
+    """Start a digest-sharing scope, unless one is already open (a nested call)."""
+    if _HASH_CALL.get() is not None:
+        return None
+    return _HASH_CALL.set(object())
+
+
+def exit_hash_call(token: contextvars.Token | None) -> None:
+    if token is not None:
+        _HASH_CALL.reset(token)
 
 
 def file_content_hash(
@@ -194,11 +216,12 @@ def file_content_hash(
     it was guarding.
     """
     memo_key = None
+    call = _HASH_CALL.get()
     try:
         st = os.stat(path)
         if size is None:
             size = st.st_size
-        memoizable = (time.time() - st.st_mtime) > _HASH_MEMO_MIN_AGE_SECONDS
+        memoizable = call is not None and (time.time() - st.st_mtime) > _HASH_MEMO_MIN_AGE_SECONDS
         if memoizable:
             # st_dev/st_ino: the FILE's identity, not only the path's. A path
             # through a re-pointed junction names a different file with the same
@@ -207,7 +230,7 @@ def file_content_hash(
             memo_key = (path, st.st_dev, st.st_ino, size, st.st_mtime_ns,
                         getattr(st, "st_ctime_ns", 0))
             cached = _HASH_MEMO.get(memo_key)
-            if cached is not None and (
+            if cached is not None and cached[2] is call and (
                 time.monotonic() - cached[0]
             ) < _HASH_MEMO_TTL_SECONDS:
                 return cached[1]
@@ -234,8 +257,10 @@ def file_content_hash(
                     f.seek(off)
                     h.update(f.read(_HASH_SAMPLE_REGION_BYTES))
         digest = h.hexdigest()
-        if memo_key is not None and len(_HASH_MEMO) < _HASH_MEMO_MAX:
-            _HASH_MEMO[memo_key] = (time.monotonic(), digest)
+        if memo_key is not None:
+            if len(_HASH_MEMO) >= _HASH_MEMO_MAX:
+                _HASH_MEMO.clear()           # entries of finished calls are dead weight
+            _HASH_MEMO[memo_key] = (time.monotonic(), digest, call)
         return digest
     except OSError:
         logger.debug("[FILE_DEP] Could not hash file for freshness: %s", path)

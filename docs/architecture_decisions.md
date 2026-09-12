@@ -85,9 +85,10 @@ where there is no inode change time. The timestamp comparison is exact on the
 integer nanoseconds, so a tool restoring whole seconds does not reach it. The
 threshold defaults to 256 MiB (64 MiB until round 19, when a memory-mapped
 `.npy` write on Windows showed that a timestamp can stay put without any tool
-restoring it) — above the ordinary CSV, parquet or array file — because the
-digest is memoized per process, so a full hash is paid once rather than on every
-lookup.
+restoring it) — above the ordinary CSV, parquet or array file. A full hash is
+paid on every cached call that checks the file (the checks within one call
+share it): round 20 found that reusing a digest for a few seconds across calls
+let a long-running process serve an in-place `np.memmap` edit stale.
 
 **Still timestamp-based, deliberately:** the explicit `file_depends_on=` /
 `FileDataSource` escape hatch folds the file's mtime into the cache key

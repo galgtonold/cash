@@ -63,25 +63,56 @@ def _reader(c, runs, path):
     return read
 
 
-def test_the_second_check_of_an_unchanged_file_does_not_rehash(cash_instance, tmp_path):
-    """The memo, asserted where it is decided rather than by a stopwatch."""
+def test_checks_inside_one_call_share_a_digest(cash_instance, tmp_path, monkeypatch):
+    """The memo, asserted where it is decided rather than by a stopwatch: an
+    aggregate whose cached helpers all depend on one input hashes it once per
+    call, not once per helper (the round-16 pipeline: fifty inputs, ten
+    helpers)."""
+    import hashlib
+    import types
+
     path = _aged_file(tmp_path)
     runs: list[str] = []
     read = _reader(cash_instance, runs, path)
 
-    read("a")                                   # cold: computes and snapshots
-    file_dep_snapshot._HASH_MEMO.clear()
-    read("a")                                   # warm: hashes once, memoizes
-    memo_after_first = dict(file_dep_snapshot._HASH_MEMO)
-    assert memo_after_first, "nothing was memoized"
+    @cash_instance.cache(assume_safe=True)
+    def aggregate(n):
+        return sum(read(str(i)) for i in range(n))
 
-    stamps = {k: v[0] for k, v in memo_after_first.items()}
-    read("a")                                   # warm again: must reuse
+    aggregate(3)                                # cold: computes and snapshots
+    aggregate.cache_clear()                     # the aggregate misses, its helpers hit
+    hashed: list[int] = []
+    monkeypatch.setattr(file_dep_snapshot, "hashlib", types.SimpleNamespace(
+        sha256=lambda *a: hashed.append(1) or hashlib.sha256(*a)))
+    aggregate(3)
+    assert len(runs) == 3, "the helpers did not hit"
+    assert len(hashed) == 1, f"one call hashed its one input {len(hashed)} times"
 
-    assert {k: v[0] for k, v in file_dep_snapshot._HASH_MEMO.items()} == stamps, (
-        "the digest was recomputed for a file nothing had touched"
-    )
-    assert len(runs) == 1
+
+def test_each_call_rehashes_a_file_under_the_cap(cash_instance, tmp_path):
+    """Round 20 (r20s5): a long-lived process served a stale result for a
+    <=256 MiB file edited in place with its size and mtime unchanged (an
+    np.memmap write; a write + os.utime back) -- the memo trusted the stat for
+    five seconds. Under the cap, the content decides on every call."""
+    path = _aged_file(tmp_path)
+    runs: list[str] = []
+
+    @cash_instance.cache(assume_safe=True)
+    def first_byte(tag):
+        runs.append(tag)
+        with open(path, "rb") as fh:
+            return fh.read(1)
+
+    assert first_byte("a") == b"x"
+    assert first_byte("a") == b"x"             # warm: the digest is memoized now
+    before = os.stat(path)
+    with open(path, "r+b") as fh:              # same size, then the mtime put back
+        fh.write(b"Z")
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert os.stat(path).st_size == before.st_size
+
+    assert first_byte("a") == b"Z", "served the old content for an edited file"
+    assert len(runs) == 2
 
 
 def test_an_edit_still_invalidates_with_the_memo_warm(cash_instance, tmp_path):

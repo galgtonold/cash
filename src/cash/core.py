@@ -53,7 +53,7 @@ from .exceptions import (
     CashImpurityWarning,
 )
 from .graph import DependencyGraph
-from .notebook.file_dep_snapshot import ACTIVE_CONFIG
+from .notebook.file_dep_snapshot import ACTIVE_CONFIG, enter_hash_call, exit_hash_call
 from .notebook.analysis import CodeAnalyzer
 
 # The decorator path reuses the notebook path's randomness detector verbatim
@@ -4361,12 +4361,14 @@ class Cash:
                 if self.config.disable:
                     return await _bypass(args, kwargs)
                 token = ACTIVE_CONFIG.set(self.config)
+                hash_call = enter_hash_call()
                 try:
                     result = await wrapper(*args, **kwargs)
                 except BaseException:
                     _drain_raised()
                     raise
                 finally:
+                    exit_hash_call(hash_call)
                     ACTIVE_CONFIG.reset(token)
                 _drain_stats()
                 self._warn_unseeded_estimator_result(
@@ -4382,12 +4384,17 @@ class Cash:
                 # This instance's settings for the file checks the call makes
                 # (`file_hash_full_max_bytes`); see ACTIVE_CONFIG.
                 token = ACTIVE_CONFIG.set(self.config)
+                # The file checks this call makes -- its own and its nested
+                # cached calls' -- share one digest per file, and the next call
+                # hashes again (see `file_dep_snapshot._HASH_CALL`).
+                hash_call = enter_hash_call()
                 try:
                     result = wrapper(*args, **kwargs)
                 except BaseException:
                     _drain_raised()
                     raise
                 finally:
+                    exit_hash_call(hash_call)
                     ACTIVE_CONFIG.reset(token)
                 _drain_stats()
                 self._warn_unseeded_estimator_result(

@@ -743,9 +743,9 @@ on every platform:
 cash.configure(file_hash_full_max_bytes=512 * 1024 * 1024)   # or CASH_FILE_HASH_FULL_MAX_BYTES
 ```
 
-The price is a full read of the file the first time each process checks it —
-about 0.72 ms per MiB, so 370 ms for a 512 MiB input — and a `stat` on every
-check after that, because digests are memoized per process. If that trade goes
+The price is a full read of the file on every cached call that checks it —
+about 0.72 ms per MiB, so 370 ms for a 512 MiB input; the checks one call makes
+(its own and its nested cached calls') share one read. If that trade goes
 bad, [`CACHE-FRESHNESS-COST`](warnings.md#cache-freshness-cost) says so with
 both numbers.
 
