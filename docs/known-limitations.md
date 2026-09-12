@@ -677,7 +677,7 @@ once per session, and only when it is reading the saved file.
 
 To keep hashing cheap, cash samples large values rather than reading them whole:
 
-<!-- claim: cash/notebook/object_hashing.py:compute_hash @61e351a4 -->
+<!-- claim: cash/notebook/object_hashing.py:compute_hash @2027fef7 -->
 | Type | What is hashed |
 |---|---|
 | DataFrame | shape, dtypes, **first 5 rows** |

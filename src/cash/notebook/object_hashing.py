@@ -31,13 +31,29 @@ logger = logging.getLogger(__name__)
 _HASH_ERRORS = (TypeError, ValueError, AttributeError, pickle.PicklingError)
 
 
+def _content_bytes(values: Any) -> bytes:
+    """The bytes of an array's content -- never of its pointers.
+
+    An object array's buffer holds PyObject pointers: memory addresses, which
+    differ in every process and between a value and its copy. A frame with a
+    text column (whose ``.values`` is an object array) hashed differently after
+    every restart, so an ``if`` or ``for`` body that might reassign it gave it
+    a new lineage each time, and nothing downstream restored (round 21). Its
+    elements are pickled instead, which is content. Numeric arrays keep the raw
+    bytes, so their hashes -- and the keys built on them -- do not move.
+    """
+    if getattr(getattr(values, 'dtype', None), 'hasobject', False):
+        return pickle.dumps(values.tolist(), protocol=4)
+    return values.tobytes()
+
+
 def _hash_dataframe_or_series(obj: Any, type_name: str) -> str:
     """Hash a pandas DataFrame or Series using shape + dtypes + data sample."""
     shape_str = f"{obj.shape}"
     dtypes_str = str(obj.dtypes.to_dict()) if type_name == 'DataFrame' else str(obj.dtype)
     try:
-        sample = str(obj.head(5).values.tobytes() if len(obj) > 0 else b'')
-    except (TypeError, ValueError, AttributeError):
+        sample = str(_content_bytes(obj.head(5).values) if len(obj) > 0 else b'')
+    except (TypeError, ValueError, AttributeError, pickle.PicklingError):
         sample = str(obj.head(5))
     combined = f"{shape_str}:{dtypes_str}:{sample}"
     return hashlib.sha256(combined.encode('utf-8')).hexdigest()
@@ -114,7 +130,7 @@ def compute_hash(obj: Any) -> str:
         if type_name == 'ndarray':
             shape_str = str(obj.shape)
             dtype_str = str(obj.dtype)
-            sample = str(obj.flat[:100].tobytes() if obj.size > 0 else b'')
+            sample = str(_content_bytes(obj.flat[:100]) if obj.size > 0 else b'')
             combined = f"{shape_str}:{dtype_str}:{sample}"
             return hashlib.sha256(combined.encode('utf-8')).hexdigest()
         if isinstance(obj, (list, tuple, dict, set, frozenset)):
