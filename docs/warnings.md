@@ -1172,7 +1172,7 @@ was edited after this process imported it. The process is still running the
 *old* code; the file now holds the *new* code. cash noticed the difference the
 first time the function was called.
 
-<!-- claim: cash/source_norm.py:_pyc_proves_unchanged @c97ead87 -->
+<!-- claim: cash/source_norm.py:_pyc_proves_unchanged @7faf61ff -->
 That includes a replacement that keeps an older timestamp — `shutil.copy2`,
 `cp -p`, `rsync -a`, robocopy, a drag-and-drop copy in Explorer all do — which
 before 0.10.1 looked untouched. cash no longer takes the file's time as proof on

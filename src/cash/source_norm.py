@@ -469,7 +469,9 @@ def _compiled_module(path: str) -> types.CodeType | None:
     if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
         return cached[2]
     try:
-        with open(path, "rb") as fh:
+        # FileIO, not `open`: this read is cash checking the code it runs, and
+        # through `open` a cached call it runs inside recorded it as an input.
+        with io.FileIO(path, "rb") as fh:
             source = fh.read()
         code: types.CodeType | None = compile(source, path, "exec", dont_inherit=True)
     except (OSError, SyntaxError, ValueError):
@@ -506,7 +508,11 @@ def _pyc_proves_unchanged(path: str, st: object) -> bool:
         pyc = importlib.util.cache_from_source(path)
         if os.stat(pyc).st_mtime > started:
             return False
-        with open(pyc, "rb") as fh:
+        # FileIO, not `open`: read through `open` inside a cached call's body --
+        # a nested cached call's key being built -- the module's .pyc became
+        # that call's input, and editing ANY function in the module re-ran it
+        # (round 20: a 25 s step on every deploy).
+        with io.FileIO(pyc, "rb") as fh:
             header = fh.read(16)
     except (OSError, ValueError, NotImplementedError):
         return False
