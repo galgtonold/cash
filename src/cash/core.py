@@ -1698,6 +1698,10 @@ class Cash:
             declared_dep_resolver=self._resolve_declared_dep_hash,
         )
 
+        # The same live re-resolution, for functions found inside data globals
+        # (`_data_callable_identity`).
+        self._data_helper_resolver = SysModulesHelperResolver(self._hash_helper_identity)
+
         atexit.register(self.shutdown)
 
         # register_magic=None (default) auto-detects: only register when an
@@ -5443,6 +5447,53 @@ class Cash:
             )
         return v
 
+    def _data_callable_identity(self, fn: Any) -> str:
+        """A callable found INSIDE a data global, identified by what calling it runs.
+
+        A registry -- ``STEPS = {"load": load_step}`` read by a cached
+        ``run(name)`` that calls ``STEPS[name](x)`` -- was keyed by each
+        function's own source, so an edit to a helper the step calls was a HIT
+        with the old result; and a cached function stored there was keyed by
+        cash's own wrapper, so not even an edit to its body moved the key
+        (round 20). A cached function counts as its dependency state, the same
+        as a call to it would; a plain function of the user's as its source
+        plus its helpers, re-resolved live like any helper's.
+        """
+        try:
+            return self._data_callable_identity_of(fn)
+        except (OSError, TypeError, ValueError):
+            raise                            # `_stabilize_for_global_hash` handles these
+        except Exception:  # noqa: BLE001 - never break a key over the deeper identity
+            logger.debug("[CORE] deep identity failed for %r", fn, exc_info=True)
+            return self._hash_callable_source(fn)
+
+    def _data_callable_identity_of(self, fn: Any) -> str:
+        if getattr(fn, "_cash_cached", False):
+            inner = getattr(fn, "__wrapped__", None)
+            if inner is not None:
+                name = self._get_func_key(inner)
+                if name in self.functions:
+                    if name not in self._populated:
+                        self._ensure_closure_analyzed(inner)
+                    return "cached:" + self._state_hasher.compute(
+                        name, own_source_override=self._pin_own_source(inner))
+                fn = inner
+        if not isinstance(fn, types.FunctionType):
+            return self._hash_callable_source(fn)
+        own = self._hash_helper_identity(fn)
+        from .purity_analyzer import _own_code_is_user
+        if not _own_code_is_user(fn, getattr(fn, "__module__", None)):
+            return own
+        try:
+            report = get_analyzer().analyze(fn)
+        except (OSError, TypeError, SyntaxError, RecursionError):
+            return own
+        if not report.helper_source_hashes:
+            return own
+        live = self._data_helper_resolver.current_hashes(report)
+        helpers = ",".join(f"{q}={live.get(q, h)}" for q, h in sorted(report.helper_source_hashes.items()))
+        return hashlib.sha256(f"{own}|{helpers}".encode("utf-8")).hexdigest()
+
     def _code_identity(self, fn: Any) -> tuple:
         """The bytecode-level identity of a callable, or ``()`` if it has none.
 
@@ -6264,7 +6315,7 @@ class Cash:
                     watch[name] = (carried, "carrier", (g, name))
                 continue
             try:
-                stabilized = self._stabilize_for_global_hash(v, self._hash_callable_source)
+                stabilized = self._stabilize_for_global_hash(v, self._data_callable_identity)
                 h = self._hash_arg_payload((stabilized,), {})
                 parts.append((name, h))
                 # Free: this is the hash the key already needed. Keeping it is
@@ -6437,7 +6488,7 @@ class Cash:
         else:
             return None
         try:
-            stabilized = self._stabilize_for_global_hash(payload, self._hash_callable_source)
+            stabilized = self._stabilize_for_global_hash(payload, self._data_callable_identity)
             return self._hash_arg_payload((stabilized,), {})
         except Exception:  # noqa: BLE001 - never break a call over this
             return None
@@ -6524,7 +6575,7 @@ class Cash:
                     self._note_carrier_verdict(value, True)
             elif verdict[1] == "partials":
                 payload = ("wrapped partials", _held_partials(value))
-            stabilized = self._stabilize_for_global_hash(payload, self._hash_callable_source)
+            stabilized = self._stabilize_for_global_hash(payload, self._data_callable_identity)
             return self._hash_arg_payload((stabilized,), {})
         except Exception:  # noqa: BLE001 - unkeyable before, never break a call over it
             self._note_carrier_verdict(value, False)
@@ -6909,7 +6960,7 @@ class Cash:
             if callable(value) and not isinstance(value, (dict, list, tuple, set)):
                 return                   # code: the helper walk follows it
             try:
-                stabilized = self._stabilize_for_global_hash(value, self._hash_callable_source)
+                stabilized = self._stabilize_for_global_hash(value, self._data_callable_identity)
                 parts.append((label, self._hash_arg_payload((stabilized,), {})))
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
                 pass
@@ -7009,7 +7060,7 @@ class Cash:
     def _safe_global_hash(self, value: Any, func_name: str, label: str) -> str | None:
         """Hash *value* for the key, warning once and skipping if it cannot be."""
         try:
-            stabilized = self._stabilize_for_global_hash(value, self._hash_callable_source)
+            stabilized = self._stabilize_for_global_hash(value, self._data_callable_identity)
             return self._hash_arg_payload((stabilized,), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
             self._warn_once(
@@ -8912,7 +8963,7 @@ class Cash:
                         continue
                     after = self._hash_arg_payload(
                         (self._stabilize_for_global_hash(
-                            g[name], self._hash_callable_source),), {})
+                            g[name], self._data_callable_identity),), {})
             except Exception:  # noqa: BLE001 - unhashable NOW; treat as unchanged
                 continue
             if after == before:

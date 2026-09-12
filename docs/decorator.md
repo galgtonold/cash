@@ -364,7 +364,7 @@ cached function counts as your code even after `pip install .`, so a changed
 checkout. If you do need a third-party function's identity in the key, name it
 with [`depends_on=`](#depends_on-explicit-dependency-graph).
 
-<!-- claim: cash/core.py:Cash._local_binding_parts @3130f596, cash/purity_analyzer.py:_resolve_local_import @e82fd5a2 -->
+<!-- claim: cash/core.py:Cash._local_binding_parts @d2c4673e, cash/purity_analyzer.py:_resolve_local_import @e82fd5a2 -->
 An import written **inside** the function (`from .models import auc`, the usual
 way out of an import cycle) is followed the same way as one at the top of the
 file -- a function it imports, a constant (`from .settings import ROUNDING`),
@@ -456,7 +456,7 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @2037320a, cash/core.py:Cash._fold_dependency_read_globals @fbbbd0b2 -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @f292bb77, cash/core.py:Cash._fold_dependency_read_globals @fbbbd0b2 -->
 Only globals that are **read** participate — and that includes globals read
 on someone else's behalf: by a **helper**, so a helper returning a module-level
 `CONFIG` invalidates its caller when that config changes, and by another
@@ -487,7 +487,7 @@ normally.
 The same rule applies to variables a closure captures, not just module
 globals.
 
-<!-- claim: cash/core.py:Cash._carried_global_hash @55782eb2 -->
+<!-- claim: cash/core.py:Cash._carried_global_hash @c44af544 -->
 **A callable built from data counts as that data.** A global that is a
 library callable carrying values — `SMOOTH = partial(ndimage.gaussian_filter,
 sigma=SIGMA)`, `POLY = np.poly1d(COEFFS)`, `CAL = interp1d(X, Y)`,
@@ -944,7 +944,11 @@ By default, `@cash.cache` runs a static analyzer on the function body
   `globals()[name]()` → a warning, and the function is **still cached**.
   Editing the callable such a table holds does not invalidate; name it with
   `depends_on=[...]` and it will. A **module-level** table (`HANDLERS[key]()`)
-  needs none of this — cash hashes it as a global already.
+  needs none of this — <!-- claim: cash/core.py:Cash._data_callable_identity_of @5ea6e8a7 -->cash hashes it as a global already, and each function
+  in it counts as what calling it runs: its source, the helpers it calls, and
+  for a `@cash.cache` function its whole dependency state, so an edit to a
+  step's helper, or to a cached step's own body, recomputes the function that
+  looks the step up.
 
 The analyzer stops at library boundaries, so an effect *inside* a dependency is
 reachable only by the method's name (`session.post`, `cur.execute`). Because a

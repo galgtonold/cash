@@ -27,14 +27,20 @@ from helpers import helper
 @cash.cache
 def inner(n):
     return sum(helper(i) for i in range(n))
+
+
+def plain_step(n):
+    return sum(helper(i) for i in range(n))
 '''
 
 JOB = '''\
 import functools, sys, time
 import cash
-from inner import inner
+from inner import inner, plain_step
 
 P = functools.partial(inner)
+CACHED_TABLE = {"inner": inner}          # a registry of cached steps
+PLAIN_TABLE = {"plain": plain_step}      # a registry of plain steps
 
 
 def run(tag):
@@ -72,10 +78,23 @@ def by_call(n):
     return inner(n)
 
 
-print(by_map(10), by_partial_global(10), by_list(10), by_default(10), by_call(10))
+@cash.cache
+def by_cached_table(n):
+    run("cached-table")
+    return CACHED_TABLE["inner"](n)
+
+
+@cash.cache
+def by_plain_table(n):
+    run("plain-table")
+    return PLAIN_TABLE["plain"](n)
+
+
+print(by_map(10), by_partial_global(10), by_list(10), by_default(10), by_call(10),
+      by_cached_table(10), by_plain_table(10))
 '''
 
-FORMS = {"map", "partial-global", "list", "default", "call"}
+FORMS = {"map", "partial-global", "list", "default", "call", "cached-table", "plain-table"}
 
 
 def _run(proj):
@@ -94,10 +113,26 @@ def test_editing_a_cached_function_passed_as_a_value_invalidates_its_user(tmp_pa
     (tmp_path / "inner.py").write_text(INNER, encoding="utf-8")
     (tmp_path / "helpers.py").write_text(HELPERS.format(K=2), encoding="utf-8")
 
-    assert _run(tmp_path) == ("90 90 90 90 90", FORMS)
-    assert _run(tmp_path) == ("90 90 90 90 90", set()), "an unedited run did not hit"
+    assert _run(tmp_path) == ("90 90 90 90 90 90 90", FORMS)
+    assert _run(tmp_path) == ("90 90 90 90 90 90 90", set()), "an unedited run did not hit"
     (tmp_path / "helpers.py").write_text(HELPERS.format(K=3), encoding="utf-8")
-    assert _run(tmp_path) == ("135 135 135 135 135", FORMS), "an old sum was served"
+    assert _run(tmp_path) == ("135 135 135 135 135 135 135", FORMS), "an old sum was served"
+
+
+def test_editing_the_body_of_a_cached_function_in_a_registry_invalidates_its_user(tmp_path):
+    """Round 20 (r20s3): a dict of cached step functions was keyed by cash's
+    own wrapper, so not even an edit to a step's BODY moved its user's key."""
+    (tmp_path / "job.py").write_text(JOB, encoding="utf-8")
+    (tmp_path / "inner.py").write_text(INNER, encoding="utf-8")
+    (tmp_path / "helpers.py").write_text(HELPERS.format(K=2), encoding="utf-8")
+    assert _run(tmp_path)[0] == "90 90 90 90 90 90 90"
+    edited = INNER.replace("    return sum(helper(i) for i in range(n))",
+                           "    return sum(helper(i) for i in range(n)) + 1", 1)
+    assert edited != INNER
+    (tmp_path / "inner.py").write_text(edited, encoding="utf-8")
+    out, ran = _run(tmp_path)
+    assert out.split()[5] == "91", f"the registry served the old body: {out}"
+    assert "cached-table" in ran
 
 
 def test_a_referenced_cached_function_is_an_edge_but_an_attribute_of_an_instance_is_not_read():
