@@ -189,6 +189,7 @@ def update_lineage_after_execution(
         mutated_vars -= target_names
 
     if mutated_vars:
+        inherit_body_file_deps(shell, statement_processor, body_nodes, mutated_vars)
         iterable_lineage = None
         target_names: set[str] = set()
         if isinstance(node, ast.For):
@@ -203,6 +204,37 @@ def update_lineage_after_execution(
                 statement_processor, body_nodes, mutated_vars | target_names,
             ),
         )
+
+
+def inherit_body_file_deps(shell, statement_processor, body_nodes: list, mutated_vars: set[str]) -> None:
+    """Give each variable the loop mutated the files its body read.
+
+    ``for f in files: d = pd.read_csv(f); parts.append(d)`` recorded each file
+    against ``d`` and none against ``parts``: ``parts.append(d)`` is a method
+    call, and a loop body's calls are not classified. So ``raw =
+    pd.concat(parts)`` inherited no file, the next statement's key had no file
+    component, and after an existing file was rewritten ``sales`` was restored
+    from the old content -- visible once the list passed 200 frames and its
+    sampled hash stopped covering the middle (round 23, r23s2, 4/4). A
+    statement that reads files already hands them to its outputs
+    (``FileDepsTracker.inherit_from_inputs``); this is the same rule for the
+    loop's accumulators.
+    """
+    executed_file_deps = getattr(statement_processor, 'executed_file_deps', None)
+    if executed_file_deps is None:
+        return
+    used = {sub.id for body_node in body_nodes for sub in ast.walk(body_node)
+            if isinstance(sub, ast.Name)}
+    files: set[str] = set()
+    for name in used:
+        files.update(executed_file_deps.get(name, ()))
+    if not files:
+        return
+    for var_name in mutated_vars:
+        value = shell.user_ns.get(var_name)
+        if value is None or isinstance(value, (int, float, complex, str, bytes, bool)):
+            continue
+        executed_file_deps.setdefault(var_name, set()).update(files)
 
 
 def collect_body_input_lineages(
