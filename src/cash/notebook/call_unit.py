@@ -1178,11 +1178,15 @@ class CallUnit:
         which refuses rather than mint a key with a discriminator missing.
         """
         combined = (*args, *kwargs.values())
+        local = set(getattr(site, "local_arg_positions", ()))
         digests = []
         for pos in site.computed_arg_positions:
             if pos >= len(combined):
                 continue
-            digests.append(compute_hash(combined[pos]))
+            # A comprehension's own variable discriminates its elements, as a
+            # loop variable does its iterations: full hash, never sampled.
+            hash_fn = compute_hash_full if pos in local else compute_hash
+            digests.append(hash_fn(combined[pos]))
         return digests
 
     def _storable(self, result, args, kwargs) -> bool:

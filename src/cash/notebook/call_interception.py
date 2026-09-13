@@ -125,6 +125,16 @@ class CallSite:
     #: today's behaviour -- the pre-existing collision risk -- rather than
     #: raising.
     stmt_identity: str = ""
+    #: Positions of bare-name arguments bound by an enclosing comprehension or
+    #: lambda -- ``slow(v)`` in ``{k: slow(v) for k, v in d.items()}``. Such a
+    #: name is local to the comprehension: resolving it by name, the key found
+    #: either nothing or an unrelated global of the same name, so every element
+    #: got ONE key and the second call was served the first's result -- on the
+    #: first run with a global ``v`` around (round 22, a grid search per model
+    #: handed the SVM the logistic regression). These are also in
+    #: ``computed_arg_positions``, and are hashed in full, never sampled, for
+    #: the reason a loop variable is (see ``call_unit._loop_var_digest``).
+    local_arg_positions: tuple[int, ...] = ()
 
 
 def _is_storable(result) -> bool:
@@ -390,7 +400,7 @@ def wrap_eligible_calls(
     sites: list[CallSite] = []
     seen: Counter[str] = Counter()
     for stmt in new_tree.body:
-        calls = eligible_call_nodes(stmt)
+        calls = _eligible_calls_in_scope(stmt)
         if not calls:
             continue
         # Computed ONCE per enclosing statement, before any call inside it is
@@ -405,7 +415,7 @@ def wrap_eligible_calls(
             stmt_identity = ast.unparse(stmt)
         except Exception:  # noqa: BLE001 - degrade, never let keying break the call
             stmt_identity = ""
-        for call in calls:
+        for call, local in calls:
             if gate is not None and not gate(call):
                 continue
             source = ast.unparse(call)
@@ -414,11 +424,12 @@ def wrap_eligible_calls(
             sites.append(
                 CallSite(
                     source=source,
-                    free_names=frozenset(_names_read(call)),
+                    free_names=frozenset(_names_read(call) - local),
                     occurrence_index=index,
-                    computed_arg_positions=_computed_arg_positions(call),
+                    computed_arg_positions=_computed_arg_positions(call, local),
                     has_unpacking=_call_has_unpacking(call),
                     stmt_identity=stmt_identity,
+                    local_arg_positions=_local_arg_positions(call, local),
                 )
             )
             call.func = ast.Call(
@@ -449,10 +460,20 @@ def _call_has_unpacking(call: ast.Call) -> bool:
     )
 
 
-def _computed_arg_positions(call: ast.Call) -> tuple[int, ...]:
+def _local_arg_positions(call: ast.Call, local: frozenset[str]) -> tuple[int, ...]:
+    """Positions of bare-name arguments bound by an enclosing comprehension or
+    lambda (see ``CallSite.local_arg_positions``)."""
+    if not local or _call_has_unpacking(call):
+        return ()
+    values = [*call.args, *(kw.value for kw in call.keywords)]
+    return tuple(i for i, v in enumerate(values) if isinstance(v, ast.Name) and v.id in local)
+
+
+def _computed_arg_positions(call: ast.Call, local: frozenset[str] = frozenset()) -> tuple[int, ...]:
     """Positions, in ``(*args, *kwargs.values())`` order, of non-``ast.Name``
     arguments -- the ones whose evaluated value (not a name's lineage) must be
-    hashed into the cache key.
+    hashed into the cache key. A bare name bound by an enclosing comprehension
+    or lambda (*local*) is one of them: it has no lineage to resolve.
 
     ``*args``/``**kwargs`` unpacking makes the position of any later argument
     unreliable to compute here, since the unpacked collection's length is not
@@ -466,11 +487,11 @@ def _computed_arg_positions(call: ast.Call) -> tuple[int, ...]:
         return tuple(range(len(call.args) + len(call.keywords)))
     positions = []
     for i, arg in enumerate(call.args):
-        if not isinstance(arg, ast.Name):
+        if not isinstance(arg, ast.Name) or arg.id in local:
             positions.append(i)
     offset = len(call.args)
     for i, kw in enumerate(call.keywords):
-        if not isinstance(kw.value, ast.Name):
+        if not isinstance(kw.value, ast.Name) or kw.value.id in local:
             positions.append(offset + i)
     return tuple(positions)
 
@@ -504,12 +525,18 @@ def eligible_call_nodes(stmt: ast.stmt) -> list[ast.Call]:
     reasoning declines ``def``/``class`` bodies: they run later, under their own
     statement.
     """
+    return [call for call, _local in _eligible_calls_in_scope(stmt)]
+
+
+def _eligible_calls_in_scope(stmt: ast.stmt) -> list[tuple[ast.Call, frozenset[str]]]:
+    """:func:`eligible_call_nodes`, each call paired with the names an enclosing
+    comprehension or lambda binds around it (see ``CallSite.local_arg_positions``)."""
     if not isinstance(stmt, _SIMPLE_STATEMENTS):
         return []
     targets = _target_names(stmt)
-    found: list[ast.Call] = []
+    found: list[tuple[ast.Call, frozenset[str]]] = []
     for root in _search_roots(stmt):
-        _collect(root, targets, found)
+        _collect(root, targets, found, frozenset())
     return found
 
 
@@ -526,12 +553,30 @@ def _search_roots(stmt: ast.stmt) -> list[ast.AST]:
     return [stmt]
 
 
-def _collect(node: ast.AST, targets: set[str], found: list[ast.Call]) -> None:
-    if isinstance(node, ast.Call) and not (_names_read(node) & targets):
-        found.append(node)
+_LOCAL_SCOPES = (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp, ast.Lambda)
+
+
+def _bound_names(node: ast.AST) -> set[str]:
+    """The names a comprehension's ``for`` targets or a lambda's parameters bind."""
+    if isinstance(node, ast.Lambda):
+        a = node.args
+        params = [*a.posonlyargs, *a.args, *a.kwonlyargs, *(p for p in (a.vararg, a.kwarg) if p)]
+        return {p.arg for p in params}
+    return {n.id for gen in node.generators for n in ast.walk(gen.target) if isinstance(n, ast.Name)}
+
+
+def _collect(node: ast.AST, targets: set[str], found: list, local: frozenset[str]) -> None:
+    if isinstance(node, _LOCAL_SCOPES):
+        local = local | _bound_names(node)
+    if (isinstance(node, ast.Call) and not (_names_read(node) & targets)
+            # A callee that reads a comprehension's own variable is a different
+            # callable per element (`m.predict(X)` over `models.items()`), and
+            # nothing in the key can see which: never intercepted.
+            and not (_names_read(node.func) & local)):
+        found.append((node, local))
         return  # accepted -- do not search inside it
     for child in ast.iter_child_nodes(node):
-        _collect(child, targets, found)
+        _collect(child, targets, found, local)
 
 
 def _names_read(node: ast.AST) -> set[str]:

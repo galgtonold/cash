@@ -310,6 +310,15 @@ Calls already wrapped in `@cash.cache` are left alone (they are on this path
 already), and builtins are skipped so a hot loop doesn't pay for a cache key per
 `len()`.
 
+**Inside a comprehension, the element is part of the key.** In
+`{name: fit(m, X) for name, m in models.items()}`, `m` belongs to the
+comprehension, not to the notebook, so `fit(m, X)` is keyed by the value `m`
+holds for each element — hashed in full, like a loop variable — and never by a
+notebook variable that happens to share the name. A call whose *callee* is the
+element (`m.predict(X)` over `models.items()`) is a different callable per
+element, which no key can see, so it is not intercepted. The same holds for a
+lambda's parameters.
+
 **Bound methods are deliberately not intercepted.** `model.predict(x)` looks like
 an obvious candidate, but caching a method puts `self` in the key, and
 [caching class methods](tutorials/feature-guides/caching-class-methods.md)

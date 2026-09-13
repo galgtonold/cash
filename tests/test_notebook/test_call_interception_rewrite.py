@@ -144,6 +144,40 @@ def test_computed_arg_positions_positional_expression_and_keyword_expression():
     assert sites[0].computed_arg_positions == (0, 2)
 
 
+def test_a_comprehension_variable_is_hashed_by_value_not_resolved_by_name():
+    """Round 22: ``fit_full(s, X, y)`` inside ``{... for name, s in ...}`` had
+    one key for every element -- ``s`` resolved by name to nothing, or to an
+    unrelated global ``s`` -- and the second call got the first's model."""
+    tree = ast.parse("models = {name: fit_full(s, X, y) for name, s in searches.items()}")
+    _, sites = wrap_eligible_calls(tree)
+
+    site = next(s for s in sites if s.source == "fit_full(s, X, y)")
+    assert site.computed_arg_positions == (0,)
+    assert site.local_arg_positions == (0,)
+    assert site.free_names == frozenset({"fit_full", "X", "y"})
+
+
+def test_a_lambda_parameter_is_local_too():
+    tree = ast.parse("score = lambda v: slow(v, k)")
+    _, sites = wrap_eligible_calls(tree)
+    site = next(s for s in sites if s.source == "slow(v, k)")
+    assert site.local_arg_positions == (0,)
+    assert "v" not in site.free_names and "k" in site.free_names
+
+
+def test_a_callee_bound_by_the_comprehension_is_not_intercepted():
+    tree = ast.parse("preds = {name: m.predict(X) for name, m in models.items()}")
+    _, sites = wrap_eligible_calls(tree)
+    assert not any("predict" in s.source for s in sites)
+
+
+def test_names_outside_any_comprehension_are_unchanged():
+    tree = ast.parse("out.append(compute(x, v=name))")
+    _, sites = wrap_eligible_calls(tree)
+    assert sites[0].local_arg_positions == ()
+    assert sites[0].computed_arg_positions == ()
+
+
 def test_computed_arg_positions_fail_closed_under_unpacking():
     """``*xs`` makes the position of every argument after it unknowable
     statically -- the unpacked collection's length isn't visible to the AST.
