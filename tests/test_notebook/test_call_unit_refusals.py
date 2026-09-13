@@ -37,6 +37,29 @@ def test_returning_an_argument_is_never_cached(call_unit_harness):
     assert calls == [1, 1], "must recompute, because it must not be stored"
 
 
+def test_a_scalar_that_happens_to_be_an_argument_is_still_cached(call_unit_harness):
+    """`score(1, 10)` returns `1 * 10`, and CPython hands back the very `10`
+    object it was passed -- small ints are shared. The identity rule above
+    refused it on every run, so the first iteration of a sweep always re-ran
+    (found by the tester-session tests). Nothing can rely on an int's identity.
+    """
+    calls = []
+
+    def score(c, a):
+        calls.append((c, a))
+        time.sleep(0.05)
+        return c * a
+
+    unit = call_unit_harness(lineage={"c": "hash-c", "a": "hash-a"},
+                             user_ns={"c": 1, "a": 10, "score": score})
+    wrapped = unit.wrap(score, _site(source="score(c, a)", names=("score", "c", "a")))
+
+    ten = 10
+    assert wrapped(1, ten) is ten, "precondition: the result IS the argument"
+    assert wrapped(1, ten) == 10
+    assert calls == [(1, 10)], "a shared small int blocked the store"
+
+
 def test_an_identity_coupled_value_is_never_cached(call_unit_harness):
     """Same refusal the statement path applies to a matplotlib Figure."""
     matplotlib = __import__("pytest").importorskip("matplotlib")

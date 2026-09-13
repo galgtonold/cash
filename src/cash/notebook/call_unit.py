@@ -599,6 +599,11 @@ def _unwrap_callee_globals(value, metadata: Mapping[str, Any]):
     return _UNWRAP_FAILED, None
 
 
+#: Result types whose identity no program can rely on -- see
+#: ``CallUnit._storable``. Exact types only: a subclass may carry state.
+_IDENTITY_FREE = frozenset({int, float, complex, bool, str, bytes, type(None)})
+
+
 class CallUnit:
     """Caches one intercepted call against the statement backend.
 
@@ -1203,6 +1208,12 @@ class CallUnit:
            structurally unfixable per-statement. At the call node the live
            arguments are in hand, so it is one ``is`` check.
 
+           Not for a plain scalar. CPython shares one object for small ints
+           and interned strings, so ``score(1, 10)`` returns the very ``10``
+           it was passed -- the check refused that call on every run, and it
+           was always the first iteration of a sweep that re-ran. No program
+           can rely on the identity of an int or a str.
+
         2. **Identity-coupled library objects** -- a matplotlib Figure/Axes is
            only correct while it IS the object pyplot's registry points at.
            The RAM tier deep-copies on store and ``Figure.__setstate__``
@@ -1225,12 +1236,13 @@ class CallUnit:
         clause) so a call's storability does not silently depend on which of
         the two dispatch paths happened to route it.
         """
-        for arg in args:
-            if result is arg:
-                return False
-        for arg in kwargs.values():
-            if result is arg:
-                return False
+        if type(result) not in _IDENTITY_FREE:
+            for arg in args:
+                if result is arg:
+                    return False
+            for arg in kwargs.values():
+                if result is arg:
+                    return False
         try:
             from .cacheability_decision import identity_coupled_reason
             return identity_coupled_reason("<intercepted call>", result) is None
