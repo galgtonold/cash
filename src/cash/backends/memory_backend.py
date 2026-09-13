@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from ._base import CacheBackend, MetadataDict
+from ._base import CacheBackend, MetadataDict, gdsf_value
 from .serialization import Serializer
 from .. import _plain_data
 
@@ -339,10 +339,6 @@ class InMemoryBackend(CacheBackend):
         if evicted_count > 0:
             self._try_malloc_trim()
 
-    #: Cost assumed for an entry written without an ``execution_time`` (raw
-    #: backend use). Small, so an entry of known cost outranks it.
-    _UNKNOWN_COST_S = 0.001
-
     def _touch(self, key: str) -> None:
         """Record a write or read: it re-bases the entry's GDSF priority."""
         self._gdsf_base[key] = self._gdsf_clock
@@ -351,11 +347,7 @@ class InMemoryBackend(CacheBackend):
 
     def _gdsf_priority(self, key: str, meta: MetadataDict) -> float:
         """``H = L + hits * execution_time / size``, L as of the last access."""
-        cost = meta.get('execution_time') or 0.0
-        if cost <= 0:
-            cost = self._UNKNOWN_COST_S
-        hits = meta.get('access_count', 0) + 1
-        return self._gdsf_base.get(key, 0.0) + hits * cost / max(1, meta.get('size', 1))
+        return self._gdsf_base.get(key, 0.0) + gdsf_value(meta, meta.get('size', 1))
 
     def _evict_to_byte_cap(self) -> None:
         """Evict by value per byte until under ~90% of the byte cap.

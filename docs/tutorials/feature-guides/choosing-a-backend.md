@@ -46,14 +46,14 @@ c = Cash(backend=InMemoryBackend(max_entries=500))
 c.register_magic()
 ```
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.__init__ @3c546f6d, cash/backends/memory_backend.py:InMemoryBackend._evict @9c8132f7, cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @80587318, cash/backends/memory_backend.py:InMemoryBackend._gdsf_priority @c21d95dd -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.__init__ @3c546f6d, cash/backends/memory_backend.py:InMemoryBackend._evict @9c8132f7, cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @80587318, cash/backends/memory_backend.py:InMemoryBackend._gdsf_priority @1174b102 -->
 A plain dict guarded by light bookkeeping. Reads and writes deep-copy by default so a downstream mutation can't poison the cache. Eviction has **three** triggers:
 
 1. `max_entries` — a hard LRU cap, evicting oldest-accessed first (`_evict_lru`).
 2. `max_size_bytes` — a soft byte cap (`_evict_to_byte_cap`), evicting down to 90% of it.
 3. A `psutil` memory-pressure check, run every `check_interval` writes, that fires when the system crosses `max_memory_percent` (`_evict`).
 
-The byte cap and the pressure check rank entries the same way: by value per byte, not by age (GreedyDual-Size-Frequency). Each entry has a priority `H = L + hits × execution_time / size`, and the lowest goes first, so a big cheap entry goes before a small expensive one, and a 30-second result outlives a newer 50 ms one of the same size. The clock `L` rises to each evicted entry's `H`. So an entry that stops being read eventually drops below newer ones and ages out, however valuable it was.
+The byte cap and the pressure check rank entries the same way: by value per byte, not by age (GreedyDual-Size-Frequency). Each entry has a priority `H = L + hits × execution_time / size`, and the lowest goes first, so a big cheap entry goes before a small expensive one, and a 30-second result outlives a newer 50 ms one of the same size. The clock `L` rises to each evicted entry's `H`. So an entry that stops being read eventually drops below newer ones and ages out, however valuable it was. The value term is rounded down to steps of about 4%, so entries of near-equal value tie and go in least-recently-used order, rather than by a few bytes' difference in size.
 
 **Key parameters** — `max_entries` (None = unlimited), `max_size_bytes` (None = unlimited), `max_memory_percent` (default 0.9 = 90% of system RAM), `check_interval` (default 10 writes between pressure checks).
 
@@ -98,7 +98,10 @@ c.register_magic()
 
 One file per entry under `cache_dir`, named by the SHA-256 of the cache key, holding a small header, the entry's metadata, and then the value. Writes are split: serialization happens on the calling thread, the actual disk write runs on a background executor. In a notebook that buys less than it sounds — `%cash_on` flushes pending writes at the end of every cell, so a killed kernel cannot lose them, which means write cost lands on your clock once per cell rather than disappearing. A second thread flushes metadata every `flush_interval` seconds, rewriting only the metadata region rather than the whole file.
 
-Eviction is LRU. When the cache exceeds `max_size_bytes`, the oldest entries are dropped until it fits under 90% of the cap — and the ranking comes from one `scandir`, not from opening every entry, because a file's mtime *is* its last access (recording a read rewrites the header in place). That ranking is a queue drained across many eviction passes, which matters: once a cache is full it evicts on most writes, so re-ranking per pass would put a directory walk on nearly every write.
+<!-- claim: cash/backends/file_backend.py:FileBackend._rebuild_evict_queue @3ee6a418, cash/backends/file_backend.py:FileBackend._check_and_evict @7f1d57b2, cash/backends/rank_index.py:RankIndex.load @f7ab4eee, cash/backends/file_backend.py:FileBackend._record_rank @6d3f3044, cash/backends/rank_index.py:INDEX_FILENAME == '_rank.log' -->
+When the cache exceeds `max_size_bytes`, entries are evicted until it fits under 90% of the cap, **least valuable per byte first** — the same ordering as the RAM tier: execution time divided by size, raised by each hit, with a clock that makes entries nobody reads age out. A 30-second result outlives newer 50 ms ones; one huge cheap value goes before many small expensive ones. Entries of about equal value go in least-recently-used order.
+
+The ranking never opens the entries. It comes from one `scandir` (sizes, and mtime as last access) plus `_rank.log`, a small file in the cache directory where each write and each access flush records the entry's priority (in batches, so a write pays nothing extra) — so a new process, after a kernel restart, still knows what the entries it did not write are worth. The file is advisory: delete it, or let two processes interleave into it, and nothing breaks; entries with no record rank as if their cost were unknown and small, and an old entry that is still being read gets a record on its next access flush. The ranking is a queue drained across many eviction passes, which matters: once a cache is full it evicts on most writes, so re-ranking per pass would put a directory walk on nearly every write.
 
 **Key parameters** — `cache_dir`, `compress` (gzip; usually only worth it for CSV/JSON), `max_size_bytes` (None = unlimited), `flush_interval` (seconds; 0 = flush on every write), `default_ttl` (seconds).
 

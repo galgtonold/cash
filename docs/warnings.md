@@ -464,7 +464,7 @@ or more times larger, so a cap that looked generous next to `inspect`'s numbers
 refused entries anyway. And the threshold used to be *half* the cap, which
 meant a 500 MB cap cached nothing at all for a 263 MB working set. It is the
 whole cap now, measured on the serialized bytes, so a value that fits is stored
-and LRU eviction does the rest.
+and eviction does the rest.
 
 <!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @80587318 -->
 **Why it matters.** Usually you get no caching at all, not RAM-only caching.
