@@ -1319,6 +1319,9 @@ class VirtualLineage:
             logger.debug("[UPSTREAM] Error simulating cell %d: %s", i, e)
             raise
 
+        for entry in simulation_trace[trace_start:]:
+            if isinstance(entry, _TraceEntry):
+                entry.cell = i
         cell_trace_segment = simulation_trace[trace_start:]
         new_cache_entries.append(_SimulationCacheEntry(
             cell_code_hash=cell_hash,

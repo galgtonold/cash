@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import textwrap
+import types
 from typing import TYPE_CHECKING
 
 from ...diagnostics import warn_diagnostic
@@ -933,6 +934,100 @@ class ReexecutionPlanner:
         'open(', 'write', 'to_', 'save', 'dump', 'os.', 'shutil.',
     )
 
+    def _user_ns(self):
+        return getattr(getattr(self._virtual_lineage, 'shell', None), 'user_ns', None)
+
+    @staticmethod
+    def _called_names(code: str) -> set[str]:
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return set()
+        return {node.func.id for node in ast.walk(tree)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+
+    def _trace_defs(self, simulation_trace: list | None) -> dict:
+        """``{name: trace entry}`` of the last ``def`` binding each name.
+
+        After a kernel restart a helper is not defined yet, so its body can
+        only be read from the notebook -- the ``def`` statement in the trace,
+        whose inputs are the globals the body reads."""
+        memo_key = (id(simulation_trace), len(simulation_trace or ()))
+        memo = self.__dict__.get('_trace_defs_memo')
+        if memo is not None and memo[0] == memo_key:
+            return memo[1]
+        defs: dict = {}
+        self.__dict__['_trace_defs_memo'] = (memo_key, defs)
+        for entry in simulation_trace or ():
+            code = entry[0].lstrip()
+            if not code.startswith(('def ', 'async def ', '@')):
+                continue
+            try:
+                node = ast.parse(entry[0]).body[0]
+            except (SyntaxError, IndexError):
+                continue
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                defs[node.name] = entry
+        return defs
+
+    def _unbound_helpers(self, names, defs: dict) -> list:
+        """The ``def`` entries for *names* that are not live functions."""
+        user_ns = self._user_ns() or {}
+        return [defs[n] for n in names
+                if n in defs and not isinstance(user_ns.get(n), types.FunctionType)]
+
+    def _is_file_writer(self, stmt_code: str, simulation_trace: list | None = None) -> bool:
+        """A statement that writes files -- in its own text, or through a user
+        function it calls (``save_png(kind, path)``, whose ``savefig`` sits in
+        the helper). A replay that re-ran a cell's inline writes but not its
+        helper's left the report folder half old, half new (round 23)."""
+        from ..cacheability import (
+            REPEATABILITY_ACCUMULATING,
+            statement_calls_user_writer,
+            statement_write_repeatability,
+            statement_writes_files,
+        )
+        if statement_writes_files(stmt_code):
+            return True
+        if statement_calls_user_writer(stmt_code, self._user_ns()) is not None:
+            return True
+        defs = self._trace_defs(simulation_trace)
+        seen: set[str] = set()
+        pending = self._unbound_helpers(self._called_names(stmt_code), defs)
+        while pending:
+            entry = pending.pop()
+            code = entry[0]
+            if code in seen:
+                continue
+            seen.add(code)
+            if (statement_writes_files(code)
+                    and statement_write_repeatability(code) != REPEATABILITY_ACCUMULATING):
+                return True
+            pending.extend(self._unbound_helpers(self._called_names(code), defs))
+        return False
+
+    def _writer_inputs(self, inputs, simulation_trace: list | None = None) -> set[str]:
+        """A writer's inputs plus the notebook globals its callees read: the
+        helper that plots ``scores`` depends on ``scores`` though the call
+        site never names it."""
+        from ..cache_key import called_function_globals
+        user_ns = self._user_ns()
+        names = set(inputs)
+        if user_ns:
+            names |= called_function_globals(names, user_ns)
+        defs = self._trace_defs(simulation_trace)
+        pending = self._unbound_helpers(names, defs)
+        seen: set[str] = set()
+        while pending:
+            entry = pending.pop()
+            if entry[0] in seen:
+                continue
+            seen.add(entry[0])
+            new = set(entry[2]) - names
+            names |= new
+            pending.extend(self._unbound_helpers(new, defs))
+        return names
+
     def _schedule_file_write_statements(
         self,
         stmts_to_run_indices: list[int],
@@ -1011,6 +1106,7 @@ class ReexecutionPlanner:
         if not writer_indices:
             return stmts_to_run_indices, restored_statements_info
 
+        writer_indices = self._whole_cell_writers(simulation_trace, writer_indices, scheduled)
         scheduled.update(writer_indices)
         first_writer = min(writer_indices)
 
@@ -1019,7 +1115,7 @@ class ReexecutionPlanner:
         pending = list(writer_indices)
         while pending:
             w = pending.pop()
-            for v in set(simulation_trace[w][2]):
+            for v in self._writer_inputs(simulation_trace[w][2], simulation_trace):
                 if not _input_changed(v):
                     continue
                 for prod in range(w - 1, -1, -1):
@@ -1090,6 +1186,42 @@ class ReexecutionPlanner:
 
         return sorted(scheduled), restored_statements_info
 
+    def _whole_cell_writers(self, simulation_trace: list, writer_indices, scheduled) -> list[int]:
+        """*writer_indices* plus every other file writer in the same cells.
+
+        A cell's writes are replayed together or not at all. Re-running only
+        the stale ones left states no run order produces: a report folder
+        whose grid came from the new models and whose ROC chart from the old,
+        or -- when ``shutil.rmtree`` re-ran and the loop that refills the
+        folder did not -- charts that were simply gone (round 23, r23s1, three
+        ways). Running the cell writes every one of its files; so does this.
+
+        A provable append is still left out, for the reason
+        :meth:`_find_stale_file_writer_indices` gives: repeating it duplicates
+        the payload on disk.
+        """
+        from ..cacheability import REPEATABILITY_ACCUMULATING, statement_write_repeatability
+        cells = {getattr(simulation_trace[w], 'cell', -1) for w in writer_indices} - {-1}
+        if not cells:
+            return list(writer_indices)
+        extra = []
+        chosen = set(writer_indices)
+        for j, entry in enumerate(simulation_trace):
+            if j in chosen or j in scheduled or getattr(entry, 'cell', -1) not in cells:
+                continue
+            code = entry[0]
+            if not self._is_file_writer(code, simulation_trace):
+                continue
+            if statement_write_repeatability(code) == REPEATABILITY_ACCUMULATING:
+                continue
+            extra.append(j)
+            if self.debug:
+                logger.debug(
+                    "[UPSTREAM] Scheduling same-cell file-writer [%s] with its "
+                    "cell's stale writers: %s", j, code[:60],
+                )
+        return sorted(chosen | set(extra))
+
     def _find_stale_file_writer_indices(
         self,
         simulation_trace: list,
@@ -1127,7 +1259,6 @@ class ReexecutionPlanner:
         from ..cacheability import (
             REPEATABILITY_ACCUMULATING,
             statement_write_repeatability,
-            statement_writes_files,
         )
 
         def _input_lineage_drifted(name: str) -> bool:
@@ -1145,8 +1276,9 @@ class ReexecutionPlanner:
             if i in skip:
                 continue
             stmt_code, _outputs, inputs = entry[0], entry[1], entry[2]
-            if not statement_writes_files(stmt_code):
+            if not self._is_file_writer(stmt_code, simulation_trace):
                 continue
+            inputs = self._writer_inputs(inputs, simulation_trace)
             # Scope gate: skip a writer whose output file no relevant consumer
             # reads. Its write runs when the user runs its own
             # cell; reconstruction of an unrelated cell must never re-fire it.

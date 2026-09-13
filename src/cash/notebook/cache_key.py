@@ -226,6 +226,39 @@ def called_function_dependencies(
     )
 
 
+def called_function_globals(inputs: Iterable[str], user_ns: Mapping[str, Any]) -> set[str]:
+    """Notebook names the functions named in *inputs* read when called.
+
+    The names behind :func:`called_function_dependencies`, for a caller that
+    needs the names themselves -- the re-execution planner, which must know
+    that ``save_png(kind, path)`` depends on the ``scores`` its body plots.
+    Transitive through called user functions, and through nested code
+    (comprehensions, inner functions). Modules and builtins are left out.
+    """
+    seen: set[str] = set()
+    stack = list(inputs)
+    found: set[str] = set()
+    while stack:
+        name = stack.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        code_objs = [getattr(user_ns.get(name), '__code__', None)]
+        while code_objs:
+            code_obj = code_objs.pop()
+            if code_obj is None:
+                continue
+            code_objs.extend(c for c in code_obj.co_consts if isinstance(c, types.CodeType))
+            for ref in _global_names(code_obj):
+                if ref in ('get_ipython', '__builtins__') or hasattr(builtins, ref):
+                    continue
+                if isinstance(user_ns.get(ref), types.ModuleType):
+                    continue
+                found.add(ref)
+                stack.append(ref)
+    return found - set(inputs)
+
+
 _ATTRIBUTE_OPS = frozenset({
     'LOAD_ATTR', 'LOAD_METHOD', 'STORE_ATTR', 'DELETE_ATTR', 'LOAD_SUPER_ATTR',
 })

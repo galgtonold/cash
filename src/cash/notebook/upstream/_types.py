@@ -43,15 +43,25 @@ class SimulationCacheEntry(NamedTuple):
     """``{filepath: mtime}`` for files read during this cell's simulation."""
 
 
-class TraceEntry(NamedTuple):
-    """A single entry in the simulation trace."""
-
+class _TraceFields(NamedTuple):
     stmt_code: str
     outputs: set
     inputs: set
     input_hashes: list
     produced_lineages: dict
     files_stale: bool
+
+
+class TraceEntry(_TraceFields):
+    """A single entry in the simulation trace.
+
+    ``cell`` -- the notebook cell the statement belongs to, -1 when unknown --
+    is an attribute rather than a field: the trace is unpacked as a 6-tuple in
+    many places. It lets the re-execution planner re-run a cell's file writes
+    together.
+    """
+
+    cell: int = -1
 
 
 class IncrementalStartResult(NamedTuple):

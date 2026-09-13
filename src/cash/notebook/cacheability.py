@@ -460,6 +460,31 @@ def statement_writes_files(code: str, tree: 'ast.Module | None' = None) -> bool:
     return any(e.kind == 'file_write' for e in analysis.side_effects)
 
 
+def statement_calls_user_writer(
+    code: str, namespace: 'Mapping[str, Any] | None', tree: 'ast.Module | None' = None,
+) -> str | None:
+    """The user function that writes files when *code* runs, or None.
+
+    :func:`statement_writes_files` reads the statement's own text, so
+    ``save_png(kind, path)`` -- whose ``fig.savefig`` sits in the helper's
+    body -- is not a writer to it. The same call judged by
+    :func:`user_callee_writing_files` is.
+    """
+    if not namespace or '(' not in code:
+        return None
+    if tree is None:
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            found = user_callee_writing_files(namespace.get(node.func.id))
+            if found:
+                return found
+    return None
+
+
 #: (co_filename, co_firstlineno, source) -> name of the writing function or None.
 _callee_write_cache: dict[tuple[str, int, str], str | None] = {}
 
