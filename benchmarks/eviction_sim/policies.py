@@ -10,9 +10,11 @@ Every policy sees the same interface:
 ``meta`` carries the entry's slot: the statement position that produced it.
 Capacities are in bytes; entries larger than the cap are refused.
 
-``CashCurrent`` and ``CashRAM`` are models of the shipped ``FileBackend`` and
-``InMemoryBackend`` byte-cap eviction, written from reading those classes.
-They are snapshots: when the backends change, change the models too.
+``CashCurrent`` and ``CashRAM`` model the byte-cap eviction ``FileBackend``
+and ``InMemoryBackend`` shipped with before GDSF ranking (2026-09-13): LRU,
+plus the disk tier's size split. They are kept as the baseline the redesign
+was measured against; the shipped ranking is now ``GDSF`` (quantized, see
+``cash.backends._base.gdsf_value``).
 """
 from __future__ import annotations
 

@@ -12,10 +12,10 @@ percentage.
 | file | what it is |
 |---|---|
 | `workload.py` | The notebook-project generator (`Project`, `Params`, `session_ops`) and the `Engine` that turns user actions into cache requests the way cash does |
-| `policies.py` | ~20 byte-capacity policies: models of cash's shipped RAM and disk eviction, the classic recency/frequency family, cost-aware policies and structure-aware policies |
+| `policies.py` | ~20 byte-capacity policies: models of cash's RAM and disk eviction before GDSF ranking, the classic recency/frequency family, cost-aware policies and structure-aware policies |
 | `run.py` | Sweeps policies × caps × seeds and prints the *lost savings* table |
 | `calibrate.py` | Re-derives the size/compute distributions from an overhead sweep |
-| `defect_disk_crumb_order.py` | Real `FileBackend`: hot small entries evicted ahead of stale large ones |
+| `defect_disk_crumb_order.py` | Real `FileBackend`: hot small entries were evicted ahead of stale large ones by the pre-GDSF size split (fixed; kept as a demonstration) |
 | `defect_ram_tier.py` | Real `InMemoryBackend`: an oversized write empties the tier; host-wide pressure empties the tier |
 
 ## Running
@@ -56,7 +56,7 @@ Disk tier, typical workload, 5 seeds, lost savings at a cap of *n* × the live s
 |---|---|---|---|---|
 | `LRU` | 37.2% | 12.9% | 7.5% | 3.3% |
 | recency/frequency family (FIFO, LFU, SLRU, ARC, S3-FIFO, SIEVE, S/B/DRRIP) | 36–60% | 13–46% | 7–38% | 3–27% |
-| `cash-now` (shipped disk policy) | 22.5% | 6.7% | **18.0%** | **15.4%** |
+| `cash-now` (disk policy before GDSF) | 22.5% | 6.7% | **18.0%** | **15.4%** |
 | `GDSF` | 16.6% | 3.9% | 1.7% | 0.5% |
 | `Supersede+GDSF-noage` (recommended) | 10.7% | 1.6% | 0.1% | 0.0% |
 
@@ -66,7 +66,7 @@ Disk tier, typical workload, 5 seeds, lost savings at a cap of *n* × the live s
 - **Evicting a dead entry must not age the live ones.** With GDSF inside the dead-first rule, raising `L` on dead evictions costs 6.2% at 1× (`Supersede+GDSF`), against 1.6% without it (`-noage`).
 - **GDSF has to rank exactly; sampling does not work.** Redis-style sampled eviction evicts the lowest of *k* random entries, which would let the disk tier read *k* headers per eviction instead of all of them. It gives back most of the gain: at 1× the live set, `GDSF-s32` loses 9.5% (typical) and 21.0% (ML-heavy), against 3.9% and 4.5% for exact GDSF. ML-heavy is worse than LRU's 19.6%. GDSF's clock only ages correctly when it evicts the true minimum. Under the generation rule, sampling hurts less (2.9% vs 1.6%), but it is still a regression.
 - **Live-set GC** means removing what a run-all of the current sources would not request. It adds no hits over the generation signal: `Hybrid` scores exactly like `Supersede` in every run. Its value is disk hygiene, since an uncapped cache grows to 21–44× its live set in 40 days.
-- **The shipped crumb split is non-monotonic in the cap.** It beats LRU at ≤ 1×, where it acts as crude size-awareness. At ≥ 2× it is much worse, because the crumb threshold grows with the cap and shreds the hot working set. Default caps (8–100 GiB) put real caches in that regime. `defect_disk_crumb_order.py` is the deterministic version.
+- **The pre-GDSF crumb split was non-monotonic in the cap.** It beats LRU at ≤ 1×, where it acts as crude size-awareness. At ≥ 2× it is much worse, because the crumb threshold grows with the cap and shreds the hot working set. Default caps (8–100 GiB) put real caches in that regime. `defect_disk_crumb_order.py` is the deterministic version.
 
 The first published sweep used an uncoupled v1 size model, whose expensive results were mostly tiny. It showed the crumb split beating LRU at every cap. The recalibration reversed that, and nothing else. The v1 parameters are in the comment on `Params`.
 
@@ -76,4 +76,4 @@ The first published sweep used an uncoupled v1 size model, whose expensive resul
 - **Not modelled:** multi-process writers, file-dependency invalidation, TTL, metadata-only entries, partial loop re-execution, the RAM tier's psutil pressure path.
 - **No offline optimum.** A miss changes which upstream entries are requested next, so Belady needs a fixed trace this model does not have.
 - **A slightly negative RAM-tier loss is real in the model, not a bug.** Gate A's fixed budget (`max(0.05 s, 0.8 × compute)`) admits entries whose RAM copy costs more than recomputing them, e.g. 10 ms of compute and a 30 ms copy. The unlimited baseline keeps them. A value-aware policy scores them negative and evicts them first, so it can beat "unlimited" by a hair. Traced under the v1 calibration: −0.1%, 17 fewer RAM hits, +0.19 s compute, −0.51 s restore. The RAM copy cost here is `0.3 ms + size / 2 GB/s`, a guess, not cash's fitted `cost_model`.
-- **`CashCurrent` and `CashRAM` are models written from reading the backends.** Re-check them against `FileBackend._check_and_evict` / `InMemoryBackend._evict_to_byte_cap` after changing either.
+- **`CashCurrent` and `CashRAM` model the backends as they were before GDSF ranking.** They are the baseline the findings compare against, not the current behaviour; the backends now rank by quantized GDSF, with the disk tier's priorities in a sidecar index.
