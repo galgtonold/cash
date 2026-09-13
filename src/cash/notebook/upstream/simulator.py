@@ -180,6 +180,9 @@ class NotebookSimulator:
             return cache[idx]
         return None
 
+    def resimulate_from_statements(self, statements: list[str]) -> None:
+        self._virtual_lineage.resimulate_from_statements(statements)
+
     def simulation_cache_size(self) -> int:
         return len(self._virtual_lineage._simulation_cache)
 

@@ -1418,6 +1418,8 @@ class UpstreamChecker:
             # re-executions will always see a lineage mismatch and trigger
             # unnecessary upstream restoration.
             self._sync_simulation_cache_lineages(self._rerecorded_since(records_before))
+            # The snapshots of the cells replayed here predate the replay.
+            self.simulator.resimulate_from_statements(statements_to_reexecute)
 
             all_metrics = restored_info + executed_metrics
 
