@@ -1110,13 +1110,27 @@ class ReexecutionPlanner:
         scheduled.update(writer_indices)
         first_writer = min(writer_indices)
 
+        def _rebound_after(name: str, w: int) -> int | None:
+            for j in range(len(simulation_trace) - 1, w, -1):
+                if name in simulation_trace[j][1]:
+                    return j
+            return None
+
         # Re-materialise a scheduled writer's changed inputs: their producers
         # may be missing from the plan when the write is the only consumer.
+        #
+        # An input the trace binds AGAIN after the writer is changed too, for
+        # this writer: the live value is the later binding. A chart cell that
+        # reuses `fig, axes = plt.subplots(...)` for a second figure re-ran the
+        # first figure's `save(fig, ...)` and its draws on the second figure's
+        # axes (r22s3 session). Its producer before the writer re-runs, and so
+        # does the last one, so the name ends bound as the cell leaves it.
         pending = list(writer_indices)
         while pending:
             w = pending.pop()
             for v in self._writer_inputs(simulation_trace[w][2], simulation_trace):
-                if not _input_changed(v):
+                later = _rebound_after(v, w)
+                if later is None and not _input_changed(v):
                     continue
                 for prod in range(w - 1, -1, -1):
                     if v in simulation_trace[prod][1]:
@@ -1129,6 +1143,9 @@ class ReexecutionPlanner:
                                     "input '%s'", prod, v,
                                 )
                         break
+                if later is not None and later not in scheduled:
+                    scheduled.add(later)
+                    pending.append(later)
 
         # Every statement AFTER a scheduled writer whose variables carry file
         # dependencies must re-execute: its cached value (whether restored at
@@ -1196,14 +1213,27 @@ class ReexecutionPlanner:
         folder did not -- charts that were simply gone (round 23, r23s1, three
         ways). Running the cell writes every one of its files; so does this.
 
-        A provable append is still left out, for the reason
-        :meth:`_find_stale_file_writer_indices` gives: repeating it duplicates
-        the payload on disk.
+        Only writes that provably REPLACE their file are pulled in: they land
+        the same bytes when repeated. A write that is not stale itself and may
+        append -- ``os.write(fd, ...)`` on a descriptor opened elsewhere -- is
+        left to run when its own cell runs; re-firing it here duplicated a
+        counter line on every replay (CAS-176 probe). The exception is a cell
+        whose replay already re-fires such a write -- a ``shutil.rmtree`` --
+        where everything but a provable append follows it, or ``PACK.mkdir()``
+        stays behind and the next write finds no folder.
         """
-        from ..cacheability import REPEATABILITY_ACCUMULATING, statement_write_repeatability
+        from ..cacheability import (
+            REPEATABILITY_ACCUMULATING,
+            REPEATABILITY_REPLACING,
+            statement_write_repeatability,
+        )
         cells = {getattr(simulation_trace[w], 'cell', -1) for w in writer_indices} - {-1}
         if not cells:
             return list(writer_indices)
+        # Cells whose replay already re-fires a write that is not provably
+        # replacing (``rmtree``, ``mkdir``): the rest of their writes follow it.
+        destructive = {getattr(simulation_trace[w], 'cell', -1) for w in writer_indices
+                       if statement_write_repeatability(simulation_trace[w][0]) != REPEATABILITY_REPLACING}
         extra = []
         chosen = set(writer_indices)
         for j, entry in enumerate(simulation_trace):
@@ -1212,7 +1242,10 @@ class ReexecutionPlanner:
             code = entry[0]
             if not self._is_file_writer(code, simulation_trace):
                 continue
-            if statement_write_repeatability(code) == REPEATABILITY_ACCUMULATING:
+            verdict = statement_write_repeatability(code)
+            if verdict == REPEATABILITY_ACCUMULATING:
+                continue
+            if verdict != REPEATABILITY_REPLACING and getattr(entry, 'cell', -1) not in destructive:
                 continue
             extra.append(j)
             if self.debug:
