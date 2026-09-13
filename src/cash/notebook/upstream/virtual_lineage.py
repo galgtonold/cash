@@ -288,7 +288,12 @@ class VirtualLineage:
         # captured-return draws are assignments, absent from the
         # bare-``Expr`` candidate set; keep the guard from short-circuiting them.
         assigned = assigned_method_call_receivers(tree)
-        if not candidates and not assigned:
+        # Mirror the runtime: an Axes/Figure handed to a call is drawn on, by
+        # a plain function (``forest(axes[0], df)``) too -- so it is decided
+        # before the no-method-call early return, exactly as there.
+        drawn_args = {name for name in top_level_call_argument_bases(tree)
+                      if receiver_is_identity_coupled(self.shell.user_ns.get(name))}
+        if not candidates and not assigned and not drawn_args:
             return fam
         tier1 = standalone_method_mutation_receivers(tree)
         receivers: set[str] = set()
@@ -329,11 +334,7 @@ class VirtualLineage:
                 continue
             if receiver_is_identity_coupled(receiver):
                 receivers.add(base)
-        # Mirror the runtime: an Axes/Figure handed to a call is drawn on.
-        for name in top_level_call_argument_bases(tree):
-            if name not in receivers and receiver_is_identity_coupled(self.shell.user_ns.get(name)):
-                receivers.add(name)
-        return receivers | fam
+        return receivers | drawn_args | fam
 
     def reset_caches(self) -> None:
         """Clear simulation and AST caches."""

@@ -74,7 +74,7 @@ The first can be re-derived from the statement that made it; the second cannot.
 has no store target to give the receiver a fresh lineage. So Cash classifies
 method-call receivers in tiers, in this order:
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @313f3d13, cash/notebook/cacheability.py:KNOWN_PURE_METHODS @6ebfef8a, cash/notebook/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @d0495812, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @81f477db -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @dc72ca3c, cash/notebook/cacheability.py:KNOWN_PURE_METHODS @6ebfef8a, cash/notebook/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @d0495812, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @81f477db -->
 
 - **Excluded outright.** A module receiver is a plain function call, not a
   mutation: `np.foo()`, `time.sleep()`, `plt.title()`. So is a receiver-pure
@@ -89,7 +89,8 @@ method-call receivers in tiers, in this order:
   which is what makes `ax.hist(...)` behave exactly like `ax.bar(...)` even
   though `hist` is itself a known-pure name on any other receiver. A live
   `Axes`/`Figure` handed to a call is drawn on too — `df.plot(ax=ax)`,
-  `sns.barplot(data=df, ax=ax)` — so it becomes the statement's mutated output
+  `sns.barplot(data=df, ax=ax)`, or a helper of your own, `draw(axes[0], df)`
+  — so it becomes the statement's mutated output
   and the statement always runs, never restoring from cache (a restored draw
   call draws nothing).
 - **Observed.** Everything else is content-hashed before and after the call. If

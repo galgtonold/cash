@@ -2753,7 +2753,14 @@ class StatementProcessor:
         # they are classified by the identity-coupled pass below and must not be
         # short-circuited by the ``not candidates`` guard.
         assigned = assigned_method_call_receivers(tree)
-        if not candidates and not assigned:
+        # An Axes/Figure handed to a call is drawn on (``df.plot(ax=ax)``) --
+        # also by a plain function, ``forest(axes[0], df)``, which has no
+        # method-call receiver at all. Behind the early return below, that
+        # call was served from the cache and the saved chart had an empty
+        # panel (round 22, tester-session tests).
+        drawn_args = {name for name in top_level_call_argument_bases(tree)
+                      if receiver_is_identity_coupled(self.shell.user_ns.get(name))}
+        if not candidates and not assigned and not drawn_args:
             return set(), set(), set(), False
         tier1 = standalone_method_mutation_receivers(tree)
         verdict = self.mutation_verdicts.get(source_hash)
@@ -2813,10 +2820,7 @@ class StatementProcessor:
                 continue
             if receiver_is_identity_coupled(receiver):
                 pre_route.add(base)
-        # An Axes/Figure handed to a call is drawn on (``df.plot(ax=ax)``).
-        for name in top_level_call_argument_bases(tree):
-            if name not in pre_route and receiver_is_identity_coupled(self.shell.user_ns.get(name)):
-                pre_route.add(name)
+        pre_route |= drawn_args
         record_verdict = verdict is None and bool(observe or assumed)
         return pre_route - outputs, observe, assumed, record_verdict
 
