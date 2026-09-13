@@ -228,7 +228,7 @@ After that, the reason-source order is:
 
 1. `@cash:no-cache` annotation
 2. Forbidden function calls (e.g. `input()`)
-3. `@stateful` function calls
+3. `@stateful` function calls, and calls to a helper of yours that writes a file (a chart, an export)
 4. In-place mutations / side effects detected by the AST visitor
 5. Inputs missing lineage
 

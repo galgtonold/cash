@@ -35,6 +35,14 @@ introspect is a judgement call, and it can be wrong in either direction:
   `post_to_slack(df)` looks like any other call, and its return value caches
   happily — so the second run silently skips the notification. `@stateful` is
   how you say "never cache a statement that calls this."
+
+  One effect it does see for itself: a helper written in your notebook or your
+  project that **writes a file** — `fig.savefig(...)`, `df.to_csv(...)`,
+  `Path(p).write_text(...)`, `open(p, "w")`, directly or through another of your
+  functions. A call to it runs every time, exactly as the write would if it
+  were inline, and the badge says why: *Calls save(), which writes files*. An
+  append (a log line, a counter) does not count — a cache hit skips it like a
+  `print`. Code from installed packages is not looked into.
 - **It can flag a function you know is fine.** The `@cash.cache` analyzer warns
   about callees that look impure. `@pure` is how you say "I've audited this,
   stop warning" — the warning is advisory, so this is about noise, not
@@ -101,8 +109,10 @@ else is required.** `@pure` earns its keep on the decorator — see
     callee `@pure` silences the `CashImpurityWarning` that would otherwise fire
     for it. That applies to decorated functions written in a notebook cell too —
     it's the decorator path that matters, not the file it lives in. In the
-    statement path (`%cash_on`) the only marker that changes a verdict is
-    [`@stateful`](#stateful-this-should-never-cache).
+    statement path (`%cash_on`) the marker that stops caching is
+    [`@stateful`](#stateful-this-should-never-cache); `@pure` changes one
+    verdict there — a helper that writes a file caches again when you mark
+    it pure, because you have said its write does not matter.
 
 ### When to use it
 
@@ -153,8 +163,9 @@ Read steps 3 and 4 together and the consequence is clear: **only step 2 changes
 the outcome.** `@pure` short-circuits to the same "not stateful" answer the
 fallthrough already gives, so in the statement path it is a performance and
 predictability nicety — Cash never peeks inside and never runs the AST heuristic
-— not a switch that turns caching on. Its load-bearing use is on the decorator,
-below.
+— not a switch that turns caching on. The one exception is a helper that
+writes a file, which `decide_cacheability` refuses after this check unless the
+helper is marked `@pure`. Its load-bearing use is on the decorator, below.
 
 ### When NOT to use it
 

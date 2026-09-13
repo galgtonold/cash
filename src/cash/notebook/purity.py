@@ -24,9 +24,10 @@ def pure(func: F) -> F:
     effect is on the ``@cash.cache`` decorator: a callee marked pure is trusted,
     so the ``CashImpurityWarning`` that would otherwise fire for it is
     suppressed (see :mod:`cash.purity_analyzer`). In the notebook *statement*
-    path it changes no verdict — an unmarked helper's statements already cache,
-    and ``@pure`` merely short-circuits the AST heuristic to the same answer.
-    Use :func:`stateful` when you need to stop a statement from caching.
+    path it changes one verdict: a call to a helper that writes a file (a
+    chart, an export) runs every time, as the write itself would, unless the
+    helper is marked pure. Otherwise an unmarked helper's statements already
+    cache. Use :func:`stateful` when you need to stop a statement from caching.
 
     Args:
         func: The function to mark as pure.

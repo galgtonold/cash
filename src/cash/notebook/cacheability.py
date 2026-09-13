@@ -454,6 +454,70 @@ def statement_writes_files(code: str, tree: 'ast.Module | None' = None) -> bool:
     return any(e.kind == 'file_write' for e in analysis.side_effects)
 
 
+#: (co_filename, co_firstlineno, source) -> name of the writing function or None.
+_callee_write_cache: dict[tuple[str, int, str], str | None] = {}
+
+
+def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
+    """The user function that writes files when *func* is called, or None.
+
+    ``save(fig, "chart.png")``, where ``save`` calls ``fig.savefig``, writes a
+    file exactly as the inline ``fig.savefig(...)`` does -- which runs every
+    time. Served from the cache instead, the call skipped the write, and a
+    Restart & Run All left the deck without its chart (round 22, 3/3). So a
+    call into USER code whose body writes a file, directly or through another
+    user function it calls, is judged like the write itself.
+
+    Only a write that REPLACES a file counts: a chart, an export, a model
+    file -- something a later run expects to find. An append (a log line, a
+    call counter) is the side effect a cache hit is understood to skip, like
+    a ``print``, and counting it would stop every function that logs from
+    caching. Code from an installed package is not looked into: its source
+    says nothing about what this call does with the user's files. ``@pure``
+    is the user's word that the function has no effect; it is taken.
+    """
+    import inspect
+
+    from .file_tracker import _installed_roots, _nc
+    from .purity import is_pure
+
+    func = inspect.unwrap(func) if callable(func) else func
+    if not isinstance(func, types.FunctionType) or is_pure(func) or _depth > 3:
+        return None
+    code_obj = func.__code__
+    if _nc(os.path.abspath(code_obj.co_filename)).startswith(_installed_roots()):
+        return None
+    try:
+        source = textwrap.dedent(inspect.getsource(func))
+    except (OSError, TypeError):
+        return None
+    key = (code_obj.co_filename, code_obj.co_firstlineno, source)
+    if key in _callee_write_cache:
+        return _callee_write_cache[key]
+    _callee_write_cache[key] = None          # a recursive call finds "no"
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    handles = frozenset(_locally_opened_handles(tree))
+    replaces = any(isinstance(node, ast.Call)
+                   and _call_repeatability(node, handles) == REPEATABILITY_REPLACING
+                   for node in ast.walk(tree))
+    found = func.__name__ if replaces else None
+    if found is None:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                callee = func.__globals__.get(node.func.id)
+                if callee is not None and callee is not func:
+                    found = user_callee_writing_files(callee, _depth + 1)
+                    if found:
+                        break
+    if len(_callee_write_cache) > 500:
+        _callee_write_cache.clear()
+    _callee_write_cache[key] = found
+    return found
+
+
 def _is_append_mode_call(call: ast.Call) -> bool:
     """True when *call* carries a statically-visible APPEND mode string.
 

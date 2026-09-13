@@ -14,7 +14,7 @@ Reason-source order (deterministic):
 
 1. ``@cash:no-cache`` annotation
 2. Forbidden function calls (e.g. ``input``)
-3. ``@stateful`` function calls
+3. ``@stateful`` function calls, and calls into user code that writes files
 4. In-place mutations + side effects (from ``StatementAnalysis``)
 5. Input variable missing lineage
 
@@ -38,7 +38,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from cash.notebook.annotations import CacheAnnotation
-from cash.notebook.cacheability import StatementAnalysis
+from cash.notebook.cacheability import StatementAnalysis, user_callee_writing_files
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +236,10 @@ def decide_cacheability(
         for name in analysis.called_names:
             if is_stateful_call(name):
                 return False, ["Calls @stateful function"]
+            writer = user_callee_writing_files(user_ns.get(name))
+            if writer:
+                return False, [f"Calls {name}(), which writes files ({writer}): "
+                               "a cache hit would skip the write"]
     except (TypeError, AttributeError) as exc:
         logger.debug("Error checking function purity: %s", exc)
 
