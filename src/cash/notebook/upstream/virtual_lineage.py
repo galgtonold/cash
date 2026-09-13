@@ -29,6 +29,7 @@ from ..cacheability import (
     RECEIVER_READONLY_WRITE_METHODS,
     assigned_method_call_receivers,
     called_function_global_mutations,
+    fits_its_receiver,
     is_pandas_plot_call,
     top_level_call_argument_bases,
     function_arg_mutations,
@@ -333,7 +334,7 @@ class VirtualLineage:
             receiver = self.shell.user_ns.get(base)
             if isinstance(receiver, types.ModuleType):
                 continue
-            if receiver_is_identity_coupled(receiver):
+            if receiver_is_identity_coupled(receiver) or fits_its_receiver(_method, receiver):
                 receivers.add(base)
         return receivers | drawn_args | fam
 

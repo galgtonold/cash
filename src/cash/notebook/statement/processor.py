@@ -446,6 +446,7 @@ from ..cacheability import (
     RECEIVER_READONLY_WRITE_METHODS,
     StatementAnalysis,
     analyze_statement,
+    fits_its_receiver,
     is_pandas_plot_call,
     top_level_call_argument_bases,
     assigned_method_call_receivers,
@@ -1183,12 +1184,14 @@ class StatementProcessor:
             est_fit: set[str] = set()
             # ...with ONE exception: a draw on a live Figure/Axes.
             draw_only = self._identity_coupled_call_receivers(_parsed_tree)
+            fit_only = self._fitted_receivers(_parsed_tree)
         else:
             mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
                 _parsed_tree, source_hash, outputs,
             )
             est_fit = self._estimator_fit_receivers(_parsed_tree, outputs) if cache_fit else set()
             draw_only = set()
+            fit_only = set()
         # OPT-IN ONLY (``# @cash:cache-fit``). A bare ``estimator.fit(X, y)``
         # mutates its receiver in place, so the classifier above routes it to
         # skip-caching: the statement re-executes and is never serialised, which is
@@ -1258,6 +1261,12 @@ class StatementProcessor:
             metrics['uncacheable_reasons'].append(
                 f"Draws on: {', '.join(sorted(draw_only))} "
                 "(live Figure/Axes; statement re-executes)"
+            )
+        if fit_only:
+            skip_cache = True
+            metrics['uncacheable_reasons'].append(
+                f"Fits: {', '.join(sorted(fit_only))} "
+                "(estimator fitted in place; statement re-executes)"
             )
         # An UNSEEDED estimator fit routed to caching above is frozen on re-run
         # with no warning -- cash's AST detector cannot see the randomness inside
@@ -1444,12 +1453,14 @@ class StatementProcessor:
             est_fit: set[str] = set()
             # ...with ONE exception: a draw on a live Figure/Axes.
             draw_only = self._identity_coupled_call_receivers(_parsed_tree)
+            fit_only = self._fitted_receivers(_parsed_tree)
         else:
             mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
                 _parsed_tree, source_hash, outputs,
             )
             est_fit = self._estimator_fit_receivers(_parsed_tree, outputs) if cache_fit else set()
             draw_only = set()
+            fit_only = set()
         # OPT-IN ONLY (``# @cash:cache-fit``). A bare ``estimator.fit(X, y)``
         # mutates its receiver in place, so the classifier above routes it to
         # skip-caching: the statement re-executes and is never serialised, which is
@@ -1519,6 +1530,12 @@ class StatementProcessor:
             metrics['uncacheable_reasons'].append(
                 f"Draws on: {', '.join(sorted(draw_only))} "
                 "(live Figure/Axes; statement re-executes)"
+            )
+        if fit_only:
+            skip_cache = True
+            metrics['uncacheable_reasons'].append(
+                f"Fits: {', '.join(sorted(fit_only))} "
+                "(estimator fitted in place; statement re-executes)"
             )
         # An UNSEEDED estimator fit routed to caching above is frozen on re-run
         # with no warning -- cash's AST detector cannot see the randomness inside
@@ -2734,6 +2751,21 @@ class StatementProcessor:
                       if receiver_is_identity_coupled(self.shell.user_ns.get(name))}
         return receivers
 
+    def _fitted_receivers(self, tree: ast.Module | None) -> set[str]:
+        """Estimators a statement fits in place (``km.fit_predict(Z)``).
+
+        The control-body companion of the ``fits_its_receiver`` routing in
+        :meth:`_classify_method_mutations`: a loop body skips that
+        classification, so ``labels_k = km.fit_predict(Z)`` was served from the
+        cache and ``models[k] = km`` kept an unfitted estimator (round 23,
+        r23s4). Cache-skip only, like :meth:`_identity_coupled_call_receivers`.
+        """
+        if tree is None:
+            return set()
+        return {base for base, method in (
+                    standalone_method_call_receivers(tree) | assigned_method_call_receivers(tree))
+                if fits_its_receiver(method, self.shell.user_ns.get(base))}
+
     def _classify_method_mutations(
         self,
         tree: ast.Module | None,
@@ -2825,7 +2857,7 @@ class StatementProcessor:
             receiver = self.shell.user_ns.get(base)
             if isinstance(receiver, types.ModuleType):
                 continue
-            if receiver_is_identity_coupled(receiver):
+            if receiver_is_identity_coupled(receiver) or fits_its_receiver(_method, receiver):
                 pre_route.add(base)
         pre_route |= drawn_args
         record_verdict = verdict is None and bool(observe or assumed)

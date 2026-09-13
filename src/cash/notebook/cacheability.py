@@ -3546,6 +3546,25 @@ def is_pandas_plot_call(method: str, receiver: object) -> bool:
     return (type(receiver).__module__ or '').startswith('pandas')
 
 
+#: Methods that fit their receiver in place, whatever they return.
+FITTING_METHODS = frozenset({'fit', 'partial_fit', 'fit_transform', 'fit_predict', 'fit_resample'})
+
+
+def fits_its_receiver(method: str, receiver: object) -> bool:
+    """``vec.fit_transform(texts)`` / ``km.fit_predict(Z)`` on an estimator.
+
+    Such a call returns a value AND fits the estimator it is called on. Cached
+    as ``X = vec.fit_transform(texts)`` with ``X`` as the only output, a hit
+    restored ``X`` and left ``vec`` unfitted -- silent in the same kernel,
+    ``NotFittedError`` after a restart (round 23, r23s4). The duck type is the
+    one the bare ``est.fit(X, y)`` rule uses: a callable ``fit`` and a callable
+    ``get_params``. Shared by the runtime and the simulation.
+    """
+    if method not in FITTING_METHODS or isinstance(receiver, types.ModuleType):
+        return False
+    return callable(getattr(receiver, 'fit', None)) and callable(getattr(receiver, 'get_params', None))
+
+
 def assigned_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple[str, str]]:
     """``(receiver_base, method_name)`` for method calls on the RHS of a top-level assignment.
 
