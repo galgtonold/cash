@@ -4,11 +4,13 @@
 directory (already holding the session's input files) and the cell sources,
 cash lines stripped. Each cell is exec'd in one namespace, in order, the way
 Restart & Run All runs them without cash. The result holds, per cell, what it
-printed and which files it wrote (path -> sha256), plus every file at the end.
+printed, whether Jupyter would display a value for it (0 or 1), and which
+files it wrote (path -> sha256), plus every file at the end.
 
 A separate process on purpose: nothing cash imported or patched can leak into
 the answer it is checked against.
 """
+import ast
 import contextlib
 import hashlib
 import io
@@ -42,10 +44,22 @@ def main() -> None:
     before = snapshot(work)
     for src in spec["cells"]:
         buf = io.StringIO()
+        displays = 0
+        tree = ast.parse(src)
+        last = tree.body[-1] if tree.body else None
         with contextlib.redirect_stdout(buf):
-            exec(compile(src, "<cell>", "exec"), ns)
+            if isinstance(last, ast.Expr):
+                # Jupyter displays the value of a cell's LAST top-level
+                # expression -- nothing else, and nothing after a ';'.
+                body = ast.Module(body=tree.body[:-1], type_ignores=[])
+                exec(compile(body, "<cell>", "exec"), ns)
+                value = eval(compile(ast.Expression(last.value), "<cell>", "eval"), ns)
+                if value is not None and not src.rstrip().endswith(";"):
+                    displays = 1
+            else:
+                exec(compile(tree, "<cell>", "exec"), ns)
         after = snapshot(work)
-        cells.append({"stdout": buf.getvalue(),
+        cells.append({"stdout": buf.getvalue(), "displays": displays,
                       "written": {rel: v[2] for rel, v in after.items() if before.get(rel) != v}})
         before = after
     Path(sys.argv[2]).write_text(json.dumps({

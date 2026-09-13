@@ -16,7 +16,8 @@ After every run the notebook is checked against a plain top-to-bottom run of
 itself as it stands at that moment (``session_oracle.py``, no cash, the current
 input files):
 
-* the cell prints what the plain run's cell prints;
+* the cell prints what the plain run's cell prints, and displays a value only
+  where Jupyter would (its last expression);
 * every file cash wrote in this step holds what a plain run leaves there;
 * every file the cell itself writes in a plain run is on disk, byte-identical
   (a chart that was never written is as wrong as a wrong number);
@@ -114,6 +115,17 @@ class Session:
 
 # --- the player --------------------------------------------------------------
 
+def _describe(step: Step) -> str:
+    """A step in one short line: a file's path, not its content."""
+    if isinstance(step, AddFile):
+        return f"AddFile({step.path})"
+    if isinstance(step, Edit):
+        return f"Edit({step.cell})"
+    if isinstance(step, Run):
+        return f"Run({step.cell})" + (f" calls={step.calls}" if step.calls else "")
+    return type(step).__name__ + (f" calls={step.calls}" if getattr(step, "calls", None) else "")
+
+
 def _write(work: Path, rel: str, content: Content) -> None:
     path = work / rel
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,7 +192,7 @@ class Player:
         return self.labels.index(label) + 1
 
     def _fail(self, step_no: int, step: Step, message: str) -> None:
-        self.failures.append(f"step {step_no} {step}: {message}")
+        self.failures.append(f"step {step_no} {_describe(step)}: {message}")
 
     def _run_cell(self, i: int) -> str | None:
         try:
@@ -193,6 +205,22 @@ class Player:
             # `%cash_persist on` needs cash on, and a restart forgets it.
             self.runner.enable_persist()
         return None
+
+    def _check_displays(self, step_no: int, step, i: int, want: int) -> None:
+        """The values the kernel displayed for cell *i*, cash's badges aside,
+        against the one a plain Jupyter run displays (its last expression)."""
+        shown = []
+        for o in self.runner.nb.cells[i - 1].get("outputs", []):
+            if o.get("output_type") not in ("execute_result", "display_data"):
+                continue
+            plain = o.get("data", {}).get("text/plain", "")
+            plain = "".join(plain) if isinstance(plain, list) else plain
+            if plain.startswith("<IPython.core.display.HTML object>"):
+                continue                      # the badge
+            shown.append(plain)
+        if len(shown) != want:
+            self._fail(step_no, step, f"cell {self.labels[i - 1]!r} displayed {len(shown)} "
+                                      f"value(s), Jupyter displays {want}: {[s[:60] for s in shown[:4]]}")
 
     def _check_cost(self, step_no: int, step, calls_before: int) -> None:
         expected = getattr(step, "calls", None)
@@ -233,7 +261,7 @@ class Player:
             _write(self.work, rel, content)
         self.runner.start_kernel()
         for step_no, step in enumerate(self.session.steps, start=1):
-            self.log.append(f"{step_no}: {step}")
+            self.log.append(f"{step_no}: {_describe(step)}")
             if isinstance(step, Edit):
                 old = self.sources[step.cell]
                 new = step.source(old) if callable(step.source) else step.source
@@ -272,6 +300,7 @@ class Player:
         got, want = _cell_stdout(self.runner, i), oracle.cells[-1]["stdout"].rstrip("\n")
         if got != want:
             self._fail(step_no, step, f"printed {got!r}, a plain run prints {want!r}")
+        self._check_displays(step_no, step, i, oracle.cells[-1]["displays"])
         self._check_files(step_no, step, before, oracle.final, oracle.cells[-1]["written"])
         self._check_cost(step_no, step, calls_before)
 
@@ -290,6 +319,8 @@ class Player:
             if i > 1 and got != want:           # cell 1 prints cash's own banner
                 self._fail(step_no, step, f"cell {self.labels[i - 1]!r} printed {got!r}, "
                                           f"a plain run prints {want!r}")
+            if i > 1:
+                self._check_displays(step_no, step, i, oracle.cells[i - 1]["displays"])
             written.update(oracle.cells[i - 1]["written"])
         self._check_files(step_no, step, before, oracle.final, written)
         self._check_cost(step_no, step, calls_before)
