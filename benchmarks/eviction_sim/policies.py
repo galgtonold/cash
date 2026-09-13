@@ -625,6 +625,48 @@ class GDSF(Policy):
         return None
 
 
+class SampledGDSF(GDSF):
+    """GDSF that evicts the lowest-H of ``k`` uniformly sampled entries
+    instead of the global minimum (the approach Redis takes for LRU/LFU).
+
+    Models a disk tier that cannot afford to read every entry's header to
+    rank them: each eviction reads ``k`` headers. ``L`` only ever rises, since
+    a sampled victim can sit below the current clock.
+    """
+
+    def __init__(self, cap, k=32, seed=7):
+        super().__init__(cap)
+        self.k = k
+        self.name = f"GDSF-sampled(k={k})"
+        self.rng = random.Random(seed)
+        self.keys = []          # dense list for O(1) sampling
+        self.pos = {}
+
+    def _on_insert(self, key, size, cost, meta):
+        super()._on_insert(key, size, cost, meta)
+        self.pos[key] = len(self.keys)
+        self.keys.append(key)
+
+    def _on_remove(self, key):
+        super()._on_remove(key)
+        i = self.pos.pop(key, None)
+        if i is not None:
+            last = self.keys.pop()
+            if i < len(self.keys):
+                self.keys[i] = last
+                self.pos[last] = i
+
+    def _victim(self, protect):
+        cands = [k for k in (self.rng.choice(self.keys) for _ in range(min(self.k, len(self.keys))))
+                 if k != protect]
+        if not cands:
+            others = [k for k in self.keys if k != protect]
+            return others[0] if others else None
+        v = min(cands, key=lambda k: self.H[k])
+        self.L = max(self.L, self.H[v])
+        return v
+
+
 class CostLRU(Policy):
     """LRU whose recency is shifted by a log value-density bonus:
 

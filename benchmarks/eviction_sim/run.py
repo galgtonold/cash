@@ -125,6 +125,11 @@ POLICIES = {
     "Supersede2+GDSF-noage": lambda cap: P.SupersedeAware(cap, keep=2, inner=P.GDSF, age_on_dead=False),
     "Supersede+CostLRU-t500": lambda cap: P.SupersedeAware(cap, keep=1, inner=P.CostLRU, inner_kw={"tau": 500}),
     "CostLRU-t8000": lambda cap: P.CostLRU(cap, tau=8000),
+    "GDSF-s8": lambda cap: P.SampledGDSF(cap, k=8),
+    "GDSF-s32": lambda cap: P.SampledGDSF(cap, k=32),
+    "GDSF-s128": lambda cap: P.SampledGDSF(cap, k=128),
+    "Supersede+GDSF-s32": lambda cap: P.SupersedeAware(cap, keep=1, inner=P.SampledGDSF, inner_kw={"k": 32},
+                                                        age_on_dead=False),
 }
 NEEDS_LIVE = {n for n in POLICIES if n.startswith(("LiveGC", "Hybrid"))}
 
