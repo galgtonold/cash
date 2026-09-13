@@ -147,27 +147,49 @@ class InMemoryBackend(CacheBackend):
             return metadata, self._safe_deep_copy(value, key)
         return None, None
 
-    def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
+    def set(self, key: str, value: Any, metadata: MetadataDict | None = None,
+            serializer: Serializer | None = None) -> bool | None:
+        """Store *value*; returns False if it was refused (see below)."""
         metadata = self._init_metadata(metadata, key)
-
-        if 'storage' not in metadata:
-            metadata['storage'] = ['RAM']
 
         # Plain data is sized, checked and copied from ONE look at it: three
         # separate walks were most of promoting two million parsed rows here.
         plain = _plain_data.profile(value)
         dict_rows_size = None if plain is not None else _plain_data.dict_rows_profile(value)
         if dict_rows_size is not None:
+            size = dict_rows_size
+        elif plain is None:
+            size = self._get_object_size(value)
+        else:
+            size = plain[0]
+
+        # A value above the eviction target can never stay: the byte cap evicts
+        # down to 90% of the cap, and it would be the last one standing. It
+        # used to be stored anyway, and the eviction took every older entry and
+        # then the value itself -- one oversized write, or one restore of a big
+        # disk entry (read-repair promotes into this tier with no size gate),
+        # emptied the tier. Refused here, before the copy: copying a frame of
+        # gigabytes only to throw it away is its own cost. The previous value
+        # for the key goes too, or a later read would serve it as current.
+        if self._max_size_bytes is not None and size > self._max_size_bytes * 0.9:
+            if key in self._store:
+                self._drop(key)
+            return False
+
+        if 'storage' not in metadata:
+            metadata['storage'] = ['RAM']
+
+        if dict_rows_size is not None:
             # csv.DictReader / JSON records with immutable values: a new dict
             # per row is a complete copy, built in C (round 20: dict rows were
             # 10x slower to cache than the same data as tuples).
-            size, immutable = dict_rows_size, False
+            immutable = False
             stored = list(map(dict, value))
         elif plain is None:
-            size, immutable = self._get_object_size(value), False
+            immutable = False
             stored = self._safe_deep_copy(value, key)
         else:
-            size, immutable, levels = plain
+            _size, immutable, levels = plain
             stored = _plain_data.copy_plain(value, immutable, levels)[1]
         metadata['size'] = size
 

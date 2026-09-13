@@ -266,10 +266,11 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 # Read-Repair / Promotion to faster tiers
                 # If found in Tier 2 (File), promote to Tier 1 (Memory)
                 for j in range(i):
-                    # Always promote to faster tiers on read?
-                    # Generally yes, L1 (Memory) should hold hot items.
-                    # Exception: if it's too huge for memory?
-                    # MemoryBackend handles its own eviction, so we can just try setting it.
+                    # Always offered: a faster tier should hold what is being
+                    # read. One it can never hold -- over the RAM tier's
+                    # eviction target -- that tier refuses itself
+                    # (`InMemoryBackend.set`), which is what keeps a restore of
+                    # a big entry from emptying it.
                     try:
                         self.backends[j].set(key, value, metadata)
                     except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
@@ -303,10 +304,12 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                     metadata["ttl"] = default
                     break
 
-        # Always write to Tier 0 (Memory)
+        # Always write to Tier 0 (Memory). It may refuse a value its cap could
+        # never hold (`InMemoryBackend.set` returns False); then it is not a
+        # destination, and the badge and the miss explanation must not say so.
         try:
-            self.backends[0].set(key, value, metadata, serializer)
-            stored_destinations.append("RAM")
+            if self.backends[0].set(key, value, metadata, serializer) is not False:
+                stored_destinations.append("RAM")
         except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
             logger.warning(
                 "Failed to write key '%s' to tier 0 (%s): %s",

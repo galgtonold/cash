@@ -6,7 +6,7 @@ on-disk layer, with a promotion policy that decides what's worth writing down.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend @ff192887, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend, cash/backends/cascading_backend.py:CascadingBackend broad="tier ordering and read-repair are properties of the class as a whole" -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend @15ead301, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend, cash/backends/cascading_backend.py:CascadingBackend broad="tier ordering and read-repair are properties of the class as a whole" -->
 The default `TieredBackend` stacks two layers, fastest first:
 
 | Tier | Backend | Speed | Survives restart? |
@@ -16,7 +16,9 @@ The default `TieredBackend` stacks two layers, fastest first:
 
 On a read, a hit in L2 is **promoted back up to L1** (read-repair) with no policy
 check at all — if it was worth persisting, it's worth holding hot, and the memory
-tier does its own eviction. Writes are the opposite: they're gated, and the next
+tier does its own eviction. The one value it turns away is one it could never
+keep: over 90% of its own cap, where holding it would first evict everything
+else. Writes are the opposite: they're gated, and the next
 section is about that gate. Cash also ships backends you can swap in or stack —
 `SQLiteBackend`, `RedisBackend`, `S3Backend`, and a `CascadingBackend` for
 multi-tier setups (see
@@ -112,10 +114,12 @@ either case; changing it means supplying your own `promotion_policy`.
 Size caps are the last word. Each persistent tier declines objects larger than a
 safe fraction of its own cap, per tier — so a 20 MB frame can land in RAM and on
 disk while skipping a Redis tier with a 10 MB limit. If a value cleared the
-compute floor but *every* persistent tier refused it, Cash keeps it in RAM and
-warns once per session with `CashCacheIneffectiveWarning`, because otherwise you
-would be left wondering why a value you were told was worth caching evaporated
-on restart.
+compute floor but *every* persistent tier refused it, Cash keeps it in RAM if it
+fits there and warns once per session with `CashCacheIneffectiveWarning`, because
+otherwise you would be left wondering why a value you were told was worth
+caching evaporated on restart. A value that big is often over the RAM tier's own
+limit too (90% of its cap), and then nothing holds it; see
+[`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big).
 
 ## Turning objects into bytes
 

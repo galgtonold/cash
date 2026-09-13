@@ -466,13 +466,15 @@ meant a 500 MB cap cached nothing at all for a 263 MB working set. It is the
 whole cap now, measured on the serialized bytes, so a value that fits is stored
 and eviction does the rest.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @80587318 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @80587318, cash/backends/memory_backend.py:InMemoryBackend.set @c5c2fd71 -->
 **Why it matters.** Usually you get no caching at all, not RAM-only caching.
 The RAM tier has its own byte cap, scaled to the machine and independent of
 `max_cache_size`, which caps only disk — and it is the *smaller* of the two.
 Anything big enough to be refused by every persistent tier is normally also over
-the RAM cap, so `InMemoryBackend.set` evicts down to 90% of that cap in the same
-call that wrote the entry, taking the entry with it. Measured, on a 4 MiB value
+the RAM cap, and `InMemoryBackend.set` refuses a value above 90% of that cap
+outright: it could not stay anyway, since the cap evicts down to 90%. The rest
+of the RAM tier is left alone (storing it used to evict every other entry
+first, then the value). Measured, on a 4 MiB value
 that trips the warning in both arms: with a RAM cap of 100 MiB, two calls run
 the body **once**; with a RAM cap of 1 MiB, two calls run it **twice** and the
 RAM store is empty immediately. The second arm is the shape of the defaults —
