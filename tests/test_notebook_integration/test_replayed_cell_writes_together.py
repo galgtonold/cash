@@ -76,6 +76,31 @@ def test_after_an_edit_the_folder_is_all_old_or_all_new(nb_runner, tail):
     assert changed in ([], ALL), f"half the report was rewritten: {changed}"
 
 
+PACK_CELLS = [
+    "import cash\n%cash_on",
+    "import shutil\nfrom pathlib import Path\nPACK = Path('pack')\nPACK.mkdir(exist_ok=True)",
+    "table = {'a': 1, 'b': 2}",
+    "if PACK.exists():\n    shutil.rmtree(PACK)\nPACK.mkdir()\n(PACK / 'table.txt').write_text(str(table))",
+    "summary = sorted(table)\n(PACK / 'summary.txt').write_text(str(summary))\nprint(sorted(p.name for p in PACK.iterdir()))",
+]
+
+
+def test_after_a_restart_a_guarded_rmtree_is_replayed_with_its_mkdir(nb_runner):
+    """r23s2: `if PACK.exists(): shutil.rmtree(PACK)` binds nothing, so the
+    simulation gave it no trace entry, and the replay after a restart ran the
+    cell's `PACK.mkdir()` alone -- FileExistsError, reported as a broken
+    upstream cell."""
+    work = Path(nb_runner.work_dir)
+    nb_runner.create_notebook(PACK_CELLS)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.restart()
+    nb_runner.run_cell(1)
+    nb_runner.run_cell(5)
+    assert "['summary.txt', 'table.txt']" in nb_runner.get_output(5)
+    assert sorted(p.name for p in (work / "pack").iterdir()) == ["summary.txt", "table.txt"]
+
+
 def test_after_a_restart_no_chart_is_lost(nb_runner):
     work = _run_all(nb_runner, TAIL)
     before = _snap(work)

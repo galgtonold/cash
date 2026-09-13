@@ -11,6 +11,7 @@ invariants land in a later refactor.
 
 import inspect
 import ast
+import builtins
 import hashlib
 import logging
 import os
@@ -1623,6 +1624,23 @@ class VirtualLineage:
             simulation_trace.append(_TraceEntry(stmt_code, all_outputs, inputs, input_hashes, produced_lineages, files_stale))
             if lookup_time > 0:
                 stmt_lookup_times[stmt_code] = lookup_time
+        elif self._may_write_files(node, stmt_code):
+            # ``if PACK.exists(): shutil.rmtree(PACK)`` binds nothing, so it had
+            # no trace entry, and a replay after a restart re-ran the cell's
+            # ``PACK.mkdir()`` without it (round 23, r23s2: FileExistsError).
+            # The same rule simple statements follow in _simulate_one_node.
+            simulation_trace.append(_TraceEntry(stmt_code, set(), inputs, input_hashes, {}, files_stale))
+
+    @staticmethod
+    def _may_write_files(node: ast.AST, stmt_code: str) -> bool:
+        """A write in the text, or a call to something that might be a
+        user function that writes (the planner decides which)."""
+        from ..cacheability import statement_writes_files
+        if statement_writes_files(stmt_code):
+            return True
+        return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                   and not hasattr(builtins, n.func.id)
+                   for n in ast.walk(node))
 
     # -- Helpers for _update_virtual_lineage ----------------------------------
 
