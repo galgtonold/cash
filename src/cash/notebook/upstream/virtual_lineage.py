@@ -128,10 +128,6 @@ class VirtualLineage:
         self._simulation_cache: list[_SimulationCacheEntry] = []
         self._simulation_cell_hashes: dict[int, str] = {}
         self._cell_id_to_last_index: dict[str, int] = {}
-        # First cached cell the next simulation must redo: one of its
-        # statements has since been re-executed, so its snapshot describes a
-        # state that no longer exists. See ``resimulate_from_statements``.
-        self._resimulate_from: int | None = None
 
         # Buffered TrackingState mutations; orchestrator drains after the phase.
         self._restores = RestoreCollector()
@@ -344,7 +340,6 @@ class VirtualLineage:
         self._simulation_cache.clear()
         self._simulation_cell_hashes.clear()
         self._ast_cache.clear()
-        self._resimulate_from = None
 
     def _get_metadata_only(self, cache_key: str) -> dict | None:
         """Get only metadata for a cache key without deserializing the full value.
@@ -377,29 +372,40 @@ class VirtualLineage:
         self._ast_cache[code] = tree
         return tree
 
-    def resimulate_from_statements(self, statements: list[str]) -> None:
-        """Make the next simulation redo every cell from the first that holds
-        one of *statements*, which were just re-executed.
+    def record_replayed_file_deps(self, rerecorded: set[str]) -> None:
+        """Add the files behind the *rerecorded* variables to the snapshots of
+        the cells that produce them.
 
-        A cell's snapshot records what the simulation knew then. Before a
+        A cell's snapshot records the files the simulation knew of. Before a
         replay -- after a restart above all -- the simulation cannot find a
         statement's cache entry (nothing is live yet to key it with), so the
-        snapshot has no file dependencies for it; the replay then restores
-        the statement, and the snapshot stays blind. A re-delivered file was
-        never looked at again and the old result was served (round 22,
-        r22s1). Simulated again with the replayed state, the entry is found
-        and its files are checked.
+        snapshot has no file dependency for a file read inside a helper; the
+        replay then restores the statement, and the snapshot stays blind. A
+        re-delivered file was never looked at again and the old result was
+        served (round 22, r22s1). With the files the restore brought back
+        (``executed_file_deps``) in the snapshot, a later change of one makes
+        the next simulation redo the cell, as it always did without a restart.
+
+        Only the file list changes. Re-simulating the replayed cells instead
+        exposed lineages the simulation cannot rebuild (a view-of-view's bump
+        of its root base), and the replay then rebuilt the base under a view
+        that still pointed at the old one.
         """
-        if not statements:
+        if not rerecorded:
             return
-        wanted = {s.strip() for s in statements}
-        first = 0                    # a statement not found: redo everything
-        for idx, entry in enumerate(self._simulation_cache):
-            if any(te[0].strip() in wanted for te in entry.trace_segment):
-                first = idx
-                break
-        if self._resimulate_from is None or first < self._resimulate_from:
-            self._resimulate_from = first
+        for entry in self._simulation_cache:
+            for trace_entry in entry.trace_segment:
+                for var in set(trace_entry[1]) & rerecorded:
+                    for path in self.executed_file_deps.get(var, ()):
+                        if path in entry.cell_file_deps:
+                            continue
+                        resolved = resolve_file_dep_path(path)
+                        if resolved is None:
+                            continue
+                        try:
+                            entry.cell_file_deps[path] = os.path.getmtime(resolved)
+                        except OSError:
+                            continue
 
     def _check_cell_file_deps(
         self,
@@ -448,10 +454,6 @@ class VirtualLineage:
                         "(cached=%s, current=%s). Re-simulating from here.",
                         idx, cached.cell_code_hash[:12], cell_hash[:12],
                     )
-                break
-            if self._resimulate_from is not None and idx >= self._resimulate_from:
-                # Re-simulate, but this is not an edit: same reasoning as a
-                # file-dep change below, the flag stays alone.
                 break
             cached_file_deps = cached.cell_file_deps
             if cached_file_deps and self._check_cell_file_deps(cached_file_deps, idx):
@@ -1361,9 +1363,6 @@ class VirtualLineage:
         # For hash change detection across intermediate cell runs, we use
         # _simulation_cell_hashes (a separate lightweight structure).
         self._simulation_cache = new_cache_entries
-        # Every entry is now either reused from before the re-simulation
-        # point or freshly simulated.
-        self._resimulate_from = None
 
         # This persists across intermediate cell runs so that a later cell can
         # detect code changes in cells that were truncated from the main cache.
