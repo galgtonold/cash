@@ -74,8 +74,8 @@ def _spy_on_wrap_eligible_calls(monkeypatch):
     captured = {}
     real = processor_module.wrap_eligible_calls
 
-    def _spy(tree, *, gate):
-        rewritten, sites = real(tree, gate=gate)
+    def _spy(tree, **kwargs):
+        rewritten, sites = real(tree, **kwargs)
         captured["sites"] = sites
         return rewritten, sites
 

@@ -137,6 +137,57 @@ class CallSite:
     local_arg_positions: tuple[int, ...] = ()
 
 
+def interceptable(fn) -> bool:
+    """Whether a callee is one :meth:`CallCache.resolve` wraps.
+
+    Only a plain Python function: builtins, classes and bound methods are left
+    alone (see "Bound methods are deliberately not intercepted" in the docs).
+    Also not one that is already ``@cash.cache``-d, nor ``@cash.stateful`` --
+    THE documented way to say "never cache this"; skipping that check cached a
+    stateful callee and returned a stale value on the FIRST run (``[1, 1]``
+    where plain Python gives ``[1, 2]``), because the second call in a loop hit
+    the entry the first had just written. Nor cash's own instrumentation:
+    ``file_tracker`` replaces ``open``, ``pd.read_csv`` and friends with
+    tracking wrappers, which are plain functions; wrapping one means trying to
+    cache a file handle (CAS-246). The sentinel is the one ``cache_key.py``
+    already reads (CAS-214), and every install site sets it.
+    """
+    return (isinstance(fn, types.FunctionType)
+            and not getattr(fn, '_cash_cached', False)
+            and not getattr(fn, '_cash_stateful', False)
+            and not getattr(fn, '_is_file_tracker_patch', False))
+
+
+_NOT_FOUND = object()
+
+
+def _static_callee(node: ast.AST, namespace) -> object:
+    """The object a callee expression names, found without calling anything.
+
+    A bare name through *namespace* and the builtins; an attribute only through
+    a module or a class (a static lookup on a class, so no descriptor or
+    property runs). Anything else -- an instance's method, a subscript, a call
+    result -- is ``_NOT_FOUND``.
+    """
+    import builtins
+    import inspect
+    if isinstance(node, ast.Name):
+        if node.id in namespace:
+            return namespace[node.id]
+        return getattr(builtins, node.id, _NOT_FOUND)
+    if isinstance(node, ast.Attribute):
+        base = _static_callee(node.value, namespace)
+        try:
+            if isinstance(base, types.ModuleType):
+                return getattr(base, node.attr, _NOT_FOUND)
+            if isinstance(base, type):
+                found = inspect.getattr_static(base, node.attr, _NOT_FOUND)
+                return found.__func__ if isinstance(found, staticmethod) else found
+        except Exception:  # noqa: BLE001 - a lookup is never worth an error
+            return _NOT_FOUND
+    return _NOT_FOUND
+
+
 def _is_storable(result) -> bool:
     """``cache_if`` predicate: may this call's result be written to the cache?
 
@@ -307,26 +358,7 @@ class CallCache:
 
     def resolve(self, fn, site_index: int = 0):
         """Return *fn* or a cached counterpart. Never raises."""
-        if not isinstance(fn, types.FunctionType):
-            return fn
-        if getattr(fn, '_cash_cached', False):
-            return fn
-        # ``@cash.stateful`` is THE documented way to say "never cache this".
-        # ``decide_cacheability`` honours it for statements; skipping it here
-        # cached a stateful callee and returned a stale value on the FIRST run
-        # (``[1, 1]`` where plain Python gives ``[1, 2]``), because the second
-        # call in a loop hit the entry the first had just written.
-        if getattr(fn, '_cash_stateful', False):
-            return fn
-        # Cash's own instrumentation. ``file_tracker`` replaces ``open``,
-        # ``pd.read_csv`` and friends with tracking wrappers, and a wrapper is a
-        # plain Python function -- so the builtin exclusion above does not cover
-        # it. Wrapping one means trying to cache a file handle: the audit-log
-        # repro on CAS-246 raised, and wrote nothing. The sentinel is the same
-        # one ``cache_key.py`` already reads defensively (CAS-214, where this
-        # shim poisoned a cache key), and every install site sets it, so new
-        # shims are covered without a new list to maintain.
-        if getattr(fn, '_is_file_tracker_patch', False):
+        if not interceptable(fn):
             return fn
 
         try:
@@ -369,6 +401,7 @@ def wrap_eligible_calls(
     tree: ast.Module,
     *,
     gate: Callable[[ast.Call], bool] | None = None,
+    namespace=None,
 ) -> tuple[ast.Module, list[CallSite]]:
     """Return ``(rewritten_copy, sites)``; *tree* is left untouched.
 
@@ -395,12 +428,27 @@ def wrap_eligible_calls(
     :func:`eligible_call_nodes` — that structural rule still runs first, and a
     site the gate rejects is simply never wrapped, i.e. left calling the
     original callee directly, at no runtime cost.
+
+    A call that is not wrapped -- the gate rejects it, or *namespace* shows its
+    callee is one :func:`interceptable` refuses (a builtin or class such as
+    ``dict``, a bound method, a ``@stateful`` function) -- is searched INSIDE
+    instead. ``rows.append(dict(k=k, err=score(df, k)))`` accepted the
+    ``dict(...)`` as the outermost call; at runtime it is a class and was not
+    wrapped, and ``score(df, k)`` inside it was never considered -- a
+    backtest was recomputed in full on an unchanged re-run (round 22).
     """
+    def skip(call: ast.Call) -> bool:
+        if namespace is not None:
+            callee = _static_callee(call.func, namespace)
+            if callee is not _NOT_FOUND and not interceptable(callee):
+                return True
+        return gate is not None and not gate(call)
+
     new_tree = copy.deepcopy(tree)
     sites: list[CallSite] = []
     seen: Counter[str] = Counter()
     for stmt in new_tree.body:
-        calls = _eligible_calls_in_scope(stmt)
+        calls = _eligible_calls_in_scope(stmt, skip)
         if not calls:
             continue
         # Computed ONCE per enclosing statement, before any call inside it is
@@ -416,8 +464,6 @@ def wrap_eligible_calls(
         except Exception:  # noqa: BLE001 - degrade, never let keying break the call
             stmt_identity = ""
         for call, local in calls:
-            if gate is not None and not gate(call):
-                continue
             source = ast.unparse(call)
             index = seen[source]
             seen[source] += 1
@@ -528,15 +574,18 @@ def eligible_call_nodes(stmt: ast.stmt) -> list[ast.Call]:
     return [call for call, _local in _eligible_calls_in_scope(stmt)]
 
 
-def _eligible_calls_in_scope(stmt: ast.stmt) -> list[tuple[ast.Call, frozenset[str]]]:
+def _eligible_calls_in_scope(
+    stmt: ast.stmt, skip: Callable[[ast.Call], bool] | None = None,
+) -> list[tuple[ast.Call, frozenset[str]]]:
     """:func:`eligible_call_nodes`, each call paired with the names an enclosing
-    comprehension or lambda binds around it (see ``CallSite.local_arg_positions``)."""
+    comprehension or lambda binds around it (see ``CallSite.local_arg_positions``).
+    A call *skip* returns ``True`` for is not taken; its inside is searched."""
     if not isinstance(stmt, _SIMPLE_STATEMENTS):
         return []
     targets = _target_names(stmt)
     found: list[tuple[ast.Call, frozenset[str]]] = []
     for root in _search_roots(stmt):
-        _collect(root, targets, found, frozenset())
+        _collect(root, targets, found, frozenset(), skip)
     return found
 
 
@@ -565,18 +614,20 @@ def _bound_names(node: ast.AST) -> set[str]:
     return {n.id for gen in node.generators for n in ast.walk(gen.target) if isinstance(n, ast.Name)}
 
 
-def _collect(node: ast.AST, targets: set[str], found: list, local: frozenset[str]) -> None:
+def _collect(node: ast.AST, targets: set[str], found: list, local: frozenset[str],
+             skip: Callable[[ast.Call], bool] | None = None) -> None:
     if isinstance(node, _LOCAL_SCOPES):
         local = local | _bound_names(node)
     if (isinstance(node, ast.Call) and not (_names_read(node) & targets)
             # A callee that reads a comprehension's own variable is a different
             # callable per element (`m.predict(X)` over `models.items()`), and
             # nothing in the key can see which: never intercepted.
-            and not (_names_read(node.func) & local)):
+            and not (_names_read(node.func) & local)
+            and not (skip is not None and skip(node))):
         found.append((node, local))
         return  # accepted -- do not search inside it
     for child in ast.iter_child_nodes(node):
-        _collect(child, targets, found, local)
+        _collect(child, targets, found, local, skip)
 
 
 def _names_read(node: ast.AST) -> set[str]:

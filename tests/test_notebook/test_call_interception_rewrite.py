@@ -171,6 +171,40 @@ def test_a_callee_bound_by_the_comprehension_is_not_intercepted():
     assert not any("predict" in s.source for s in sites)
 
 
+def test_a_call_inside_an_uninterceptable_call_is_found():
+    """``rows.append(dict(k=k, err=score(df, k)))`` took ``dict(...)`` as the
+    outermost call; at runtime a class is not wrapped, and ``score`` inside it
+    was never considered (round 22: a backtest recomputed in full)."""
+    tree = ast.parse("rows.append(dict(k=k, err=score(df, k)))")
+
+    def score(df, k):
+        return k
+
+    _, without_ns = wrap_eligible_calls(tree)
+    assert [s.source for s in without_ns] == ["dict(k=k, err=score(df, k))"]
+    _, with_ns = wrap_eligible_calls(tree, namespace={"score": score})
+    assert [s.source for s in with_ns] == ["score(df, k)"]
+
+
+def test_a_call_the_gate_rejects_is_searched_inside():
+    tree = ast.parse("out.append(log_it(compute(x)))")
+    _, sites = wrap_eligible_calls(tree, gate=lambda call: ast.unparse(call.func) != "log_it")
+    assert [s.source for s in sites] == ["compute(x)"]
+
+
+def test_a_plain_function_is_still_the_outermost_call():
+    tree = ast.parse("out.append(outer(inner(x)))")
+
+    def outer(v):
+        return v
+
+    def inner(v):
+        return v
+
+    _, sites = wrap_eligible_calls(tree, namespace={"outer": outer, "inner": inner})
+    assert [s.source for s in sites] == ["outer(inner(x))"]
+
+
 def test_names_outside_any_comprehension_are_unchanged():
     tree = ast.parse("out.append(compute(x, v=name))")
     _, sites = wrap_eligible_calls(tree)

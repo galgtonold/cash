@@ -303,12 +303,14 @@ nothing order-independent can be pulled out of it:
 | `s += compute(x)` | `compute(x)` |
 | `out.append(compute(x))` | `compute(x)` |
 | `prices[t] = compute(t)` | `compute(t)` |
+| `rows.append(dict(t=t, v=compute(t)))` | `compute(t)` |
 | `s = merge(s, x)` | none — the call reads `s` |
 | `df.sort_values(inplace=True)` | none — the mutation *is* the work |
 
 Calls already wrapped in `@cash.cache` are left alone (they are on this path
-already), and builtins are skipped so a hot loop doesn't pay for a cache key per
-`len()`.
+already), and builtins and classes are skipped so a hot loop doesn't pay for a
+cache key per `len()`. A call *inside* one of them is still found — in
+`dict(t=t, v=compute(t))` it is `compute(t)` that is cached.
 
 **Inside a comprehension, the element is part of the key.** In
 `{name: fit(m, X) for name, m in models.items()}`, `m` belongs to the

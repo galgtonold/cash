@@ -2257,6 +2257,7 @@ class StatementProcessor:
                     return False
             rewritten, sites = wrap_eligible_calls(
                 tree if tree is not None else ast.parse(code), gate=gate,
+                namespace=self.shell.user_ns,
             )
             if not sites:
                 # Under default-on, "nothing here was eligible" is the

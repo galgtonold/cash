@@ -328,10 +328,9 @@ DEMAND_FORECAST = Session(
     files=FORECAST_FILES,
     steps=(
         RunAll(),
-        # Monday: the unchanged backtest again -- nothing should be refitted.
-        Run("backtest", calls={"backtest": 0},
-            gap="a call nested in rows.append(dict(..., wape=f(...))) is not call-cached; "
-                "rows.append(f(...)) and w = f(...) are"),
+        # Monday: the unchanged backtest again -- nothing may be refitted
+        # (the call sits in rows.append(dict(..., wape=backtest_one(...)))).
+        Run("backtest", calls={"backtest": 0}),
         # A new day: restart and jump straight to the metrics
         # (r22s4 BLOCKING: every restart-then-jump was refused).
         Restart(),
