@@ -576,8 +576,10 @@ class ForLoopHandler:
         context_hash = compute_context_hash(iteration_context)
         modified_code = f"# __iteration_context__: {context_hash}\n{code}"
 
+        # A body statement is never the cell's last expression: Jupyter shows
+        # nothing for ``ax.text(...)`` inside a loop (round 22: 151 Text reprs).
         result = self.statement_processor.process_statement(
-            modified_code, ttl, silent, annotation=annotation,
+            modified_code, ttl, silent, annotation=annotation, is_last=False,
         )
 
         # Attach human-readable loop variable values to the metrics

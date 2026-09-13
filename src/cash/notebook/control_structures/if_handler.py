@@ -171,8 +171,9 @@ class IfHandler:
         annotation = _helpers.resolve_statement_annotation(
             raw_cell, body_node, branch_annotation,
         )
+        # Never the cell's last expression -- see ForLoopHandler.
         metrics = self.statement_processor.process_statement(
-            modified_code, ttl, silent, annotation=annotation,
+            modified_code, ttl, silent, annotation=annotation, is_last=False,
         )
         metrics['control_context'] = branch_hash
         metrics['branch_label'] = branch_label

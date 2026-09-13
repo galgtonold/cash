@@ -460,7 +460,7 @@ class _StatementProcessorWithoutLoopVarsScope:
         self.vars_with_mutation_lineage: set = set()
         self.compute_hash = lambda v: 'fakehash'
 
-    def process_statement(self, code, ttl, silent, annotation=None):
+    def process_statement(self, code, ttl, silent, annotation=None, is_last=True):
         return {
             'status': CacheStatus.COMPUTED,
             'execution_time': 0.01,
