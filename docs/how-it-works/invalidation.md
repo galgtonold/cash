@@ -23,7 +23,7 @@ A *failed* lookup is memoised too, but for two seconds rather than five minutes 
 
 ## Upstream simulation
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker @67a7bcbb, cash/notebook/upstream/simulator.py:NotebookSimulator @cf12b488, cash/notebook/server_discovery.py:_read_notebook_code_cells @f6b1396e broad="the simulation story is the two orchestrating classes, not one method" -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker @d9f57cde, cash/notebook/upstream/simulator.py:NotebookSimulator @cf12b488, cash/notebook/server_discovery.py:_read_notebook_code_cells @f6b1396e broad="the simulation story is the two orchestrating classes, not one method" -->
 The classic problem: you edited cell 1 but then ran cell 3 directly. Cash solves this with a virtual-lineage approach. When cell 3 runs, Cash reads the notebook's current cell state — from a live source when one is available, the saved file otherwise — and *simulates* the upstream cells — cells 1 and 2 — without executing them. It parses each upstream statement's AST to compute what its lineage hash *should* be given the current code, then compares those virtual lineages against the in-memory lineages stored from the last actual run. Only the cells whose simulated lineage differs from what is in memory are re-executed; the rest are restored straight from cache, which is also how a variable you never computed this session appears in the namespace without its cell running.
 
 <!-- claim: cash/notebook/server_discovery.py:_read_notebook_code_cells @f6b1396e, cash/notebook/server_discovery.py:last_cell_source @b653689d -->
@@ -138,12 +138,12 @@ flowchart TD
 
 ## Mutation bumps the receiver's lineage
 
-<!-- claim: cash/notebook/cacheability.py @1e9b88c3 broad="the three-tier mutation classification spans the module, not one function" -->
+<!-- claim: cash/notebook/cacheability.py @fbac43de broad="the three-tier mutation classification spans the module, not one function" -->
 `items.append(x)` names `items` as a *receiver*, not as an assignment target, so nothing about it would ordinarily move. Cash classifies every standalone method call and, when the call mutates, routes the receiver into the statement's outputs — its lineage is rebuilt from the statement's source, and everything downstream misses.
 
 The classification runs in three tiers, because "does this method mutate?" is not statically decidable in general:
 
-1. **Statically known** — `list.append`, `dict.update`, `inplace=True`, and friends, plus known-*pure* methods (`df.mean()`) that are excluded outright. `df.to_csv(path)` sits in a third static set: it reads the frame and writes a file, so it must *not* bump the frame's lineage.
+1. **Statically known** — `list.append`, `dict.update`, `inplace=True`, and friends, plus known-*pure* methods (`df.mean()`) that are excluded outright. `df.to_csv(path)` sits in a third static set: it reads the frame and writes a file, so it must *not* bump the frame's lineage. A call that fits an estimator (`fit`, `fit_transform`, `fit_predict`, …) mutates the estimator even when its value is captured: `X = vec.fit_transform(texts)` bumps `vec`.
 2. **Identity-coupled receivers** — a method call on a live matplotlib `Axes`/`Figure` draws on it whatever it returns, so it always counts as a mutation; so does handing one to a call (`df.plot(ax=ax)`), which mutates the *axes*, not `df` — pandas' plotting calls leave the frame's lineage alone.
 3. **Observed** — for everything else Cash content-hashes the receiver before and after execution and records the verdict, keyed by the statement's source hash.
 

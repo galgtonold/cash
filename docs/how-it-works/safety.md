@@ -53,7 +53,7 @@ The split looks arbitrary until you write the two forms side by side.
 statement's outputs; `d.update(o)` is a bare expression with no target at all.
 The first can be re-derived from the statement that made it; the second cannot.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @20807ce5, cash/notebook/cacheability.py:selfref_inplace_write_vars @5fcce56c -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @1e41cabe, cash/notebook/cacheability.py:selfref_inplace_write_vars @5fcce56c -->
 !!! note "…but only when the base was made in the same cell"
     The **Cached** verdicts above are this classifier's per-statement decision.
     A separate rule sits on top, in the upstream checker: a variable the cell
@@ -74,7 +74,7 @@ The first can be re-derived from the statement that made it; the second cannot.
 has no store target to give the receiver a fresh lineage. So Cash classifies
 method-call receivers in tiers, in this order:
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @dc72ca3c, cash/notebook/cacheability.py:KNOWN_PURE_METHODS @6ebfef8a, cash/notebook/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @d0495812, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @81f477db -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @44f80de9, cash/notebook/cacheability.py:KNOWN_PURE_METHODS @6ebfef8a, cash/notebook/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @d0495812, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @81f477db -->
 
 - **Excluded outright.** A module receiver is a plain function call, not a
   mutation: `np.foo()`, `time.sleep()`, `plt.title()`. So is a receiver-pure
@@ -92,7 +92,11 @@ method-call receivers in tiers, in this order:
   `sns.barplot(data=df, ax=ax)`, or a helper of your own, `draw(axes[0], df)`
   — so it becomes the statement's mutated output
   and the statement always runs, never restoring from cache (a restored draw
-  call draws nothing).
+  call draws nothing). The same holds for a call that **fits an estimator in
+  place** — `fit`, `partial_fit`, `fit_transform`, `fit_predict`,
+  `fit_resample` on anything with scikit-learn's `fit` and `get_params` — even
+  when its value is captured: `X = vec.fit_transform(texts)` re-runs, because
+  restoring `X` would leave `vec` unfitted.
 - **Observed.** Everything else is content-hashed before and after the call. If
   the content changed, the receiver mutated. Receivers that can only be
   *sampled* rather than hashed whole (DataFrames, Series, ndarrays, collections
@@ -112,7 +116,11 @@ same source text, so a simulated restore and a live run agree.
 One exception: statements inside a loop or `if`/`try` body are *not* classified
 this way. The simulation treats a control structure as a single unit, so
 bumping a body statement's receiver from a per-statement source would desync
-the two. The control structure owns its body's mutation lineage instead.
+the two. The control structure owns its body's mutation lineage instead. Two
+kinds of body statement still skip the cache, so they re-execute on every run:
+a draw on a live `Axes`/`Figure` (including one handed to a helper,
+`draw_panel(ax, ...)`) and a call that fits an estimator
+(`labels = km.fit_predict(Z)`).
 
 ??? question "Why skip the cache if the lineage is already bumped?"
     The lineage bump and the cache skip answer different questions. Bumping
