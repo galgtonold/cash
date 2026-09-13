@@ -13,6 +13,7 @@ orchestrator (``UpstreamChecker``) takes that plan and runs it via the real
 ``process_statement_callback``.
 """
 
+import ast
 import logging
 import re
 from collections.abc import Callable
@@ -41,6 +42,24 @@ from .virtual_lineage import (  # noqa: F401  re-exported (imported by upstream/
 )
 
 __all__ = ["NotebookSimulator"]
+
+
+def _statement_codes(cell_source: str) -> list[str]:
+    """The cell's top-level statements as the runtime keys them (unparsed,
+    with an expression's trailing ``;`` kept); the raw text if it does not parse."""
+    try:
+        clean = CodeAnalyzer.strip_magics(cell_source.replace('\r\n', '\n'))
+        tree = ast.parse(clean)
+    except (SyntaxError, ValueError, TypeError):
+        return [cell_source]
+    from ..ipython.cell_executor import CellExecutor
+    codes = []
+    for node in tree.body:
+        code = ast.unparse(node)
+        if CellExecutor._expr_has_trailing_semicolon(clean, node):
+            code += ';'
+        codes.append(code)
+    return codes
 
 logger = logging.getLogger(__name__)
 
@@ -586,6 +605,21 @@ class NotebookSimulator:
                 continue
         return muts
 
+    def _persisted_reads(self, code: str) -> set[str] | None:
+        """Files *code* read when it last ran, from the backend, or ``None``."""
+        cash = getattr(self._virtual_lineage, 'cash_instance', None)
+        backend = getattr(cash, 'backend', None) if cash is not None else None
+        if backend is None or not hasattr(backend, 'get_metadata'):
+            return None
+        from ..cache_key import read_provenance_key
+        try:
+            record = backend.get_metadata(read_provenance_key(code))
+        except (OSError, TypeError, ValueError, AttributeError):
+            return None
+        if not record or not record.get('read_provenance'):
+            return None
+        return set(record.get('paths') or ())
+
     def _compute_relevant_read_paths(
         self,
         required_inputs: set[str] | None,
@@ -652,6 +686,10 @@ class NotebookSimulator:
                     dep = efd[o]
                     r.update(dep.keys() if hasattr(dep, 'keys') else dep)
             if r is None:
+                # After a restart the session record is empty; what the
+                # statement read when it last ran was persisted for this.
+                r = self._persisted_reads(src)
+            if r is None:
                 fully_known = False
             else:
                 paths.update(r)
@@ -670,7 +708,11 @@ class NotebookSimulator:
                     paths.update(dep.keys() if hasattr(dep, 'keys') else dep)
 
         if notebook_cells and current_cell_idx is not None and 0 <= current_cell_idx < len(notebook_cells):
-            _collect(notebook_cells[current_cell_idx])
+            # One statement at a time, keyed as the runtime keys them, so a
+            # statement's persisted read record is found after a restart (the
+            # whole cell's text is no statement's key).
+            for stmt in _statement_codes(notebook_cells[current_cell_idx]):
+                _collect(stmt)
 
         return paths, fully_known
 

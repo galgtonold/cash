@@ -24,7 +24,12 @@ from cash.exceptions import (
     CashCacheIneffectiveWarning,
 )
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
-from cash.notebook.cache_key import CacheKeyContext, compute_cache_key, write_provenance_key
+from cash.notebook.cache_key import (
+    CacheKeyContext,
+    compute_cache_key,
+    read_provenance_key,
+    write_provenance_key,
+)
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.file_dep_snapshot import snapshot_dependencies, snapshot_file_deps
 from cash.notebook.object_hashing import estimate_object_size
@@ -2536,6 +2541,8 @@ class StatementProcessor:
                 self._persist_write_provenance(code, inputs, tree)
         except AttributeError:
             pass
+        if accessed_files:
+            self._persist_read_provenance(code, accessed_files)
 
         # Detect in-place mutations (detection-only; do not modify lineage).
         # Reuses the StatementAnalysis from process_statement to avoid a
@@ -2609,6 +2616,30 @@ class StatementProcessor:
             saved_time=0.0,
             code_hash=cache_key,
         )
+
+    def _persist_read_provenance(self, code: str, accessed_files: set[str]) -> None:
+        """Record, across restarts, which files this statement read.
+
+        See :func:`~cash.notebook.cache_key.read_provenance_key`. Written only
+        when the statement's read set is new this session, so a notebook re-run
+        costs no extra writes. Best-effort: a failure leaves the read set
+        unknown after a restart, which is the conservative old behaviour.
+        """
+        paths = sorted(accessed_files)
+        written = self.__dict__.setdefault('_read_provenance_written', {})
+        if written.get(code) == paths:
+            return
+        backend = self.cash_instance.backend if self.cash_instance else None
+        if backend is None:
+            return
+        try:
+            self._stmt_restorer.persist_metadata_only(
+                backend, read_provenance_key(code),
+                {'read_provenance': True, 'paths': paths, 'code': code, 'ttl': None},
+            )
+            written[code] = paths
+        except (OSError, TypeError, ValueError, AttributeError):
+            logger.debug("%s read-provenance persistence failed", _LOG_PROCESSOR)
 
     def _persist_write_provenance(
         self,

@@ -15,6 +15,7 @@ from ..cacheability import (
     consumed_input_names,
     statement_saves_current_pyplot_figure,
     statement_writes_files,
+    statement_written_paths,
 )
 from ..cache_key import write_provenance_key
 from ..file_dep_snapshot import file_dep_is_fresh
@@ -1001,14 +1002,38 @@ class ReexecutionPlanner:
         # freshly written file.
         tracking = getattr(self._classifier, '_tracking_state', None)
         executed_file_deps = getattr(tracking, 'executed_file_deps', None) or {}
+        # Only what depends on a file a scheduled writer WRITES. "Any file
+        # dependency" promoted nearly everything after the writer, because
+        # recorded dependencies include inherited ones: saving a cleaned copy of
+        # the data re-ran the backtest and the forecast behind it for a cell that
+        # read only the copy (round 21, r21s2's doubled backtest; replay corpus).
+        # A writer whose path does not resolve keeps the broad rule.
+        written_forms = self._written_path_forms(simulation_trace, writer_indices)
+
+        def _reads_written(outputs) -> bool:
+            deps = set()
+            for v in outputs:
+                dep = executed_file_deps.get(v)
+                if dep:
+                    deps.update(dep.keys() if hasattr(dep, 'keys') else dep)
+            if not deps:
+                return False
+            if written_forms is None:
+                return True
+            return any(self._normalize_path_forms(d) & written_forms for d in deps)
+
         promoted: set[int] = set()
+        promoted_outputs: set[str] = set()
         for i in range(first_writer + 1, len(simulation_trace)):
             if i in scheduled:
                 continue
-            outputs = simulation_trace[i][1]
-            if any(executed_file_deps.get(v) for v in outputs):
+            outputs, inputs = simulation_trace[i][1], simulation_trace[i][2]
+            # ...and, in trace order, whatever consumes a re-read value.
+            if _reads_written(outputs) or (written_forms is not None
+                                           and set(inputs) & promoted_outputs):
                 scheduled.add(i)
                 promoted.add(i)
+                promoted_outputs.update(outputs)
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM] Promoting file-reader [%s] to re-exec (writer "
@@ -1155,6 +1180,42 @@ class ReexecutionPlanner:
                     )
         return writer_indices
 
+    def _written_path_forms(self, simulation_trace: list, writer_indices) -> set[str] | None:
+        """Comparable forms of every path the writers write, or ``None`` if any
+        writer's output does not resolve."""
+        forms: set[str] = set()
+        for w in writer_indices:
+            written = self._writer_paths(simulation_trace[w][0])
+            if not written:
+                return None
+            for p in written:
+                forms |= self._normalize_path_forms(p)
+        return forms
+
+    def _writer_paths(self, stmt_code: str) -> set[str] | None:
+        """The paths a writer writes: from its code, else from the record it
+        left when it last ran.
+
+        After a kernel restart ``OUT`` in ``OUT / 'table.csv'`` is not bound
+        yet, so the code alone no longer resolves -- and every writer looked
+        like it might feed the cell being run.
+        """
+        user_ns = getattr(getattr(self._virtual_lineage, 'shell', None), 'user_ns', None)
+        written = statement_written_paths(stmt_code, namespace=user_ns)
+        if written:
+            return written
+        cash = getattr(self._virtual_lineage, 'cash_instance', None)
+        backend = getattr(cash, 'backend', None) if cash is not None else None
+        if backend is None or not hasattr(backend, 'get_metadata'):
+            return None
+        try:
+            record = backend.get_metadata(write_provenance_key(stmt_code))
+        except (OSError, TypeError, ValueError, AttributeError):
+            return None
+        if not record or not record.get('write_provenance') or not record.get('paths'):
+            return None
+        return set(record['paths'])
+
     @staticmethod
     def _normalize_path_forms(path: str) -> set[str]:
         """Comparable forms of a file path: resolved-abspath (normcased) + basename.
@@ -1196,9 +1257,7 @@ class ReexecutionPlanner:
         """
         if not relevant_read_paths_known or relevant_read_paths is None:
             return False
-        from ..cacheability import statement_written_paths
-        user_ns = getattr(getattr(self._virtual_lineage, 'shell', None), 'user_ns', None)
-        written = statement_written_paths(stmt_code, namespace=user_ns)
+        written = self._writer_paths(stmt_code)
         if not written:
             return False  # unresolvable target -> stay conservative
         read_forms: set[str] = set()

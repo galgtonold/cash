@@ -26,6 +26,7 @@ __all__ = [
     "CacheKeyResult",
     "compute_cache_key",
     "write_provenance_key",
+    "read_provenance_key",
 ]
 
 
@@ -39,6 +40,20 @@ def write_provenance_key(code: str) -> str:
     ``stmt:`` cache entry.
     """
     return "writeprov:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+def read_provenance_key(code: str) -> str:
+    """Backend key for the files a statement READ when it last ran.
+
+    The companion of :func:`write_provenance_key`. After a kernel restart the
+    session's record of what each statement read is gone, and a reader static
+    analysis cannot resolve (``pd.read_csv(f)`` over a glob result) made the
+    whole read set unknown -- so the reconstruction scope gate re-fired every
+    writer, dragging in the expensive producers of their payloads (round 21,
+    replay corpus: a backtest and a forecast recomputed for a cell that needed
+    neither).
+    """
+    return "readprov:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
 
 @runtime_checkable
 class FunctionTrackerProtocol(Protocol):

@@ -43,6 +43,7 @@ SALES = (
     SETUP,
     # 2 -- imports and parameters
     "import glob\n"
+    "import time\n"
     "from pathlib import Path\n"
     "import numpy as np\n"
     "import pandas as pd\n"
@@ -63,6 +64,7 @@ SALES = (
     "weekly['week'] = pd.to_datetime(weekly['week'])\n"
     "weekly['revenue'] = weekly['units'] * weekly['price']\n"
     "weekly = weekly[weekly['units'] >= 0]\n"
+    "weekly.to_csv(OUT / 'weekly_clean.csv', index=False)\n"
     "print('clean', len(weekly), round(weekly['revenue'].sum(), 2))\n",
     # 5 -- the overview chart, drawn through ax= and saved
     "tot = weekly.groupby(['week', 'category'])['units'].sum().unstack()\n"
@@ -82,6 +84,8 @@ SALES = (
     "        level = alpha * v + (1 - alpha) * level\n"
     "    return np.repeat(level, h)\n"
     "def run_backtest(series, n):\n"
+    "    time.sleep(0.6)             # the expensive step of the notebook\n"
+    "    open('calls.log', 'a').write('backtest\\n')\n"
     "    rows = []\n"
     "    for sku, y in series.iterrows():\n"
     "        vals = y.values\n"
@@ -89,6 +93,8 @@ SALES = (
     "            rows.append((sku, k, abs(smooth_forecast(vals[:k], 1)[0] - vals[k])))\n"
     "    return pd.DataFrame(rows, columns=['sku', 'k', 'err'])\n"
     "def run_forecast(series, h):\n"
+    "    time.sleep(0.4)\n"
+    "    open('calls.log', 'a').write('forecast\\n')\n"
     "    rows = [(sku, i, v) for sku, y in series.iterrows()\n"
     "            for i, v in enumerate(smooth_forecast(y.values, h))]\n"
     "    return pd.DataFrame(rows, columns=['sku', 'step', 'forecast'])\n",
@@ -103,6 +109,11 @@ SALES = (
     "table = forecast.groupby('sku')['forecast'].sum().to_frame('fc').join(bt_metrics).round(4)\n"
     "table.to_csv(OUT / 'table.csv')\n"
     "print(table.to_string())\n",
+    # 10 -- a summary that reads only the cleaned file cell 4 saved (r21s2's
+    # doubled backtest: once that writer was scheduled, every later statement
+    # carrying a file dependency was re-run with it)
+    "clean_file = pd.read_csv(OUT / 'weekly_clean.csv')\n"
+    "print(clean_file.groupby('category')['units'].sum().to_string())\n",
 )
 
 _CORRECTED = _weekly_csv(_WEEKS[2], 2, bump=7)
@@ -117,9 +128,9 @@ SALES_EDITS = {
     "negative_filter": Edit(cell=4, source=SALES[3].replace(">= 0", "> 10")),
 }
 SALES_TARGETS = {
-    "control": (9,),
-    "corrected_file": (9, 5, 7),
-    "new_week": (9,),
+    "control": (9, 10),
+    "corrected_file": (9, 5, 7, 10),
+    "new_week": (9, 10),
     "horizon": (9, 8),
     "chart_title": (9,),
     "negative_filter": (9, 5),
@@ -159,6 +170,7 @@ CHURN = (
     SETUP,
     # 2 -- imports and parameters
     "import json\n"
+    "import time\n"
     "from pathlib import Path\n"
     "import numpy as np\n"
     "import pandas as pd\n"
@@ -187,7 +199,11 @@ CHURN = (
     "    cust = cust[cust['region'] == REGION]\n"
     "print('clean', len(cust), cust['region'].nunique())\n",
     # 5 -- features and label
-    "counts = events.pivot_table(index='customer_id', columns='kind', values='count', aggfunc='sum').fillna(0)\n"
+    "def build_counts(ev):\n"
+    "    time.sleep(0.5)             # the expensive step of the notebook\n"
+    "    open('calls.log', 'a').write('build_counts\\n')\n"
+    "    return ev.pivot_table(index='customer_id', columns='kind', values='count', aggfunc='sum').fillna(0)\n"
+    "counts = build_counts(events)\n"
     "data = cust.merge(counts, left_on='customer_id', right_index=True)\n"
     "data['churn'] = ((data['support'] > 1) & (data['login'] < 5)).astype(int)\n"
     "print('features', data.shape, int(data['churn'].sum()))\n",
@@ -244,6 +260,27 @@ CHURN_TARGETS = {
     "chart_title": (8, 9),
     "eval_rows": (8, 6),
 }
+
+
+def expected_recompute(scenario) -> list[str]:
+    """The expensive steps a scenario NEEDS to recompute -- no more.
+
+    Cost is asserted, not just reported: re-running the backtest for a cell
+    that reads only the cleaned file (r21s2's doubled backtest) or after a
+    restart for a chart nothing reads is exactly the kind of waste that made
+    the notebook path slower than no cache in round 21.
+    """
+    if scenario.notebook == "churn":
+        return []                       # the events file never changes
+    data_changed = scenario.name in ("corrected_file", "new_week", "negative_filter")
+    if scenario.target == 7 and data_changed:
+        return ["backtest"]
+    if scenario.target in (8, 9):
+        if data_changed:
+            return ["backtest", "forecast"] if scenario.target == 9 else ["forecast"]
+        if scenario.name == "horizon":
+            return ["forecast"]
+    return []
 
 
 SCENARIOS = (

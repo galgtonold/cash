@@ -86,6 +86,7 @@ class Result:
     oracle_files: dict[str, str] = field(default_factory=dict)     # relpath -> sha (oracle)
     rerun: list[str] = field(default_factory=list)
     seconds: float = 0.0
+    recomputed: list[str] = field(default_factory=list)   # expensive steps that really ran
 
     @property
     def stdout_ok(self) -> bool:
@@ -103,7 +104,8 @@ class Result:
 
     def explain(self) -> str:
         lines = [f"{self.scenario}: {'OK' if self.ok else 'WRONG'}  ({self.seconds:.1f}s, "
-                 f"{len(self.rerun)} statements re-run for other cells)"]
+                 f"{len(self.rerun)} statements re-run for other cells, "
+                 f"recomputed: {', '.join(self.recomputed) or 'nothing expensive'})"]
         if not self.stdout_ok:
             lines += ["  stdout (cash):", *("    " + x for x in self.stdout.splitlines()),
                       "  stdout (no cash):", *("    " + x for x in self.oracle_stdout.splitlines())]
@@ -118,13 +120,24 @@ class Result:
 
 _SKIP_PARTS = {".cash", ".ipynb_checkpoints", "__pycache__"}
 
+#: The corpus's expensive functions append their name here, so a scenario can
+#: report what REALLY recomputed -- a statement scheduled for re-execution may
+#: still be served from the statement cache. Bookkeeping, not output: never
+#: compared with the oracle.
+CALLS_LOG = "calls.log"
+
+
+def _calls(work: Path) -> list[str]:
+    p = work / CALLS_LOG
+    return p.read_text(encoding="utf-8").split() if p.exists() else []
+
 
 def _snapshot(work: Path) -> dict[str, tuple[int, int, str]]:
     snap = {}
     for p in work.rglob("*"):
         if not p.is_file() or _SKIP_PARTS & set(p.relative_to(work).parts) or p.suffix == ".ipynb":
             continue
-        if p.name.endswith(".cashtrace.jsonl"):
+        if p.name.endswith(".cashtrace.jsonl") or p.name == CALLS_LOG:
             continue
         st = p.stat()
         snap[p.relative_to(work).as_posix()] = (st.st_mtime_ns, st.st_size, _sha(p))
@@ -209,10 +222,12 @@ def run_with_cash(scenario: Scenario, runner, trace_path: str) -> Result:
             runner.set_cell_source(scenario.edit.cell, edited[scenario.edit.cell - 1])
         scenario.edit.apply_to_dir(work)
         before = _snapshot(work)
+        calls_before = len(_calls(work))
         t0 = time.perf_counter()
         runner.run_cell(scenario.target)
         seconds = time.perf_counter() - t0
         after = _snapshot(work)
+        recomputed = _calls(work)[calls_before:]
     finally:
         if prev is None:
             os.environ.pop("CASH_TRACE_FILE", None)
@@ -224,7 +239,7 @@ def run_with_cash(scenario: Scenario, runner, trace_path: str) -> Result:
     written = {rel: v[2] for rel, v in after.items() if before.get(rel) != v}
     o_stdout, o_files = oracle(scenario)
     return Result(scenario.id, _cell_stdout(runner, scenario.target), o_stdout,
-                  written, o_files, rerun, seconds)
+                  written, o_files, rerun, seconds, recomputed)
 
 
 def fresh_trace_file() -> str:
