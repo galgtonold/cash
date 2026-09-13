@@ -338,6 +338,7 @@ class MismatchClassifier:
         current_cell_outputs: set[str] | None,
         notebook_cells: list[str],
         broken_vars: set[str],
+        virtual_modules: set[str] | None = None,
     ) -> bool:
         """Check early-exit conditions for a lineage mismatch.
 
@@ -424,6 +425,19 @@ class MismatchClassifier:
 
         # Downstream advancement: if var is also a current-cell output reset lineage.
         if required_inputs and var_name in required_inputs and current_cell_outputs and var_name in current_cell_outputs:
+            # ...but only when the cell's own last run explains the gap. After an
+            # upstream edit the live value may be the cell's output built on the
+            # OLD upstream frame: resetting its lineage to the new virtual one
+            # kept that value, and ``docs['n_chars'] = ...`` printed the rows an
+            # edited filter had removed (round 23, r23s4, silent).
+            if upstream_has_modifications and not self._current_cell_reproduces(
+                    var_name, actual_lineage, virtual_lineage, virtual_modules or set()):
+                if self.debug:
+                    logger.debug("[UPSTREAM_DEBUG]   -> '%s' is written by the current cell, "
+                                 "but re-running it on the edited upstream state does not give "
+                                 "its live lineage. Marking broken.", var_name)
+                broken_vars.add(var_name)
+                return True
             if self.debug:
                 logger.debug("[UPSTREAM_DEBUG]   -> '%s' is also an OUTPUT of the current cell. "
                       "Lineage is ahead due to downstream advancement. "
@@ -435,6 +449,33 @@ class MismatchClassifier:
             return True
 
         return False
+
+    #: Source of the cell being checked; set by ``UpstreamChecker``.
+    current_cell_code: str | None = None
+
+    def _current_cell_reproduces(
+        self,
+        var_name: str,
+        actual_lineage: str,
+        virtual_lineage: dict[str, str],
+        virtual_modules: set[str],
+    ) -> bool:
+        """True when running the current cell on the simulated cell-entry state
+        gives *var_name* its live lineage -- the gap is the cell's own earlier
+        run and nothing upstream. Simulated on copies; nothing is kept."""
+        code = self.current_cell_code
+        if not code:
+            return True
+        lineage = dict(virtual_lineage)
+        try:
+            self._virtual_lineage._simulate_one_cell(
+                -1, code, [], lineage, set(virtual_modules), [],
+                set(), set(), {}, set(),
+            )
+        except Exception:  # noqa: BLE001 - cannot tell: treat as not reproduced
+            logger.debug("[UPSTREAM] could not re-simulate the current cell for '%s'", var_name)
+            return False
+        return lineage.get(var_name) == actual_lineage
 
     def _is_singleunit_loop_nolineage_selfmod(self, var_name: str) -> bool:
         """True if *var_name* is a no-lineage var self-modified by a single-unit loop.
@@ -547,6 +588,7 @@ class MismatchClassifier:
             var_name, actual_lineage, final_virtual_hash, virtual_lineage,
             vars_with_stale_files, upstream_has_modifications, required_inputs,
             current_cell_outputs, notebook_cells, broken_vars,
+            virtual_modules=virtual_modules,
         ):
             return
 

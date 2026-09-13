@@ -326,6 +326,11 @@ class UpstreamChecker:
         # in-place mutation, so Phase 2 can restore a stale self-reassigned input.
         # And the names the cell MUTATES in place (`lst.append`, `arr += 1`,
         # `d.update`) so Phase 2 can restore a no-lineage in-place accumulator.
+        # The classifier re-simulates this cell to tell its own earlier run
+        # apart from an upstream edit (MismatchClassifier._current_cell_reproduces).
+        classifier = getattr(self.simulator, '_classifier', None)
+        if classifier is not None:
+            classifier.current_cell_code = cell_code
         try:
             _, current_cell_outputs = CodeAnalyzer.analyze_code_block(cell_code)
             current_cell_reassigned = CodeAnalyzer.reassigned_names(cell_code)
