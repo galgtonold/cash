@@ -129,11 +129,16 @@ SALES_EDITS = {
 }
 SALES_TARGETS = {
     "control": (9, 10),
-    "corrected_file": (9, 5, 7, 10),
+    # (8, 9): look at the forecast first, then the export. The forecast's
+    # replay refreshes the series but not the backtest above it, which the
+    # forecast does not read; the export does, so the backtest computed from
+    # the old series must still be recomputed (round 22, r22s1). (10, 9): the
+    # summary re-writes the cleaned file, then the export needs both models.
+    "corrected_file": (9, 5, 7, 10, (8, 9), (10, 9)),
     "new_week": (9, 10),
     "horizon": (9, 8),
     "chart_title": (9,),
-    "negative_filter": (9, 5),
+    "negative_filter": (9, 5, (8, 9)),
 }
 
 
@@ -254,7 +259,10 @@ CHURN_EDITS = {
 CHURN_TARGETS = {
     "control": (8, 9),
     "corrected_file": (8, 6),
-    "region": (8,),
+    # (9, 8): the region chart first replays the model for its top driver
+    # but not the report beside it, which the chart does not read; the
+    # summary prints that report, so it must follow.
+    "region": (8, (9, 8)),
     "leak_fix": (8, 7),
     "max_iter": (8,),
     "chart_title": (8, 9),
@@ -272,15 +280,17 @@ def expected_recompute(scenario) -> list[str]:
     """
     if scenario.notebook == "churn":
         return []                       # the events file never changes
-    data_changed = scenario.name in ("corrected_file", "new_week", "negative_filter")
-    if scenario.target == 7 and data_changed:
-        return ["backtest"]
-    if scenario.target in (8, 9):
-        if data_changed:
-            return ["backtest", "forecast"] if scenario.target == 9 else ["forecast"]
-        if scenario.name == "horizon":
-            return ["forecast"]
-    return []
+    done = set().union(*(_sales_needs(scenario.name, c) for c in scenario.first))
+    return sorted(_sales_needs(scenario.name, scenario.target) - done)
+
+
+def _sales_needs(edit: str, cell: int) -> set[str]:
+    """What running *cell* after *edit* must recompute, from a first run."""
+    if edit in ("corrected_file", "new_week", "negative_filter"):
+        return {7: {"backtest"}, 8: {"forecast"}, 9: {"backtest", "forecast"}}.get(cell, set())
+    if edit == "horizon" and cell in (8, 9):
+        return {"forecast"}
+    return set()
 
 
 SCENARIOS = (

@@ -1345,6 +1345,7 @@ class UpstreamChecker:
                 logger.debug("[UPSTREAM_DEBUG] Current cell found at index %s", current_cell_idx)
                 logger.debug("[UPSTREAM_DEBUG] Will simulate %s upstream cells", current_cell_idx)
 
+            records_before = self._lineage_records()
             statements_to_reexecute, restored_info, total_restore_time = self.simulator.simulate_upstream(
                 current_cell_idx,
                 notebook_cells,
@@ -1416,7 +1417,7 @@ class UpstreamChecker:
             # differently than runtime lineage).  Without this sync, subsequent
             # re-executions will always see a lineage mismatch and trigger
             # unnecessary upstream restoration.
-            self._sync_simulation_cache_lineages()
+            self._sync_simulation_cache_lineages(self._rerecorded_since(records_before))
 
             all_metrics = restored_info + executed_metrics
 
@@ -1431,6 +1432,25 @@ class UpstreamChecker:
             raise UpstreamStateError(
                 f"Failed to restore or simulate upstream state: {e}"
             ) from e
+
+    def _lineage_records(self) -> dict[str, tuple]:
+        """Each variable's recorded lineage and input-lineage map, as held now.
+
+        The map object is kept (not copied): recording a variable replaces it,
+        so ``is`` tells a re-recording apart even when the lineage came out the
+        same.
+        """
+        return {v: (h, self.executed_input_lineages.get(v))
+                for v, h in self.variable_lineage.items()}
+
+    def _rerecorded_since(self, before: dict[str, tuple]) -> set[str]:
+        """Variables this upstream pass recorded again (re-executed or restored)."""
+        changed = set()
+        for v, h in self.variable_lineage.items():
+            old = before.get(v)
+            if old is None or old[0] != h or old[1] is not self.executed_input_lineages.get(v):
+                changed.add(v)
+        return changed
 
     def _should_sync_cache_var(
         self,
@@ -1463,8 +1483,17 @@ class UpstreamChecker:
             return False
         return True
 
-    def _sync_simulation_cache_lineages(self) -> None:
+    def _sync_simulation_cache_lineages(self, rerecorded: set[str]) -> None:
         """Sync simulation cache virtual lineages with actual runtime lineages.
+
+        Only the *rerecorded* variables -- the ones this upstream pass just
+        re-executed or restored -- are synced. Their runtime lineage is fresh.
+        Any other variable's runtime lineage is only as fresh as its last run:
+        after an upstream edit, a sibling the pass did not need (``a = f(x)``
+        when only ``b = g(x)`` was asked for) still holds the value computed
+        from the old ``x``, and its snapshot is the only place that knows.
+        Syncing it laundered the stale value into a match, and the next cell
+        that read it was served the old result (round 22).
 
         After upstream statements are executed/restored/skipped, ``variable_lineage``
         holds the authoritative lineage for each variable.  The simulation cache
@@ -1516,6 +1545,8 @@ class UpstreamChecker:
 
             cached_vl = entry.virtual_lineage
             for var_name in list(cached_vl.keys()):
+                if var_name not in rerecorded:
+                    continue
                 if not self._should_sync_cache_var(var_name, cumulative_stmt_codes, cached_vl, idx):
                     continue
                 # Safe to sync: the runtime lineage was produced by code within

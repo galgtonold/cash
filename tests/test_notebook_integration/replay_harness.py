@@ -71,10 +71,15 @@ class Scenario:
     edit: Edit
     target: int                                   # 1-based
     restart: bool = False                         # restart + run cell 1 before the edit
+    # Cells run after the edit and before the target: the user looks at
+    # another cell first. Its replay refreshes part of what the target needs
+    # and must not make the rest look fresh (round 22, r22s1).
+    first: tuple[int, ...] = ()
 
     @property
     def id(self) -> str:
-        return f"{self.notebook}:{self.name}{'+restart' if self.restart else ''}->c{self.target}"
+        path = "".join(f"->c{c}" for c in (*self.first, self.target))
+        return f"{self.notebook}:{self.name}{'+restart' if self.restart else ''}{path}"
 
 
 @dataclass
@@ -221,6 +226,8 @@ def run_with_cash(scenario: Scenario, runner, trace_path: str) -> Result:
         if scenario.edit.cell is not None:
             runner.set_cell_source(scenario.edit.cell, edited[scenario.edit.cell - 1])
         scenario.edit.apply_to_dir(work)
+        for cell in scenario.first:
+            runner.run_cell(cell)
         before = _snapshot(work)
         calls_before = len(_calls(work))
         t0 = time.perf_counter()
@@ -249,17 +256,21 @@ def fresh_trace_file() -> str:
 
 
 def scenarios_from(notebook: str, cells, files, edits: dict[str, Edit],
-                   targets: dict[str, tuple[int, ...]],
+                   targets: dict[str, tuple[int | tuple[int, ...], ...]],
                    restart: tuple[str, ...] = ()) -> list[Scenario]:
     """One scenario per (edit, target); edits named in *restart* also get a
-    variant that restarts the kernel between the first run and the edit."""
+    variant that restarts the kernel between the first run and the edit.
+
+    A target given as a tuple is a path: ``(7, 9)`` runs cell 7 after the
+    edit, then checks cell 9.
+    """
     out = []
     for name, edit in edits.items():
-        for target in targets[name]:
-            out.append(Scenario(notebook, name, tuple(cells), tuple(files), edit, target))
-            if name in restart:
+        for path in targets[name]:
+            *first, target = path if isinstance(path, tuple) else (path,)
+            for again in ((False, True) if name in restart else (False,)):
                 out.append(Scenario(notebook, name, tuple(cells), tuple(files), edit, target,
-                                    restart=True))
+                                    restart=again, first=tuple(first)))
     return out
 
 
