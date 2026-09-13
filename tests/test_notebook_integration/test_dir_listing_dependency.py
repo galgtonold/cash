@@ -60,6 +60,30 @@ def test_unchanged_globbed_dir_stays_cached(nb_runner, tmp_path):
     )
 
 
+@pytest.mark.parametrize("listing", ["glob('*.num')", "rglob('*.num')", "iterdir()"])
+def test_new_file_in_pathlib_listed_dir_invalidates(nb_runner, tmp_path, listing):
+    """Round 22: ``Path.glob`` lists through a captured ``os.scandir`` on 3.13
+    (and pathlib's accessor on 3.10) -- a new month's file was never seen."""
+    pdir = tmp_path / "pdir"
+    pdir.mkdir()
+    (pdir / "d1.num").write_text("1")
+    (pdir / "d2.num").write_text("2")
+    pp = str(pdir).replace("\\", "/")
+    nb_runner.create_notebook([
+        "from pathlib import Path\n"
+        f"vals = sorted(int(p.read_text()) for p in Path('{pp}').{listing})\n"
+        "print('vals =', vals)"
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "vals = [1, 2]" in nb_runner.get_output(1)
+
+    time.sleep(1.1)
+    (pdir / "d3.num").write_text("30")
+    nb_runner.run_all()
+    assert "vals = [1, 2, 30]" in nb_runner.get_output(1), nb_runner.get_output(1)
+
+
 def test_os_listdir_new_file_invalidates(nb_runner, tmp_path):
     ldir = tmp_path / "ldir"
     ldir.mkdir()

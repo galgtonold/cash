@@ -670,6 +670,47 @@ def _patch_pathlib_accessor() -> None:
         logger.debug("[FILE_TRACKER] Failed to patch pathlib accessor: %s", e)
 
 
+def _patch_pathlib_listing() -> None:
+    """Track the directories ``Path.glob`` / ``rglob`` / ``iterdir`` list.
+
+    Listing a directory is how a new file matching a pattern becomes visible
+    (see the ``os.scandir`` registration). pathlib mostly calls
+    ``os.scandir`` at call time, which that patch covers -- but not on two
+    versions: on 3.10 it lists through ``_NormalAccessor.scandir`` /
+    ``.listdir``, and on 3.13 ``Path.glob`` goes through ``glob._Globber`` /
+    ``glob._StringGlobber``, whose ``scandir`` holds the ORIGINAL
+    ``os.scandir``, captured when the module was imported. A notebook reading
+    ``sorted(Path("ledger").glob("*.csv"))`` recorded no directory there, and
+    a new month's file was never seen: the concat was served from the cache
+    without it (round 22, 3/3).
+    """
+    import glob as glob_module
+
+    targets = [(getattr(pathlib, '_NormalAccessor', None), ('scandir', 'listdir'))]
+    targets += [(getattr(glob_module, name, None), ('scandir',))
+                for name in ('_Globber', '_StringGlobber')]
+    factory = FileDependencyRegistry()._create_listdir_handler
+    for owner, names in targets:
+        if owner is None:
+            continue
+        for name in names:
+            original = owner.__dict__.get(name)
+            if isinstance(original, staticmethod):
+                original = original.__func__
+            if original is None or getattr(original, '_is_file_tracker_patch', False):
+                continue
+            real_original = _unwrap_to_real(original)
+            if not callable(real_original):
+                continue
+            wrapper = factory(real_original, _dispatch_track)
+            wrapper._is_file_tracker_patch = True
+            wrapper._original_func = real_original
+            try:
+                setattr(owner, name, staticmethod(wrapper))
+            except (AttributeError, TypeError) as e:
+                logger.debug("[FILE_TRACKER] Failed to patch %s.%s: %s", owner.__name__, name, e)
+
+
 def _patch_thread_pool_submit() -> None:
     """Run work submitted to a ``ThreadPoolExecutor`` under the submitter's context.
 
@@ -1465,6 +1506,7 @@ class FileAccessTracker:
         # 2b. Python 3.10 only: pathlib captured io.open at import time, so the
         # io.open patch above misses every pathlib read. See the function.
         _patch_pathlib_accessor()
+        _patch_pathlib_listing()
 
         # 2c. Work handed to a thread pool runs under the submitter's tracker,
         # and work handed to a process pool reports what it read back to it.
