@@ -44,3 +44,27 @@ def test_a_warm_rerun_draws_the_same_chart(nb_runner):
     png.unlink()
     nb_runner.run_all()
     assert hashlib.sha256(png.read_bytes()).hexdigest() == first, "the warm run drew a different chart"
+
+
+# Round 23 (r23s1): the same helper called inside a loop, one figure per item.
+# A loop body is decomposed per iteration and its calls are call-cached, which
+# the fix above never reached -- the call cache served `draw(ax, ...)` and the
+# re-run saved blank charts.
+LOOP_CELL = (
+    "for name, values in [('a', data), ('b', data[::-1])]:\n"
+    "    fig, ax = plt.subplots(figsize=(3, 3))\n"
+    "    draw(ax, values, name)\n"
+    "    fig.savefig(f'{name}.png', dpi=40)\n"
+    "    plt.close(fig)"
+)
+
+
+def test_a_rerun_of_a_loop_draws_the_same_charts(nb_runner):
+    work = Path(nb_runner.work_dir)
+    nb_runner.create_notebook(CELLS[:2] + [LOOP_CELL])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    first = {n: hashlib.sha256((work / f"{n}.png").read_bytes()).hexdigest() for n in "ab"}
+    nb_runner.run_cell(3)
+    again = {n: hashlib.sha256((work / f"{n}.png").read_bytes()).hexdigest() for n in "ab"}
+    assert again == first, "an unchanged re-run of the loop saved different (blank) charts"

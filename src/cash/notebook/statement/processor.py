@@ -2726,6 +2726,12 @@ class StatementProcessor:
                 continue  # ``plt.savefig()`` is a module call, not a receiver draw
             if receiver_is_identity_coupled(value):
                 receivers.add(base)
+        # An Axes handed to a plain function (``draw(ax, df)``) is drawn on
+        # too -- the same ``drawn_args`` rule `_classify_method_mutations`
+        # applies outside a loop. In a loop body it was missed, and a re-run
+        # saved every chart blank (round 23, a plotting helper per model).
+        receivers |= {name for name in top_level_call_argument_bases(tree)
+                      if receiver_is_identity_coupled(self.shell.user_ns.get(name))}
         return receivers
 
     def _classify_method_mutations(

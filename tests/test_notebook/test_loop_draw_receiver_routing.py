@@ -69,6 +69,18 @@ def test_a_captured_return_draw_is_caught(axes):
     assert _receivers("counts, bins, patches = ax.hist([1, 2])", {'ax': ax}) == {'ax'}
 
 
+def test_an_axes_handed_to_a_plain_function_is_caught(axes):
+    """``draw_panel(ax, kind, y, s)`` has no method-call receiver at all, yet
+    draws on ``ax`` (round 23: every chart of a loop saved blank on re-run)."""
+    _fig, ax = axes
+    assert _receivers("draw_panel(ax, 'roc', y)", {'ax': ax, 'y': [1]}) == {'ax'}
+
+
+def test_a_plain_argument_is_not_caught():
+    """The same widening must leave ordinary loops caching: ``score(c, a)``."""
+    assert _receivers("rows.append(score(c, a))", {'c': 1, 'a': [2], 'rows': []}) == set()
+
+
 def test_a_dataframe_receiver_is_not_caught():
     """The discriminator that keeps ordinary loops caching: ``df.head()`` is pure."""
     pd = pytest.importorskip("pandas")
