@@ -7365,6 +7365,12 @@ class Cash:
                 # One level only: fold the constants the helper itself reads.
                 # Deeper recursion would drag in whole transitive namespaces for
                 # a diminishing chance of catching a real edit.
+                if getattr(value, "_cash_cached", False):
+                    # A cached helper is cash's wrapper, whose globals are
+                    # cash's own: it warned KEY-UNHASHABLE-GLOBAL for
+                    # 'rates.fetch.ACTIVE_CONFIG' on every run (round 22; the
+                    # class-method twin was fixed in round 19, source_norm).
+                    value = getattr(value, "__wrapped__", value)
                 helper_globals = getattr(value, "__globals__", None)
                 if not isinstance(helper_globals, dict):
                     continue

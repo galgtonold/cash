@@ -145,6 +145,34 @@ def test_a_class_with_cached_methods_does_not_report_cash_s_own_globals(tmp_path
     assert not [w for w in rec if "ACTIVE_CONFIG" in str(w.message)]
 
 
+def test_a_cached_function_called_through_its_module_does_not_report_cash_s_globals(
+        tmp_path, monkeypatch):
+    """Round 22: ``rates.fetch(day)`` inside a cached ``process`` warned about
+    'rates.fetch.ACTIVE_CONFIG' on every run -- the module walk's twin of the
+    class walk above. The user's constants inside ``fetch`` still count."""
+    cache = repr(str(tmp_path / "rcache"))
+    mods = _module(tmp_path, monkeypatch, {
+        "rates": f"""
+            import cash
+            c = cash.Cash(cache_dir={cache})
+            BASE = 1.0
+
+            @c.cache
+            def fetch(day):
+                return BASE + len(day) / 100
+        """,
+        "daily": """
+            import rates{tag} as rates
+
+            def process(day):
+                return rates.fetch(day) * 2
+        """,
+    })
+    text = _messages(tmp_path, mods["daily"].process, "2026-06-01")
+    assert "ACTIVE_CONFIG" not in text, text
+    assert "KEY-UNHASHABLE-GLOBAL" not in text, text
+
+
 def test_the_loader_of_a_settings_dict_is_not_a_stale_read(tmp_path, monkeypatch):
     mods = _module(tmp_path, monkeypatch, {"settings": """
         _CFG = {}
