@@ -477,6 +477,16 @@ class TestSideEffects:
         a = _analyze("p.write_bytes(b'\\x00')")
         assert any(e.kind == 'file_write' for e in a.side_effects)
 
+    def test_pathlib_mkdir(self):
+        # Round 22: `OUT.mkdir(exist_ok=True)` restored from the cache left an
+        # emptied output folder missing; it must run like any other write.
+        from cash.notebook.cacheability import statement_write_repeatability, statement_writes_files
+        a = _analyze("OUT.mkdir(exist_ok=True)")
+        assert any(e.kind == 'file_write' for e in a.side_effects)
+        assert statement_writes_files("OUT.mkdir(parents=True, exist_ok=True)")
+        # Unknown, like os.mkdir: without exist_ok a second run raises.
+        assert statement_write_repeatability("OUT.mkdir()") == 'unknown'
+
     def test_pathlib_read_text_not_detected(self):
         a = _analyze("s = p.read_text()")
         assert not any(e.kind == 'file_write' for e in a.side_effects)

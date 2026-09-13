@@ -425,6 +425,12 @@ _WRITE_METHODS: frozenset[str] = frozenset({
     # methods on other types (str.replace!) and would over-flag.
     'write_text',
     'write_bytes',
+    # `OUT.mkdir(exist_ok=True)`: restored instead of run, it left an output
+    # folder the user had emptied missing, and the first savefig into it
+    # raised (round 22, with every result persisted). A write on every type
+    # that has it (Path, ZipFile, SFTP clients). Its repeatability stays
+    # unknown, like os.mkdir's: without exist_ok a second run raises.
+    'mkdir',
 })
 
 # File open modes that indicate writing
@@ -433,7 +439,7 @@ _WRITE_MODES: frozenset[str] = frozenset({'w', 'wb', 'a', 'ab', 'w+', 'wb+', 'a+
 # Cheap textual pre-filter for statement_writes_files: superset of the names
 # in the write-detection tables above, checked before any AST work.
 _WRITE_TEXT_MARKERS: tuple[str, ...] = (
-    'open(', 'write', 'to_', 'save', 'dump', 'os.', 'shutil.',
+    'open(', 'write', 'to_', 'save', 'dump', 'os.', 'shutil.', 'mkdir',
 )
 
 

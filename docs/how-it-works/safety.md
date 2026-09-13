@@ -169,7 +169,7 @@ request never gets sent). Cash's side-effect analysis flags these statements as
 |---------|----------|---------------------------|
 | File writes | `open('f', 'w')`, `df.to_csv()`, `df.to_parquet()`, `Path(p).write_text()` | The file wouldn't be written on a cache hit |
 | Serializing writers | `json.dump()`, `pickle.dump()`, `np.save()`, `fig.savefig()` | The artifact wouldn't be produced |
-| Filesystem changes | `os.remove()`, `shutil.move()`, `os.mkdir()` | The change to disk wouldn't happen |
+| Filesystem changes | `os.remove()`, `shutil.move()`, `os.mkdir()`, `Path(p).mkdir()` | The change to disk wouldn't happen |
 | System calls | `os.system()`, `subprocess.run()` | The process wouldn't run |
 | Network writes | `requests.post()`, `requests.put()`, `requests.delete()`, `requests.patch()` | The request wouldn't be sent |
 | Database writes | `df.to_sql()` | The rows wouldn't reach the database |
@@ -179,7 +179,7 @@ Read-style calls are deliberately **not** treated as side effects:
 cache, exactly like reading a CSV. Only the verbs that *change* the world are
 flagged.
 
-<!-- claim: cash/notebook/cacheability.py:_WRITE_METHODS @d59e035c, cash/notebook/cacheability.py:_WRITE_MODES @44a74dfd, cash/notebook/cacheability.py:_is_open_write_mode @ca4d33fa, cash/notebook/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @7c59797e -->
+<!-- claim: cash/notebook/cacheability.py:_WRITE_METHODS @74b44b0c, cash/notebook/cacheability.py:_WRITE_MODES @44a74dfd, cash/notebook/cacheability.py:_is_open_write_mode @ca4d33fa, cash/notebook/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @7c59797e -->
 Detection is by call shape, so it works without importing anything, with two
 consequences worth knowing. A bare `open(...)` counts only when its mode
 argument is **statically** a write mode: `open(p, 'w')` is flagged, and
@@ -189,7 +189,9 @@ any receiver — not a `to_*` / `write_*` wildcard. `obj.save(x)` is flagged eve
 on a receiver Cash knows nothing about, while `obj.write_thing(x)` and
 `obj.to_widget(x)` are not flagged at all. The list stops where names start
 colliding: `rename`, `replace` and `touch` are deliberately absent, because
-`str.replace` would otherwise flag half a notebook.
+`str.replace` would otherwise flag half a notebook. `mkdir` is on it: every type
+that has one writes to a filesystem, and an `OUT.mkdir(exist_ok=True)` restored
+instead of run leaves an emptied output folder missing.
 
 <!-- claim: cash/notebook/cacheability.py:statement_write_repeatability @795a3382, cash/notebook/cacheability.py:_REPLACING_WRITE_METHODS @ff293068, cash/notebook/cacheability.py:_is_append_mode_call @3caac057 -->
 Being uncacheable is not the end of the story for a writer. Because a file
