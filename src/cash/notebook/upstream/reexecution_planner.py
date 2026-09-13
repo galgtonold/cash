@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import logging
 import os
 import re
@@ -206,6 +207,10 @@ class ReexecutionPlanner:
 
         stmts_to_run_indices = self._schedule_conditional_producer_inits(
             stmts_to_run_indices, simulation_trace, broken_vars,
+        )
+
+        stmts_to_run_indices = self._complete_inputs_produced_before(
+            stmts_to_run_indices, simulation_trace,
         )
 
         stmts_to_run_indices, restored_statements_info = self._schedule_file_write_statements(
@@ -468,6 +473,41 @@ class ReexecutionPlanner:
         if not additions:
             return stmts_to_run_indices
         return sorted(scheduled | additions)
+
+    def _complete_inputs_produced_before(
+        self,
+        stmts_to_run_indices: list[int],
+        simulation_trace: list,
+    ) -> list[int]:
+        """Give every scheduled statement a producer, before it, of each input
+        that is not live.
+
+        The backward scan resolves an input by NAME, so a name bound twice
+        resolves to its last producer. That is right while the name is live or
+        the last producer runs first -- but ``import glob`` in cell 2 and again
+        in cell 3, after a restart, resolved to cell 3's import, which runs
+        AFTER cell 2's ``files = glob.glob(...)``: the replay raised
+        ``NameError: glob`` and every jump downstream was refused until the
+        imports were merged (round 22, r22s3 and r22s4). The shadow pass above
+        cannot see it: both imports bind the same lineage.
+        """
+        user_ns = self._virtual_lineage.shell.user_ns
+        scheduled = set(stmts_to_run_indices)
+        pending = sorted(scheduled)
+        while pending:
+            i = pending.pop(0)
+            for v in simulation_trace[i][2] or ():            # inputs
+                if v in user_ns or hasattr(builtins, v):
+                    continue
+                if any(p < i and v in simulation_trace[p][1] for p in scheduled):
+                    continue
+                p = self._latest_producer(simulation_trace, v, before=i)
+                if p is not None and p not in scheduled:
+                    scheduled.add(p)
+                    pending.append(p)
+                    trace_event("input_producer_completion", stmt=simulation_trace[p][0][:80],
+                                var=v, consumer=simulation_trace[i][0][:80])
+        return sorted(scheduled)
 
     def _latest_producer(self, simulation_trace: list, var: str, before: int) -> int | None:
         """Index of the LAST statement before *before* that outputs *var*."""
