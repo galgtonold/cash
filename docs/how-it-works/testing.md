@@ -18,12 +18,12 @@ are the part that does not change.
 ## The shape of the suite
 
 **<!-- docnum:tests_total -->~9,850<!-- /docnum --> tests** across three suites,
-spread over <!-- docnum:test_files -->~1,320<!-- /docnum --> files:
+spread over <!-- docnum:test_files -->~1,330<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | <!-- docnum:tests_unit -->~5,210<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
-| Notebook integration | <!-- docnum:tests_integration -->~4,230<!-- /docnum --> | Real kernels executing real notebooks, cell by cell |
+| Unit | <!-- docnum:tests_unit -->~5,220<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
+| Notebook integration | <!-- docnum:tests_integration -->~4,260<!-- /docnum --> | Real kernels executing real notebooks, cell by cell |
 | Docs | <!-- docnum:tests_docs -->~380<!-- /docnum --> | The documentation itself — see [below](#the-docs-are-tested-too) |
 
 Every one runs on **<!-- docnum:platforms -->15<!-- /docnum --> platform combinations** — Python

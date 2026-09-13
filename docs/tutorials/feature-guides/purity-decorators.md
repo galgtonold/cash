@@ -149,7 +149,7 @@ def euclidean(p, q):
 
 ### What it actually does
 
-<!-- claim: cash/notebook/purity.py:pure @de701258, cash/notebook/statement/processor.py:StatementProcessor._check_callable_stateful @328208d8 -->
+<!-- claim: cash/notebook/purity.py:pure @b3cd5bc3, cash/notebook/statement/processor.py:StatementProcessor._check_callable_stateful @328208d8 -->
 `@pure` is a one-line marker. It sets `_cash_pure = True` on both the original function and the wrapper.
 
 When the statement processor evaluates a cell, it looks at every bare-name call (`foo(x)`, not `obj.foo(x)`). For each name, it consults `_check_callable_stateful`, which:
@@ -216,7 +216,7 @@ Now any cell that calls `log_to_dashboard(...)` or `send_alert(...)` runs fresh 
 
 ### What it actually does
 
-<!-- claim: cash/notebook/purity.py:stateful @d2b97ef0, cash/notebook/cacheability_decision.py:decide_cacheability @894ac130 -->
+<!-- claim: cash/notebook/purity.py:stateful @d2b97ef0, cash/notebook/cacheability_decision.py:decide_cacheability @be2e3981 -->
 `@stateful` sets `_cash_stateful = True` on the wrapped function. When the statement processor walks the bare-name calls in a cell and finds one whose resolved callable has that attribute, `_check_callable_stateful` returns `True`. The caller (in `decide_cacheability`) then refuses to cache the cell and records the reason "Calls @stateful function".
 
 `@stateful` is checked *before* `@pure` in `_check_callable_stateful`, so if you ever (accidentally) stack both decorators on the same function, stateful wins. Don't rely on that — see the [caveats](#mixing-markers).

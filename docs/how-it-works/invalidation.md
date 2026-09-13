@@ -23,7 +23,7 @@ A *failed* lookup is memoised too, but for two seconds rather than five minutes 
 
 ## Upstream simulation
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker @ec254368, cash/notebook/upstream/simulator.py:NotebookSimulator @b4162a28, cash/notebook/server_discovery.py:_read_notebook_code_cells @f6b1396e broad="the simulation story is the two orchestrating classes, not one method" -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker @38bcb296, cash/notebook/upstream/simulator.py:NotebookSimulator @225113c8, cash/notebook/server_discovery.py:_read_notebook_code_cells @f6b1396e broad="the simulation story is the two orchestrating classes, not one method" -->
 The classic problem: you edited cell 1 but then ran cell 3 directly. Cash solves this with a virtual-lineage approach. When cell 3 runs, Cash reads the notebook's current cell state — from a live source when one is available, the saved file otherwise — and *simulates* the upstream cells — cells 1 and 2 — without executing them. It parses each upstream statement's AST to compute what its lineage hash *should* be given the current code, then compares those virtual lineages against the in-memory lineages stored from the last actual run. Only the cells whose simulated lineage differs from what is in memory are re-executed; the rest are restored straight from cache, which is also how a variable you never computed this session appears in the namespace without its cell running.
 
 <!-- claim: cash/notebook/server_discovery.py:_read_notebook_code_cells @f6b1396e, cash/notebook/server_discovery.py:last_cell_source @b653689d -->
@@ -138,7 +138,7 @@ flowchart TD
 
 ## Mutation bumps the receiver's lineage
 
-<!-- claim: cash/notebook/cacheability.py @b837cacc broad="the three-tier mutation classification spans the module, not one function" -->
+<!-- claim: cash/notebook/cacheability.py @ea76a52b broad="the three-tier mutation classification spans the module, not one function" -->
 `items.append(x)` names `items` as a *receiver*, not as an assignment target, so nothing about it would ordinarily move. Cash classifies every standalone method call and, when the call mutates, routes the receiver into the statement's outputs — its lineage is rebuilt from the statement's source, and everything downstream misses.
 
 The classification runs in three tiers, because "does this method mutate?" is not statically decidable in general:

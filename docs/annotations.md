@@ -110,7 +110,7 @@ now = datetime.utcnow()    # always fresh
 
 This is the right directive when a statement has observable side effects or produces values that must always be recomputed (timestamps, monotonic counters, "fire and forget" prints).
 
-<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @894ac130 -->
+<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @be2e3981 -->
 Behind the scenes: the cacheability decision short-circuits at [`cacheability_decision.py` — `decide_cacheability`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py):
 
 <!-- test:skip reason="source-code excerpt: has return outside function" -->

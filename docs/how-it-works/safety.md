@@ -257,7 +257,7 @@ Cash checks the live estimator and warns through the same channel.
 
 ## From watching to deciding
 
-<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @894ac130 -->
+<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @be2e3981 -->
 The findings above are merged into a single verdict per statement by
 `decide_cacheability`. It has five reason-sources and the first one that
 triggers wins:
@@ -287,6 +287,12 @@ cacheable, reasons = decide_cacheability(
 assert cacheable is False
 assert reasons == ["Side effect: df.to_parquet() (file_write)"]
 ```
+
+Source 3 also refuses a call to a function of yours — defined in the
+notebook or your project, not an installed package — whose body writes a
+file: `save(fig, "chart.png")` runs every time, exactly as the `savefig`
+inside it would if it were written inline. See
+[Purity decorators](../tutorials/feature-guides/purity-decorators.md).
 
 Note the `outputs` argument: it is what turns "this statement mutates `df`"
 into "this statement *produces* `df`". Pass `outputs={"df"}` for a statement
