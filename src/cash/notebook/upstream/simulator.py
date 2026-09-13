@@ -798,6 +798,18 @@ class NotebookSimulator:
             vars_mutated_by_loops, simulation_trace
         )
 
+        # A loop whose data changed underneath it (a new file, not a code
+        # edit) loses the trust, and so does everything built from it.
+        changed_loops = self._virtual_lineage._loops_reading_changed_data(
+            vars_mutated_by_loops, simulation_trace, loop_target_vars, vars_derived_from_loops,
+        )
+        if changed_loops:
+            untrusted = self._virtual_lineage._propagate_loop_derived_vars(
+                changed_loops, simulation_trace)
+            vars_mutated_by_loops = vars_mutated_by_loops - untrusted
+            vars_derived_from_loops = vars_derived_from_loops - untrusted
+            trace_event("loop_trust_dropped", vars=untrusted)
+
         if self.debug and loop_target_vars:
             logger.debug("[UPSTREAM_DEBUG] Loop target variables (iteration vars): %s", loop_target_vars)
 

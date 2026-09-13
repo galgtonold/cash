@@ -699,6 +699,52 @@ class VirtualLineage:
                     break
         return tainted
 
+    def _loops_reading_changed_data(
+        self,
+        vars_mutated_by_loops: set[str],
+        simulation_trace: list,
+        loop_target_vars: set[str],
+        vars_derived_from_loops: set[str],
+    ) -> set[str]:
+        """Loop-built variables whose loop reads data that has changed since it ran.
+
+        Loop trust assumes the loop's inputs are what they were: with no code
+        edit upstream, a loop-built value whose lineage disagrees with the
+        simulation is trusted, because the two engines fold a loop differently.
+        A new file in a folder the notebook globs is not a code edit. The
+        frame read from it changed, the loop over it (``for k in grid:
+        rows.append(score(raw, k))``) did not re-run, and everything derived
+        from it -- the tuned parameter picked from ``rows`` -- was trusted and
+        served from the old data (round 22, r22s4, 3/3).
+
+        So compare each data input of a loop producing an accumulator, as the
+        simulation has it at that point, with the lineage it had when the
+        loop last ran (``TrackingState.control_outcomes``, recorded on entry).
+        Inputs that are themselves loop-built or loop targets are skipped:
+        their lineages disagree by construction.
+        """
+        changed: set[str] = set()
+        outcomes = self._tracking_state.control_outcomes
+        for entry in simulation_trace:
+            stmt_code, outputs, inputs, input_hashes = entry[0], entry[1], entry[2], entry[3] or {}
+            accs = outputs & vars_mutated_by_loops
+            if not accs or not stmt_code.lstrip().startswith(self._CTRL_PREFIXES):
+                continue
+            recorded = outcomes.get(hashlib.sha256(stmt_code.encode('utf-8')).hexdigest())
+            if recorded is None:
+                continue
+            for inp in inputs:
+                if (inp in outputs or inp in loop_target_vars or inp in vars_derived_from_loops
+                        or inp in _BUILTIN_NAMES):
+                    continue
+                if isinstance(self.shell.user_ns.get(inp), types.ModuleType):
+                    continue
+                now, then = input_hashes.get(inp), recorded[0].get(inp)
+                if now is not None and then is not None and now != then:
+                    changed |= accs
+                    break
+        return changed
+
     def _propagate_loop_derived_vars(
         self,
         vars_mutated_by_loops: set[str],
