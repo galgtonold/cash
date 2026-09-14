@@ -181,20 +181,38 @@ _HASH_READ_CHUNK = 1024 * 1024                # 1 MiB streaming chunk
 #:    upstream simulation: 19-108 s per cell for a notebook that runs in 25 s
 #:    uncached (round 23). A new cell run falls back to the window, so the edit
 #:    it was bounding is still seen by the first cell run that starts after
-#:    it. A script never begins an epoch and keeps the window alone.
+#:    it. The run ends with the cell (``end_file_state_epoch``): whatever runs
+#:    between cells -- a thread the cell started, a callback -- has the window
+#:    alone, as a script does, which never begins a run at all.
 _HASH_MEMO: dict[tuple[str, int, int, int, int, int], tuple[float, str, int | None]] = {}
 #: A full memo is cleared, not frozen: frozen, every file past the cap was
 #: re-hashed on every check.
 _HASH_MEMO_MAX = 1 << 17
 _HASH_MEMO_TTL_SECONDS = 5.0
 _HASH_MEMO_MIN_AGE_SECONDS = 10.0
+#: The current cell run's number, or None between runs.
 _HASH_EPOCH: int | None = None
+_EPOCH_COUNT = 0
+#: A cell run started inside another (`%%cash` within a hooked cell) is the
+#: same run.
+_EPOCH_DEPTH = 0
 
 
 def begin_file_state_epoch() -> None:
-    """Start a new cell run: digests from the previous one are looked at again."""
-    global _HASH_EPOCH
-    _HASH_EPOCH = (_HASH_EPOCH or 0) + 1
+    """A cell run starts: digests from earlier runs are looked at again."""
+    global _HASH_EPOCH, _EPOCH_COUNT, _EPOCH_DEPTH
+    _EPOCH_DEPTH += 1
+    if _EPOCH_DEPTH == 1:
+        _EPOCH_COUNT += 1
+        _HASH_EPOCH = _EPOCH_COUNT
+
+
+def end_file_state_epoch() -> None:
+    """The cell run that `begin_file_state_epoch` started is over."""
+    global _HASH_EPOCH, _EPOCH_DEPTH
+    _EPOCH_DEPTH = max(0, _EPOCH_DEPTH - 1)
+    if _EPOCH_DEPTH == 0:
+        _HASH_EPOCH = None
 
 
 def file_content_hash(

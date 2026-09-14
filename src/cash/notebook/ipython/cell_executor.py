@@ -64,7 +64,7 @@ from .._protocols import ShellProtocol
 from ..analysis import CodeAnalyzer
 from ..annotations import get_statement_annotations
 from ..cache_status import CacheStatus
-from ..file_dep_snapshot import begin_file_state_epoch
+from ..file_dep_snapshot import begin_file_state_epoch, end_file_state_epoch
 from ..consumables import consumable_state, is_consumable_unrestorable
 from ..control_structures import contains_top_level_await, is_control_structure
 from ..randomness import get_drawing_rng_modules, rng_lineage_fingerprint
@@ -790,9 +790,22 @@ class CellExecutor:
         - :class:`_PipelineSyntaxError` — the cell's own AST failed to parse
         - :class:`_EarlyReturn` — propagate the wrapped value (hook only)
         """
-        kwargs = kwargs or {}
         # Each file is hashed at most once per cell run (file_dep_snapshot).
         begin_file_state_epoch()
+        try:
+            return self._execute_cell_pipeline(raw_cell, args, kwargs, original_run_cell)
+        finally:
+            end_file_state_epoch()
+
+    def _execute_cell_pipeline(
+        self,
+        raw_cell: str,
+        args: tuple,
+        kwargs: dict | None,
+        original_run_cell: Callable[..., Any] | None,
+    ) -> _PipelineCompleted | _PipelineSyntaxError | _EarlyReturn:
+        """The body of :meth:`execute_cell`."""
+        kwargs = kwargs or {}
 
         # 1. Cell ID & notebook path
         self._extract_cell_id_and_notebook_path()
@@ -925,9 +938,22 @@ class CellExecutor:
         drift from the sync path in upstream reconstruction, cacheability, or
         badge accounting.
         """
-        kwargs = kwargs or {}
         # Each file is hashed at most once per cell run (file_dep_snapshot).
         begin_file_state_epoch()
+        try:
+            return await self._execute_cell_pipeline_async(raw_cell, args, kwargs, original_run_cell)
+        finally:
+            end_file_state_epoch()
+
+    async def _execute_cell_pipeline_async(
+        self,
+        raw_cell: str,
+        args: tuple,
+        kwargs: dict | None,
+        original_run_cell: Callable[..., Any] | None,
+    ) -> _PipelineCompleted | _PipelineSyntaxError | _EarlyReturn:
+        """The body of :meth:`execute_cell_async`."""
+        kwargs = kwargs or {}
 
         # 1. Cell ID & notebook path
         self._extract_cell_id_and_notebook_path()

@@ -37,24 +37,45 @@ N = 80
 #: Per cell run, because the claim is per cell run -- a new one looks at the
 #: files again, once -- and because a peek is an execution too: the first one
 #: after a cell runs the upstream check over that cell's new entries, before
-#: its expression is evaluated. Under a loaded suite that check was also seen
-#: twice, in two runs, doubling a total that is right per run. (Before cell
-#: runs were numbered there is one bucket, ``None``, and it holds everything.)
+#: its expression is evaluated. (Before cell runs were numbered there is one
+#: bucket, ``None``, and it holds everything.)
+#:
+#: The counter wraps the ORIGINALS, kept on the module, and `_counting` puts
+#: them back: a worker reuses its kernel for the next test, module state and
+#: all, and a second test's counter stacked on the first counted every call
+#: twice -- which read as the check running twice.
 _M = "__import__('cash.notebook.file_dep_snapshot', fromlist=['_'])"
 _BUMP = ("m._test_n.setdefault(getattr(m, '_HASH_EPOCH', None), [0, 0]).__setitem__({i}, "
          "m._test_n[getattr(m, '_HASH_EPOCH', None)][{i}] + 1)")
 COUNTER = (
-    "(lambda m, types: (setattr(m, '_test_n', {}), setattr(m, '_HASH_MEMO_TTL_SECONDS', 0.0),"
+    "(lambda m, types: (lambda s: (setattr(m, '_test_saved', s), setattr(m, '_test_n', {}),"
+    " setattr(m, '_HASH_MEMO_TTL_SECONDS', 0.0),"
     " setattr(m, 'hashlib', types.SimpleNamespace(sha256=(lambda f: (lambda *a: "
-    f"({_BUMP.format(i=1)}, f(*a))[1]))(m.hashlib.sha256))),"
+    f"({_BUMP.format(i=1)}, f(*a))[1]))(s[0].sha256))),"
     " setattr(m, 'file_content_hash', (lambda f: (lambda *a, **k: "
-    f"({_BUMP.format(i=0)}, f(*a, **k))[1]))(m.file_content_hash))))"
+    f"({_BUMP.format(i=0)}, f(*a, **k))[1]))(s[1]))))"
+    "(getattr(m, '_test_saved', None) or (m.hashlib, m.file_content_hash, m._HASH_MEMO_TTL_SECONDS)))"
     f"({_M}, __import__('types'))"
+)
+UNINSTALL = (
+    "(lambda m: (lambda s: s and (setattr(m, 'hashlib', s[0]), setattr(m, 'file_content_hash', s[1]),"
+    " setattr(m, '_HASH_MEMO_TTL_SECONDS', s[2]), delattr(m, '_test_saved')))"
+    f"(getattr(m, '_test_saved', None)))({_M})"
 )
 RESET = f"{_M}._test_n.clear()"
 READ = f"{_M}._test_n"
 
-SETUP = "import glob\nimport os\nimport pandas as pd\nfiles = sorted(glob.glob('exports/*.csv'))"
+
+@pytest.fixture
+def _counting(nb_runner):
+    yield
+    try:
+        nb_runner.peek(UNINSTALL)
+    except Exception:  # noqa: BLE001 - a kernel that never started has nothing to undo
+        pass
+
+
+SETUP ="import glob\nimport os\nimport pandas as pd\nfiles = sorted(glob.glob('exports/*.csv'))"
 LOOP = ("parts = []\n"
         "for f in files:\n"
         "    d = pd.read_csv(f)\n"
@@ -86,7 +107,7 @@ def _counts_for(nb_runner, cell):
     return max(v[0] for v in table.values()), max(v[1] for v in table.values())
 
 
-def test_a_loop_over_files_digests_each_file_once(nb_runner):
+def test_a_loop_over_files_digests_each_file_once(nb_runner, _counting):
     _files(nb_runner.work_dir)
     nb_runner.create_notebook(["import cash\n%cash_on", SETUP, LOOP])
     nb_runner.start_kernel()
@@ -100,7 +121,7 @@ def test_a_loop_over_files_digests_each_file_once(nb_runner):
     assert lookups <= 10 * N, f"{lookups} lookups for {N} files: the loop's bookkeeping grows with N squared"
 
 
-def test_statements_derived_from_many_files_do_not_redigest_them(nb_runner):
+def test_statements_derived_from_many_files_do_not_redigest_them(nb_runner, _counting):
     _files(nb_runner.work_dir)
     nb_runner.create_notebook(["import cash\n%cash_on", SETUP, COMPREHENSION, DERIVED])
     nb_runner.start_kernel()

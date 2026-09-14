@@ -73,6 +73,13 @@ def test_a_restored_variable_carries_exactly_its_entry_files(tmp_path):
 # One digest per file per cell run.                                          #
 # --------------------------------------------------------------------------- #
 
+@pytest.fixture(autouse=True)
+def _no_cell_run_leaks(monkeypatch):
+    """Each test starts and ends outside any cell run."""
+    monkeypatch.setattr(file_dep_snapshot, "_HASH_EPOCH", None)
+    monkeypatch.setattr(file_dep_snapshot, "_EPOCH_DEPTH", 0)
+
+
 @pytest.fixture
 def count_hashes(monkeypatch):
     hashed: list[int] = []
@@ -94,10 +101,45 @@ def test_one_cell_run_hashes_each_file_once(tmp_path, monkeypatch, count_hashes)
     clock[0] += 600                                 # ten minutes into the same cell
     file_dep_snapshot.file_content_hash(path)
     assert len(count_hashes) == 1, "one cell run hashed an unchanged file twice"
+    file_dep_snapshot.end_file_state_epoch()
 
     file_dep_snapshot.begin_file_state_epoch()      # the next cell looks again
     file_dep_snapshot.file_content_hash(path)
     assert len(count_hashes) == 2
+    file_dep_snapshot.end_file_state_epoch()
+
+
+def test_between_cell_runs_the_window_applies(tmp_path, monkeypatch, count_hashes):
+    """A cell run's digests end with it. Left current until the next cell,
+    anything running in between -- a thread the cell started, a cached
+    function called from a callback -- reused them indefinitely, and so did
+    every script-style test that ran after a notebook one in the same process."""
+    path = _aged(tmp_path, "a.csv")
+    clock = [1000.0]
+    monkeypatch.setattr(file_dep_snapshot.time, "monotonic", lambda: clock[0])
+    file_dep_snapshot.begin_file_state_epoch()
+    file_dep_snapshot.file_content_hash(path)
+    file_dep_snapshot.end_file_state_epoch()
+    clock[0] += 60
+    file_dep_snapshot.file_content_hash(path)
+    assert len(count_hashes) == 2, "a digest from a finished cell run was reused a minute later"
+
+
+def test_a_nested_cell_run_is_the_same_run(tmp_path, monkeypatch, count_hashes):
+    """`%%cash` inside a hooked cell runs the pipeline again from within it."""
+    path = _aged(tmp_path, "a.csv")
+    clock = [1000.0]
+    monkeypatch.setattr(file_dep_snapshot.time, "monotonic", lambda: clock[0])
+    file_dep_snapshot.begin_file_state_epoch()
+    file_dep_snapshot.file_content_hash(path)
+    file_dep_snapshot.begin_file_state_epoch()
+    clock[0] += 60
+    file_dep_snapshot.file_content_hash(path)
+    file_dep_snapshot.end_file_state_epoch()
+    clock[0] += 60
+    file_dep_snapshot.file_content_hash(path)       # still the outer run
+    file_dep_snapshot.end_file_state_epoch()
+    assert len(count_hashes) == 1
 
 
 def test_outside_a_cell_run_the_window_still_bounds_reuse(tmp_path, monkeypatch, count_hashes):
@@ -163,6 +205,8 @@ def test_an_edit_between_cell_runs_is_seen(tmp_path, monkeypatch, count_hashes):
     with open(path, "r+b") as fh:
         fh.write(b"Z")
     os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    file_dep_snapshot.end_file_state_epoch()
     clock[0] += 10
     file_dep_snapshot.begin_file_state_epoch()
     assert file_dep_snapshot.file_content_hash(path) != first
+    file_dep_snapshot.end_file_state_epoch()

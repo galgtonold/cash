@@ -21,10 +21,10 @@ The shape of every statement's journey is the same:
 
 ## What happens when you run a cell
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics._execute_cell @6944c822, cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @22480ff3 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics._execute_cell @6944c822, cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @5ffc94aa, cash/notebook/ipython/cell_executor.py:CellExecutor._execute_cell_pipeline @0b77fadf -->
 `CashMagics` stands in front of IPython's `run_cell`, and hands the cell to
 `CellExecutor.execute_cell()`. Steps 2-7 below are that method's own
-seven phases; step 1 (interception) and step 8 (badge render) happen in
+seven phases (in `_execute_cell_pipeline`, inside one cell run); step 1 (interception) and step 8 (badge render) happen in
 `CashMagics` around it:
 
 ```mermaid
