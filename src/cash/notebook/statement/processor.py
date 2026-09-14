@@ -187,6 +187,20 @@ def _config_float(config: Any, attr: str, default: float) -> float:
         return default
 
 
+def _snapshot_with_inherited(
+    file_dependencies: set[str], accessed_remote: set[str],
+    inherited_snapshots: dict[str, dict] | None,
+) -> dict[str, dict]:
+    """Snapshot the files a statement read itself; take the ones it only
+    inherited from its inputs' producers as they recorded them."""
+    inherited_snapshots = inherited_snapshots or {}
+    own = set(file_dependencies) - inherited_snapshots.keys()
+    snapshot = snapshot_dependencies(own, accessed_remote)
+    for path, recorded in inherited_snapshots.items():
+        snapshot.setdefault(path, recorded)
+    return snapshot
+
+
 def _is_control_body(code: str) -> bool:
     """True when *code* is one statement out of a loop or branch BODY, not a
     statement the user wrote at cell level.
@@ -3484,14 +3498,28 @@ class StatementProcessor:
              return None
 
         all_file_deps = set(accessed_files) if accessed_files else set()
+        inherited_snapshots: dict[str, dict] = {}
 
         # CRITICAL: Include inherited file dependencies from input variables
         # This ensures that when Cell 3 (`df`) is cached, it stores the CSV file's mtime
         # even though Cell 3 didn't directly read the file. This allows proper invalidation.
+        #
+        # An inherited file is recorded as the input's PRODUCER recorded it --
+        # the state the value was built from -- rather than read and hashed
+        # again here. Re-snapshotted per statement, every statement derived from
+        # a frame read out of 5,222 files re-read all 5,222 (round 23, r23s4).
+        # A later lookup still checks the real file against it.
         if hasattr(self, 'executed_file_deps'):
+            direct = all_file_deps.copy()
             for input_var in inputs:
-                if input_var in self.executed_file_deps:
-                    all_file_deps.update(self.executed_file_deps[input_var])
+                inherited = self.executed_file_deps.get(input_var)
+                if not inherited:
+                    continue
+                all_file_deps.update(inherited)
+                recorded = self._producer_file_snapshots(input_var)
+                for path in inherited:
+                    if path in recorded and path not in direct:
+                        inherited_snapshots.setdefault(path, recorded[path])
 
         return self._store_in_cache(
             cache_key,
@@ -3508,7 +3536,32 @@ class StatementProcessor:
             accessed_remote=accessed_remote or set(),
             force_persist=force_persist,
             miss_guarded=miss_guarded,
+            inherited_snapshots=inherited_snapshots,
         )
+
+    def _producer_file_snapshots(self, var_name: str) -> dict[str, dict]:
+        """The file snapshots *var_name*'s producing statement stored, or {}."""
+        key = self._tracking_state.variable_sources.get(var_name)
+        backend = getattr(self.cash_instance, 'backend', None) if self.cash_instance else None
+        if not key or backend is None:
+            return {}
+        from .. import file_dep_snapshot
+        epoch = file_dep_snapshot._HASH_EPOCH
+        memo = self.__dict__.get('_producer_snapshot_memo')
+        if memo is None or memo.get('__epoch__') != epoch:
+            memo = self.__dict__['_producer_snapshot_memo'] = {'__epoch__': epoch}
+        if key in memo:
+            return memo[key]
+        try:
+            peek = getattr(backend, 'peek_metadata', None)
+            meta = peek(key) if peek is not None else backend.get(key)[0]
+        except Exception:  # noqa: BLE001 - a snapshot it cannot read is taken afresh
+            meta = None
+        snaps = (meta or {}).get('file_dependencies') or {} if isinstance(meta, dict) else {}
+        if len(memo) > 64:
+            memo.clear()
+        memo[key] = snaps
+        return snaps
 
 
     def _should_skip_large_object_caching(
@@ -3854,6 +3907,7 @@ class StatementProcessor:
         accessed_remote: set[str] = frozenset(),
         force_persist: bool = False,
         miss_guarded: bool = False,
+        inherited_snapshots: dict[str, dict] | None = None,
     ) -> StatementCacheMetadata | None:
         """Store execution results and metadata in the cache. Returns
         metadata, or ``None`` when the statement was so cheap to compute
@@ -3861,6 +3915,10 @@ class StatementProcessor:
         will miss cleanly rather than hit a metadata-only entry and
         pay a per-file read just to decide 'recompute')."""
         t_store = time.time()
+        # What this key recorded is about to change (``_producer_file_snapshots``).
+        producer_memo = self.__dict__.get('_producer_snapshot_memo')
+        if producer_memo:
+            producer_memo.pop(cache_key, None)
 
         # "Too cheap to cache" floor — checked here (not inside
         # ``_should_skip_large_object_caching``) so we can skip writing
@@ -3989,7 +4047,8 @@ class StatementProcessor:
             source_hash=source_hash,
             code=code,
             key=cache_key,
-            file_dependencies=snapshot_dependencies(file_dependencies, accessed_remote),
+            file_dependencies=_snapshot_with_inherited(
+                file_dependencies, accessed_remote, inherited_snapshots),
             force_persist=force_persist,
             output_lineages=self._lineage.build_output_lineages(self._tracking_state, outputs),
             ttl=ttl,

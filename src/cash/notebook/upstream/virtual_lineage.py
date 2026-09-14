@@ -94,6 +94,11 @@ def _normalize_stmt(s: str) -> str:
 _FORWARD_PROBE_PLACEHOLDER = object()
 
 
+#: Cache keys whose file dependencies were found fresh in the current cell run
+#: (see VirtualLineage._validate_file_freshness).
+_FRESH_ENTRY_VERDICTS: dict = {}
+
+
 class VirtualLineage:
     """Phase 1 of NotebookSimulator: forward simulation + cache probing.
 
@@ -1647,7 +1652,7 @@ class VirtualLineage:
 
     @staticmethod
     def _validate_file_freshness(
-        hist_files: dict[str, Any], debug: bool = False
+        hist_files: dict[str, Any], debug: bool = False, memo_key: str | None = None,
     ) -> bool:
         """Return True if all historical file dependencies are still fresh.
 
@@ -1655,7 +1660,26 @@ class VirtualLineage:
         is recorded it is checked too — that catches rewrites within a
         single mtime tick on coarse-resolution filesystems (HFS+/APFS,
         some ext4 configs).
+
+        *memo_key* -- the entry's cache key. A "fresh" verdict holds for the
+        rest of the cell run: the simulation re-validated the same upstream
+        entry for every statement of the cell, twice -- 5,222 files x 2 x 24
+        statements of stats in r23s4. Within one run the upstream values are
+        what a from-the-top run gives even if this cell later writes one of
+        their files (upstream ran before the write), so re-checking can only
+        repeat the answer.
         """
+        from .. import file_dep_snapshot as _fds
+        epoch = _fds._HASH_EPOCH
+        memo = _FRESH_ENTRY_VERDICTS
+        if memo_key is not None and epoch is not None:
+            if memo.get("epoch") != epoch:
+                memo.clear()
+                memo["epoch"] = epoch
+                memo["keys"] = set()
+            if memo_key in memo["keys"]:
+                return True
+        full_hash_max = _fds._full_hash_max_bytes() if hist_files else None
         for fpath, stored in hist_files.items():
             resolved = resolve_file_dep_path(fpath)
             if resolved is None:
@@ -1663,11 +1687,13 @@ class VirtualLineage:
                     logger.debug("[UPSTREAM] Forward prop failed: Miss file %s", fpath)
                 return False
             # Content-authoritative freshness when the size matches.
-            is_fresh, reason = file_dep_is_fresh(resolved, stored)
+            is_fresh, reason = file_dep_is_fresh(resolved, stored, full_hash_max)
             if not is_fresh:
                 if debug:
                     logger.debug("[UPSTREAM] Forward prop failed: Stale file (%s) %s", reason, resolved)
                 return False
+        if memo_key is not None and epoch is not None:
+            memo["keys"].add(memo_key)
         return True
 
     def _resolve_input_lineage(
@@ -1879,7 +1905,7 @@ class VirtualLineage:
             if metadata:
                 hist_files = metadata.get('file_dependencies', {})
                 output_lineages = metadata.get('output_lineages', {})
-                files_valid = not hist_files or self._validate_file_freshness(hist_files, self.debug)
+                files_valid = not hist_files or self._validate_file_freshness(hist_files, self.debug, memo_key=cache_key)
 
                 if files_valid and output_lineages:
                     self._last_hit_bumped = set()
@@ -2479,7 +2505,7 @@ class VirtualLineage:
                     # Verify file deps are still valid (mtime + size, both
                     # forms â€” see _validate_file_freshness for rationale).
                     file_deps = metadata.get('file_dependencies', {})
-                    deps_valid = self._validate_file_freshness(file_deps, self.debug)
+                    deps_valid = self._validate_file_freshness(file_deps, self.debug, memo_key=cache_key)
 
                     if deps_valid:
                         # Cache hit! This statement's restore will put its

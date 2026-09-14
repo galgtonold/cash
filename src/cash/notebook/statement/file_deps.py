@@ -157,8 +157,16 @@ class StatementFileDeps:
         accessed_files: set[str] | None,
         inputs: set[str],
         value: Any,
+        rebind: bool = False,
     ) -> None:
         """Record direct and inherited file dependencies for *var_name*.
+
+        *rebind* -- the statement bound a fresh value to the name (it is not
+        also one of the statement's inputs): the files the OLD value came from
+        are forgotten. Merged instead, ``for f in files: d = pd.read_csv(f)``
+        left ``d`` depending on every file read so far, and each iteration's
+        save snapshotted all of them -- quadratic in the files (round 23, r23s2:
+        865,265 hashes in one cell). An in-place change keeps what it had.
 
         Two sources of file deps are handled here so that the logic is not
         duplicated:
@@ -174,6 +182,9 @@ class StatementFileDeps:
         """
         executed_file_deps = tracking_state.executed_file_deps
         executed_file_mtimes = tracking_state.executed_file_mtimes
+        if rebind:
+            executed_file_deps.pop(var_name, None)
+            executed_file_mtimes.pop(var_name, None)
         # 1. Direct file dependencies from this statement's execution.
         if accessed_files:
             if var_name not in executed_file_deps:
@@ -236,6 +247,8 @@ class StatementFileDeps:
         }
         executed_file_deps = tracking_state.executed_file_deps
         executed_file_mtimes = tracking_state.executed_file_mtimes
+        # A restored value is exactly the entry's value: its files are the
+        # entry's, not those of whatever the name held before.
         for var_name in restored_vars:
-            executed_file_deps.setdefault(var_name, set()).update(file_deps.keys())
-            executed_file_mtimes.setdefault(var_name, {}).update(mtime_map)
+            executed_file_deps[var_name] = set(file_deps.keys())
+            executed_file_mtimes[var_name] = dict(mtime_map)

@@ -307,14 +307,14 @@ A matching size *and* a matching content hash is fresh, **regardless of the mtim
 
 ### Large files are sampled, not fully hashed
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @e571c25f, cash/notebook/file_dep_snapshot.py:file_content_hash @81f99180, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @8b351a2f, cash/notebook/file_dep_snapshot.py:file_content_hash @ac740b3f, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
 Hashing a multi-GB parquet on every lookup would defeat the point of caching, so the hash is size-bounded (`file_content_hash`), at a threshold you can move (`file_hash_full_max_bytes`):
 
 - Files **≤ 256 MiB** (`_HASH_FULL_MAX_BYTES`) are hashed **in full**.
 - Files **> 256 MiB** are **sampled** at three deterministic, size-derived offsets — head, middle, and tail, **256 KiB each** (`_HASH_SAMPLE_REGION_BYTES`) — with the byte length folded into the digest.
 
 <!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == 5.0 -->
-A full hash costs about 0.72 ms per MiB, and within one process it is reused for up to five seconds against the file's stat fields, so an aggregate whose ten cached helpers read the same fifty inputs hashes each input once, and a check inside that window costs a `stat()`. The window has one consequence on Windows: an edit that leaves the size and every timestamp alone — an `np.memmap` write, a write with the mtime put back — is seen by a running process up to five seconds late (see [known limitations](../../known-limitations.md#an-edit-that-keeps-size-and-timestamps-in-a-running-process)).
+A full hash costs about 0.72 ms per MiB, and within one process it is reused for up to five seconds against the file's stat fields (in a notebook, also for the rest of the cell run), so an aggregate whose ten cached helpers read the same fifty inputs hashes each input once, and a check inside that window costs a `stat()`. The window has one consequence on Windows: an edit that leaves the size and every timestamp alone — an `np.memmap` write, a write with the mtime put back — is seen by a running process up to five seconds late (see [known limitations](../../known-limitations.md#an-edit-that-keeps-size-and-timestamps-in-a-running-process)).
 
 A sampled hash on its own would miss an edit that changes only unsampled interior bytes while preserving the exact size. **It doesn't, because sampled files carry a timestamp backstop**: above the cap a matching hash is trusted only when the mtime *also* matches, so any real in-place write is caught (`stale_reason` reads `'mtime-sampled'`). Below the cap the hash is authoritative and mtime is ignored, which is what makes a content-preserving `touch` free.
 

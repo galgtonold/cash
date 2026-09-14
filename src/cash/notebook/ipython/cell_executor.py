@@ -64,6 +64,7 @@ from .._protocols import ShellProtocol
 from ..analysis import CodeAnalyzer
 from ..annotations import get_statement_annotations
 from ..cache_status import CacheStatus
+from ..file_dep_snapshot import begin_file_state_epoch
 from ..consumables import consumable_state, is_consumable_unrestorable
 from ..control_structures import contains_top_level_await, is_control_structure
 from ..randomness import get_drawing_rng_modules, rng_lineage_fingerprint
@@ -790,6 +791,8 @@ class CellExecutor:
         - :class:`_EarlyReturn` — propagate the wrapped value (hook only)
         """
         kwargs = kwargs or {}
+        # Each file is hashed at most once per cell run (file_dep_snapshot).
+        begin_file_state_epoch()
 
         # 1. Cell ID & notebook path
         self._extract_cell_id_and_notebook_path()
@@ -923,6 +926,8 @@ class CellExecutor:
         badge accounting.
         """
         kwargs = kwargs or {}
+        # Each file is hashed at most once per cell run (file_dep_snapshot).
+        begin_file_state_epoch()
 
         # 1. Cell ID & notebook path
         self._extract_cell_id_and_notebook_path()

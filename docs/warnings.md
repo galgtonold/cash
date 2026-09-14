@@ -1884,7 +1884,7 @@ every later call would be a cache hit with the old answer — silently, for as
 long as the entry lived. Not caching is the only honest option: nothing can say
 which version of the file the result came from.
 
-<!-- claim: cash/notebook/file_tracker.py:FileAccessTracker._digest_now @eaa4904d, cash/notebook/file_dep_snapshot.py:snapshot_file_deps @2c3ca753 -->
+<!-- claim: cash/notebook/file_tracker.py:FileAccessTracker._digest_now @eaa4904d, cash/notebook/file_dep_snapshot.py:snapshot_file_deps @571bfc89 -->
 A writer that moves neither the size nor a timestamp — an `np.memmap` write on
 Windows — does not trigger this warning, and does not need to: a file under
 the full-hash cap is fingerprinted by its content **when the function first

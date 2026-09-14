@@ -310,6 +310,18 @@ class ForLoopHandler:
             _probe_n = self._split_eligible(node, iterable)
             _probe_elapsed = 0.0
 
+            # The files each iteration's body read. A name the body rebinds
+            # (`d = pd.read_csv(f)`) holds only its latest iteration's file, so
+            # the accumulator's inheritance is gathered as the loop goes. Only
+            # rebound names: one changed in place (`parts.append(d)`) keeps
+            # every file and is read once at the end -- read per iteration, its
+            # growing set made the gathering quadratic again.
+            _file_deps = getattr(self.statement_processor, 'executed_file_deps', None)
+            _body_names = {n.id for stmt in node.body for n in ast.walk(stmt)
+                           if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
+                           } if _file_deps is not None else set()
+            _body_files: set[str] = set()
+
             for _idx, iteration_value in enumerate(iterable):
                 total_iterations += 1
                 _iter_started = _time.perf_counter()
@@ -323,13 +335,16 @@ class ForLoopHandler:
                     computed_iterations += 1
                 if _probe_n is not None and _idx < self._SPLIT_PROBE_ITERS:
                     _probe_elapsed += _time.perf_counter() - _iter_started
+                for _name in _body_names:
+                    _body_files.update(_file_deps.get(_name, ()))
 
             if _probe_n is not None:
                 self._record_split_verdict(node, _probe_elapsed, _probe_n)
 
             # After all iterations, update lineage for mutated variables
             _helpers.update_lineage_after_execution(
-                self.shell, self.statement_processor, node, ast.unparse(node), debug=self.debug
+                self.shell, self.statement_processor, node, ast.unparse(node), debug=self.debug,
+                body_files=_body_files,
             )
 
             # Stamp every body metric with this for-loop's source header.

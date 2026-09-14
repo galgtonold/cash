@@ -171,7 +171,8 @@ class StatementLineageBuilder:
 
             tracking_state.variable_sources[var_name] = cache_key
 
-            self._file_deps.update_for_var(tracking_state, var_name, accessed_files, inputs, value)
+            self._file_deps.update_for_var(tracking_state, var_name, accessed_files, inputs, value,
+                                           rebind=var_name not in inputs)
 
         # After all outputs' lineages are recorded, replay derivation bumps:
         # a mutation of a base/frame bumps its live-alias derivatives

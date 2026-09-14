@@ -167,7 +167,8 @@ def extract_cash_frame_lineno(exc: Exception) -> int | None:
 # ---------------------------------------------------------------------------
 
 def update_lineage_after_execution(
-    shell, statement_processor, node: ast.AST, code: str, debug: bool = False
+    shell, statement_processor, node: ast.AST, code: str, debug: bool = False,
+    body_files: set[str] | None = None,
 ) -> None:
     """
     Update lineage for variables that may have been mutated inside the
@@ -189,7 +190,7 @@ def update_lineage_after_execution(
         mutated_vars -= target_names
 
     if mutated_vars:
-        inherit_body_file_deps(shell, statement_processor, body_nodes, mutated_vars)
+        inherit_body_file_deps(shell, statement_processor, body_nodes, mutated_vars, body_files)
         iterable_lineage = None
         target_names: set[str] = set()
         if isinstance(node, ast.For):
@@ -206,7 +207,8 @@ def update_lineage_after_execution(
         )
 
 
-def inherit_body_file_deps(shell, statement_processor, body_nodes: list, mutated_vars: set[str]) -> None:
+def inherit_body_file_deps(shell, statement_processor, body_nodes: list, mutated_vars: set[str],
+                           body_files: set[str] | None = None) -> None:
     """Give each variable the loop mutated the files its body read.
 
     ``for f in files: d = pd.read_csv(f); parts.append(d)`` recorded each file
@@ -219,13 +221,16 @@ def inherit_body_file_deps(shell, statement_processor, body_nodes: list, mutated
     statement that reads files already hands them to its outputs
     (``FileDepsTracker.inherit_from_inputs``); this is the same rule for the
     loop's accumulators.
+
+    *body_files* is what a per-iteration loop gathered as it ran: a name the
+    body rebinds holds only the last iteration's files by now.
     """
     executed_file_deps = getattr(statement_processor, 'executed_file_deps', None)
     if executed_file_deps is None:
         return
     used = {sub.id for body_node in body_nodes for sub in ast.walk(body_node)
             if isinstance(sub, ast.Name)}
-    files: set[str] = set()
+    files: set[str] = set(body_files or ())
     for name in used:
         files.update(executed_file_deps.get(name, ()))
     if not files:

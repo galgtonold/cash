@@ -173,14 +173,33 @@ _HASH_READ_CHUNK = 1024 * 1024                # 1 MiB streaming chunk
 #: thousand calls, to catch an edit that is seen five seconds later anyway and
 #: never reaches a stored entry (the fingerprint an entry is stored with is
 #: taken when the body reads the file). Reverted.
-_HASH_MEMO: dict[tuple[str, int, int, int, int, int], tuple[float, str]] = {}
-_HASH_MEMO_MAX = 4096
+#:
+#: 3. In a notebook a digest also holds for the rest of the CELL RUN it was
+#:    computed in (``begin_file_state_epoch``). A cell over thousands of files
+#:    outlasts the five seconds on its own -- r23s4 read 5,222 files, and every
+#:    statement derived from them re-hashed all of them on save, lookup and
+#:    upstream simulation: 19-108 s per cell for a notebook that runs in 25 s
+#:    uncached (round 23). A new cell run falls back to the window, so the edit
+#:    it was bounding is still seen by the first cell run that starts after
+#:    it. A script never begins an epoch and keeps the window alone.
+_HASH_MEMO: dict[tuple[str, int, int, int, int, int], tuple[float, str, int | None]] = {}
+#: A full memo is cleared, not frozen: frozen, every file past the cap was
+#: re-hashed on every check.
+_HASH_MEMO_MAX = 1 << 17
 _HASH_MEMO_TTL_SECONDS = 5.0
 _HASH_MEMO_MIN_AGE_SECONDS = 10.0
+_HASH_EPOCH: int | None = None
+
+
+def begin_file_state_epoch() -> None:
+    """Start a new cell run: digests from the previous one are looked at again."""
+    global _HASH_EPOCH
+    _HASH_EPOCH = (_HASH_EPOCH or 0) + 1
 
 
 def file_content_hash(
     path: str, size: int | None = None, full_hash_max: int | None = None,
+    st: os.stat_result | None = None,
 ) -> str | None:
     """Return a stable content hash for *path*, or ``None`` if unreadable.
 
@@ -203,10 +222,13 @@ def file_content_hash(
     for a project marker, and profiling a 50-dependency hit found 7,000
     ``os.path.exists`` calls and 130 ms spent there -- three times the hashing
     it was guarding.
+
+    *st* is the caller's stat of *path*, when it has just taken one.
     """
     memo_key = None
     try:
-        st = os.stat(path)
+        if st is None:
+            st = os.stat(path)
         if size is None:
             size = st.st_size
         memoizable = (time.time() - st.st_mtime) > _HASH_MEMO_MIN_AGE_SECONDS
@@ -214,13 +236,18 @@ def file_content_hash(
             # st_dev/st_ino: the FILE's identity, not only the path's. A path
             # through a re-pointed junction names a different file with the same
             # path, and two release copies laid down by one deploy can share
-            # size and timestamps exactly (CAS-108's reproduction did).
-            memo_key = (path, st.st_dev, st.st_ino, size, st.st_mtime_ns,
-                        getattr(st, "st_ctime_ns", 0))
+            # size and timestamps exactly (CAS-108's reproduction did). Where
+            # the filesystem gives an identity, it is the whole key: a relative
+            # read is recorded under both spellings (``FileTracker._track_path``)
+            # and was hashed once for each. Where it gives none (st_ino 0), the
+            # path stands in for it.
+            memo_key = (path if not st.st_ino else "", st.st_dev, st.st_ino, size,
+                        st.st_mtime_ns, getattr(st, "st_ctime_ns", 0))
             cached = _HASH_MEMO.get(memo_key)
             if cached is not None and (
-                time.monotonic() - cached[0]
-            ) < _HASH_MEMO_TTL_SECONDS:
+                (cached[2] is not None and cached[2] == _HASH_EPOCH)
+                or time.monotonic() - cached[0] < _HASH_MEMO_TTL_SECONDS
+            ):
                 return cached[1]
     except OSError:
         logger.debug("[FILE_DEP] Could not stat file for freshness: %s", path)
@@ -248,8 +275,10 @@ def file_content_hash(
                     f.seek(off)
                     h.update(f.read(_HASH_SAMPLE_REGION_BYTES))
         digest = h.hexdigest()
-        if memo_key is not None and len(_HASH_MEMO) < _HASH_MEMO_MAX:
-            _HASH_MEMO[memo_key] = (time.monotonic(), digest)
+        if memo_key is not None:
+            if len(_HASH_MEMO) >= _HASH_MEMO_MAX:
+                _HASH_MEMO.clear()
+            _HASH_MEMO[memo_key] = (time.monotonic(), digest, _HASH_EPOCH)
         return digest
     except OSError:
         logger.debug("[FILE_DEP] Could not hash file for freshness: %s", path)
@@ -281,7 +310,7 @@ def snapshot_file_deps(
         if read is not None and read[0] == (st.st_size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0)):
             content_hash = read[1]
         else:
-            content_hash = file_content_hash(f, st.st_size, full_hash_max)
+            content_hash = file_content_hash(f, st.st_size, full_hash_max, st)
         if content_hash is not None:
             entry["hash"] = content_hash
         # The integer nanoseconds alongside the float. ``st_mtime`` is derived
@@ -529,7 +558,7 @@ def file_dep_is_fresh(
     if stored_hash is not None:
         if full_hash_max is None:
             full_hash_max = _full_hash_max_bytes()
-        cur_hash = file_content_hash(resolved_path, st.st_size, full_hash_max)
+        cur_hash = file_content_hash(resolved_path, st.st_size, full_hash_max, st)
         if cur_hash != stored_hash:
             # Recorded in one regime and checked in the other -- the size is
             # the same, so `file_hash_full_max_bytes` moved across it. The

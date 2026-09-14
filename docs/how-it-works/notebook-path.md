@@ -21,7 +21,7 @@ The shape of every statement's journey is the same:
 
 ## What happens when you run a cell
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics._execute_cell @6944c822, cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @6b1a160f -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics._execute_cell @6944c822, cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @22480ff3 -->
 `CashMagics` stands in front of IPython's `run_cell`, and hands the cell to
 `CellExecutor.execute_cell()`. Steps 2-7 below are that method's own
 seven phases; step 1 (interception) and step 8 (badge render) happen in
@@ -101,7 +101,7 @@ flowchart TD
     I3 --> K3
 ```
 
-<!-- claim: cash/notebook/control_structures/processor.py:compute_context_hash @589aad3c, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @77ef09c3 -->
+<!-- claim: cash/notebook/control_structures/processor.py:compute_context_hash @589aad3c, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @ce9ee5c8 -->
 The mechanism is deliberately plain: the context hash is prepended to the body
 statement as a *comment*, so it flows into the ordinary statement cache key
 through the source hash — no special key format is needed.

@@ -700,7 +700,7 @@ Two large objects that differ only outside the sampled region therefore hash ide
 
 ## A very large file, edited in place, with its timestamp put back
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @e571c25f, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @8b351a2f, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
 Files up to `file_hash_full_max_bytes` (**256 MiB** by default) are hashed in
 full, so their content decides and none of this applies. Above that, the hash
 covers three 256 KiB regions — head, middle and tail — and the file's
@@ -755,22 +755,27 @@ both numbers.
 
 ## An edit that keeps size and timestamps, in a running process
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == 5.0, cash/notebook/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0, cash/notebook/file_dep_snapshot.py:file_content_hash @81f99180 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == 5.0, cash/notebook/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0, cash/notebook/file_dep_snapshot.py:file_content_hash @ac740b3f -->
 Within one process, a data file's content hash is reused for **up to five
 seconds** while the file's size, modification time and inode change time stay
 the same — and only for a file that had not been touched for ten seconds
 before. That is what keeps an aggregate over fifty inputs, or a loop over one
-large input, from re-reading them on every call.
+large input, from re-reading them on every call. In a notebook the hash is
+also reused for the rest of the **cell run** it was taken in, however long
+that takes: a cell over thousands of input files outlasts five seconds on its
+own, and re-reading all of them for every statement derived from them cost
+minutes per cell. The next cell run reads them again.
 
 The edit that gets through: one that leaves every one of those fields as it
 was. On Linux and macOS any write moves the inode change time, so there is
 none. On **Windows** there are two — a write through `np.memmap(mode="r+")`,
 which moves no timestamp at all, and an in-place write followed by `os.utime`
 putting the old modification time back. A cached call made within those five
-seconds in the **same process** is served the result for the file as it was.
-The next check after the window reads the file and recomputes, and nothing
-wrong is stored for later: an entry records the file as its function read it,
-so a new process always compares against the right version.
+seconds in the **same process** — or later in the same notebook cell run — is
+served the result for the file as it was. The next check after that reads
+the file and recomputes, and nothing wrong is stored for later: an entry
+records the file as its function read it, so a new process always compares
+against the right version.
 
 If your long-running process has another program patching its inputs this way
 and must see the change on the very next call, clear the function
