@@ -11,11 +11,13 @@ invariants land in a later refactor.
 
 import inspect
 import ast
+import importlib.util
 import builtins
 import hashlib
 import logging
 import os
 import re
+import sys
 import time as time_module
 import types
 from collections.abc import Callable, Iterable
@@ -47,6 +49,7 @@ from ..cache_key import (
     compute_cache_key,
     is_cash_instrumentation,
     is_module_like,
+    virtual_callable_key,
     virtual_namespace,
 )
 from ..cache_status import CacheStatus
@@ -240,6 +243,10 @@ class VirtualLineage:
         #: Simulated ``def``s by lineage (``VirtualCallable``). Content-
         #: addressed, so an entry never goes stale; the cap bounds memory.
         self._virtual_callables: dict[str, VirtualCallable] = {}
+        #: Classes a simulated ``from X import C`` bound, by lineage -> the
+        #: source digest the runtime folds into a lineage (see
+        #: ``_register_imported_callables``). Not in the key: it skips classes.
+        self._imported_classes: dict[str, str] = {}
 
         # Buffered TrackingState mutations; orchestrator drains after the phase.
         self._restores = RestoreCollector()
@@ -337,8 +344,8 @@ class VirtualLineage:
         """Simulation half of CAS-260: the globals a callee writes.
 
         Byte-for-byte the same derivation as
-        ``StatementProcessor._callee_mutated_globals`` — same
-        :func:`called_function_global_mutations` walk, same namespace filter —
+        ``StatementProcessor._callee_mutated_globals`` â€” same
+        :func:`called_function_global_mutations` walk, same namespace filter â€”
         differing only in how the callee's source is found
         (:meth:`_resolve_sim_function_source` reads stashed cell text, the
         runtime reads the live object). That pairing is the one this module
@@ -349,7 +356,7 @@ class VirtualLineage:
         key inputs; a simulation that did not would compute a DIFFERENT key for
         every statement calling a global-mutating helper, and ADR-007's whole
         point is that the two engines mint identical keys. The failure would
-        not look like a crash — the simulation would simply never find the
+        not look like a crash â€” the simulation would simply never find the
         entry the runtime wrote, and reschedule work that was already cached.
 
         Control-structure bodies are excluded on the runtime's own rule (see
@@ -369,18 +376,35 @@ class VirtualLineage:
             if n in ns and not isinstance(ns[n], types.ModuleType)
         }
 
-    def _mutation_receivers(self, stmt_code: str, tree: ast.Module) -> set[str]:
+    def _mutation_receivers(
+        self, stmt_code: str, tree: ast.Module, virtual_modules: set[str] | None = None,
+    ) -> set[str]:
         """Receivers of standalone method calls in *tree* that mutate, per the
         runtime's broad-precise classification.
 
         Statically-known mutators (``MUTATING_METHODS`` / ``inplace=True``) and
         known-pure methods are decided the same way as the runtime, without a
         verdict. For everything else this reads ``mutation_verdicts`` (keyed by
-        the statement's ``source_hash`` — the same SHA-256 of the code the
+        the statement's ``source_hash`` â€” the same SHA-256 of the code the
         runtime uses) so the simulation reproduces the runtime's observed
         decision; an unknown verdict (statement not yet executed) is treated as
         mutating (conservative).
+
+        A module is never a receiver: the runtime skips a call on one
+        (``pd.set_option(...)``) as a module function call. After a restart the
+        module is not in ``user_ns`` yet, and the verdict died with the kernel,
+        so the call read as an unknown method -- "mutating" -- and bumped
+        ``pd``'s lineage, and with it the key of every statement that reads
+        ``pd`` (round 23, r23s2: nothing restored). *virtual_modules* names the
+        modules the simulation bound.
         """
+        user_ns = self.shell.user_ns
+
+        def is_module(name: str) -> bool:
+            if isinstance(user_ns.get(name), types.ModuleType):
+                return True
+            return bool(virtual_modules) and name not in user_ns and name in virtual_modules
+
         # Bare FUNCTION-arg mutations (``proc(d)`` whose body mutates its
         # parameter) mirror bare method calls: no Store target, so the mutated
         # arg must be surfaced as an output or the backward restore scan resolves
@@ -392,7 +416,7 @@ class VirtualLineage:
             if standalone_call_arg_targets(tree):
                 fam = {
                     v for v in function_arg_mutations(tree, self._resolve_sim_function_source)
-                    if not isinstance(self.shell.user_ns.get(v), types.ModuleType)
+                    if not is_module(v)
                 }
         except (SyntaxError, ValueError, RecursionError):
             fam = set()
@@ -411,9 +435,11 @@ class VirtualLineage:
         receivers: set[str] = set()
         source_hash = hashlib.sha256(stmt_code.encode('utf-8')).hexdigest()
         verdict = self.mutation_verdicts.get(source_hash)
+        if verdict is None:
+            verdict = self._persisted_mutation_verdict(source_hash)
         for base, method in candidates:
             receiver = self.shell.user_ns.get(base)
-            if isinstance(receiver, types.ModuleType):
+            if is_module(base):
                 continue  # module function call, not a method mutation
             if base in tier1:
                 receivers.add(base)
@@ -432,7 +458,7 @@ class VirtualLineage:
                     receivers.add(base)
             else:
                 receivers.add(base)  # unknown -> conservative
-        # mirror the runtime — a captured-return draw
+        # mirror the runtime â€” a captured-return draw
         # (``counts, bins, _ = ax.hist(...)``) routes its receiver as a mutation
         # too, gated SOLELY by the identity-coupled check so the simulated lineage
         # bumps the same source-based receiver the runtime does (unified-key
@@ -442,7 +468,7 @@ class VirtualLineage:
             if base in receivers:
                 continue
             receiver = self.shell.user_ns.get(base)
-            if isinstance(receiver, types.ModuleType):
+            if is_module(base):
                 continue
             if receiver_is_identity_coupled(receiver) or fits_its_receiver(_method, receiver):
                 receivers.add(base)
@@ -453,6 +479,7 @@ class VirtualLineage:
         self._simulation_cache.clear()
         self._simulation_cell_hashes.clear()
         self._ast_cache.clear()
+        self.__dict__.pop('_import_bindings_memo', None)
 
     def _get_metadata_only(self, cache_key: str) -> dict | None:
         """Get only metadata for a cache key without deserializing the full value.
@@ -575,7 +602,7 @@ class VirtualLineage:
                 # mismatch_classifier ``_handle_mismatch_prereqs``). But it must
                 # NOT set ``cache_had_hash_mismatch``: that flag becomes the global
                 # ``upstream_has_modifications``, which disables loop-derived TRUST
-                # for EVERY loop var in the notebook — so an unrelated loop chain
+                # for EVERY loop var in the notebook â€” so an unrelated loop chain
                 # (whose runtime folds a value-hash and whose sim folds input-
                 # lineages, structurally divergent) would be spuriously marked
                 # broken and re-executed. Break to re-simulate; leave the flag
@@ -732,7 +759,7 @@ class VirtualLineage:
         """Re-apply unsaved extension code for broken variables.
 
         If a broken variable's producing code is NOT in the notebook (unsaved
-        extension), schedule it for re-execution â€” unless the trace already
+        extension), schedule it for re-execution Ã¢â‚¬â€ unless the trace already
         updated that variable.
         """
         all_notebook_stmts = self._collect_notebook_statements(notebook_cells)
@@ -778,8 +805,8 @@ class VirtualLineage:
         A reassignment accumulator (``result = result + 1``) enters the loop-trust
         set so that a no-change re-run is not re-executed (which would re-drain a
         one-shot iterable). But when the accumulator ALSO has an external
-        dependency via a *non-loop* producing statement — typically an
-        initializer like ``result = np.zeros(N)`` — editing that external input
+        dependency via a *non-loop* producing statement â€” typically an
+        initializer like ``result = np.zeros(N)`` â€” editing that external input
         (``N``) and re-running the edited cell before the reader leaves
         ``upstream_has_modifications`` False, and every current-state input
         lineage is consistent, so the trust would serve a stale value. Only the
@@ -1187,9 +1214,9 @@ class VirtualLineage:
         virtual_lineage: dict[str, str],
         virtual_modules: set[str],
     ) -> dict[str, dict[str, str]]:
-        """Return a mapping of loop-derived variable â†’ its data-input virtual lineages.
+        """Return a mapping of loop-derived variable Ã¢â€ â€™ its data-input virtual lineages.
 
-        Used to detect when loop inputs change (e.g., N=10â†’20) even when the
+        Used to detect when loop inputs change (e.g., N=10Ã¢â€ â€™20) even when the
         producing code is unchanged on disk.
         """
         loop_var_input_lineages: dict[str, dict[str, str]] = {}
@@ -1390,7 +1417,7 @@ class VirtualLineage:
             cell_stmt_occurrence_counts: dict = {}
 
             for node in tree.body:
-                # A top-level ``raise`` unconditionally aborts the cell — every
+                # A top-level ``raise`` unconditionally aborts the cell â€” every
                 # statement after it is dead code that never runs in a real
                 # from-start execution. Stop here so the simulation does not
                 # register a post-raise assignment (``z = 1; raise; z = 2``) as
@@ -1409,7 +1436,7 @@ class VirtualLineage:
         except SyntaxError:
             # a single unparseable upstream cell (a half-written cell
             # the user has SAVED but not run) must NOT abort the whole
-            # simulation and silently disable caching for every cell below it —
+            # simulation and silently disable caching for every cell below it â€”
             # a notebook with one mid-edit cell is the normal state of the
             # workflow cash exists to speed up. An unparseable cell cannot have
             # executed, so it contributes no runtime state: treat it as a no-op
@@ -1417,12 +1444,12 @@ class VirtualLineage:
             # falling through to the cache-entry append below, so cells that do
             # NOT depend on it keep their lineage and their cache. A cell that
             # DID depend on it then follows an ordinary lineage mismatch and
-            # recomputes from the current (last-valid) memory — never a wrong
+            # recomputes from the current (last-valid) memory â€” never a wrong
             # cache hit, because the broken cell never ran to change that
             # memory. The visible ``CashUpstreamSyntaxWarning`` naming the
             # offending cell is emitted by
             # ``UpstreamChecker._warn_broken_upstream_cells``; here we only keep
-            # the simulation alive. Non-syntax errors still propagate below —
+            # the simulation alive. Non-syntax errors still propagate below â€”
             # they signal a real bug, not a user typo. (Was: re-raise, which
             # poisoned every downstream cell silently.)
             logger.debug(
@@ -1747,6 +1774,26 @@ class VirtualLineage:
             # The same rule simple statements follow in _simulate_one_node.
             simulation_trace.append(_TraceEntry(stmt_code, set(), inputs, input_hashes, {}, files_stale))
 
+    def _persisted_mutation_verdict(self, source_hash: str) -> set[str] | None:
+        """The runtime's verdict on a bare method call, from an earlier kernel.
+
+        See ``mutation_verdict_key``. Kept in ``mutation_verdicts`` once read,
+        where the runtime overwrites it when the statement runs again.
+        """
+        backend = getattr(self.cash_instance, 'backend', None) if self.cash_instance else None
+        if backend is None or not hasattr(backend, 'get_metadata'):
+            return None
+        from ..cache_key import mutation_verdict_key
+        try:
+            record = backend.get_metadata(mutation_verdict_key(source_hash))
+        except (OSError, TypeError, ValueError, AttributeError):
+            return None
+        if not record or not record.get('mutation_verdict'):
+            return None
+        verdict = set(record.get('receivers') or ())
+        self.mutation_verdicts.setdefault(source_hash, verdict)
+        return verdict
+
     def _persisted_control_outcome(
         self, stmt_code: str, virtual_lineage: dict[str, str],
     ) -> tuple[dict[str, str], dict[str, str], frozenset[str], str] | None:
@@ -1798,7 +1845,7 @@ class VirtualLineage:
         """Return True if all historical file dependencies are still fresh.
 
         Each entry is ``{path: {'mtime': ..., 'size': ...}}``. When ``size``
-        is recorded it is checked too — that catches rewrites within a
+        is recorded it is checked too â€” that catches rewrites within a
         single mtime tick on coarse-resolution filesystems (HFS+/APFS,
         some ext4 configs).
 
@@ -1852,7 +1899,7 @@ class VirtualLineage:
     ) -> str | None:
         """Resolve the lineage hash for a single input variable.
 
-        Priority: virtual_lineage â†’ variable_lineage â†’ hash from user_ns.
+        Priority: virtual_lineage Ã¢â€ â€™ variable_lineage Ã¢â€ â€™ hash from user_ns.
         Returns ``None`` if the input cannot be resolved.
         """
         if inp in virtual_lineage:
@@ -2015,7 +2062,7 @@ class VirtualLineage:
         """Try to forward-propagate lineages from a cached entry.
 
         Returns (cache_lookup_time, files_stale, stmt_file_deps, file_deps_to_check)
-        on cache miss or failed validation, or None-wrapped early-return tuple isn't usedâ€”
+        on cache miss or failed validation, or None-wrapped early-return tuple isn't usedÃ¢â‚¬â€
         instead returns a special sentinel. On successful propagation, returns with
         file_deps_to_check as empty set (caller should return early).
 
@@ -2112,7 +2159,7 @@ class VirtualLineage:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.decorator_list:
             return
         lineage = virtual_lineage.get(node.name)
-        if not lineage or lineage in self._virtual_callables:
+        if not lineage or virtual_callable_key(lineage, node.name) in self._virtual_callables:
             return
         try:
             module = compile(stmt_code, '<cash-simulated>', 'exec', dont_inherit=True)
@@ -2124,7 +2171,63 @@ class VirtualLineage:
             return
         if len(self._virtual_callables) >= self._VIRTUAL_CALLABLES_MAX:
             self._virtual_callables.clear()
-        self._virtual_callables[lineage] = VirtualCallable(source_identity_digest(stmt_code), code)
+        self._virtual_callables[virtual_callable_key(lineage, node.name)] = VirtualCallable(source_identity_digest(stmt_code), code)
+
+    def _register_imported_callables(
+        self, tree: ast.Module | None, virtual_lineage: dict[str, str], stmt_code: str = '',
+    ) -> None:
+        """Remember what a simulated ``from X import Y`` binds, as the live object would count.
+
+        The runtime folds a source digest into the lineage of every statement
+        that reads a callable -- a class included -- and into the key for a
+        function. After a restart ``EXPORTS = Path(...)`` was simulated before
+        the import had run again: no ``Path`` in ``user_ns``, no digest, and a
+        lineage the runtime never gave ``EXPORTS`` -- so nothing built from it
+        restored (round 23, r23s2). The digest comes from the module object
+        when it is already imported (``pathlib`` always is), else from what the
+        statement bound when it last ran (``_import_bindings``): the simulation
+        never imports anything itself.
+        """
+        if tree is None:
+            return
+        tracker = getattr(self, 'function_tracker', None)
+        for node in tree.body:
+            if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
+                continue
+            module = sys.modules.get(node.module)
+            for alias in node.names:
+                name = alias.asname or alias.name
+                lineage = virtual_lineage.get(name)
+                if not lineage or name in self.shell.user_ns:
+                    continue
+                obj = getattr(module, alias.name, None) if module is not None else None
+                if obj is not None and tracker is not None:
+                    if not callable(obj):
+                        continue
+                    try:
+                        digest = tracker.get_function_source_hash(obj)
+                    except Exception:  # noqa: BLE001 - a digest we cannot take is one we do not claim
+                        continue
+                    code = getattr(obj, '__code__', None)
+                    is_class = isinstance(obj, type)
+                else:
+                    entry = self._import_bindings(stmt_code).get(name) if stmt_code else None
+                    if not entry or entry.get('module'):
+                        continue
+                    digest, is_class, code = entry.get('digest'), bool(entry.get('is_class')), None
+                    if entry.get('code'):
+                        import base64
+                        import marshal
+                        try:
+                            code = marshal.loads(base64.b64decode(entry['code']))
+                        except (ValueError, EOFError, TypeError):
+                            code = None
+                if digest is None:
+                    continue
+                if is_class:
+                    self._imported_classes[virtual_callable_key(lineage, name)] = digest
+                elif isinstance(code, types.CodeType):
+                    self._virtual_callables.setdefault(virtual_callable_key(lineage, name), VirtualCallable(digest, code))
 
     def _virtual_callee_lineages(
         self, inputs: set[str], virtual_lineage: dict[str, str], virtual_modules: set[str],
@@ -2158,18 +2261,22 @@ class VirtualLineage:
         return {name for name in names if name not in user_ns}
 
     def _virtual_callable_hashes(self, inputs: set[str], virtual_lineage: dict[str, str]) -> dict[str, str]:
-        """``name -> source digest`` for inputs that are simulated defs, not live functions."""
-        if not self._virtual_callables:
+        """``name -> source digest`` for callable inputs the kernel does not hold yet:
+        simulated defs, and what a simulated ``from X import Y`` bound."""
+        if not self._virtual_callables and not self._imported_classes:
             return {}
         user_ns = self.shell.user_ns
         found: dict[str, str] = {}
         for name in inputs:
             if name in user_ns:
                 continue
-            virtual = self._virtual_callables.get(
-                virtual_lineage.get(name) or self.variable_lineage.get(name) or '')
+            lineage = virtual_lineage.get(name) or self.variable_lineage.get(name) or ''
+            key = virtual_callable_key(lineage, name)
+            virtual = self._virtual_callables.get(key)
             if virtual is not None:
                 found[name] = virtual.source_hash
+            elif key in self._imported_classes:
+                found[name] = self._imported_classes[key]
         return found
 
     def _compute_virtual_output_lineages(
@@ -2224,7 +2331,7 @@ class VirtualLineage:
                     file_deps.update(self.executed_file_deps[out])
         return file_deps
 
-    def _bound_modules(self, outputs: set[str], tree: ast.Module | None) -> set[str]:
+    def _bound_modules(self, outputs: set[str], tree: ast.Module | None, stmt_code: str = '') -> set[str]:
         """The names an import statement binds to a MODULE.
 
         ``import x`` always binds one. ``from m import name`` usually binds a
@@ -2232,8 +2339,11 @@ class VirtualLineage:
         value (``is_module_like``): a function goes in as an input with its
         source hash. Counting every imported name as a module gave
         ``df = clean(raw)`` a different key in the simulation, so the
-        simulation never found that statement's entry (round 21). A name not
-        bound yet keeps the old answer; the runtime has no key for it either.
+        simulation never found that statement's entry (round 21).
+
+        A name not bound yet is answered by what the statement bound when it
+        last ran (``_import_bindings``), and without that record keeps the old
+        answer: a module.
         """
         if tree is None:
             return set(outputs)
@@ -2241,9 +2351,39 @@ class VirtualLineage:
                       for node in tree.body if isinstance(node, ast.ImportFrom)
                       for alias in node.names}
         user_ns = self.shell.user_ns
-        return {out for out in outputs
-                if out not in from_bound or out not in user_ns
-                or isinstance(user_ns[out], types.ModuleType)}
+        recorded = self._import_bindings(stmt_code) if stmt_code and (from_bound - set(user_ns)) else {}
+
+        def is_module(out: str) -> bool:
+            if out in user_ns:
+                return isinstance(user_ns[out], types.ModuleType)
+            if out in recorded:
+                return bool(recorded[out].get('module'))
+            return True
+
+        return {out for out in outputs if out not in from_bound or is_module(out)}
+
+    def _import_bindings(self, stmt_code: str) -> dict[str, dict]:
+        """What *stmt_code* (a ``from`` import) bound when it last ran -- see
+        ``import_bindings_key`` -- or ``{}``. Memoized; cleared with the caches."""
+        memo = self.__dict__.setdefault('_import_bindings_memo', {})
+        if stmt_code in memo:
+            return memo[stmt_code]
+        found: dict[str, dict] = {}
+        backend = getattr(self.cash_instance, 'backend', None) if self.cash_instance else None
+        if backend is not None and hasattr(backend, 'get_metadata'):
+            from ..cache_key import import_bindings_key
+            try:
+                record = backend.get_metadata(import_bindings_key(stmt_code))
+            except (OSError, TypeError, ValueError, AttributeError):
+                record = None
+            if record and record.get('import_bindings') and record.get('code') == stmt_code:
+                found = dict(record.get('bindings') or {})
+                found = {k: v for k, v in found.items() if isinstance(v, dict)}
+                if record.get('magic') != importlib.util.MAGIC_NUMBER.hex():
+                    for entry in found.values():
+                        entry.pop('code', None)     # another interpreter's bytecode
+        memo[stmt_code] = found
+        return found
 
     def _propagate_import_lineage(
         self,
@@ -2255,7 +2395,7 @@ class VirtualLineage:
 
         Called after computing the lineage hash for an import so that
         ``compute_cache_key`` can find the module in ``variable_lineage`` and
-        include it in the module component â€” preventing cache key mismatches.
+        include it in the module component Ã¢â‚¬â€ preventing cache key mismatches.
         """
         # Every name the import binds, not only modules: an import the runtime
         # SKIPPED leaves its names without a lineage otherwise, and a statement
@@ -2307,7 +2447,7 @@ class VirtualLineage:
             # in sync (a runtime-only bump desyncs cross-cell restore).
             mutation_tree = self._get_cached_ast(stmt_code)
             if mutation_tree is not None:
-                outputs = outputs | self._mutation_receivers(stmt_code, mutation_tree)
+                outputs = outputs | self._mutation_receivers(stmt_code, mutation_tree, virtual_modules)
 
                 # Model bare-name ``del x`` as a namespace removal so the
                 # position-scoped liveness check downstream reconstructs an
@@ -2326,7 +2466,7 @@ class VirtualLineage:
             stripped = stmt_code.strip()
             is_import = stripped.startswith(('import ', 'from '))
             if is_import:
-                virtual_modules.update(self._bound_modules(outputs, mutation_tree))
+                virtual_modules.update(self._bound_modules(outputs, mutation_tree, stmt_code))
 
             # ADR-018: RNG state is a hidden lineage variable. A draw READS it
             # (fold into the key + the output-lineage inputs, so a re-seed both
@@ -2414,6 +2554,8 @@ class VirtualLineage:
                 # is still recorded as a producer of the aliased base.
                 outputs = outputs | hit_bumped
                 self._register_virtual_callable(stmt_code, mutation_tree, virtual_lineage)
+                if is_import:
+                    self._register_imported_callables(mutation_tree, virtual_lineage, stmt_code)
                 return outputs, cache_lookup_time, False, stmt_file_deps
 
             _, cache_lookup_time, files_stale, stmt_file_deps, extra_file_deps = cache_result
@@ -2445,6 +2587,8 @@ class VirtualLineage:
             # Update virtual state
             virtual_lineage.update(lineage_by_out)
             self._register_virtual_callable(stmt_code, mutation_tree, virtual_lineage)
+            if is_import:
+                self._register_imported_callables(mutation_tree, virtual_lineage, stmt_code)
 
             # Mirror the runtime derivation-alias bump: when
             # a base/frame is mutated in place, bump its live-alias derivatives.
@@ -2483,7 +2627,7 @@ class VirtualLineage:
     ) -> tuple[set, float, float] | None:
         """Validate file deps for a virtual restore.  Returns failure tuple or None.
 
-        Each entry is ``{'mtime': ..., 'size': ...}`` — see
+        Each entry is ``{'mtime': ..., 'size': ...}`` â€” see
         :meth:`_validate_file_freshness`.
         """
         for fpath, stored in file_deps.items():
@@ -2530,8 +2674,8 @@ class VirtualLineage:
 
         Only these may have an EMPTY cached value restored over a non-empty
         in-memory one. A confirmed lineage means the empty value is
-        the correct current result — a filter that legitimately matched nothing
-        — rather than a corrupt or truncated entry.
+        the correct current result â€” a filter that legitimately matched nothing
+        â€” rather than a corrupt or truncated entry.
 
         The guard condition mirrors ``_check_lineage_consistency`` exactly: when
         that check does not run (file deps present, or no expected lineages),
@@ -2640,7 +2784,7 @@ class VirtualLineage:
             lin = output_lineages.get(var) if output_lineages else None
             self._restores.record_restore(
                 var_name=var,
-                lineage_hash=lin,  # may be None — apply step skips lineage write if so
+                lineage_hash=lin,  # may be None â€” apply step skips lineage write if so
                 code=stored_code if stored_code else None,
                 code_hash=stored_hash if stored_hash else None,
                 input_lineages=dict(input_hashes) if input_hashes else None,
@@ -2663,7 +2807,7 @@ class VirtualLineage:
         and that statement would be a cache hit on DISK, then the cache
         restore will inject both the output variable and its data into
         memory.  In that case we do NOT need upstream re-execution to
-        produce the broken variable â€” the cache restore will provide it.
+        produce the broken variable Ã¢â‚¬â€ the cache restore will provide it.
 
         This avoids expensive upstream re-execution for scenarios like
         kernel restarts where heavy current-cell statements are on disk.
@@ -2701,7 +2845,7 @@ class VirtualLineage:
             # Check if this statement uses any broken variable
             uses_broken = inputs & (broken_vars - resolved_by_cache)
             if not uses_broken:
-                # Statement doesn't need any broken vars â€” skip probe
+                # Statement doesn't need any broken vars Ã¢â‚¬â€ skip probe
                 continue
 
             # Build input hashes from virtual lineage (same as simulation)
@@ -2712,7 +2856,7 @@ class VirtualLineage:
                 elif inp in self.variable_lineage:
                     input_hashes[inp] = self.variable_lineage[inp]
 
-            # Probe the cache (read-only â€” don't restore anything yet)
+            # Probe the cache (read-only Ã¢â‚¬â€ don't restore anything yet)
             try:
                 cache_key, _, _, _, _ = compute_cache_key(
                     stmt_code,
@@ -2733,7 +2877,7 @@ class VirtualLineage:
                 metadata, cached_data = self.cash_instance.backend.get(cache_key)
                 if metadata and cached_data is not None:
                     # Verify file deps are still valid (mtime + size, both
-                    # forms â€” see _validate_file_freshness for rationale).
+                    # forms Ã¢â‚¬â€ see _validate_file_freshness for rationale).
                     file_deps = metadata.get('file_dependencies', {})
                     deps_valid = self._validate_file_freshness(file_deps, self.debug, memo_key=cache_key)
 
@@ -2941,7 +3085,7 @@ class VirtualLineage:
            downstream dependents are also flagged as stale.
 
         The directly-mismatched variables themselves are NOT included in the
-        returned set â€” they are handled by the backward scan which has full
+        returned set Ã¢â‚¬â€ they are handled by the backward scan which has full
         unsaved-edit context.  Only their transitive dependents are returned.
         """
         directly_mismatched_vars = self._find_directly_mismatched_vars(

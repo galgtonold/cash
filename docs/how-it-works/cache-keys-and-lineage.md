@@ -43,13 +43,15 @@ Five details of that formula are load-bearing:
   computed the same key as before and the backend handed back the pre-reload module
   object.
 
-<!-- claim: cash/notebook/upstream/virtual_lineage.py:VirtualLineage._register_virtual_callable @22c3c6de -->
+<!-- claim: cash/notebook/upstream/virtual_lineage.py:VirtualLineage._register_virtual_callable @8ac3fb9d -->
 The function and callee components come from the live function. After a kernel
 restart, the upstream check computes the key of `summary = score(raw)` before
 `def score` has run again, so it takes both from the `def` statement in the notebook
 instead: the same text the kernel compiles, so the same digest and the same globals.
-Without them the key never matched, and every statement that called a notebook
-function was re-run after a restart, along with everything it needed.
+A name imported with `from X import Y` gets its digest from the module when it is
+already loaded, and otherwise from what that import bound when it last ran, which
+Cash records. Without them the key never matched, and every statement that called
+a notebook function was re-run after a restart, along with everything it needed.
 
 Note what is *not* in the key: **files**. A file you read does not enter the key directly. It enters the *lineage* of whatever variable the read produced (see below), and it is re-checked on every lookup by a separate freshness pass — see [knowing when to recompute](invalidation.md#what-counts-as-a-change).
 

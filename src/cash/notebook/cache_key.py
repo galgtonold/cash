@@ -58,6 +58,32 @@ def read_provenance_key(code: str) -> str:
     return "readprov:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
 
 
+def import_bindings_key(code: str) -> str:
+    """Backend key for what a ``from X import Y`` statement bound when it last ran.
+
+    After a restart the simulation meets ``from statsmodels... import
+    ExponentialSmoothing`` before the import has run again, with the module
+    not loaded: it took the name for a module, and had no source digest for
+    the class -- which the runtime folds into the lineage of every statement
+    that reads it, a ``def`` included. The def's lineage disagreed, and so did
+    every statement calling it (round 23, r23s2: a 45 s forecast re-ran).
+    """
+    return "impbind:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+def mutation_verdict_key(source_hash: str) -> str:
+    """Backend key for which receivers a bare method call was observed to mutate.
+
+    ``TrackingState.mutation_verdicts`` holds it for the session, and the
+    upstream simulation reads it to reproduce the runtime's decision. After a
+    restart it was gone, the simulation fell back to "an unknown method
+    mutates its receiver", and ``PACK.mkdir(exist_ok=True)`` bumped ``PACK``'s
+    lineage where the runtime never had -- so nothing built from ``PACK``
+    restored (round 23, r23s2).
+    """
+    return "mutverdict:" + source_hash
+
+
 def control_outcome_key(code: str) -> str:
     """Backend key for what a top-level loop left behind when it last ran.
 
@@ -85,11 +111,18 @@ class VirtualCallable(NamedTuple):
 
     Both are derivable from the ``def`` statement: the runtime compiles
     ``ast.unparse(node)``, which is also what ``inspect.getsource`` returns
-    for it. Keyed by the def's LINEAGE, not its name, so a notebook that
-    defines ``score`` twice pairs each call with the definition above it.
+    for it. Keyed by lineage AND name (:func:`virtual_callable_key`): by
+    lineage so a notebook that defines ``score`` twice pairs each call with
+    the definition above it, and by name because one ``from m import f, g``
+    gives both names the same lineage.
     """
     source_hash: str
     code: types.CodeType
+
+
+def virtual_callable_key(lineage: str, name: str) -> str:
+    """Where :class:`VirtualCallable` entries live: the binding's lineage, and its name."""
+    return f"{lineage}:{name}"
 
 
 @runtime_checkable
@@ -227,7 +260,7 @@ def virtual_namespace(
         return virtual_lineage.get(name) or variable_lineage.get(name)
 
     def code_for(name: str) -> types.CodeType | None:
-        found = callables.get(lineage_of(name) or '')
+        found = callables.get(virtual_callable_key(lineage_of(name) or '', name))
         return found.code if found is not None else None
 
     return VirtualNamespace(code_for, virtual_modules.__contains__, lineage_of)
@@ -431,7 +464,7 @@ def _process_input_var(
             debug_print_fn(f"[CACHE_KEY] Input '{var_name}' resolved to: {lineage[:16]}...")
 
     if val is None and lineage and virtual_callables and var_name not in user_ns:
-        virtual = virtual_callables.get(lineage)
+        virtual = virtual_callables.get(virtual_callable_key(lineage, var_name))
         if virtual is not None:
             func_source_hashes.append(f"{var_name}:{virtual.source_hash}")
         return

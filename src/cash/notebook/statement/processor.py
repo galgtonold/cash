@@ -2506,6 +2506,7 @@ class StatementProcessor:
                         "(observed; receiver lineage bumped; statement re-executes)"
                     )
             self.mutation_verdicts[source_hash] = set(mut_assumed) | newly_mutated
+            self._persist_mutation_verdict(source_hash, self.mutation_verdicts[source_hash])
 
         # Auto-track newly imported local modules so _capture_variables includes
         # the module source hash in the lineage on first execution.
@@ -2513,6 +2514,7 @@ class StatementProcessor:
             self.function_tracker.auto_track_local_imports(code)
         except (ImportError, AttributeError, OSError):
             logger.debug("%s Failed to auto-track local imports", _LOG_PROCESSOR)
+        self._persist_import_bindings(code, tree)
 
         captured_vars = self._lineage.capture_and_track_variables(
             self._tracking_state, outputs, inputs, code, source_hash,
@@ -2652,6 +2654,91 @@ class StatementProcessor:
             saved_time=0.0,
             code_hash=cache_key,
         )
+
+    def _persist_import_bindings(self, code: str, tree: ast.Module | None) -> None:
+        """Record, across restarts, what a ``from X import Y`` statement bound.
+
+        See :func:`~cash.notebook.cache_key.import_bindings_key`. For each name:
+        whether it is a module, and for a callable the source digest the
+        lineage and key take from it, and a plain function's code (marshal,
+        tagged with the bytecode magic) for the callee walk. Written only when
+        it changed this session; best-effort.
+        """
+        if 'import' not in code:
+            return
+        try:
+            nodes = [n for n in (tree or ast.parse(code)).body if isinstance(n, ast.ImportFrom)]
+        except SyntaxError:
+            return
+        if not nodes:
+            return
+        import base64
+        import importlib.util
+        import marshal
+        user_ns = self.shell.user_ns
+        bindings: dict[str, dict[str, Any]] = {}
+        for node in nodes:
+            for alias in node.names:
+                name = alias.asname or alias.name
+                if name == '*' or name not in user_ns:
+                    continue
+                value = user_ns[name]
+                entry: dict[str, Any] = {'module': isinstance(value, types.ModuleType)}
+                if callable(value) and not entry['module'] and self.function_tracker is not None:
+                    try:
+                        entry['digest'] = self.function_tracker.get_function_source_hash(value)
+                    except Exception:  # noqa: BLE001 - no digest is a smaller record, not an error
+                        entry['digest'] = None
+                    entry['is_class'] = isinstance(value, type)
+                    func_code = getattr(value, '__code__', None)
+                    if isinstance(func_code, types.CodeType) and not entry['is_class']:
+                        try:
+                            entry['code'] = base64.b64encode(marshal.dumps(func_code)).decode('ascii')
+                        except ValueError:
+                            pass
+                bindings[name] = entry
+        if not bindings:
+            return
+        written = self.__dict__.setdefault('_import_bindings_written', {})
+        if written.get(code) == bindings:
+            return
+        backend = self.cash_instance.backend if self.cash_instance else None
+        if backend is None:
+            return
+        from ..cache_key import import_bindings_key
+        try:
+            self._stmt_restorer.persist_metadata_only(
+                backend, import_bindings_key(code),
+                {'import_bindings': True, 'bindings': bindings, 'code': code, 'ttl': None,
+                 'magic': importlib.util.MAGIC_NUMBER.hex()},
+            )
+            written[code] = bindings
+        except (OSError, TypeError, ValueError, AttributeError):
+            logger.debug("%s import-binding persistence failed", _LOG_PROCESSOR)
+
+    def _persist_mutation_verdict(self, source_hash: str, receivers: set[str]) -> None:
+        """Record, across restarts, which receivers this bare method call mutated.
+
+        See :func:`~cash.notebook.cache_key.mutation_verdict_key`. Written only
+        when the verdict is new this session. Best-effort: without it the
+        simulation after a restart assumes the call mutates, as it always did.
+        """
+        verdict = sorted(receivers)
+        written = self.__dict__.setdefault('_mutation_verdicts_written', {})
+        if written.get(source_hash) == verdict:
+            return
+        backend = self.cash_instance.backend if self.cash_instance else None
+        if backend is None:
+            return
+        from ..cache_key import mutation_verdict_key
+        try:
+            self._stmt_restorer.persist_metadata_only(
+                backend, mutation_verdict_key(source_hash),
+                {'mutation_verdict': True, 'receivers': verdict, 'ttl': None},
+            )
+            written[source_hash] = verdict
+        except (OSError, TypeError, ValueError, AttributeError):
+            logger.debug("%s mutation-verdict persistence failed", _LOG_PROCESSOR)
 
     def _persist_read_provenance(self, code: str, accessed_files: set[str]) -> None:
         """Record, across restarts, which files this statement read.
