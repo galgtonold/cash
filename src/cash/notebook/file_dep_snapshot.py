@@ -297,10 +297,11 @@ def file_content_hash(
             # size and timestamps exactly (CAS-108's reproduction did). Where
             # the filesystem gives an identity, it is the whole key: a relative
             # read is recorded under both spellings (``FileTracker._track_path``)
-            # and was hashed once for each. Where it gives none (st_ino 0), the
-            # path stands in for it.
-            memo_key = (path if not st.st_ino else "", st.st_dev, st.st_ino, size,
-                        st.st_mtime_ns, getattr(st, "st_ctime_ns", 0))
+            # and was hashed once for each. Where it gives none (st_ino 0 --
+            # including every stat a Windows directory listing returns), the
+            # absolute path stands in for it, so both spellings still share.
+            memo_key = (os.path.normcase(os.path.abspath(path)) if not st.st_ino else "",
+                        st.st_dev, st.st_ino, size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0))
             cached = _HASH_MEMO.get(memo_key)
             if cached is not None and (
                 (cached[2] is not None and cached[2] == _HASH_EPOCH)

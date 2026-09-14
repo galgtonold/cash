@@ -755,7 +755,7 @@ both numbers.
 
 ## An edit that keeps size and timestamps, in a running process
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == 5.0, cash/notebook/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0, cash/notebook/file_dep_snapshot.py:file_content_hash @18a6d115 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == 5.0, cash/notebook/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0, cash/notebook/file_dep_snapshot.py:file_content_hash @35a8fc69 -->
 Within one process, a data file's content hash is reused for **up to five
 seconds** while the file's size, modification time and inode change time stay
 the same — and only for a file that had not been touched for ten seconds

@@ -2565,6 +2565,10 @@ class StatementProcessor:
         try:
             if any(e.kind == 'file_write' for e in statement_analysis.side_effects):
                 self._tracking_state.executed_write_stmt_codes.add(code)
+                # The upstream check's per-file answers for this cell run were
+                # taken before this write; nothing checked after it may use them.
+                from ..upstream.virtual_lineage import forget_file_state_this_run
+                forget_file_state_this_run()
                 # Persist write provenance so a post-restart isolated reader can
                 # tell an already-on-disk writer effect (skip it) from a stale
                 # one (re-fire it) — ``executed_write_stmt_codes`` is empty after

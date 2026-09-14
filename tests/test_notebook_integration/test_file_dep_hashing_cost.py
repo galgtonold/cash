@@ -132,6 +132,7 @@ def test_statements_derived_from_many_files_do_not_redigest_them(nb_runner, _cou
     lookups, digests = _counts_for(nb_runner, 4)
     assert str(N * 34) in nb_runner.get_output(4)
     assert digests <= N + 10, f"{digests} digests of {N} inherited files in one cell run"
-    # The check after the cell still stats each new entry's files (960 lookups,
-    # 2 spellings x 80 files x 6 entries); saving them no longer does (2,094).
-    assert lookups <= 16 * N, f"{lookups} lookups for {N} inherited files across 6 derived statements"
+    # The check after the cell answers each file once per run: 160 lookups (2
+    # spellings x 80 files), where each of the 6 new entries used to check all
+    # of them (960) and saving them did too (2,094).
+    assert lookups <= 4 * N, f"{lookups} lookups for {N} inherited files across 6 derived statements"

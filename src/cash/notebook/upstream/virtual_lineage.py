@@ -18,7 +18,7 @@ import os
 import re
 import time as time_module
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from ...utils import resolve_file_dep_path
@@ -38,7 +38,7 @@ from ..cacheability import (
     standalone_method_mutation_receivers,
 )
 from ..cacheability_decision import receiver_is_identity_coupled
-from ..file_dep_snapshot import file_dep_is_fresh
+from ..file_dep_snapshot import _LISTING_MIN_FILES, file_dep_is_fresh, stats_from_listings
 from ..cache_key import (
     CacheKeyContext,
     compute_cache_key,
@@ -97,6 +97,82 @@ _FORWARD_PROBE_PLACEHOLDER = object()
 #: Cache keys whose file dependencies were found fresh in the current cell run
 #: (see VirtualLineage._validate_file_freshness).
 _FRESH_ENTRY_VERDICTS: dict = {}
+
+#: Per cell run, per FILE: the (path, recorded snapshot) pairs found fresh, and
+#: each path's resolution and mtime. The same run-long trust the entry verdicts
+#: above already take, one level down: upstream entries share their files -- in
+#: r23s4 every entry depended on the same 5,222 documents, in two spellings --
+#: and each entry checked all of them again, twice (freshness, then mtime):
+#: 7-11 s before every cell of a notebook that runs in 30 s uncached.
+_FILE_STATE_THIS_RUN: dict = {}
+
+
+def _file_state_this_run() -> dict | None:
+    """This cell run's per-file memo, or None outside a run."""
+    from .. import file_dep_snapshot as _fds
+    epoch = _fds._HASH_EPOCH
+    if epoch is None:
+        return None
+    if _FILE_STATE_THIS_RUN.get("epoch") != epoch:
+        _FILE_STATE_THIS_RUN.clear()
+        _FILE_STATE_THIS_RUN.update(epoch=epoch, fresh=set(), where={})
+    return _FILE_STATE_THIS_RUN
+
+
+def forget_file_state_this_run() -> None:
+    """A statement of this cell run wrote files: answers taken before it are
+    not answers for entries checked after it."""
+    _FILE_STATE_THIS_RUN.clear()
+
+
+def _snapshot_token(stored: Any) -> Any:
+    """What identifies a recorded snapshot, cheaply."""
+    if isinstance(stored, dict):
+        return (stored.get("hash"), stored.get("size"), stored.get("mtime_ns", stored.get("mtime")),
+                stored.get("remote"), stored.get("absent"))
+    return repr(stored)
+
+
+def _locate_files(paths: Iterable[str], run: dict | None) -> dict[str, tuple[str | None, Any]]:
+    """``{path: (resolved or None, stat or None)}`` for *paths*, this run's answers first.
+
+    A crowded directory is read with one listing (``stats_from_listings``); a
+    listed path is where it was recorded. The rest go through
+    ``resolve_file_dep_path``'s relocation fallbacks, as before.
+    """
+    where = run["where"] if run is not None else {}
+    paths = list(paths)
+    todo = [p for p in paths if p not in where]
+    listed = stats_from_listings(todo) if len(todo) >= _LISTING_MIN_FILES else {}
+    found: dict[str, tuple[str | None, Any]] = {}
+    for p in todo:
+        st = listed.get(p)
+        found[p] = (p, st) if st is not None else (resolve_file_dep_path(p), None)
+    if run is not None and len(where) < 200_000:
+        where.update(found)
+    return {p: found[p] if p in found else where[p] for p in paths}
+
+
+def _stats_this_run(paths: Iterable[str]) -> dict[str, tuple[str | None, Any]]:
+    """``{path: (resolved or None, stat or None)}``, one stat per path per cell run.
+
+    The resolution is ``resolve_file_dep_path``'s (relocation fallbacks
+    included); the stat is the listing's where the directory was listed.
+    """
+    run = _file_state_this_run()
+    stats = run.setdefault("stat", {}) if run is not None else {}
+    paths = list(paths)
+    todo = [p for p in paths if p not in stats]
+    if todo:
+        for p, (resolved, listed) in _locate_files(todo, run).items():
+            st = listed
+            if st is None and resolved is not None:
+                try:
+                    st = os.stat(resolved)
+                except OSError:
+                    st = None
+            stats[p] = (resolved, st)
+    return {p: stats[p] for p in paths}
 
 
 class VirtualLineage:
@@ -420,22 +496,21 @@ class VirtualLineage:
         cached_file_deps: dict[str, float],
         idx: int,
     ) -> bool:
-        """Return True if any file dep for the cached cell at *idx* has changed."""
+        """Return True if any file dep for the cached cell at *idx* has changed.
+
+        One stat per file per cell run (``_stats_this_run``)."""
+        current = _stats_this_run(cached_file_deps)
         for fpath, stored_mtime in cached_file_deps.items():
-            try:
-                resolved = resolve_file_dep_path(fpath)
-                if resolved is None:
-                    return True
-                current_mtime = os.path.getmtime(resolved)
-                if abs(current_mtime - stored_mtime) > 0.01:
-                    if self.debug:
-                        logger.debug(
-                            "[UPSTREAM_DEBUG] File dependency changed: %s "
-                            "(cached mtime=%s, current=%s)",
-                            resolved, stored_mtime, current_mtime,
-                        )
-                    return True
-            except OSError:
+            resolved, st = current[fpath]
+            if resolved is None or st is None:
+                return True
+            if abs(st.st_mtime - stored_mtime) > 0.01:
+                if self.debug:
+                    logger.debug(
+                        "[UPSTREAM_DEBUG] File dependency changed: %s "
+                        "(cached mtime=%s, current=%s)",
+                        resolved, stored_mtime, st.st_mtime,
+                    )
                 return True
         return False
 
@@ -1680,18 +1755,25 @@ class VirtualLineage:
             if memo_key in memo["keys"]:
                 return True
         full_hash_max = _fds._full_hash_max_bytes() if hist_files else None
-        for fpath, stored in hist_files.items():
-            resolved = resolve_file_dep_path(fpath)
+        run = _file_state_this_run()
+        fresh_this_run = run["fresh"] if run is not None else set()
+        pending = {(fpath, _snapshot_token(stored)): (fpath, stored) for fpath, stored in hist_files.items()}
+        pending = {k: v for k, v in pending.items() if k not in fresh_this_run}
+        located = _locate_files([fpath for fpath, _ in pending.values()], run)
+        for token, (fpath, stored) in pending.items():
+            resolved, listed = located[fpath]
             if resolved is None:
                 if debug:
                     logger.debug("[UPSTREAM] Forward prop failed: Miss file %s", fpath)
                 return False
             # Content-authoritative freshness when the size matches.
-            is_fresh, reason = file_dep_is_fresh(resolved, stored, full_hash_max)
+            is_fresh, reason = file_dep_is_fresh(resolved, stored, full_hash_max, listed)
             if not is_fresh:
                 if debug:
                     logger.debug("[UPSTREAM] Forward prop failed: Stale file (%s) %s", reason, resolved)
                 return False
+            if run is not None:
+                fresh_this_run.add(token)
         if memo_key is not None and epoch is not None:
             memo["keys"].add(memo_key)
         return True
@@ -1778,16 +1860,12 @@ class VirtualLineage:
 
     @staticmethod
     def _stat_file_deps(hist_files: dict[str, float]) -> dict[str, float]:
-        """Stat each path in *hist_files* and return ``{path: mtime}`` for existing files."""
-        result: dict[str, float] = {}
-        for fpath in hist_files:
-            try:
-                resolved = resolve_file_dep_path(fpath)
-                if resolved is not None:
-                    result[fpath] = os.path.getmtime(resolved)
-            except OSError:
-                logger.debug("Cannot stat file dependency %s", fpath)
-        return result
+        """Stat each path in *hist_files* and return ``{path: mtime}`` for existing files.
+
+        Once per path per cell run (``_stats_this_run``), and from a directory
+        listing where many share a directory."""
+        return {p: st.st_mtime for p, (_resolved, st) in _stats_this_run(hist_files).items()
+                if st is not None}
 
     def _apply_cache_hit_propagation(
         self,
@@ -1850,14 +1928,7 @@ class VirtualLineage:
         Returns ``(file_deps_to_check, stmt_file_deps)``.
         """
         file_deps_to_check: set[str] = set(hist_files.keys())
-        stmt_file_deps: dict[str, float] = {}
-        for fpath in hist_files:
-            try:
-                resolved = resolve_file_dep_path(fpath)
-                if resolved is not None:
-                    stmt_file_deps[fpath] = os.path.getmtime(resolved)
-            except OSError:
-                logger.debug("Cannot stat historical file dependency %s", fpath)
+        stmt_file_deps = self._stat_file_deps(hist_files)
         if self.debug:
             logger.debug(
                 "[UPSTREAM] Found historical file deps (validation failed/skipped): %s",
@@ -1943,14 +2014,14 @@ class VirtualLineage:
             return ""
 
         file_components = []
+        current = _stats_this_run(file_deps_to_check)
         for file_path in sorted(file_deps_to_check):
-            if os.path.exists(file_path):
-                try:
-                    stat = os.stat(file_path)
-                    file_components.append(f"{file_path}:{stat.st_mtime}:{stat.st_size}")
-                    stmt_file_deps[file_path] = stat.st_mtime
-                except OSError:
-                    logger.debug("Cannot stat file for hash component: %s", file_path)
+            resolved, stat = current[file_path]
+            # Only a file that is where it was recorded, as before: the
+            # relocation fallbacks would put a different path's state in a key.
+            if stat is not None and resolved == file_path:
+                file_components.append(f"{file_path}:{stat.st_mtime}:{stat.st_size}")
+                stmt_file_deps[file_path] = stat.st_mtime
         if file_components:
             return ":" + hashlib.sha256(",".join(file_components).encode('utf-8')).hexdigest()
         return ""
