@@ -14,6 +14,7 @@ Arrow-backed strings (pandas 3's default) report their real size as ``nbytes``.
 """
 from __future__ import annotations
 
+import random
 import sys
 from typing import Any
 
@@ -30,17 +31,30 @@ def _holds_python_objects(dtype: Any) -> bool:
 
 
 def _sampled_bytes(values: Any) -> int:
-    """Pointers plus the sampled mean size of what they point at."""
+    """Pointers plus the sampled mean size of what they point at.
+
+    A random sample, seeded by the length so one value always gets one size.
+    Not every k-th value: data with a period -- rows cycling through a few
+    shapes -- lands a fixed stride on one of them (measured: 22% low on a
+    column repeating every 5 rows, stride 3,125).
+    """
     n = len(values)
     if not n:
         return 0
-    step = max(1, n // _OBJECT_SAMPLE)
-    sample = values[::step][:_OBJECT_SAMPLE]
+    if n <= _OBJECT_SAMPLE:
+        sample = values
+    else:
+        sample = values[sorted(random.Random(n).sample(range(n), _OBJECT_SAMPLE))]
     return 8 * n + int(sum(map(sys.getsizeof, sample)) / len(sample) * n)
 
 
 def _column_bytes(col: Any) -> int:
     """One column's data, as ``memory_usage(deep=True)`` counts it."""
+    if str(col.dtype) == "category":
+        # Codes, plus the categories counted deep: they are strings held as
+        # Python objects on pandas < 3.
+        categorical = col.array
+        return int(categorical.codes.nbytes) + _index_bytes(categorical.categories)
     if _holds_python_objects(col.dtype):
         return _sampled_bytes(col.to_numpy(dtype=object))
     return int(col.array.nbytes)

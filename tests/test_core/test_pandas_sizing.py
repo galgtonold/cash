@@ -42,11 +42,26 @@ def _cases():
         pass
 
 
-@pytest.mark.parametrize("name,obj", list(_cases()), ids=lambda v: v if isinstance(v, str) else "")
-def test_the_size_is_memory_usage_deep(name, obj):
-    usage = obj.memory_usage(deep=True)
-    exact = int(usage.sum()) if isinstance(obj, pd.DataFrame) else int(usage)
-    assert pandas_nbytes(obj) == pytest.approx(exact, rel=0.02), name
+@pytest.fixture(params=["default strings", "object strings (pandas < 3)"])
+def string_inference(request):
+    """pandas 3 stores strings in Arrow; pandas 2 -- CI's Python 3.10 jobs --
+    keeps them as Python objects, in columns and in categories alike. Both,
+    wherever the running pandas can be asked for the old behaviour."""
+    if request.param.startswith("object"):
+        try:
+            with pd.option_context("future.infer_string", False):
+                yield
+        except (KeyError, pd.errors.OptionError):
+            pytest.skip("this pandas has no future.infer_string")
+    else:
+        yield
+
+
+def test_the_size_is_memory_usage_deep(string_inference):
+    for name, obj in _cases():
+        usage = obj.memory_usage(deep=True)
+        exact = int(usage.sum()) if isinstance(obj, pd.DataFrame) else int(usage)
+        assert pandas_nbytes(obj) == pytest.approx(exact, rel=0.03), name
 
 
 def test_neither_sizing_builds_a_memory_usage_series(monkeypatch):
@@ -64,16 +79,19 @@ def test_neither_sizing_builds_a_memory_usage_series(monkeypatch):
 
 
 def test_python_objects_are_sampled_not_walked(monkeypatch):
-    """deep=True walks every value; a sample answers the order of magnitude."""
+    """deep=True walks every value; a sample answers the order of magnitude.
+
+    The column repeats every 5 rows, the shape a fixed stride aliases on."""
     looked = []
     real = sys.getsizeof
     monkeypatch.setattr(_sizing.sys, "getsizeof", lambda o: looked.append(1) or real(o))
     col = np.array([f"row-{i}" * (1 + i % 5) for i in range(200_000)], dtype=object)
-    frame = pd.DataFrame({"s": col})
+    frame = pd.DataFrame({"s": pd.Series(col, dtype=object)})
+    assert frame["s"].dtype == object
     size = pandas_nbytes(frame)
     assert len(looked) <= _sizing._OBJECT_SAMPLE
     exact = int(frame.memory_usage(deep=True).sum())
-    assert 0.8 * exact < size < 1.25 * exact
+    assert 0.85 * exact < size < 1.15 * exact
 
 
 def test_anything_else_is_not_its_business():
