@@ -233,6 +233,16 @@ class ReexecutionPlanner:
             stmts_to_run_indices, simulation_trace, restored_statements_info,
         )
 
+        # Again, now that the file-write passes are done: they PROMOTE restored
+        # statements to re-execution (a restore validated before a scheduled
+        # write), and a promoted statement's inputs were never cascaded. After
+        # a restart ``counts = build_counts(events)`` restored, was promoted
+        # behind ``OUT.mkdir()``, and ran without its ``def`` -- a NameError
+        # (replay corpus, churn).
+        stmts_to_run_indices = self._complete_inputs_produced_before(
+            stmts_to_run_indices, simulation_trace, virtual_lineage, virtual_modules,
+        )
+
         skipped_metrics = self._virtual_lineage._collect_skipped_statement_metrics(
             simulation_trace, stmts_to_run_indices, restored_statements_info,
             virtual_modules, stmt_lookup_times,
@@ -479,6 +489,8 @@ class ReexecutionPlanner:
         self,
         stmts_to_run_indices: list[int],
         simulation_trace: list,
+        virtual_lineage: dict[str, str] | None = None,
+        virtual_modules: set[str] | None = None,
     ) -> list[int]:
         """Give every scheduled statement a producer, before it, of each input
         that is not live.
@@ -491,13 +503,20 @@ class ReexecutionPlanner:
         ``NameError: glob`` and every jump downstream was refused until the
         imports were merged (round 22, r22s3 and r22s4). The shadow pass above
         cannot see it: both imports bind the same lineage.
+
+        With *virtual_lineage*, the globals the statement's callees read count
+        as inputs too (``absent_callee_globals``).
         """
         user_ns = self._virtual_lineage.shell.user_ns
         scheduled = set(stmts_to_run_indices)
         pending = sorted(scheduled)
         while pending:
             i = pending.pop(0)
-            for v in simulation_trace[i][2] or ():            # inputs
+            inputs = set(simulation_trace[i][2] or ())
+            if virtual_lineage is not None:
+                inputs |= self._virtual_lineage.absent_callee_globals(
+                    inputs, virtual_lineage, virtual_modules or set())
+            for v in sorted(inputs):
                 if v in user_ns or hasattr(builtins, v):
                     continue
                 if any(p < i and v in simulation_trace[p][1] for p in scheduled):
