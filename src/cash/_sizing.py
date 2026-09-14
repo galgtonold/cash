@@ -1,0 +1,66 @@
+"""The in-memory size of a pandas frame or series, without ``memory_usage``.
+
+``DataFrame.memory_usage()`` builds a result Series -- one per column, then
+concatenated with the index's -- and that is nearly all it costs: ~0.23 ms for
+a 200-row, five-column frame, deep or not, against ~0.05 ms to sum the column
+arrays' ``nbytes`` to the same number. Cash sized every stored frame twice, once
+for the RAM tier's cap and once for the restore-cost estimate; in a loop over a
+thousand small files that was 18% of the cell (round 23).
+
+``deep=True`` is also unbounded where it differs at all: a column of Python
+objects is walked value by value, seconds for millions of strings. Those are
+sampled here instead -- the callers want the order of magnitude, not the byte.
+Arrow-backed strings (pandas 3's default) report their real size as ``nbytes``.
+"""
+from __future__ import annotations
+
+import sys
+from typing import Any
+
+#: Values looked at per column of Python objects.
+_OBJECT_SAMPLE = 64
+
+
+def _holds_python_objects(dtype: Any) -> bool:
+    """Object dtype, or strings stored as Python objects rather than in Arrow.
+
+    By name: categorical and string dtypes report ``kind == 'O'`` too, and
+    their arrays' ``nbytes`` is already the real size."""
+    return str(dtype) == "object" or getattr(dtype, "storage", None) == "python"
+
+
+def _sampled_bytes(values: Any) -> int:
+    """Pointers plus the sampled mean size of what they point at."""
+    n = len(values)
+    if not n:
+        return 0
+    step = max(1, n // _OBJECT_SAMPLE)
+    sample = values[::step][:_OBJECT_SAMPLE]
+    return 8 * n + int(sum(map(sys.getsizeof, sample)) / len(sample) * n)
+
+
+def _column_bytes(col: Any) -> int:
+    """One column's data, as ``memory_usage(deep=True)`` counts it."""
+    if _holds_python_objects(col.dtype):
+        return _sampled_bytes(col.to_numpy(dtype=object))
+    return int(col.array.nbytes)
+
+
+def _index_bytes(index: Any) -> int:
+    """The index's own ``nbytes``: a RangeIndex is a few numbers, not n of them."""
+    if type(index).__name__ != "MultiIndex" and _holds_python_objects(index.dtype):
+        return _sampled_bytes(index.to_numpy(dtype=object))
+    return int(index.nbytes)
+
+
+def pandas_nbytes(obj: Any) -> int | None:
+    """The size of a DataFrame or Series, index included; None for anything else."""
+    kind = type(obj).__name__
+    try:
+        if kind == "DataFrame":
+            return _index_bytes(obj.index) + sum(_column_bytes(col) for _, col in obj.items())
+        if kind == "Series":
+            return _index_bytes(obj.index) + _column_bytes(obj)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return None

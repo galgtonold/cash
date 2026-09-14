@@ -26,6 +26,8 @@ import pickle
 import sys
 from typing import Any
 
+from cash._sizing import pandas_nbytes
+
 logger = logging.getLogger(__name__)
 
 _HASH_ERRORS = (TypeError, ValueError, AttributeError, pickle.PicklingError)
@@ -226,10 +228,14 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
         return sys.getsizeof(obj)
     try:
         type_name = type(obj).__name__
-        if type_name == 'DataFrame':
-            return int(obj.memory_usage(deep=True).sum())
-        if type_name == 'Series':
-            return int(obj.memory_usage(deep=True))
+        if type_name in ('DataFrame', 'Series'):
+            # ``memory_usage(deep=True)``'s number, without building its Series
+            # (see ``cash._sizing``); a column of Python objects is sampled.
+            size = pandas_nbytes(obj)
+            if size is not None:
+                return size
+            usage = obj.memory_usage(deep=True)
+            return int(usage.sum() if type_name == 'DataFrame' else usage)
         if type_name == 'ndarray':
             return int(obj.nbytes)
         if type_name in _SPARSE_CSR_CSC_TYPES:

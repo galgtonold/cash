@@ -15,6 +15,7 @@ from typing import Any
 from ._base import CacheBackend, MetadataDict
 from .serialization import Serializer
 from .. import _plain_data
+from .._sizing import pandas_nbytes
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +290,11 @@ class InMemoryBackend(CacheBackend):
         # it escaped from `%cash_on` as a ModuleNotFoundError. The annotation
         # already said `-> int`; this makes it true.
         try:
+            # A frame is sized from its column arrays: ``memory_usage`` spent
+            # ~0.23 ms building a result Series per store (``cash._sizing``).
+            frame_size = pandas_nbytes(obj)
+            if frame_size is not None:
+                return frame_size
             # Prefer nbytes for numpy/pandas
             if hasattr(obj, 'nbytes'):
                 return int(obj.nbytes)
