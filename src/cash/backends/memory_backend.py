@@ -109,15 +109,54 @@ class InMemoryBackend(CacheBackend):
                 done, copied = _plain_data.copy_plain(value)
                 if done:
                     return copied
+            if value_type is dict:
+                # A notebook entry is dicts around the values, and carries the
+                # RNG state: `random.getstate()` is a tuple of 625 ints, which
+                # deepcopy walks an int at a time -- 2.3M calls for the 2,629
+                # entries of one loop over files (round 23, r23s2). Its plain
+                # parts go into deepcopy's memo as already copied: a tuple is
+                # shared, a list of immutables gets a new list, and two names
+                # for one object still come back as one object.
+                memo: dict[int, Any] = {}
+                InMemoryBackend._premade_copies(value, memo)
+                return copy.deepcopy(value, memo)
             return copy.deepcopy(value)
         except (TypeError, pickle.PicklingError, RecursionError, AttributeError):
             logger.debug("Could not deep-copy value for key %r, returning reference", key)
             return value
 
+    @staticmethod
+    def _premade_copies(value: dict, memo: dict[int, Any], depth: int = 0) -> None:
+        """Put a copy of each plain container in *value*'s dicts into *memo*."""
+        for item in value.values():
+            item_type = type(item)
+            if item_type is dict:
+                if depth < 4:
+                    InMemoryBackend._premade_copies(item, memo, depth + 1)
+            elif (item_type is tuple or item_type is list) and id(item) not in memo:
+                if _plain_data.immutable_below(item):
+                    memo[id(item)] = item if item_type is tuple else list(item)
+
     def peek_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, without counting an access. See `BaseBackend.peek_metadata`."""
         entry = self._store.get(key)
         return dict(entry[0]) if entry is not None else None
+
+    def get_metadata(self, key: str) -> MetadataDict | None:
+        """The metadata, counted as an access the way `get` counts one.
+
+        Without this the base class answered through ``get()``, which
+        deep-copies the value only to drop it: the upstream simulation reading
+        entries' metadata spent 5.3 s of one 6 s cell copying (round 23, r23s1).
+        """
+        entry = self._store.get(key)
+        if entry is None:
+            return None
+        metadata = entry[0]
+        metadata['last_access'] = time.time()
+        metadata['access_count'] = metadata.get('access_count', 0) + 1
+        metadata.setdefault('source', self.source_label)
+        return metadata
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         if key in self._store:
@@ -235,8 +274,10 @@ class InMemoryBackend(CacheBackend):
 
         # Plain data -- lists and tuples over primitives -- is summed a level at
         # a time: the per-element recursion below took 3.5 s to size two
-        # million parsed rows being promoted into this tier (round 19).
-        if not seen or len(seen) == 1:
+        # million parsed rows being promoted into this tier (round 19). At any
+        # depth, not only the top: every notebook entry holds the RNG state, a
+        # tuple of 625 ints one dict down (round 23: 1.7M calls in one cell).
+        if type(obj) in _plain_data.SEQS:
             plain = _plain_data.size_of(obj)
             if plain is not None:
                 return plain
