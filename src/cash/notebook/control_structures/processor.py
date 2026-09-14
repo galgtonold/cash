@@ -332,9 +332,12 @@ class ControlStructureProcessor:
         before = dict(lineage)
         reads_before = dict(state.statement_file_reads)
         rng_before = _global_rng_fingerprint() if isinstance(node, ast.For) else None
-        result = self._dispatch(node, ttl, silent, parent_context, raw_cell,
-                                inherited_annotation, prev_node)
+        from ..write_observer import observe_writes
+        with observe_writes() as written:
+            result = self._dispatch(node, ttl, silent, parent_context, raw_cell,
+                                    inherited_annotation, prev_node)
         if result.success:
+            self._record_writes(code, reads, written)
             left = {v: h for v, h in lineage.items() if before.get(v) != h or v in writes}
             # A file the body read changes nothing above, so the entry lineages
             # cannot see it: keep the files behind what it left, and their state.
@@ -353,6 +356,26 @@ class ControlStructureProcessor:
             if not any(_status(m) == CacheStatus.RESTORED for m in result.metrics):
                 self._persist_outcome(node, code, reads, before, outcome, rng_before)
         return result
+
+    def _record_writes(self, code: str, reads, written: set[str]) -> None:
+        """A structure that wrote files is a writer, as the simulation sees it.
+
+        The simulation plans a loop as one statement, so that is where the
+        planner looks for a writer's provenance. Each body statement ran on
+        its own and knew its writes, but ``for kind in KINDS: save_chart(kind)``
+        as a whole had none, and after a restart it was re-fired -- with
+        everything it reads (round 23, r23s3: a 263 s sweep, to redraw four
+        charts already on disk).
+        """
+        sp = self.statement_processor
+        try:
+            written = sp.user_written_paths(written)
+            if not written:
+                return
+            sp._tracking_state.executed_write_stmt_codes.add(code)
+            sp._persist_write_provenance(code, set(reads), None, written)
+        except Exception:  # noqa: BLE001 - never let bookkeeping break the user's loop
+            logger.debug("[CONTROL] write provenance failed", exc_info=True)
 
     def _persist_outcome(self, node, code, reads, before, outcome, rng_before) -> None:
         """Keep a loop's outcome for the simulation of a later kernel.

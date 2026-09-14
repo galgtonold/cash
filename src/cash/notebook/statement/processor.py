@@ -455,6 +455,7 @@ from ..call_interception import HELPER_NAME, CallCache, wrap_eligible_calls
 from ..call_unit import call_site_is_cacheable
 from ..compiled_source import is_cash_filename, register_cell_source
 from ..function_tracker import FunctionTracker
+from ..write_observer import observe_writes
 from ..cacheability import (
     KNOWN_PURE_METHODS,
     RECEIVER_READONLY_WRITE_METHODS,
@@ -2564,8 +2565,11 @@ class StatementProcessor:
         # Record executed file-WRITING statements by code text:
         # writes have no variable edge, so the upstream simulation needs this
         # to tell an edited/new writer from one that already ran.
+        # A write the code does not spell (``save_chart(kind)``, whose savefig
+        # is in the helper) counts too: it was observed (``write_observer``).
+        written = self.user_written_paths(getattr(self, '_last_written_paths', frozenset()))
         try:
-            if any(e.kind == 'file_write' for e in statement_analysis.side_effects):
+            if written or any(e.kind == 'file_write' for e in statement_analysis.side_effects):
                 self._tracking_state.executed_write_stmt_codes.add(code)
                 # The upstream check's per-file answers for this cell run were
                 # taken before this write; nothing checked after it may use them.
@@ -2575,8 +2579,11 @@ class StatementProcessor:
                 # tell an already-on-disk writer effect (skip it) from a stale
                 # one (re-fire it) — ``executed_write_stmt_codes`` is empty after
                 # a restart, which used to force every writer to re-fire and
-                # re-run its non-idempotent side effect (round-3).
-                self._persist_write_provenance(code, inputs, tree)
+                # re-run its non-idempotent side effect (round-3). Not for a
+                # loop body statement: the simulation sees the loop, which
+                # records its own (ControlStructureProcessor).
+                if not _is_control_body(code):
+                    self._persist_write_provenance(code, inputs, tree, written)
         except AttributeError:
             pass
         if accessed_files:
@@ -2764,11 +2771,28 @@ class StatementProcessor:
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("%s read-provenance persistence failed", _LOG_PROCESSOR)
 
+    #: A writer that produced more files than this gets no provenance.
+    _MAX_PROVENANCE_FILES = 1000
+
+    def user_written_paths(self, paths) -> frozenset[str]:
+        """*paths* without cash's own storage (its cache directories)."""
+        if not paths:
+            return frozenset()
+        roots = set()
+        backend = self.cash_instance.backend if self.cash_instance else None
+        for b in [backend, *getattr(backend, 'backends', ())]:
+            root = getattr(b, 'cache_dir', None)
+            if isinstance(root, (str, os.PathLike)):
+                roots.add(os.path.normcase(os.path.abspath(os.fspath(root))) + os.sep)
+        return frozenset(p for p in paths
+                         if not any(os.path.normcase(p).startswith(r) for r in roots))
+
     def _persist_write_provenance(
         self,
         code: str,
         inputs: set[str],
         tree: ast.Module | None,
+        written: frozenset[str] | set[str] = frozenset(),
     ) -> None:
         """Record what file(s) a just-executed writer statement produced.
 
@@ -2777,24 +2801,37 @@ class StatementProcessor:
         post-restart isolated downstream reader can short-circuit an
         already-fresh writer (:meth:`ReexecutionPlanner._writer_output_already_fresh`)
         instead of re-firing a non-idempotent side effect and re-deriving stale
-        data. Best-effort and CONSERVATIVE: an unresolvable output path (f-string
-        / computed) records nothing, so that writer keeps re-firing as before.
+        data. Best-effort and CONSERVATIVE: a writer whose output paths neither
+        resolve from the code nor were *written* as it ran records nothing,
+        and keeps re-firing as before.
+
+        *written* is what the statement was seen writing (``write_observer``,
+        cash's own storage removed). A path it wrote that is gone again -- a
+        temporary file renamed into place -- is dropped; a path the code names
+        must exist. The input lineages cover the globals the statement's
+        callees read too: an edited helper is a new payload.
         """
         try:
             from cash.notebook.cacheability import statement_written_paths
+            from ..cache_key import called_function_globals
 
-            raw_paths = statement_written_paths(code, tree, self.shell.user_ns)
-            if not raw_paths:
-                return  # path(s) not statically resolvable -> stay conservative
-            paths = sorted({os.path.abspath(p) for p in raw_paths})
+            raw_paths = statement_written_paths(code, tree, self.shell.user_ns) or set()
+            named = {os.path.abspath(p) for p in raw_paths}
+            seen = {p for p in written if os.path.exists(p)} - named
+            if not named and not seen:
+                return  # nothing resolvable, nothing observed -> stay conservative
+            if len(named) + len(seen) > self._MAX_PROVENANCE_FILES:
+                return  # snapshotting would cost more than a re-fire saves
+            paths = sorted(named | seen)
             file_deps = snapshot_file_deps(set(paths))
             # Every recorded path must be readable now, else there is nothing to
             # vouch for (and a later freshness check would fail anyway).
             if any(p not in file_deps for p in paths):
                 return
+            names = set(inputs) | called_function_globals(inputs, self.shell.user_ns)
             input_lineages = {
                 v: self.variable_lineage[v]
-                for v in inputs
+                for v in names
                 if v in self.variable_lineage
             }
             record = {
@@ -3382,6 +3419,9 @@ class StatementProcessor:
         self._observed_rng_draw = set()
         self._rng_draw_newly_seen = False
         pre_rng = capture_rng_state()
+        # The files it writes (see `write_observer`); read by the post-execution
+        # step for the writer's provenance. Reset first, like the RNG draw.
+        self._last_written_paths: frozenset[str] = frozenset()
 
         try:
             # What we EXECUTE is the user's own text when we have it; what we
@@ -3403,7 +3443,7 @@ class StatementProcessor:
                 tree = None
             ctx_manager = self._make_capture_ctx(stream_output, skip_capture)
             with ctx_manager as captured:
-                with FileAccessTracker(self.shell.user_ns) as file_tracker:
+                with observe_writes() as written_paths, FileAccessTracker(self.shell.user_ns) as file_tracker:
                     if tree is None:
                         try:
                             tree = ast.parse(source)
@@ -3457,6 +3497,7 @@ class StatementProcessor:
                         result_val = None
 
                 accessed_files = file_tracker.get_accessed_files()
+                self._last_written_paths = frozenset(written_paths)
                 accessed_remote = file_tracker.get_accessed_remote_urls()
                 # Deliberately `code` (the canonical/keyed form), not `source`:
                 # the RNG observation is about what the STATEMENT does, which
@@ -3509,6 +3550,9 @@ class StatementProcessor:
         self._observed_rng_draw = set()
         self._rng_draw_newly_seen = False
         pre_rng = capture_rng_state()
+        # The files it writes (see `write_observer`); read by the post-execution
+        # step for the writer's provenance. Reset first, like the RNG draw.
+        self._last_written_paths: frozenset[str] = frozenset()
 
         try:
             # See the identical comment in `_execute_statement`: `source` is
@@ -3518,7 +3562,7 @@ class StatementProcessor:
                 tree = None
             ctx_manager = self._make_capture_ctx(stream_output, skip_capture)
             with ctx_manager as captured:
-                with FileAccessTracker(self.shell.user_ns) as file_tracker:
+                with observe_writes() as written_paths, FileAccessTracker(self.shell.user_ns) as file_tracker:
                     if tree is None:
                         try:
                             tree = ast.parse(source)
@@ -3561,6 +3605,7 @@ class StatementProcessor:
                         result_val = None
 
                 accessed_files = file_tracker.get_accessed_files()
+                self._last_written_paths = frozenset(written_paths)
                 accessed_remote = file_tracker.get_accessed_remote_urls()
                 # `code` (the canonical/keyed form), not `source` -- see the
                 # identical comment in `_execute_statement`.

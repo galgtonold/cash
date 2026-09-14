@@ -1374,22 +1374,31 @@ class ReexecutionPlanner:
                     )
                 continue
             changed = stmt_code not in executed_writes
-            inputs_changed = bool(set(inputs) & scheduled_outputs) or any(
-                _input_lineage_drifted(v) for v in inputs
-            )
+            scheduled_inputs = set(inputs) & scheduled_outputs
+            drifted = any(_input_lineage_drifted(v) for v in inputs)
+            inputs_changed = bool(scheduled_inputs) or drifted
             # ``changed`` fires for every writer after a kernel restart because
             # ``executed_write_stmt_codes`` is session-scoped and starts empty.
             # Before re-firing such a writer (which would re-run its
             # non-idempotent side effect and re-derive stale data), check its
             # persisted provenance: if the payload is unchanged AND the output
             # file is still fresh on disk, the effect is already applied — do
-            # NOT schedule it (round-3). Only short-circuit the pure
-            # ``changed`` path; a genuine input change (``inputs_changed``) must
-            # always re-run.
-            if changed and not inputs_changed and self._writer_output_already_fresh(
-                stmt_code, inputs, virtual_lineage, runtime_lineage,
-            ):
-                changed = False
+            # NOT schedule it (round-3).
+            #
+            # An input whose producer is scheduled is answered the same way. A
+            # producer is scheduled to REBUILD a value as often as to change it
+            # -- after a restart, everything the cell needs is -- and the
+            # provenance tells the two apart: the lineage the input had when
+            # the file was written against the lineage the simulation gives it
+            # now, which an upstream edit changes. Without this every writer
+            # above a restarted cell re-fired, with everything it reads
+            # (round 23, r23s3: a 263 s sweep). A lineage that drifted from the
+            # runtime's (an unsaved edit) always re-runs.
+            if ((changed or scheduled_inputs) and not drifted
+                    and self._writer_output_already_fresh(
+                        stmt_code, inputs, virtual_lineage, runtime_lineage,
+                        must_cover=scheduled_inputs)):
+                changed = inputs_changed = False
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM] File-writer effect already fresh on disk; "
@@ -1507,8 +1516,13 @@ class ReexecutionPlanner:
         inputs,
         virtual_lineage: dict | None,
         runtime_lineage: dict,
+        must_cover: set[str] | frozenset[str] = frozenset(),
     ) -> bool:
         """True when a writer's effect is already on disk and provably current.
+
+        *must_cover*: inputs the record has to have a lineage for -- ones
+        whose producer is being re-run, which it can vouch for only if it
+        knows what they were.
 
         Consulted only for a writer that looks ``changed`` purely because its
         code was never seen THIS session (the post-restart case). Returns True —
@@ -1546,6 +1560,8 @@ class ReexecutionPlanner:
         # still carry the lineage they had when it was written. A drift means
         # the file was produced from a now-stale payload.
         stored_lineages = record.get('input_lineages') or {}
+        if not set(must_cover) <= set(stored_lineages):
+            return False
         for var, stored_lineage in stored_lineages.items():
             current = (virtual_lineage or {}).get(var)
             if current is None:

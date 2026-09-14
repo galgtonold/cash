@@ -173,7 +173,7 @@ Conditionals work the same way with a different marker: `if`/`elif`/`else` and
 `# control_context:` branch hash, so only the branch that actually ran is
 cached and unused branches never pollute the key space.
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @1c131b82, cash/notebook/control_structures/processor.py:get_control_structure_type @eb40f97d -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @4fbec3b2, cash/notebook/control_structures/processor.py:get_control_structure_type @eb40f97d -->
 `while` and `with` are the exception — they are executed as a **single cacheable
 unit** through the statement processor rather than decomposed, because neither
 has an enumerable iteration space to key on.
@@ -233,6 +233,18 @@ read, down to a helper called through another helper, is unchanged. Anything
 else, and the loop runs again. The loop's own variables (`parts`, `d` in
 `for f in files: d = read(f); parts.append(d)`) are not stored anywhere a
 restart can bring them back from: a cell that reads them runs the loop.
+
+<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writer_output_already_fresh @3aded0eb, cash/notebook/write_observer.py:observe_writes @cb18a8f7 -->
+A cell that writes files (`df.to_csv(...)`, a loop saving one chart per kind)
+is not re-run after a restart just because it ran in an earlier kernel. When it
+runs, Cash records the files it actually wrote, whether the path is in the code or
+inside a helper, along with their size and modification time and the lineages
+of what it read, including the globals of the functions it calls. After a
+restart the writer is re-run only when the cell you run reads one of its files
+*and* that file is gone or changed, or one of those lineages differs: an edited
+helper, or an upstream edit to the data it writes. Writes a C extension makes
+without going through Python's `open` are not seen; such a writer is re-run as
+before.
 
 !!! tip "The other half of the story"
     Restoration is only safe because Cash can prove the cached value is still
