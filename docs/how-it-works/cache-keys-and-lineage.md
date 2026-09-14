@@ -53,6 +53,16 @@ already loaded, and otherwise from what that import bound when it last ran, whic
 Cash records. Without them the key never matched, and every statement that called
 a notebook function was re-run after a restart, along with everything it needed.
 
+<!-- claim: cash/notebook/upstream/virtual_lineage.py:VirtualLineage._propagate_import_lineage @4e7082a9 -->
+A module's lineage is the lineage of the import that bound it. Some imports run
+without Cash: the cell that turns Cash on is already running when `%cash_on`
+executes, so the imports after it in that cell run uncached. The upstream check
+gives such names the lineage of their import, in notebook order. A name imported
+again further down ends up with the later import's lineage, which is what it had
+when both imports ran through Cash. Until this was fixed it kept the first import's
+lineage: after a restart, a helper that read `sys` got a new lineage when it was
+defined again, and every call to it missed.
+
 Note what is *not* in the key: **files**. A file you read does not enter the key directly. It enters the *lineage* of whatever variable the read produced (see below), and it is re-checked on every lookup by a separate freshness pass — see [knowing when to recompute](invalidation.md#what-counts-as-a-change).
 
 ```mermaid

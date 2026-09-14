@@ -247,6 +247,9 @@ class VirtualLineage:
         #: source digest the runtime folds into a lineage (see
         #: ``_register_imported_callables``). Not in the key: it skips classes.
         self._imported_classes: dict[str, str] = {}
+        #: The lineage ``_propagate_import_lineage`` last gave each name, so a
+        #: later import of that name can replace it -- but not one the runtime set.
+        self._propagated_imports: dict[str, str] = {}
 
         # Buffered TrackingState mutations; orchestrator drains after the phase.
         self._restores = RestoreCollector()
@@ -2400,9 +2403,20 @@ class VirtualLineage:
         # Every name the import binds, not only modules: an import the runtime
         # SKIPPED leaves its names without a lineage otherwise, and a statement
         # reading one is then not cached ("input variable missing lineage").
+        # A lineage put there for an EARLIER import of the name is replaced:
+        # `import os, sys` in the cell that turns cash on (it runs uncached) and
+        # `import sys` in the next. After a restart the second never runs --
+        # `sys` is bound -- and `sys` kept the first's lineage while the session
+        # before had keyed everything with the second's. Every helper reading
+        # `sys.__stderr__` that ran again got a new lineage, and r23s3's 235 s
+        # sweep missed.
         for out in outputs:
-            if out not in self.variable_lineage and out in lineage_by_out:
+            if out not in lineage_by_out:
+                continue
+            held = self.variable_lineage.get(out)
+            if held is None or held == self._propagated_imports.get(out):
                 self._restores.record_restore(var_name=out, lineage_hash=lineage_by_out[out])
+                self._propagated_imports[out] = lineage_by_out[out]
                 if self.debug:
                     logger.debug(
                         "[LINEAGE_DEBUG] Propagated module '%s' lineage to variable_lineage: %s...",
