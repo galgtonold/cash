@@ -24,6 +24,7 @@ from cash.notebook.lineage_store import LineageStore
 __all__ = [
     "CacheKeyContext",
     "CacheKeyResult",
+    "VirtualCallable",
     "compute_cache_key",
     "write_provenance_key",
     "read_provenance_key",
@@ -55,6 +56,26 @@ def read_provenance_key(code: str) -> str:
     """
     return "readprov:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
 
+class VirtualCallable(NamedTuple):
+    """A notebook function the simulation has seen defined but the kernel has not.
+
+    After a restart the upstream simulation meets ``summary = score(raw)``
+    before ``def score`` has run again, so ``score`` is not in ``user_ns`` --
+    and the two key components that come from the live function, its source
+    digest and the globals its code reads (:func:`called_function_dependencies`),
+    went missing from the simulated key. It never matched the entry the
+    runtime wrote, so nothing that calls a notebook function restored after a
+    restart; each one was re-run, and everything it needed with it.
+
+    Both are derivable from the ``def`` statement: the runtime compiles
+    ``ast.unparse(node)``, which is also what ``inspect.getsource`` returns
+    for it. Keyed by the def's LINEAGE, not its name, so a notebook that
+    defines ``score`` twice pairs each call with the definition above it.
+    """
+    source_hash: str
+    code: types.CodeType
+
+
 @runtime_checkable
 class FunctionTrackerProtocol(Protocol):
     """Protocol for objects that can provide function source hashes."""
@@ -80,6 +101,10 @@ class CacheKeyContext:
     compute_hash_fn: Callable[[object], str] | None = None
     debug: bool = False
     debug_print_fn: Callable[..., Any] | None = None
+    #: Simulation only: lineage -> :class:`VirtualCallable`, for a function
+    #: named as an input that is not live in ``user_ns``. The runtime never
+    #: sets it, so its keys are unchanged.
+    virtual_callables: Mapping[str, VirtualCallable] | None = None
     _lineage_store: LineageStore = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -162,10 +187,41 @@ def is_module_like(var_name: str, val: object, virtual_modules: set[str]) -> boo
     return False
 
 
+class VirtualNamespace(NamedTuple):
+    """What the simulation knows about names the kernel does not hold yet.
+
+    Passed to :func:`called_function_dependencies` so a callee that is only a
+    simulated ``def`` (:class:`VirtualCallable`) is walked like a live one:
+    its code, which of the names it reads are modules, and their lineages at
+    the call's position.
+    """
+    code_for: Callable[[str], types.CodeType | None]
+    is_module: Callable[[str], bool]
+    lineage_of: Callable[[str], str | None]
+
+
+def virtual_namespace(
+    callables: Mapping[str, VirtualCallable],
+    virtual_lineage: Mapping[str, str],
+    variable_lineage: Mapping[str, str],
+    virtual_modules: set[str],
+) -> VirtualNamespace:
+    """The simulation's answers, a name's simulated lineage first."""
+    def lineage_of(name: str) -> str | None:
+        return virtual_lineage.get(name) or variable_lineage.get(name)
+
+    def code_for(name: str) -> types.CodeType | None:
+        found = callables.get(lineage_of(name) or '')
+        return found.code if found is not None else None
+
+    return VirtualNamespace(code_for, virtual_modules.__contains__, lineage_of)
+
+
 def called_function_dependencies(
     inputs: Iterable[str],
     user_ns: Mapping[str, Any],
     variable_lineage: Mapping[str, str],
+    virtual: VirtualNamespace | None = None,
 ) -> list[str]:
     """``"name:lineage"`` components for the globals a called function reaches for.
 
@@ -185,27 +241,44 @@ def called_function_dependencies(
     load-bearing half: it is what makes DELETING a callee change the key. Without
     it the call site keeps its entry and cash serves a cached value for code that
     would now raise ``NameError`` — a masked error rather than a stale value.
+
+    *virtual* (simulation only) stands in for a callee that is not in
+    ``user_ns``. When one is used, every name is answered by the simulation --
+    the runtime's key was built with all of them live, at that position.
     """
     seen: set[str] = set()
     stack = [name for name in inputs]
     referenced: set[str] = set()
     attribute_only: set[str] = set()
+    used_virtual = False
+
+    def code_of(name: str) -> types.CodeType | None:
+        nonlocal used_virtual
+        code_obj = getattr(user_ns.get(name), '__code__', None)
+        if code_obj is None and virtual is not None and name not in user_ns:
+            code_obj = virtual.code_for(name)
+            used_virtual = used_virtual or code_obj is not None
+        return code_obj
+
+    def is_module(ref: str) -> bool:
+        if isinstance(user_ns.get(ref), types.ModuleType):
+            return True
+        return virtual is not None and ref not in user_ns and virtual.is_module(ref)
 
     while stack:
         name = stack.pop()
         if name in seen:
             continue
         seen.add(name)
-        code_obj = getattr(user_ns.get(name), '__code__', None)
+        code_obj = code_of(name)
         if code_obj is None:
             continue
         attrs = _attribute_only_names(code_obj)
         for ref in code_obj.co_names:
             if ref in seen or ref in ('get_ipython', '__builtins__'):
                 continue
-            value = user_ns.get(ref)
             # Modules carry their own key component; builtins are constant.
-            if not isinstance(value, types.ModuleType) and not hasattr(builtins, ref):
+            if not is_module(ref) and not hasattr(builtins, ref):
                 referenced.add(ref)
             if ref in attrs:
                 attribute_only.add(ref)
@@ -218,22 +291,35 @@ def called_function_dependencies(
     # notebook variable shares it. ``forecast = run_forecast(...)`` keyed
     # ``forecast:ABSENT`` before its first run and ``forecast:<lineage>``
     # after, so the simulation never found the entry and re-ran it (round 21).
-    attribute_only -= {ref for name in seen
-                       for ref in _global_names(getattr(user_ns.get(name), '__code__', None))}
+    attribute_only -= {ref for name in seen for ref in _global_names(code_of(name))}
+    if used_virtual:
+        def lineage(ref: str) -> str:
+            return virtual.lineage_of(ref) or 'ABSENT'
+    else:
+        def lineage(ref: str) -> str:
+            return variable_lineage.get(ref, 'ABSENT')
     return sorted(
-        f"{ref}:{'ABSENT' if ref in attribute_only else variable_lineage.get(ref, 'ABSENT')}"
+        f"{ref}:{'ABSENT' if ref in attribute_only else lineage(ref)}"
         for ref in referenced
     )
 
 
-def called_function_globals(inputs: Iterable[str], user_ns: Mapping[str, Any]) -> set[str]:
+def called_function_globals(
+    inputs: Iterable[str],
+    user_ns: Mapping[str, Any],
+    virtual: VirtualNamespace | None = None,
+    keep_modules: bool = False,
+) -> set[str]:
     """Notebook names the functions named in *inputs* read when called.
 
     The names behind :func:`called_function_dependencies`, for a caller that
     needs the names themselves -- the re-execution planner, which must know
     that ``save_png(kind, path)`` depends on the ``scores`` its body plots.
     Transitive through called user functions, and through nested code
-    (comprehensions, inner functions). Modules and builtins are left out.
+    (comprehensions, inner functions). Builtins are left out, and modules
+    unless *keep_modules* (they are not walked into either way).
+
+    *virtual* stands in for a function not in ``user_ns`` (simulation only).
     """
     seen: set[str] = set()
     stack = list(inputs)
@@ -243,7 +329,10 @@ def called_function_globals(inputs: Iterable[str], user_ns: Mapping[str, Any]) -
         if name in seen:
             continue
         seen.add(name)
-        code_objs = [getattr(user_ns.get(name), '__code__', None)]
+        code = getattr(user_ns.get(name), '__code__', None)
+        if code is None and virtual is not None and name not in user_ns:
+            code = virtual.code_for(name)
+        code_objs = [code]
         while code_objs:
             code_obj = code_objs.pop()
             if code_obj is None:
@@ -252,7 +341,10 @@ def called_function_globals(inputs: Iterable[str], user_ns: Mapping[str, Any]) -
             for ref in _global_names(code_obj):
                 if ref in ('get_ipython', '__builtins__') or hasattr(builtins, ref):
                     continue
-                if isinstance(user_ns.get(ref), types.ModuleType):
+                if isinstance(user_ns.get(ref), types.ModuleType) or (
+                        virtual is not None and ref not in user_ns and virtual.is_module(ref)):
+                    if keep_modules:
+                        found.add(ref)
                     continue
                 found.add(ref)
                 stack.append(ref)
@@ -294,6 +386,7 @@ def _process_input_var(
     input_hashes: list[str],
     func_source_hashes: list[str],
     module_source_hashes: list[str],
+    virtual_callables: Mapping[str, VirtualCallable] | None = None,
 ) -> None:
     """Process one input variable, appending to input_hashes / func_source_hashes / module_source_hashes."""
     val = user_ns.get(var_name)
@@ -320,6 +413,12 @@ def _process_input_var(
         input_hashes.append(lineage)
         if debug:
             debug_print_fn(f"[CACHE_KEY] Input '{var_name}' resolved to: {lineage[:16]}...")
+
+    if val is None and lineage and virtual_callables and var_name not in user_ns:
+        virtual = virtual_callables.get(lineage)
+        if virtual is not None:
+            func_source_hashes.append(f"{var_name}:{virtual.source_hash}")
+        return
 
     if val is not None and callable(val) and not isinstance(val, type) and function_tracker is not None:
         try:
@@ -485,6 +584,7 @@ def compute_cache_key(
             var_name, virtual_modules, user_ns, variable_lineage, virtual_lineage,
             ctx._lineage_store, compute_hash_fn, function_tracker, debug, debug_print_fn,
             input_hashes, func_source_hashes, module_source_hashes,
+            ctx.virtual_callables,
         )
 
     # Build the final combined hash string
@@ -517,7 +617,9 @@ def compute_cache_key(
     # see, because it is built when the ``def`` runs and only looks upward.
     # Omitted entirely when absent, so a statement that calls no user-defined
     # function keeps a byte-identical key.
-    callee_deps = called_function_dependencies(sorted_inputs, user_ns, variable_lineage)
+    virtual = (virtual_namespace(ctx.virtual_callables, virtual_lineage, variable_lineage, virtual_modules)
+               if ctx.virtual_callables else None)
+    callee_deps = called_function_dependencies(sorted_inputs, user_ns, variable_lineage, virtual)
     callee_component = f":callees:{':'.join(callee_deps)}" if callee_deps else ""
 
     combined_hash_str = (

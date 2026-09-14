@@ -39,11 +39,15 @@ from ..cacheability import (
 )
 from ..cacheability_decision import receiver_is_identity_coupled
 from ..file_dep_snapshot import _LISTING_MIN_FILES, file_dep_is_fresh, stats_from_listings
+from ...source_norm import source_identity_digest
 from ..cache_key import (
     CacheKeyContext,
+    VirtualCallable,
+    called_function_dependencies,
     compute_cache_key,
     is_cash_instrumentation,
     is_module_like,
+    virtual_namespace,
 )
 from ..cache_status import CacheStatus
 from ..control_structures import extract_target_names, get_control_structure_type, is_control_structure
@@ -92,6 +96,28 @@ def _normalize_stmt(s: str) -> str:
 # _check_input_lineage_skip sees the variable as "present".  Replaced by
 # the real cached value when _restore_from_cache runs.
 _FORWARD_PROBE_PLACEHOLDER = object()
+
+
+class _InputHashes(dict):
+    """A trace entry's input lineages, and those of its not-yet-defined callees' globals.
+
+    ``input_hashes`` names the statement's own inputs, and other code copies
+    it as such (a restore records it as the variable's input lineages). The
+    globals a simulated-only callee reads (see ``VirtualCallable``) belong in
+    the key, at the statement's position, but nowhere else -- so they ride
+    alongside, read back only when the key is rebuilt from the trace.
+    """
+    __slots__ = ("callee_lineages",)
+
+    def __init__(self, own: dict[str, str], callee_lineages: dict[str, str]) -> None:
+        super().__init__(own)
+        self.callee_lineages = callee_lineages
+
+
+def _key_lineages(input_hashes: dict[str, str]) -> dict[str, str]:
+    """*input_hashes* plus any callee lineages riding on it (``_InputHashes``)."""
+    callee = getattr(input_hashes, "callee_lineages", None)
+    return {**callee, **input_hashes} if callee else input_hashes
 
 
 #: Cache keys whose file dependencies were found fresh in the current cell run
@@ -211,6 +237,9 @@ class VirtualLineage:
         self._simulation_cache: list[_SimulationCacheEntry] = []
         self._simulation_cell_hashes: dict[int, str] = {}
         self._cell_id_to_last_index: dict[str, int] = {}
+        #: Simulated ``def``s by lineage (``VirtualCallable``). Content-
+        #: addressed, so an entry never goes stale; the cap bounds memory.
+        self._virtual_callables: dict[str, VirtualCallable] = {}
 
         # Buffered TrackingState mutations; orchestrator drains after the phase.
         self._restores = RestoreCollector()
@@ -874,9 +903,10 @@ class VirtualLineage:
                     variable_lineage=self.variable_lineage,
                     user_ns=self.shell.user_ns,
                     function_tracker=self.function_tracker if hasattr(self, 'function_tracker') else None,
-                    virtual_lineage=input_hashes,
+                    virtual_lineage=_key_lineages(input_hashes),
                     virtual_modules=virtual_modules,
                     compute_hash_fn=self.compute_hash_fn,
+                    virtual_callables=self._virtual_callables,
                 ),
                 outputs=outputs,
             )
@@ -1267,6 +1297,9 @@ class VirtualLineage:
                 input_hashes[inp] = virtual_lineage[inp]
             elif inp in self.variable_lineage:
                 input_hashes[inp] = self.variable_lineage[inp]
+        callee_lineages = self._virtual_callee_lineages(inputs, virtual_lineage, virtual_modules)
+        if callee_lineages:
+            input_hashes = _InputHashes(input_hashes, callee_lineages)
 
         outputs, lookup_time, files_stale, stmt_file_deps = self._update_virtual_lineage(
             stmt_code, virtual_lineage, virtual_modules, occurrence_index=occurrence_index,
@@ -2026,6 +2059,86 @@ class VirtualLineage:
             return ":" + hashlib.sha256(",".join(file_components).encode('utf-8')).hexdigest()
         return ""
 
+    #: See ``_virtual_callables``.
+    _VIRTUAL_CALLABLES_MAX = 4096
+
+    def _register_virtual_callable(
+        self, stmt_code: str, tree: ast.Module | None, virtual_lineage: dict[str, str],
+    ) -> None:
+        """Remember a simulated ``def`` under its lineage (see ``VirtualCallable``).
+
+        *stmt_code* is ``ast.unparse`` of the def, which is also the text the
+        runtime compiles it from and ``inspect.getsource`` returns for it, so
+        its digest and code are the live function's. A decorated def is left
+        out: the name is bound to whatever the decorator returns, whose source
+        and code are not the def's.
+        """
+        if tree is None or len(tree.body) != 1:
+            return
+        node = tree.body[0]
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.decorator_list:
+            return
+        lineage = virtual_lineage.get(node.name)
+        if not lineage or lineage in self._virtual_callables:
+            return
+        try:
+            module = compile(stmt_code, '<cash-simulated>', 'exec', dont_inherit=True)
+        except (SyntaxError, ValueError):
+            return
+        code = next((c for c in module.co_consts
+                     if isinstance(c, types.CodeType) and c.co_name == node.name), None)
+        if code is None:
+            return
+        if len(self._virtual_callables) >= self._VIRTUAL_CALLABLES_MAX:
+            self._virtual_callables.clear()
+        self._virtual_callables[lineage] = VirtualCallable(source_identity_digest(stmt_code), code)
+
+    def _virtual_callee_lineages(
+        self, inputs: set[str], virtual_lineage: dict[str, str], virtual_modules: set[str],
+    ) -> dict[str, str] | None:
+        """Lineages, here, of the globals read by callees that exist only as simulated defs."""
+        user_ns = self.shell.user_ns
+        if not self._virtual_callables or all(name in user_ns for name in inputs):
+            return None
+        virtual = virtual_namespace(self._virtual_callables, virtual_lineage,
+                                    self.variable_lineage, virtual_modules)
+        deps = called_function_dependencies(sorted(inputs), user_ns, self.variable_lineage, virtual)
+        found = dict(dep.split(':', 1) for dep in deps)
+        return {name: lin for name, lin in found.items() if lin != 'ABSENT'} or None
+
+    def absent_callee_globals(
+        self, inputs: set[str], virtual_lineage: dict[str, str], virtual_modules: set[str],
+    ) -> set[str]:
+        """Names the callees in *inputs* read that the kernel does not hold.
+
+        A statement re-run to rebuild a value needs them bound, and its own
+        inputs do not name them: after a restart ``summary = score(raw)`` was
+        re-run with ``score``'s ``OFFSET`` never rebuilt -- a NameError, where
+        the cell had run fine. Modules included: the def's cell imported them.
+        """
+        from ..cache_key import called_function_globals
+        user_ns = self.shell.user_ns
+        virtual = (virtual_namespace(self._virtual_callables, virtual_lineage,
+                                     self.variable_lineage, virtual_modules)
+                   if self._virtual_callables else None)
+        names = called_function_globals(inputs, user_ns, virtual, keep_modules=True)
+        return {name for name in names if name not in user_ns}
+
+    def _virtual_callable_hashes(self, inputs: set[str], virtual_lineage: dict[str, str]) -> dict[str, str]:
+        """``name -> source digest`` for inputs that are simulated defs, not live functions."""
+        if not self._virtual_callables:
+            return {}
+        user_ns = self.shell.user_ns
+        found: dict[str, str] = {}
+        for name in inputs:
+            if name in user_ns:
+                continue
+            virtual = self._virtual_callables.get(
+                virtual_lineage.get(name) or self.variable_lineage.get(name) or '')
+            if virtual is not None:
+                found[name] = virtual.source_hash
+        return found
+
     def _compute_virtual_output_lineages(
         self,
         source_hash: str,
@@ -2035,6 +2148,7 @@ class VirtualLineage:
         outputs: set[str],
         stmt_code: str,
         tree: ast.Module | None = None,
+        virtual_lineage: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """The lineage of each output of a simulated statement.
 
@@ -2044,11 +2158,19 @@ class VirtualLineage:
         gave every output one hash and knew only ``import X`` -- so every name
         from ``from helpers import clean`` disagreed with the runtime, and so
         did everything computed from it (round 21).
+
+        A callee that is only a simulated def contributes its digest as the
+        live function would (``_virtual_callable_hashes``).
         """
         function_tracker = getattr(self, 'function_tracker', None)
         user_ns = self.shell.user_ns
         try:
             func_component = callable_source_component(function_tracker, inputs, user_ns)
+            virtual = self._virtual_callable_hashes(inputs, virtual_lineage or {})
+            if virtual and function_tracker is not None:
+                hashes = function_tracker.get_callable_source_hashes(inputs, user_ns)
+                hashes.update(virtual)
+                func_component = ":" + ":".join(f"{k}:{v}" for k, v in sorted(hashes.items()))
         except (TypeError, ValueError, AttributeError):
             logger.debug("[UPSTREAM] Failed to compute function source hashes for capture")
             func_component = ""
@@ -2195,6 +2317,7 @@ class VirtualLineage:
                         virtual_lineage=virtual_lineage,
                         virtual_modules=virtual_modules,
                         compute_hash_fn=self.compute_hash_fn,
+                        virtual_callables=self._virtual_callables,
                     ),
                     outputs=outputs,
                     occurrence_index=occurrence_index,
@@ -2233,6 +2356,7 @@ class VirtualLineage:
                     compute_hash_fn=self.compute_hash_fn,
                     debug=self.debug,
                     debug_print_fn=print,
+                    virtual_callables=self._virtual_callables,
                 ),
                 outputs=outputs,
                 occurrence_index=occurrence_index,
@@ -2256,6 +2380,7 @@ class VirtualLineage:
                 # Union derivation-bumped vars so this cached mutation statement
                 # is still recorded as a producer of the aliased base.
                 outputs = outputs | hit_bumped
+                self._register_virtual_callable(stmt_code, mutation_tree, virtual_lineage)
                 return outputs, cache_lookup_time, False, stmt_file_deps
 
             _, cache_lookup_time, files_stale, stmt_file_deps, extra_file_deps = cache_result
@@ -2274,7 +2399,7 @@ class VirtualLineage:
             # Compute output lineage hashes
             lineage_by_out = self._compute_virtual_output_lineages(
                 source_hash, input_lineages_all, file_hash_component, inputs, outputs,
-                stmt_code, mutation_tree,
+                stmt_code, mutation_tree, virtual_lineage,
             )
 
             if self.debug and ('sort' in stmt_code or 'VolAdj' in stmt_code or 'read_csv' in stmt_code or 'exists' in stmt_code):
@@ -2286,6 +2411,7 @@ class VirtualLineage:
 
             # Update virtual state
             virtual_lineage.update(lineage_by_out)
+            self._register_virtual_callable(stmt_code, mutation_tree, virtual_lineage)
 
             # Mirror the runtime derivation-alias bump: when
             # a base/frame is mutated in place, bump its live-alias derivatives.
@@ -2647,11 +2773,12 @@ class VirtualLineage:
                     variable_lineage=self.variable_lineage,
                     user_ns=self.shell.user_ns,
                     function_tracker=self.function_tracker if hasattr(self, 'function_tracker') else None,
-                    virtual_lineage=input_hashes,
+                    virtual_lineage=_key_lineages(input_hashes),
                     virtual_modules=virtual_modules,
                     compute_hash_fn=self.compute_hash_fn,
                     debug=self.debug,
                     debug_print_fn=print,
+                    virtual_callables=self._virtual_callables,
                 ),
                 outputs=outputs,
             )

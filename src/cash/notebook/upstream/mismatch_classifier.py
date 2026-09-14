@@ -899,7 +899,11 @@ class MismatchClassifier:
         """Schedule *stmt* for re-execution and cascade its unresolved inputs."""
         stmts_to_run_indices.append(i)
         stmt_inputs, _ = CodeAnalyzer.analyze_code_block(stmt_code)
-        for inp in stmt_inputs:
+        # A callee's globals are inputs too, once the statement runs; the ones
+        # missing from the kernel must be rebuilt first (absent_callee_globals).
+        callee_names = self._virtual_lineage.absent_callee_globals(
+            set(stmt_inputs), virtual_lineage, virtual_modules)
+        for inp in [*stmt_inputs, *sorted(callee_names - set(stmt_inputs))]:
             if inp in resolved_vars or inp in needed_vars:
                 continue
             if self._should_add_input_to_needed(

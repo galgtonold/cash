@@ -6,7 +6,7 @@ Every cached result is stored under a key that captures exactly what was compute
 
 A cache key is a deterministic fingerprint of a computation: the same source code over the same inputs always produces the same key, so a hit means the result can be reused without re-executing anything. Any relevant change — edited code, a recomputed upstream variable, a changed helper function — produces a different key and causes a miss.
 
-<!-- claim: cash/notebook/cache_key.py:compute_cache_key @4ae41646 -->
+<!-- claim: cash/notebook/cache_key.py:compute_cache_key @271a6245 -->
 The statement-level key is built by `compute_cache_key()` in `cash.notebook.cache_key`:
 
 ```
@@ -42,6 +42,14 @@ Five details of that formula are load-bearing:
   source hash goes in too. Without it, re-running `import mymod` after a reload
   computed the same key as before and the backend handed back the pre-reload module
   object.
+
+<!-- claim: cash/notebook/upstream/virtual_lineage.py:VirtualLineage._register_virtual_callable @22c3c6de -->
+The function and callee components come from the live function. After a kernel
+restart, the upstream check computes the key of `summary = score(raw)` before
+`def score` has run again, so it takes both from the `def` statement in the notebook
+instead: the same text the kernel compiles, so the same digest and the same globals.
+Without them the key never matched, and every statement that called a notebook
+function was re-run after a restart, along with everything it needed.
 
 Note what is *not* in the key: **files**. A file you read does not enter the key directly. It enters the *lineage* of whatever variable the read produced (see below), and it is re-checked on every lookup by a separate freshness pass — see [knowing when to recompute](invalidation.md#what-counts-as-a-change).
 
