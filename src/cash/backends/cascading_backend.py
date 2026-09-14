@@ -67,6 +67,17 @@ class _MultiBackendMixin:
                     entries.append(entry)
         return entries
 
+    def entry_count(self) -> int:
+        """The largest tier's count.
+
+        The tiers overlap, and only `list_entries` can tell by how much: it
+        reads every entry's key. The notebook writes a metadata record to the
+        persistent tier for every statement it stores, RAM-only values
+        included, so there the largest tier holds them all; a RAM-only entry
+        from a decorated function is the one thing this can miss.
+        """
+        return max((b.entry_count() for b in self.backends), default=0)
+
     def tier_labels(self) -> list[str]:
         """Flatten child tier labels in configured order.
 

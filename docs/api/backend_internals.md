@@ -1,6 +1,6 @@
 # Backend internals
 
-<!-- claim: cash/backends/_base.py:CacheBackend @b613672d broad="the page documents the ABC as a whole contract" -->
+<!-- claim: cash/backends/_base.py:CacheBackend @22c1a1d6 broad="the page documents the ABC as a whole contract" -->
 This page is for users **writing their own backend** or contributing
 fixes to the bundled ones. End-users picking a backend should go to
 [Backends](backends.md) instead.
@@ -35,6 +35,11 @@ override `peek_metadata(key)` to return the metadata without recording one:
 `explain()` uses it, and is documented to change nothing. The default falls
 back to `get_metadata()`, whose own default is a full `get()`.
 
+If your backend can count its entries without reading them, override
+`entry_count()`. `%cash_on` prints that number every time it runs, and the
+default counts `list_entries()`, which reads every entry's metadata — on a
+file cache of a few thousand entries that took 22.7 s on Windows.
+
 If your backend touches the network or disk, also pull in
 `PendingWrites` (below) so `set()` can return fast and the real I/O
 happens off the calling thread.
@@ -53,6 +58,7 @@ disk for DataFrames), see the `Serializer` hierarchy and the
         - delete
         - clear
         - list_entries
+        - entry_count
         - cleanup_expired
         - get_metadata
         - tier_labels

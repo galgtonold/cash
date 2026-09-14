@@ -509,11 +509,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # back by nbconvert / a headless agent, whose console may be cp1252.
         print(safe_text(f"Cash enabled.{ttl_msg} Your computations will be cached automatically."))
         print("   Run %cash_help for available commands.")
-        # Report existing cache state if available
+        # Report existing cache state if available. Counted, not listed: a
+        # listing reads every entry's metadata, and every %cash_on paid that --
+        # re-running r23s2's first cell took 22.7 s.
         try:
-            entries = self._cash_instance.backend.list_entries()
-            if entries:
-                print(f"   Found existing cache with {len(entries)} entries.")
+            count = self._cash_instance.backend.entry_count()
+            if count:
+                print(f"   Found existing cache with {count} entries.")
         except (OSError, AttributeError, TypeError):
             pass
         # One-time hint: with no live reader, cash reads upstream cells from the

@@ -781,6 +781,16 @@ class CacheBackend(ABC):
         """List all cache entries with their metadata."""
         ...
 
+    def entry_count(self) -> int:
+        """How many entries this backend holds, as cheaply as it can tell.
+
+        The default counts `list_entries`, which reads every entry's
+        metadata. Backends that can count without that override it: on a
+        file cache of a few thousand entries the read is seconds to tens of
+        seconds on Windows, and ``%cash_on`` wants only the number.
+        """
+        return len(self.list_entries())
+
     def cleanup_expired(self, is_expired: Callable[[dict[str, Any]], bool]) -> int:
         """Iterate over all items and delete those where ``is_expired(metadata)`` is True.
 

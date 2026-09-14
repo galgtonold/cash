@@ -1670,6 +1670,19 @@ class FileBackend(CacheBackend):
                 logger.debug("Skipping unreadable entry %s in list_entries", path, exc_info=True)
         return entries
 
+    def entry_count(self) -> int:
+        """Entry files in the cache directory: one listing, no entry opened.
+
+        Counts an unreadable entry that `list_entries` would skip; the number
+        is for display, and reading every header to rule those out is the
+        cost this method exists to avoid (``%cash_on``: 22.7 s on r23s2).
+        """
+        self._ensure_initialized()
+        if self._unusable:
+            return 0
+        self._writes.wait_all()
+        return len(_glob_untracked(os.path.join(self.cache_dir, _ENTRY_GLOB)))
+
     def cleanup_expired(self, is_expired: Callable[[dict[str, Any]], bool]) -> int:
         self._ensure_initialized()
         if self._unusable:

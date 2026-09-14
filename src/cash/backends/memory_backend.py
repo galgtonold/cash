@@ -266,6 +266,9 @@ class InMemoryBackend(CacheBackend):
     def list_entries(self) -> list[dict[str, Any]]:
         return [meta for meta, _ in self._store.values()]
 
+    def entry_count(self) -> int:
+        return len(self._store)
+
     def cleanup_expired(self, is_expired: Callable[[dict[str, Any]], bool]) -> int:
         keys_to_delete = []
         for key, (meta, _) in self._store.items():
