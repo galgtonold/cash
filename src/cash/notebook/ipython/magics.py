@@ -1433,11 +1433,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         # Analytics events are intentionally NOT flushed here, per cell.
         # The AnalyticsManager buffers events and flushes on its own policy —
-        # every ~50 events, on any stats query, and via an atexit hook on a
-        # clean shutdown.  Forcing a SQLite connect+commit on *every* cell
-        # fsync'd the DB per cell and dominated per-cell wall time (~12 ms/cell,
-        # measured), defeating the very batch buffer it was draining.
-        # Trade-off: on a hard kernel kill the last < 50 buffered analytics
+        # every ``_flush_threshold`` events, on any stats query, and via an
+        # atexit hook on a clean shutdown.  Forcing a SQLite connect+commit on
+        # *every* cell fsync'd the DB per cell and dominated per-cell wall time
+        # (~12 ms/cell, measured), defeating the very batch buffer it was
+        # draining. Trade-off: on a hard kernel kill the buffered analytics
         # events may be lost — acceptable because analytics is best-effort
         # observability, not correctness.
 

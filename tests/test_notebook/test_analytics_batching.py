@@ -1,12 +1,12 @@
 """Analytics batching guards (CAS-149).
 
 The per-cell finaliser used to call ``analytics_manager.flush()`` on *every*
-cell, force-draining a buffer explicitly designed to batch 50 events. Each
+cell, force-draining a buffer explicitly designed to batch events. Each
 flush is a SQLite ``connect + commit`` (an fsync), which dominated per-cell
 wall time (~12 ms/cell measured). These tests pin the fix:
 
 * the per-cell path must NOT commit-per-cell — events stay buffered until the
-  50-event threshold, a stats query, or a clean-shutdown drain; and
+  batch threshold, a stats query, or a clean-shutdown drain; and
 * buffered events are NOT lost on the happy path — a normal ``flush()`` (and
   the ``atexit`` shutdown drain) persists them.
 
@@ -69,7 +69,7 @@ class TestPerCellDoesNotFsync:
         am = AnalyticsManager(db_path=str(tmp_path / "analytics.db"))
         magics._statement_processor.analytics_manager = am
 
-        n_cells = 10  # well under the 50-event flush threshold
+        n_cells = 10  # well under the flush threshold
         for i in range(n_cells):
             magics.cash("", f"batch_var_{i} = {i} + 1")
 
@@ -93,7 +93,7 @@ class TestBufferPolicy:
 
     def test_events_buffered_below_threshold_not_persisted(self, tmp_path):
         am = AnalyticsManager(db_path=str(tmp_path / "a.db"))
-        for _ in range(5):  # < 50
+        for _ in range(5):  # < the flush threshold
             am.record_event("MISS", 0.01)
         assert len(am._event_buffer) == 5
         # Not yet committed to disk.
@@ -101,7 +101,7 @@ class TestBufferPolicy:
 
     def test_threshold_triggers_automatic_flush(self, tmp_path):
         am = AnalyticsManager(db_path=str(tmp_path / "a.db"))
-        for _ in range(am._flush_threshold):  # exactly 50
+        for _ in range(am._flush_threshold):  # exactly the threshold
             am.record_event("HIT", 0.01, saved_time=0.1)
         # Reaching the threshold drains the buffer to disk.
         assert am._event_buffer == []

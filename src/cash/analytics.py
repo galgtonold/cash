@@ -82,7 +82,10 @@ class AnalyticsManager:
 
         self.session_id = str(uuid.uuid4())
         self._event_buffer: list[tuple] = []
-        self._flush_threshold = 50  # Flush every 50 events
+        # Events per commit. A commit is an fsync, ~12 ms on Windows; at 50 a
+        # loop's 3,000 statements committed 60 times (round 23). What a hard
+        # kill can lose is this many telemetry rows, never a cached result.
+        self._flush_threshold = 1000
         # Set True only if the db cannot be created even after a recreate
         # (read-only dir, disk full). Analytics then no-ops for the session
         # rather than retrying a doomed connect on every event.
