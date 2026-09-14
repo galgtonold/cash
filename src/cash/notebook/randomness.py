@@ -3,10 +3,12 @@ from __future__ import annotations
 """Detection of unseeded random calls that compromise cache reproducibility."""
 
 import ast
+import functools
 import secrets
 import hashlib
 import inspect
 import logging
+import re
 import types
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -1574,6 +1576,43 @@ def restore_object_rng_states(
             logger.debug("[RANDOMNESS] Failed to restore RNG state for %r: %s", name, e)
 
 
+#: A loop body statement's source is prefixed per iteration with a comment
+#: naming the iteration; a comment changes nothing these scans report.
+_CONTROL_MARKER_LINE = re.compile(r"\A(?:# (?:__iteration_context__|control_context):[^\n]*\n)+")
+
+
+@functools.lru_cache(maxsize=1024)
+def _scan_rng_modules(code: str) -> tuple[frozenset, frozenset, frozenset, frozenset]:
+    """``(drawn, seeded, entropy-reseeded, used)`` modules for *code*, parsed once.
+
+    Four helpers below each parsed and walked the same source, and a statement
+    asks them ten times between its key, its execution and its store: 40,414
+    parses for the 3,016 statements of a loop over 1,000 files (round 23). The
+    visitor reads nothing but the tree, so its answer is a function of the text.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return frozenset(), frozenset(), frozenset(), frozenset()
+    visitor = RandomnessVisitor()
+    visitor.visit(tree)
+    drawn = frozenset(call.module for call in visitor.random_calls)
+    seeded = frozenset(module for module, _ in visitor.seed_calls)
+    entropy = frozenset(module for module, _ in visitor.entropy_seed_calls)
+    # A draw off a carrier bound in this same source still uses the module's
+    # RNG machinery, so the module belongs in the used set.  Carriers bound in
+    # an *earlier* statement are not visible here — this scan is deliberately
+    # stateless, and the per-object channel (``capture_object_rng_states``) is
+    # what replays those.
+    carriers = frozenset(_CARRIER_MODULES.get(kind, kind)
+                         for kind, _seeded in visitor.carrier_assigns.values())
+    return drawn, seeded, entropy, drawn | seeded | carriers
+
+
+def _rng_scan(code: str) -> tuple[frozenset, frozenset, frozenset, frozenset]:
+    return _scan_rng_modules(_CONTROL_MARKER_LINE.sub("", code))
+
+
 def get_used_rng_modules(code: str) -> set[str]:
     """
     Analyze code to determine which RNG modules are used.
@@ -1584,28 +1623,7 @@ def get_used_rng_modules(code: str) -> set[str]:
     Returns:
         Set of module names that have RNG calls (e.g., {'random', 'numpy.random'})
     """
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return set()
-
-    visitor = RandomnessVisitor()
-    visitor.visit(tree)
-
-    modules = set()
-    for call in visitor.random_calls:
-        modules.add(call.module)
-    for module, _ in visitor.seed_calls:
-        modules.add(module)
-    # A draw off a carrier bound in this same source still uses the module's
-    # RNG machinery, so the module belongs in the set.  Carriers bound in an
-    # *earlier* statement are not visible here — this helper is deliberately
-    # stateless, and the per-object channel (``capture_object_rng_states``) is
-    # what replays those.
-    for _name, (kind, _seeded) in visitor.carrier_assigns.items():
-        modules.add(_CARRIER_MODULES.get(kind, kind))
-
-    return modules
+    return set(_rng_scan(code)[3])
 
 
 def get_drawing_rng_modules(code: str) -> set[str]:
@@ -1615,13 +1633,7 @@ def get_drawing_rng_modules(code: str) -> set[str]:
     the target of a bare ``np.random.seed(0)``. Only a draw's result depends on
     the RNG state, so only a draw's cache key should.
     """
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return set()
-    visitor = RandomnessVisitor()
-    visitor.visit(tree)
-    return {call.module for call in visitor.random_calls}
+    return set(_rng_scan(code)[0])
 
 
 def _is_entropy_seed(node: ast.Call) -> bool:
@@ -1653,13 +1665,7 @@ def get_entropy_reseed_modules(code: str) -> set[str]:
     served from cache, so the printed metric described a model that had already
     been replaced in the kernel.
     """
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return set()
-    visitor = RandomnessVisitor()
-    visitor.visit(tree)
-    return {module for module, _lineno in visitor.entropy_seed_calls}
+    return set(_rng_scan(code)[2])
 
 
 def get_seeding_rng_modules(code: str) -> set[str]:
@@ -1669,13 +1675,7 @@ def get_seeding_rng_modules(code: str) -> set[str]:
     opens a new "seed epoch" for its module; every later draw from that module
     is keyed on the epoch, so re-seeding invalidates the draws that follow it.
     """
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return set()
-    visitor = RandomnessVisitor()
-    visitor.visit(tree)
-    return {module for module, _lineno in visitor.seed_calls}
+    return set(_rng_scan(code)[1])
 
 
 # -----------------------------------------------------------------------------
