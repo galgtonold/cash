@@ -26,6 +26,7 @@ __all__ = [
     "CacheKeyResult",
     "VirtualCallable",
     "compute_cache_key",
+    "control_outcome_key",
     "write_provenance_key",
     "read_provenance_key",
 ]
@@ -55,6 +56,21 @@ def read_provenance_key(code: str) -> str:
     neither).
     """
     return "readprov:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+def control_outcome_key(code: str) -> str:
+    """Backend key for what a top-level loop left behind when it last ran.
+
+    ``TrackingState.control_outcomes`` holds it for the session: the lineages
+    a loop left, which the runtime derives from the VALUES it built and the
+    simulation cannot derive from code. After a restart that record was
+    gone, the simulation's loop lineages disagreed with the entries the
+    runtime wrote, and nothing downstream of a loop restored (round 23,
+    r23s2: every per-file read of a 1,312-file folder, again). Written only
+    for a loop that cannot have done anything else (see
+    ``ControlStructureProcessor._persistable_callees``).
+    """
+    return "ctrlout:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
 
 class VirtualCallable(NamedTuple):
     """A notebook function the simulation has seen defined but the kernel has not.

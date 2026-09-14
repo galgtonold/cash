@@ -33,6 +33,9 @@ import ast
 import contextlib
 import hashlib
 import logging
+import random
+import sys
+import types
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -46,6 +49,33 @@ if TYPE_CHECKING:
 __all__ = ["ControlStructureResult", "ControlStructureProcessor", "is_control_structure", "get_control_structure_type", "contains_break_or_continue", "contains_top_level_await", "extract_target_names", "bind_target_values", "build_iteration_context", "compute_context_hash"]
 
 logger = logging.getLogger(__name__)
+
+
+def _global_rng_fingerprint() -> tuple:
+    """The state of ``random``'s and numpy's global generators, comparable with ``==``."""
+    np = sys.modules.get('numpy')
+    numpy_state: tuple | None = None
+    if np is not None:
+        try:
+            kind, keys, pos, has_gauss, gauss = np.random.get_state()
+            numpy_state = (kind, keys.tobytes(), pos, has_gauss, gauss)
+        except Exception:  # noqa: BLE001 - an unreadable state is not the same state
+            numpy_state = (object(),)
+    return (random.getstate(), numpy_state)
+
+
+def _status(metric: Any) -> Any:
+    status = metric.get('status') if isinstance(metric, dict) else getattr(metric, 'status', None)
+    return CacheStatus(status) if isinstance(status, str) and status in CacheStatus.__members__ else status
+
+
+def _holds_rng_state(value: Any) -> bool:
+    """A generator object: drawing from it inside a loop changes it in place."""
+    if isinstance(value, random.Random):
+        return True
+    module = type(value).__module__ or ''
+    return module.startswith('numpy.random') and type(value).__name__ in (
+        'Generator', 'RandomState')
 
 @dataclass
 class ControlStructureResult:
@@ -301,6 +331,7 @@ class ControlStructureProcessor:
         entry = {n: lineage[n] for n in reads if n in lineage}
         before = dict(lineage)
         reads_before = dict(state.statement_file_reads)
+        rng_before = _global_rng_fingerprint() if isinstance(node, ast.For) else None
         result = self._dispatch(node, ttl, silent, parent_context, raw_cell,
                                 inherited_annotation, prev_node)
         if result.success:
@@ -314,9 +345,105 @@ class ControlStructureProcessor:
                 if reads_before.get(key, (None,))[0] is not local:
                     files.update(local)
             from ..statement.file_deps import compute_file_hash_component
-            outcomes[hashlib.sha256(code.encode('utf-8')).hexdigest()] = (
-                entry, left, frozenset(files), compute_file_hash_component(files))
+            outcome = (entry, left, frozenset(files), compute_file_hash_component(files))
+            outcomes[hashlib.sha256(code.encode('utf-8')).hexdigest()] = outcome
+            # Judged only on a run that restored nothing: a restored statement
+            # puts back the RNG state it was stored with, so a loop that draws
+            # nothing still moves the generators when it hits in a new kernel.
+            if not any(_status(m) == CacheStatus.RESTORED for m in result.metrics):
+                self._persist_outcome(node, code, reads, before, outcome, rng_before)
         return result
+
+    def _persist_outcome(self, node, code, reads, before, outcome, rng_before) -> None:
+        """Keep a loop's outcome for the simulation of a later kernel.
+
+        ``control_outcomes`` dies with the kernel, and without it the
+        simulation's lineages for what a loop built disagreed with the
+        entries written from them: after a restart nothing downstream of a
+        loop restored, and the loop ran again (round 23; see
+        ``control_outcome_key``). A record is trusted instead of a replay, so
+        it is written only for a loop whose outcome is all it did
+        (``_persistable_callees``), together with the lineages of what its
+        callees read. A loop that no longer qualifies deletes its record.
+        Best-effort both ways: without a record the loop is replayed, as it
+        always was.
+        """
+        from ..cache_key import control_outcome_key
+        sp = self.statement_processor
+        backend = getattr(getattr(sp, 'cash_instance', None), 'backend', None)
+        restorer = getattr(sp, '_stmt_restorer', None)
+        if backend is None or restorer is None:
+            return
+        key = control_outcome_key(code)
+        written = self.__dict__.setdefault('_outcomes_written', {})
+        try:
+            callees = self._persistable_callees(node, code, reads, before, rng_before)
+            if callees is None:
+                if written.get(key, True) is not None:
+                    backend.delete(key)
+                    written[key] = None
+                return
+            entry, left, files, file_component = outcome
+            record = {'entry': entry, 'callees': callees, 'left': left,
+                      'files': sorted(files), 'file_component': file_component}
+            if written.get(key) == record:
+                return
+            restorer.persist_metadata_only(
+                backend, key, {'control_outcome': True, 'code': code, 'ttl': None, **record})
+            written[key] = record
+        except Exception:  # noqa: BLE001 - never let bookkeeping break the user's loop
+            logger.debug("[CONTROL] control-outcome persistence failed", exc_info=True)
+
+    def _persistable_callees(self, node, code, reads, before, rng_before) -> dict[str, str] | None:
+        """What a later kernel must find unchanged to trust this loop's record, or None.
+
+        None -- replay, never trust -- unless the loop's outcome is all it did:
+
+        * a ``for`` loop (the shape that is expensive to replay);
+        * the global RNG where it was: a draw is the loop's effect on every
+          draw after it, and a record would skip it;
+        * no file written, by its text or by a function it calls: skipping
+          the loop would skip the write;
+        * no clock or uuid read, in it or in a function it calls: its
+          outcome is not a function of its inputs;
+        * no global mutated in place by a function it calls, and no RNG
+          object read: effects the entry lineages do not show.
+
+        Otherwise the lineages of every global its callees read, transitively
+        -- an edited helper, even one called through another, has a new
+        lineage, which the entry lineages alone do not name.
+        """
+        if not isinstance(node, ast.For) or rng_before is None:
+            return None
+        if rng_before != _global_rng_fingerprint():
+            return None
+        from ..analysis import CodeAnalyzer
+        from ..cache_key import called_function_globals
+        from ..cacheability import (
+            called_function_global_mutations,
+            statement_calls_user_writer,
+            statement_writes_files,
+        )
+        user_ns = self.shell.user_ns
+        if statement_writes_files(code) or statement_calls_user_writer(code, user_ns):
+            return None
+        if any(_holds_rng_state(user_ns.get(name)) for name in reads):
+            return None
+        callee_names = called_function_globals(reads, user_ns)
+        resolve = getattr(self.statement_processor, '_resolve_live_function_source', None)
+        if resolve is None:
+            return None
+        for name in (set(reads) | callee_names):
+            if not isinstance(user_ns.get(name), types.FunctionType):
+                continue
+            source = resolve(name)
+            if source is None or CodeAnalyzer.scan_for_forbidden_functions(source, user_ns):
+                return None
+        if CodeAnalyzer.scan_for_forbidden_functions(code, user_ns):
+            return None
+        if called_function_global_mutations(ast.parse(code), resolve, include_control_bodies=True):
+            return None
+        return {name: before.get(name, 'ABSENT') for name in sorted(callee_names)}
 
     def _dispatch(
         self,

@@ -1717,6 +1717,8 @@ class VirtualLineage:
         # TrackingState.control_outcomes).
         recorded = self._tracking_state.control_outcomes.get(
             hashlib.sha256(stmt_code.encode('utf-8')).hexdigest())
+        if recorded is None:
+            recorded = self._persisted_control_outcome(stmt_code, virtual_lineage)
         if recorded is not None and recorded[0] == input_hashes:
             if compute_file_hash_component(recorded[2]) == recorded[3]:
                 virtual_lineage.update(recorded[1])
@@ -1744,6 +1746,37 @@ class VirtualLineage:
             # ``PACK.mkdir()`` without it (round 23, r23s2: FileExistsError).
             # The same rule simple statements follow in _simulate_one_node.
             simulation_trace.append(_TraceEntry(stmt_code, set(), inputs, input_hashes, {}, files_stale))
+
+    def _persisted_control_outcome(
+        self, stmt_code: str, virtual_lineage: dict[str, str],
+    ) -> tuple[dict[str, str], dict[str, str], frozenset[str], str] | None:
+        """A loop's outcome from an earlier kernel, when it may still be trusted.
+
+        See ``control_outcome_key``. Written only for a loop whose outcome was
+        all it did; trusted only when every global its callees read has, here,
+        the lineage it had then -- the entry lineages and file state are
+        checked by the caller, exactly as for the session's own record. Any
+        doubt returns None, and the loop is replayed.
+        """
+        backend = getattr(self.cash_instance, 'backend', None) if self.cash_instance else None
+        if backend is None or not hasattr(backend, 'get_metadata'):
+            return None
+        from ..cache_key import control_outcome_key
+        try:
+            record = backend.get_metadata(control_outcome_key(stmt_code))
+        except (OSError, TypeError, ValueError, AttributeError):
+            return None
+        if not record or not record.get('control_outcome') or record.get('code') != stmt_code:
+            return None
+        try:
+            for name, then in (record.get('callees') or {}).items():
+                now = virtual_lineage.get(name) or self.variable_lineage.get(name) or 'ABSENT'
+                if now != then:
+                    return None
+            return (dict(record['entry']), dict(record['left']),
+                    frozenset(record['files']), str(record['file_component']))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return None
 
     @staticmethod
     def _may_write_files(node: ast.AST, stmt_code: str) -> bool:

@@ -173,7 +173,7 @@ Conditionals work the same way with a different marker: `if`/`elif`/`else` and
 `# control_context:` branch hash, so only the branch that actually ran is
 cached and unused branches never pollute the key space.
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @c50a00a4, cash/notebook/control_structures/processor.py:get_control_structure_type @eb40f97d -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @1c131b82, cash/notebook/control_structures/processor.py:get_control_structure_type @eb40f97d -->
 `while` and `with` are the exception — they are executed as a **single cacheable
 unit** through the statement processor rather than decomposed, because neither
 has an enumerable iteration space to key on.
@@ -219,6 +219,20 @@ final value straight from cache:
 
 # Cash restores the final 'df' directly:  ~0.1s (deserialization only)
 ```
+
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @a6159e9b -->
+That holds for values computed *from* a loop too. A loop's outputs get lineages
+derived from the values it built, which the upstream simulation cannot derive
+from code, so Cash writes down what a loop left behind when it runs, and the
+simulation in a later kernel uses that record to find the entries computed
+from it. The record is trusted instead of running the loop, so Cash keeps one only for a
+`for` loop whose outcome is all it did: no file written, no draw from the global
+random generators, no clock or `uuid` read, no global changed in place by a
+function it calls. It is used only while everything the loop and its functions
+read, down to a helper called through another helper, is unchanged. Anything
+else, and the loop runs again. The loop's own variables (`parts`, `d` in
+`for f in files: d = read(f); parts.append(d)`) are not stored anywhere a
+restart can bring them back from: a cell that reads them runs the loop.
 
 !!! tip "The other half of the story"
     Restoration is only safe because Cash can prove the cached value is still
