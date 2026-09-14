@@ -92,13 +92,13 @@ class TestCrossInstanceVisibility:
         os.makedirs(cache_dir, exist_ok=True)
         anchor = PendingWrites()
         doomed = PendingWrites()
-        _register_writer(cache_dir, anchor)
-        _register_writer(cache_dir, doomed)
-        assert doomed in _sibling_writers(cache_dir, anchor)
+        scope = _register_writer(cache_dir, anchor)
+        assert _register_writer(cache_dir, doomed) == scope
+        assert doomed in _sibling_writers(scope, anchor)
 
         del doomed
         gc.collect()
-        assert _sibling_writers(cache_dir, anchor) == []
+        assert _sibling_writers(scope, anchor) == []
 
 
 class TestWorkerThreadMarker:
@@ -401,33 +401,20 @@ class TestAFailedWriteDoesNotDestroyWhatWasThere:
         backend._writes.wait_all()
         assert backend.get("k")[1] == "v1"
 
-        real_open = open
+        real_write_all = fb._write_all
         armed = {"on": False}
 
-        class _DiesHalfway:
-            def __init__(self, fh):
-                self._fh = fh
+        # Every entry byte goes out through `_write_all`, on the descriptor the
+        # file was created with. For a key that already exists that is the
+        # temp file (the in-place path refuses on O_EXCL before writing), so
+        # this fails the payload write itself.
+        def dies_halfway(fd, data):
+            if not armed["on"]:
+                return real_write_all(fd, data)
+            real_write_all(fd, data[:len(data) // 2])
+            raise OSError("No space left on device")
 
-            def write(self, data):
-                self._fh.write(data[:len(data) // 2])
-                raise OSError("No space left on device")
-
-            def __getattr__(self, name):
-                return getattr(self._fh, name)
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return self._fh.__exit__(*exc)
-
-        def failing_open(path, mode="r", *a, **kw):
-            fh = real_open(path, mode, *a, **kw)
-            if armed["on"] and "w" in mode and "b" in mode:
-                return _DiesHalfway(fh)
-            return fh
-
-        monkeypatch.setattr(fb, "open", failing_open, raising=False)
+        monkeypatch.setattr(fb, "_write_all", dies_halfway)
         armed["on"] = True
         backend.set("k", "v2")
         backend._writes.wait_all()

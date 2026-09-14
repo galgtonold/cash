@@ -122,7 +122,8 @@ def _writer_scope(cache_dir: str) -> str:
         return os.path.abspath(cache_dir)
 
 
-def _register_writer(cache_dir: str, writes: PendingWrites) -> None:
+def _register_writer(cache_dir: str, writes: PendingWrites) -> str:
+    """Register *writes* under *cache_dir*'s scope, and return the scope."""
     scope = _writer_scope(cache_dir)
     # Tell the file tracker this directory is cash's own storage, so its entry
     # files never become dependencies of the user's code. The tracker's other
@@ -146,12 +147,17 @@ def _register_writer(cache_dir: str, writes: PendingWrites) -> None:
         if len(_WRITERS_BY_DIR) > 64:
             for dead in [s for s, b in _WRITERS_BY_DIR.items() if not b]:
                 del _WRITERS_BY_DIR[dead]
+    return scope
 
 
-def _sibling_writers(cache_dir: str, own: PendingWrites) -> list[PendingWrites]:
-    """Live write queues over *cache_dir* other than *own*."""
+def _sibling_writers(scope: str, own: PendingWrites) -> list[PendingWrites]:
+    """Live write queues over the directory *scope* names, other than *own*.
+
+    Takes the scope ``_register_writer`` returned, not the directory: resolving
+    it is a ``realpath``, ~60us on Windows, and every read of the backend asks
+    (round 23: 2.7% of a loop over a thousand files)."""
     with _WRITERS_LOCK:
-        bucket = _WRITERS_BY_DIR.get(_writer_scope(cache_dir))
+        bucket = _WRITERS_BY_DIR.get(scope)
         return [w for w in bucket if w is not own] if bucket else []
 
 __all__ = ["FileBackend", "CACHE_FORMAT_VERSION"]
@@ -315,7 +321,7 @@ class FileBackend(CacheBackend):
         # thread, the actual disk I/O runs in this executor so a slow
         # write doesn't block cell execution.
         self._writes = PendingWrites()
-        _register_writer(self.cache_dir, self._writes)
+        self._writer_scope = _register_writer(self.cache_dir, self._writes)
 
         # Lazy initialization: defer directory creation, stat scanning,
         # and background thread to first actual use.
@@ -869,7 +875,7 @@ class FileBackend(CacheBackend):
         self._writes.wait(key)
         if PendingWrites.in_worker_thread():
             return
-        for sibling in _sibling_writers(self.cache_dir, self._writes):
+        for sibling in _sibling_writers(self._writer_scope, self._writes):
             try:
                 sibling.wait(key)
             except Exception:  # noqa: BLE001 — see docstring
@@ -912,10 +918,16 @@ class FileBackend(CacheBackend):
         # A temp file in the target directory; the leading dot keeps the
         # partial out of the ``*.entry`` glob the backend scans.
         fd, tmp_path = _create_temp_file(directory)
-        os.close(fd)
         try:
-            with open(tmp_path, 'wb') as f:
-                f.write(payload)
+            # Through the descriptor it was created with, as
+            # `_write_new_in_place` does. Closing it and reopening the name
+            # went through the file tracker's patched ``open`` and opened a
+            # file created a moment before -- on Windows the slowest open there
+            # is, ~2 ms against 0.25 ms for the whole write (round 23).
+            try:
+                _write_all(fd, payload)
+            finally:
+                os.close(fd)
             self._replace_with_retry(tmp_path, path)
         except BaseException:
             try:
@@ -1144,10 +1156,20 @@ class FileBackend(CacheBackend):
         self._writes.wait(key)
         path = self._get_path(key)
 
-        try:
-            existing, _ = read_entry(path, with_payload=False)
-        except UNREADABLE_ENTRY:
-            existing = None
+        # What this process last wrote there, when it was metadata only, needs
+        # no disk read to know: reading an entry written moments before is the
+        # slowest open on Windows, ~5 ms, and a cheap statement re-run in every
+        # cell run rewrites its entry every time (round 23). If another process
+        # has put a full entry there since, this overwrites it -- a later miss,
+        # never a wrong value.
+        known = self._metadata_cache.get(key)
+        if known is not None and known.get('metadata_only'):
+            existing = known
+        else:
+            try:
+                existing, _ = read_entry(path, with_payload=False)
+            except UNREADABLE_ENTRY:
+                existing = None
         if existing is not None and not existing.get('metadata_only'):
             return
 
@@ -1160,7 +1182,13 @@ class FileBackend(CacheBackend):
         metadata.setdefault('size', 0)
 
         try:
-            self._atomic_write(path, pack_entry(metadata, b""))
+            blob = pack_entry(metadata, b"")
+            # A new key takes the in-place write, as a new full entry does
+            # (`_write_new_in_place`): a loop's statements each write one of
+            # these, on the user's clock, and the temp-and-rename was most of
+            # the 0.65 ms each cost (round 23).
+            if existing is not None or not self._write_new_in_place(path, blob):
+                self._atomic_write(path, blob)
             with self._lock:
                 self._remember(key, metadata)
         except OSError as exc:
