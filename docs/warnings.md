@@ -466,7 +466,7 @@ meant a 500 MB cap cached nothing at all for a 263 MB working set. It is the
 whole cap now, measured on the serialized bytes, so a value that fits is stored
 and LRU eviction does the rest.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @9dbcf959 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @809aa60e -->
 **Why it matters.** Usually you get no caching at all, not RAM-only caching.
 The RAM tier has its own byte cap, scaled to the machine and independent of
 `max_cache_size`, which caps only disk — and it is the *smaller* of the two.

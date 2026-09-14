@@ -71,6 +71,17 @@ class InMemoryBackend(CacheBackend):
         #: Keys whose stored value is a list of dicts of immutable values: a
         #: hit copies each dict with ``map(dict, ...)`` instead of deepcopy.
         self._dict_rows: builtins.set[str] = set()
+        #: GreedyDual-Size-Frequency state for the byte cap (see
+        #: `_evict_to_byte_cap`): the clock L, and each key's L as of its last
+        #: write or read. Kept here, not in the entry's metadata dict, because
+        #: that dict is shared with the other tiers and would carry it to disk.
+        self._gdsf_clock = 0.0
+        self._gdsf_base: dict[str, float] = {}
+        #: Access order, for ties. ``last_access`` is wall-clock and collides
+        #: within one timer tick, which is how the disk tier's LRU once
+        #: degenerated into directory order.
+        self._access_seq = 0
+        self._seq_by_key: dict[str, int] = {}
 
     #: Types whose instances cannot be mutated, so SHARING one between the
     #: stored entry and the caller is safe. Exact-type membership, never
@@ -166,6 +177,7 @@ class InMemoryBackend(CacheBackend):
             metadata['last_access'] = time.time()
             metadata['access_count'] = metadata.get('access_count', 0) + 1
             metadata.setdefault('source', self.source_label)
+            self._touch(key)
 
             if key in self._immutable_below:
                 # Checked when it was stored; the stored value is private.
@@ -204,6 +216,7 @@ class InMemoryBackend(CacheBackend):
         if key in self._store:
             self._current_size_bytes -= self._store[key][0].get('size', 0)
         self._store[key] = (metadata, stored)
+        self._touch(key)
         if immutable:
             self._immutable_below.add(key)
         else:
@@ -231,6 +244,8 @@ class InMemoryBackend(CacheBackend):
         """Remove *key*, keeping the byte-cap running total in sync."""
         self._immutable_below.discard(key)
         self._dict_rows.discard(key)
+        self._gdsf_base.pop(key, None)
+        self._seq_by_key.pop(key, None)
         entry = self._store.pop(key, None)
         if entry is not None:
             self._current_size_bytes -= entry[0].get('size', 0)
@@ -242,6 +257,8 @@ class InMemoryBackend(CacheBackend):
         self._store.clear()
         self._immutable_below.clear()
         self._dict_rows.clear()
+        self._gdsf_base.clear()
+        self._seq_by_key.clear()
         self._current_size_bytes = 0
         # Also try to free memory back to OS
         self._try_malloc_trim()
@@ -337,33 +354,27 @@ class InMemoryBackend(CacheBackend):
             logger.debug("Memory check failed: %s", exc)
 
     def _evict(self) -> None:
-        """Evict items until memory usage is safe (target: 90% of max threshold)."""
+        """Evict items until memory usage is safe (target: 90% of max threshold).
+
+        Same order as the byte cap (`_evict_to_byte_cap`): least value per
+        byte first. It used to score ``execution_time * access_count / size``,
+        which put every entry not yet read at zero -- a 30-second result went
+        before a 1 ms one that had been read once.
+        """
         target_percent = self.max_memory_percent * 0.9
 
-        items = []
-        for key, (meta, _val) in self._store.items():
-            exec_time = meta.get('execution_time', 0.001)
-            if exec_time <= 0:
-                exec_time = 0.001
-
-            access_count = meta.get('access_count', 0)
-
-            size = meta.get('size', 1)
-            if size <= 0:
-                size = 1
-
-            score = (exec_time * access_count) / size
-            last_access = meta.get('last_access', 0)
-            items.append((score, last_access, key, size))
-
-        # Sort: Primary=Score (asc), Secondary=LastAccess (asc) — lowest/oldest evicted first
-        items.sort(key=lambda x: (x[0], x[1]))
+        items = [
+            (self._gdsf_priority(key, meta), self._seq_by_key.get(key, 0), key)
+            for key, (meta, _val) in self._store.items()
+        ]
+        items.sort()
 
         evicted_count = 0
 
-        for _score, _last_access, key, _size in items:
+        for priority, _seq, key in items:
             if key in self._store:
                 self._drop(key)
+                self._gdsf_clock = max(self._gdsf_clock, priority)
                 evicted_count += 1
 
                 if psutil is None:
@@ -375,27 +386,56 @@ class InMemoryBackend(CacheBackend):
         if evicted_count > 0:
             self._try_malloc_trim()
 
-    def _evict_to_byte_cap(self) -> None:
-        """Evict least-recently-used entries until under ~90% of the byte cap.
+    #: Cost assumed for an entry written without an ``execution_time`` (raw
+    #: backend use). Small, so an entry of known cost outranks it.
+    _UNKNOWN_COST_S = 0.001
 
-        Mirrors the file backend's LRU eviction: sort by ``last_access``
-        (oldest first) and drop until the running total falls to 90% of the
-        cap, giving headroom so the next few writes don't immediately
-        re-trigger eviction. No-op when the cap is unset or already satisfied.
+    def _touch(self, key: str) -> None:
+        """Record a write or read: it re-bases the entry's GDSF priority."""
+        self._gdsf_base[key] = self._gdsf_clock
+        self._access_seq += 1
+        self._seq_by_key[key] = self._access_seq
+
+    def _gdsf_priority(self, key: str, meta: MetadataDict) -> float:
+        """``H = L + hits * execution_time / size``, L as of the last access."""
+        cost = meta.get('execution_time') or 0.0
+        if cost <= 0:
+            cost = self._UNKNOWN_COST_S
+        hits = meta.get('access_count', 0) + 1
+        return self._gdsf_base.get(key, 0.0) + hits * cost / max(1, meta.get('size', 1))
+
+    def _evict_to_byte_cap(self) -> None:
+        """Evict by value per byte until under ~90% of the byte cap.
+
+        GreedyDual-Size-Frequency: the lowest ``H = L + hits * cost / size``
+        goes first, and the clock ``L`` rises to each victim's H, so an entry
+        that stops being read ages below newer ones however valuable it was.
+        Recency alone treated a 30 s result like a 50 ms one of the same size,
+        and 4 MB like 1 MB; in a trace-driven eviction simulation that
+        difference was most of the loss. In a notebook: a folder loop's
+        per-file frames (20 ms each) were all dropped for a later cell's
+        full-table copies (0.1-3 s per 570 MB), so the loop's next run read
+        every file again (round 23, r23s2). Ties go to the least recently
+        touched.
+
+        Evicts down to 90% of the cap, giving headroom so the next few writes
+        don't immediately re-trigger eviction. No-op when the cap is unset or
+        already satisfied.
         """
         if not self._max_size_bytes or self._current_size_bytes <= self._max_size_bytes:
             return
         target = self._max_size_bytes * 0.9
         items = [
-            (meta.get('last_access', 0), key)
+            (self._gdsf_priority(key, meta), self._seq_by_key.get(key, 0), key)
             for key, (meta, _) in self._store.items()
         ]
-        items.sort()  # oldest first
+        items.sort()  # least valuable per byte first
         evicted = 0
-        for _last_access, key in items:
+        for priority, _seq, key in items:
             if self._current_size_bytes <= target:
                 break
             self._drop(key)
+            self._gdsf_clock = max(self._gdsf_clock, priority)
             evicted += 1
         if evicted:
             self._try_malloc_trim()

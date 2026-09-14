@@ -46,12 +46,14 @@ c = Cash(backend=InMemoryBackend(max_entries=500))
 c.register_magic()
 ```
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.__init__ @6c559007, cash/backends/memory_backend.py:InMemoryBackend._evict @03ba0434 -->
-A plain dict guarded by light bookkeeping. Reads and writes deep-copy by default so a downstream mutation can't poison the cache. Eviction has **three** triggers, and they do not use the same policy:
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.__init__ @3c546f6d, cash/backends/memory_backend.py:InMemoryBackend._evict @9c8132f7, cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @809aa60e, cash/backends/memory_backend.py:InMemoryBackend._gdsf_priority @c21d95dd -->
+A plain dict guarded by light bookkeeping. Reads and writes deep-copy by default so a downstream mutation can't poison the cache. Eviction has **three** triggers:
 
 1. `max_entries` — a hard LRU cap, evicting oldest-accessed first (`_evict_lru`).
-2. `max_size_bytes` — a soft byte cap (`_evict_to_byte_cap`).
-3. A `psutil` memory-pressure check, run every `check_interval` writes, that fires when the system crosses `max_memory_percent`. This one is **not** LRU: `_evict` scores each entry as `(execution_time × access_count) / size` and drops the lowest-scoring first, so a big cheap entry goes before a small expensive one.
+2. `max_size_bytes` — a soft byte cap (`_evict_to_byte_cap`), evicting down to 90% of it.
+3. A `psutil` memory-pressure check, run every `check_interval` writes, that fires when the system crosses `max_memory_percent` (`_evict`).
+
+The byte cap and the pressure check rank entries the same way: by value per byte, not by age (GreedyDual-Size-Frequency). Each entry has a priority `H = L + hits × execution_time / size`, and the lowest goes first, so a big cheap entry goes before a small expensive one, and a 30-second result outlives a newer 50 ms one of the same size. The clock `L` rises to each evicted entry's `H`. So an entry that stops being read eventually drops below newer ones and ages out, however valuable it was.
 
 **Key parameters** — `max_entries` (None = unlimited), `max_size_bytes` (None = unlimited), `max_memory_percent` (default 0.9 = 90% of system RAM), `check_interval` (default 10 writes between pressure checks).
 
