@@ -118,11 +118,23 @@ class CacheFreshnessChecker:
         checked = getattr(self, '_checked', None)
         if memo_key is not None and checked is not None and memo_key in checked:
             return checked[memo_key]
-        resolved = resolve_file_dep_path(fpath)
-        if resolved is None:
-            answer = (None, False, 'missing')
-        else:
-            answer = (resolved, *file_dep_is_fresh(resolved, stored, full_hash_max))
+        answer = None
+        if isinstance(stored, dict) and 'size' in stored:
+            # A local snapshot checked where it was recorded first: the stat
+            # that decides freshness also says the file is there, which is all
+            # ``resolve_file_dep_path``'s ``exists`` was asking -- one syscall
+            # per dependency per lookup instead of two (a re-run of statements
+            # derived from 3,000 files made 72,000; round 23). A path that is
+            # not there any more goes through the relocation fallbacks as before.
+            is_fresh, reason = file_dep_is_fresh(fpath, stored, full_hash_max)
+            if reason != 'unreadable':
+                answer = (fpath, is_fresh, reason)
+        if answer is None:
+            resolved = resolve_file_dep_path(fpath)
+            if resolved is None:
+                answer = (None, False, 'missing')
+            else:
+                answer = (resolved, *file_dep_is_fresh(resolved, stored, full_hash_max))
         if memo_key is not None and checked is not None:
             checked[memo_key] = answer
         return answer

@@ -29,6 +29,7 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from ...utils import normalize_path
+from ..file_dep_snapshot import realpath_this_run
 from ..server_discovery import get_notebook_path
 
 if TYPE_CHECKING:
@@ -79,7 +80,7 @@ def compute_file_hash_component(
     file_components = []
     for f in sorted(accessed_files):
         if os.path.exists(f):
-            canonical_path = normalize_path(os.path.realpath(f))
+            canonical_path = normalize_path(realpath_this_run(f))
             display_path = canonical_path
             if notebook_dir:
                 try:

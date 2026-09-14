@@ -39,6 +39,8 @@ import time
 from collections.abc import Iterable
 from typing import Any
 
+from cash.utils import normalize_path
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -215,6 +217,44 @@ def end_file_state_epoch() -> None:
         _HASH_EPOCH = None
 
 
+#: ``realpath`` answers for the current cell run, keyed on the path as given
+#: (and the working directory, for a relative one).
+_REALPATH_MEMO: dict[tuple[str, str], str] = {}
+_REALPATH_MEMO_EPOCH: int | None = None
+
+
+def realpath_this_run(path: str) -> str:
+    """``os.path.realpath(path)``, remembered for the rest of the cell run.
+
+    ``realpath`` is a handful of ``_getfinalpathname`` calls on Windows, ~60us,
+    and a statement's files were resolved again at every read, every lineage
+    component and every snapshot: 13% of a cell reading 3,000 files (round 23).
+    Within one run a link is not re-pointed under the same statement's feet;
+    the next run resolves afresh, and so does anything outside a run. A
+    relative path is keyed on the working directory too, so an ``os.chdir``
+    mid-cell resolves anew.
+    """
+    global _REALPATH_MEMO_EPOCH
+    epoch = _HASH_EPOCH
+    if epoch is None:
+        return os.path.realpath(path)
+    if _REALPATH_MEMO_EPOCH != epoch:
+        _REALPATH_MEMO.clear()
+        _REALPATH_MEMO_EPOCH = epoch
+    key = ("" if os.path.isabs(path) else os.getcwd(), path)
+    resolved = _REALPATH_MEMO.get(key)
+    if resolved is None:
+        resolved = os.path.realpath(path)
+        if len(_REALPATH_MEMO) < 65536:
+            _REALPATH_MEMO[key] = resolved
+            # A resolved path resolves to itself, and callers hand it back in
+            # both spellings: the tracker records ``normalize_path`` of it, and
+            # the lineage component resolves that record again.
+            _REALPATH_MEMO[("", resolved)] = resolved
+            _REALPATH_MEMO[("", normalize_path(resolved))] = resolved
+    return resolved
+
+
 def file_content_hash(
     path: str, size: int | None = None, full_hash_max: int | None = None,
     st: os.stat_result | None = None,
@@ -280,7 +320,12 @@ def file_content_hash(
         # hashed the file a second time to fingerprint that "read").
         with io.FileIO(path, "rb") as f:
             if size <= full_hash_max:
-                for chunk in iter(lambda: f.read(_HASH_READ_CHUNK), b""):
+                # ``FileIO.read(n)`` allocates n bytes before it reads, so a
+                # 2 KB file read in 1 MiB chunks cost two 1 MiB allocations:
+                # ~400us a file against ~60us reading size + 1 (the +1 finds EOF
+                # in the first read; a file that grew is still read to its end).
+                want = min(size + 1, _HASH_READ_CHUNK)
+                for chunk in iter(lambda: f.read(want), b""):
                     h.update(chunk)
             else:
                 half = _HASH_SAMPLE_REGION_BYTES // 2

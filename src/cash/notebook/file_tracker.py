@@ -1338,8 +1338,10 @@ class FileAccessTracker:
         try:
             # Normalize path using realpath to get canonical path
             # This resolves symlinks and normalizes the path, making it
-            # stable across os.chdir() calls
-            abs_path = normalize_path(os.path.realpath(raw_path))
+            # stable across os.chdir() calls. Resolved once per cell run
+            # (``realpath_this_run``): a loop reads the same files again.
+            from cash.notebook.file_dep_snapshot import realpath_this_run
+            abs_path = normalize_path(realpath_this_run(raw_path))
         except (TypeError, ValueError, OSError) as e:
             logger.debug("[TRACKER] Could not track file path %r: %s", path, e)
             return
