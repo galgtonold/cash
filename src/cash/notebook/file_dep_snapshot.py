@@ -564,8 +564,57 @@ def _timestamps_match(st: os.stat_result, stored: Any, field: str) -> bool:
     return abs(live - stored_seconds) <= _LEGACY_TIMESTAMP_TOLERANCE_SECONDS
 
 
+#: A directory holding at least this many of one lookup's dependencies is read
+#: with one listing rather than a stat per file.
+_LISTING_MIN_FILES = 16
+
+
+def stats_from_listings(paths: Iterable[str]) -> dict[str, os.stat_result]:
+    """``{path: stat}`` from one directory listing per crowded directory. Windows only.
+
+    A stat on Windows opens the file, ~90 us here; re-running statements
+    derived from 3,000 files made one per file per statement lookup, most of
+    the cell (round 23). A listing returns every entry's size and timestamps
+    from the directory itself, a few milliseconds for the lot. Elsewhere a
+    listing entry's stat IS a stat, so there is nothing to gain.
+
+    What the listing reports can lag the file in one case measured: a file with
+    a second hard link, edited through the other name, until something opens
+    this one. ``file_dep_is_fresh`` takes a listed stat only for a file it
+    hashes in full, where content decides and a lagging size or time can at
+    most reuse a digest within the window it already reuses one.
+
+    Through the unpatched ``os.scandir``: the file tracker records a directory
+    listed while it is active as a read, and this one is cash's, not the user's.
+    """
+    if os.name != "nt":
+        return {}
+    by_dir: dict[str, dict[str, str]] = {}
+    for path in paths:
+        directory, name = os.path.split(path)
+        by_dir.setdefault(directory, {})[os.path.normcase(name)] = path
+    scandir = getattr(os.scandir, "_original_func", os.scandir)
+    found: dict[str, os.stat_result] = {}
+    for directory, wanted in by_dir.items():
+        if len(wanted) < _LISTING_MIN_FILES:
+            continue
+        try:
+            with scandir(directory or ".") as entries:
+                for entry in entries:
+                    path = wanted.get(os.path.normcase(entry.name))
+                    if path is not None:
+                        try:
+                            found[path] = entry.stat()
+                        except OSError:
+                            pass
+        except OSError:
+            continue
+    return found
+
+
 def file_dep_is_fresh(
     resolved_path: str, stored: dict[str, Any], full_hash_max: int | None = None,
+    listed: os.stat_result | None = None,
 ) -> tuple[bool, str | None]:
     """Return ``(is_fresh, stale_reason)`` for a resolved file dependency.
 
@@ -611,10 +660,21 @@ def file_dep_is_fresh(
             return False, "appeared"
     stored_mtime, stored_size = split_file_dep_value(stored)
     stored_hash = stored.get("hash") if isinstance(stored, dict) else None
-    try:
-        st = os.stat(resolved_path)
-    except OSError:
-        return False, "unreadable"
+    if full_hash_max is None and listed is not None:
+        full_hash_max = _full_hash_max_bytes()
+    # A listed stat (``stats_from_listings``) stands in for one only where the
+    # file is hashed in full: there content is the authority, not the size or
+    # the time the listing reports. A sampled file keeps its timestamps as a
+    # backstop, so it gets a stat of its own.
+    if (listed is not None and stored_hash is not None
+            and listed.st_size <= full_hash_max
+            and (stored_size is None or stored_size <= full_hash_max)):
+        st = listed
+    else:
+        try:
+            st = os.stat(resolved_path)
+        except OSError:
+            return False, "unreadable"
     # Cheap size check first — never hash when the size already proves staleness.
     if stored_size is not None and st.st_size != stored_size:
         return False, "size"

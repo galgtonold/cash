@@ -30,7 +30,12 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from ...utils import resolve_file_dep_path
-from ..file_dep_snapshot import _full_hash_max_bytes, file_dep_is_fresh
+from ..file_dep_snapshot import (
+    _LISTING_MIN_FILES,
+    _full_hash_max_bytes,
+    file_dep_is_fresh,
+    stats_from_listings,
+)
 from ._metadata import StatementCacheMetadata
 
 if TYPE_CHECKING:
@@ -80,6 +85,8 @@ class CacheFreshnessChecker:
         # its inputs, so the two passes below checked every file twice. One
         # answer per (path, snapshot) per lookup: nothing runs in between.
         self._checked: dict = {}
+        # Stats taken from directory listings for this lookup (Windows).
+        self._listed: dict = {}
 
         t3 = time.time()
         raw_metadata, cached_data = self._backend.get(cache_key)
@@ -126,7 +133,9 @@ class CacheFreshnessChecker:
             # per dependency per lookup instead of two (a re-run of statements
             # derived from 3,000 files made 72,000; round 23). A path that is
             # not there any more goes through the relocation fallbacks as before.
-            is_fresh, reason = file_dep_is_fresh(fpath, stored, full_hash_max)
+            listed = getattr(self, '_listed', None)
+            is_fresh, reason = file_dep_is_fresh(
+                fpath, stored, full_hash_max, listed.get(fpath) if listed else None)
             if reason != 'unreadable':
                 answer = (fpath, is_fresh, reason)
         if answer is None:
@@ -161,6 +170,12 @@ class CacheFreshnessChecker:
         """Return None if any direct file dep in *metadata* is missing or modified."""
         file_deps = metadata.file_dependencies or {}
         full_hash_max = _full_hash_max_bytes() if file_deps else None
+        if len(file_deps) >= _LISTING_MIN_FILES:
+            # Many files: read their directories once rather than stat each
+            # (see ``stats_from_listings``). Taken now, at lookup, so it is as
+            # current as the stats it replaces.
+            self._listed = stats_from_listings(
+                p for p, s in file_deps.items() if isinstance(s, dict) and 'size' in s)
         for fpath, stored in file_deps.items():
             # Content is authoritative when the size matches; a bare size/mtime
             # check both over-invalidates on a touch and misses a

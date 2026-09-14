@@ -80,7 +80,7 @@ the latency trade-offs of each — see
 This is the part that decides whether a shared backend actually pays off, and
 it differs between the two caching paths:
 
-<!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @91700a2b, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @8b351a2f -->
+<!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @91700a2b, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @91117625 -->
 <!-- claim: cash/remote_source.py:RemoteFileDataSource @4f8286f8 broad="the portability claim is a property of the whole source type" -->
 
 | What you cached | Hits on another machine? |
