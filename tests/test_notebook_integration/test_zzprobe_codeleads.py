@@ -84,21 +84,14 @@ def test_upstream_reexec_nameerror_swallowed_serves_stale(nb_runner):
 # 2. from-import-names-polluting-virtual-modules-key-divergence
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "OPEN, cache-effectiveness only (CAS-228). After a restart a chain rooted "
-        "in `from math import pi` RE-EXECUTES instead of restoring from disk, "
-        "while the `import math` chain beside it restores correctly. The VALUE is "
-        "right either way -- this costs time, not correctness -- but from-imports "
-        "are ubiquitous, so it is worth fixing rather than pinning as intended. "
-        "Not root-caused: the module-component path in cache_key.py contributes "
-        "nothing for an unlisted name and so looks stable across restart, meaning "
-        "the divergence is elsewhere. strict=True deliberately: the repo's global "
-        "xfail_strict is OFF, so without it a fix would land as a silent XPASS."
-    ),
-)
 def test_from_import_virtual_restore_after_restart(nb_runner):
+    """After a restart a chain rooted in `from math import pi` re-executed
+    instead of restoring, while the `import math` chain beside it restored.
+    The simulation met the import before it had run again, took `pi` for a
+    module (it was not in user_ns), and keyed every reader of it differently
+    from the runtime. Fixed by recording what a from-import bound
+    (``import_bindings_key``) and taking a loaded module's attribute as the
+    live object would count."""
     nb_runner.create_notebook([
         "from math import pi",
         "import math",
