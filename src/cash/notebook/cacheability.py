@@ -65,6 +65,8 @@ __all__ = [
     "MUTATING_METHODS",
     "PANDAS_INPLACE_METHODS",
     "KNOWN_PURE_METHODS",
+    "standalone_method_call_inner_methods",
+    "chain_is_pure",
     "RECEIVER_READONLY_WRITE_METHODS",
 ]
 
@@ -104,11 +106,23 @@ PANDAS_INPLACE_METHODS = {
 # objects like DataFrames, where hashing twice per standalone call is costly).
 # A name here must be unambiguously non-mutating — being wrong means a real
 # mutation goes undetected. Anything not listed falls through to observation.
+#
+# A DataFrame/Series/ndarray cannot be observed (its content hash is a sample),
+# so an unlisted method on one is ASSUMED to mutate it and bumps its lineage:
+# the last line of a cell showing a frame -- ``comparison.round(4)`` (r23s1),
+# ``feat_demo.describe().round(3)`` (r23s3) -- was badged an in-place
+# mutation, and editing it re-ran everything built from the frame below it.
+# A chain is pure when nothing inside it is known to mutate
+# (:func:`chain_is_pure`): ``df.sort_values('x').head()`` leaves ``df``
+# alone, ``df.pop('b').round(2)`` does not.
 KNOWN_PURE_METHODS = frozenset({
     # pandas / numpy inspection & summary (return a new object, never mutate)
     'head', 'tail', 'describe', 'info', 'sample', 'value_counts', 'nunique',
     'unique', 'corr', 'cov', 'memory_usage', 'count', 'isna', 'isnull',
     'notna', 'notnull', 'nlargest', 'nsmallest', 'idxmax', 'idxmin',
+    # pandas / numpy arithmetic summaries (an ``out=`` target is tier-1 on its own)
+    'round', 'abs', 'sum', 'mean', 'median', 'min', 'max', 'std', 'var',
+    'quantile', 'groupby', 'agg', 'aggregate', 'pivot_table', 'copy',
     # display / plotting
     'plot', 'hist', 'boxplot', 'show',
 })
@@ -3508,6 +3522,61 @@ def standalone_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple
                 method = f'plot.{method}'
             calls.add((base, method))
     return frozenset(calls)
+
+
+def standalone_method_call_inner_methods(
+    tree: ast.Module | None,
+) -> dict[tuple[str, str], frozenset[str]]:
+    """The methods called INSIDE each receiver of
+    :func:`standalone_method_call_receivers`, keyed like its pairs.
+
+    ``feat_demo.describe().round(3)`` is the pair ``('feat_demo', 'round')``;
+    this says ``describe`` ran on ``feat_demo`` on the way (see
+    :func:`chain_is_pure`). Two statements with the same pair merge their
+    inner methods, the conservative way.
+    """
+    if tree is None:
+        return {}
+    inner: dict[tuple[str, str], frozenset[str]] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+            continue
+        func = node.value.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        base = _extract_receiver_base_name(func.value)
+        if not base:
+            continue
+        methods: set[str] = set()
+        receiver = func.value
+        while True:
+            if isinstance(receiver, ast.Call) and isinstance(receiver.func, ast.Attribute):
+                methods.add(receiver.func.attr)
+                receiver = receiver.func.value
+            elif isinstance(receiver, (ast.Attribute, ast.Subscript)):
+                receiver = receiver.value
+            else:
+                break
+        method = func.attr
+        if isinstance(func.value, ast.Attribute) and func.value.attr == 'plot':
+            method = f'plot.{method}'
+        inner[(base, method)] = inner.get((base, method), frozenset()) | methods
+    return inner
+
+
+def chain_is_pure(method: str, inner: frozenset[str]) -> bool:
+    """Whether a call labelled *method*, with *inner* called on the way, is
+    known not to mutate its receiver.
+
+    The last method must be known pure, and nothing inside the chain known
+    to mutate: ``df.pop('b').round(2)`` is labelled ``round`` and still
+    removes a column. An unlisted inner method is let through, as it always
+    was -- ``df.sort_values('x').head()`` -- because a method that mutates in
+    place almost always returns ``None`` and cannot be chained; asking that
+    every inner method be listed made r23s2's ``vs_plan.sort_values(...).head()``
+    an assumed mutation, and a restart rebuilt the frame from 1,312 files.
+    """
+    return method in KNOWN_PURE_METHODS and not (inner & MUTATING_METHODS)
 
 
 def _argument_root(node: ast.AST) -> str | None:

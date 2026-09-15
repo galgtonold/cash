@@ -27,7 +27,6 @@ from ...utils import resolve_file_dep_path
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
 from ..cacheability import (
-    KNOWN_PURE_METHODS,
     RECEIVER_READONLY_WRITE_METHODS,
     assigned_method_call_receivers,
     called_function_global_mutations,
@@ -36,6 +35,8 @@ from ..cacheability import (
     top_level_call_argument_bases,
     function_arg_mutations,
     standalone_call_arg_targets,
+    chain_is_pure,
+    standalone_method_call_inner_methods,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
 )
@@ -435,6 +436,7 @@ class VirtualLineage:
         if not candidates and not assigned and not drawn_args:
             return fam
         tier1 = standalone_method_mutation_receivers(tree)
+        inner = standalone_method_call_inner_methods(tree)
         receivers: set[str] = set()
         source_hash = hashlib.sha256(stmt_code.encode('utf-8')).hexdigest()
         verdict = self.mutation_verdicts.get(source_hash)
@@ -454,7 +456,8 @@ class VirtualLineage:
             if receiver_is_identity_coupled(receiver):
                 receivers.add(base)  # Axes/Figure draw method mutates it
                 continue
-            if method in KNOWN_PURE_METHODS or is_pandas_plot_call(method, receiver):
+            if (chain_is_pure(method, inner.get((base, method), frozenset()))
+                    or is_pandas_plot_call(method, receiver)):
                 continue
             if verdict is not None:
                 if base in verdict:

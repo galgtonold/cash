@@ -457,7 +457,6 @@ from ..compiled_source import is_cash_filename, register_cell_source
 from ..function_tracker import FunctionTracker
 from ..write_observer import observe_writes
 from ..cacheability import (
-    KNOWN_PURE_METHODS,
     RECEIVER_READONLY_WRITE_METHODS,
     StatementAnalysis,
     analyze_statement,
@@ -468,6 +467,8 @@ from ..cacheability import (
     called_function_global_mutations,
     function_arg_mutations,
     standalone_call_arg_targets,
+    chain_is_pure,
+    standalone_method_call_inner_methods,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
 )
@@ -3107,6 +3108,7 @@ class StatementProcessor:
         if not candidates and not assigned and not drawn_args:
             return set(), set(), set(), False
         tier1 = standalone_method_mutation_receivers(tree)
+        inner = standalone_method_call_inner_methods(tree)
         verdict = self.mutation_verdicts.get(source_hash)
         pre_route: set[str] = set()
         observe: set[str] = set()
@@ -3135,7 +3137,8 @@ class StatementProcessor:
                 # Figure is idempotent + load-bearing for chart coherence.
                 pre_route.add(base)
                 continue
-            if method in KNOWN_PURE_METHODS or is_pandas_plot_call(method, receiver):
+            if (chain_is_pure(method, inner.get((base, method), frozenset()))
+                    or is_pandas_plot_call(method, receiver)):
                 continue
             if verdict is not None:
                 if base in verdict:

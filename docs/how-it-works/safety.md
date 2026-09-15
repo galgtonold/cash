@@ -74,13 +74,17 @@ The first can be re-derived from the statement that made it; the second cannot.
 has no store target to give the receiver a fresh lineage. So Cash classifies
 method-call receivers in tiers, in this order:
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @44f80de9, cash/notebook/cacheability.py:KNOWN_PURE_METHODS @6ebfef8a, cash/notebook/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @d0495812, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @81f477db -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @3d3bb34d, cash/notebook/cacheability.py:KNOWN_PURE_METHODS @adc93e66, cash/notebook/cacheability.py:standalone_method_call_inner_methods @c952d0cc, cash/notebook/cacheability.py:chain_is_pure @800f85aa, cash/notebook/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @d0495812, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @81f477db -->
 
 - **Excluded outright.** A module receiver is a plain function call, not a
   mutation: `np.foo()`, `time.sleep()`, `plt.title()`. So is a receiver-pure
   writer — `df.to_csv(path)` *reads* the frame and writes a file, so it must
   never bump `df`'s lineage — and so is anything on the known-pure list
-  (`head`, `describe`, `value_counts`, `plot`, …). pandas' plotting entry
+  (`head`, `describe`, `value_counts`, `round`, `mean`, `groupby`, `plot`, …).
+  A chained call counts by its last method, as long as nothing inside the
+  chain is known to change the object: `df.sort_values('x').head()` leaves
+  `df` alone, `df.pop('b').round(2)` does not.
+  pandas' plotting entry
   points count as pure on a pandas receiver however they are spelled —
   `df.plot.bar(...)`, `df.groupby(k)[c].mean().plot(...)`, `df.hist()` — they
   draw on an Axes and leave the data alone.

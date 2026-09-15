@@ -23,7 +23,7 @@ spread over <!-- docnum:test_files -->~1,360<!-- /docnum --> files:
 | Suite | Size | What it covers |
 |---|---|---|
 | Unit | <!-- docnum:tests_unit -->~5,330<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
-| Notebook integration | <!-- docnum:tests_integration -->~4,330<!-- /docnum --> | Real kernels executing real notebooks, cell by cell |
+| Notebook integration | <!-- docnum:tests_integration -->~4,340<!-- /docnum --> | Real kernels executing real notebooks, cell by cell |
 | Docs | <!-- docnum:tests_docs -->~380<!-- /docnum --> | The documentation itself — see [below](#the-docs-are-tested-too) |
 
 Every one runs on **<!-- docnum:platforms -->15<!-- /docnum --> platform combinations** — Python
