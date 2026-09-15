@@ -1347,6 +1347,7 @@ class ReexecutionPlanner:
         the read set is fully known and the writer's own path resolves; every
         uncertain case falls through to the prior (conservative) behaviour.
         """
+        self._read_index = None  # this pass's (``_read_path_index``)
         tracking = getattr(self._classifier, '_tracking_state', None)
         executed_writes = getattr(tracking, 'executed_write_stmt_codes', None)
         if executed_writes is None:
@@ -1524,6 +1525,29 @@ class ReexecutionPlanner:
                 continue
         return forms
 
+    def _read_path_index(self, relevant_read_paths) -> tuple[set[str], list[str], list[str]]:
+        """``(comparable forms, folders listed, places)`` of the paths read, once
+        per writer pass (``_find_stale_file_writer_indices``) rather than once per
+        writer: each is a resolve and an ``isdir``, and 12 writers over 1,312
+        read files made 44,000 of them before one restarted cell (r23s2)."""
+        cached = getattr(self, '_read_index', None)
+        if cached is not None and cached[0] is relevant_read_paths:
+            return cached[1]
+        read_forms: set[str] = set()
+        read_dirs: list[str] = []
+        read_places: list[str] = []
+        for rp in relevant_read_paths:
+            read_forms |= self._normalize_path_forms(rp)
+            resolved = resolve_file_dep_path(rp) or rp
+            read_places.append(os.path.normcase(os.path.abspath(resolved)))
+            if os.path.isdir(resolved):
+                # A listed / globbed folder: whatever is written inside it is
+                # read by the next listing.
+                read_dirs.append(os.path.normcase(os.path.abspath(resolved)) + os.sep)
+        index = (read_forms, read_dirs, read_places)
+        self._read_index = (relevant_read_paths, index)
+        return index
+
     def _writer_output_unread(
         self,
         stmt_code: str,
@@ -1544,17 +1568,7 @@ class ReexecutionPlanner:
         written = self._writer_paths(stmt_code, simulation_trace)
         if not written:
             return False  # unresolvable target -> stay conservative
-        read_forms: set[str] = set()
-        read_dirs: list[str] = []
-        read_places: list[str] = []
-        for rp in relevant_read_paths:
-            read_forms |= self._normalize_path_forms(rp)
-            resolved = resolve_file_dep_path(rp) or rp
-            read_places.append(os.path.normcase(os.path.abspath(resolved)))
-            if os.path.isdir(resolved):
-                # A listed / globbed folder: whatever is written inside it is
-                # read by the next listing.
-                read_dirs.append(os.path.normcase(os.path.abspath(resolved)) + os.sep)
+        read_forms, read_dirs, read_places = self._read_path_index(relevant_read_paths)
         for wp in written:
             if self._normalize_path_forms(wp) & read_forms:
                 return False  # this output IS read by a relevant consumer
