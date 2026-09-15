@@ -319,7 +319,33 @@ holds for each element — hashed in full, like a loop variable — and never by
 notebook variable that happens to share the name. A call whose *callee* is the
 element (`m.predict(X)` over `models.items()`) is a different callable per
 element, which no key can see, so it is not intercepted. The same holds for a
-lambda's parameters.
+lambda's parameters, and for an argument computed from the element
+(`make_features(cleaned[mid], W)`): it too is hashed in full.
+
+<!-- claim: cash/notebook/call_unit.py:_keys_by_content @b1716a9c, cash/notebook/call_unit.py:call_cache_key @cdb14ce0, cash/notebook/call_unit.py:_CONTENT_KEY_MAX_BYTES == 67108864 -->
+**The key holds what the call receives.** When everything a call reads is plain
+data — numbers, strings, dates, numpy arrays, pandas frames, and lists or dicts
+of those — its key is the function it calls and the values it is handed. An
+argument counts by its value, not by the notebook variables it was built from,
+and the statement the call sits in is not part of the key:
+
+<!-- test:skip reason="illustrative: the reader's own sweep" -->
+```python { .nb-cell }
+for W in WINDOWS:
+    sc = {}
+    for mid in ids:
+        sc[mid] = fit_score(make_features(cleaned[mid], W))
+```
+
+Fix the data of a few machines in `cleaned` and `fit_score` runs again only for
+them — `make_features` still runs for every machine, since its result is the
+argument being hashed. Rename `sc` and nothing is fitted again; the same call in
+another cell is served too. A call that reads anything whose state can change
+while its value hashes the same — a connection, an iterator, an object of your
+own class, through an argument or a global its function uses — keeps its
+statement in the key, so two statements calling `fetch_next(conn)` never share
+results. So does a call whose arguments add up to more than 64 MiB: hashing them
+in full on every call would cost more than it saves.
 
 **Bound methods are deliberately not intercepted.** `model.predict(x)` looks like
 an obvious candidate, but caching a method puts `self` in the key, and

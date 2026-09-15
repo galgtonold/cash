@@ -140,6 +140,13 @@ class CallSite:
     #: frame's sample is its shape, dtypes and first five rows, and rolling
     #: features all begin with the same empty rows.
     local_arg_positions: tuple[int, ...] = ()
+    #: Free names the call reads only inside computed arguments -- ``cleaned``
+    #: and ``make_features`` in ``fit_score(make_features(cleaned[mid], W))``.
+    #: What they contribute is the argument's value, which the key can hash
+    #: instead of their lineage (see ``call_unit.call_cache_key``'s
+    #: *by_content*): a change to ``cleaned`` that leaves this element's
+    #: features as they were then keeps the call's result.
+    content_names: frozenset[str] = frozenset()
 
 
 def interceptable(fn) -> bool:
@@ -481,6 +488,7 @@ def wrap_eligible_calls(
                     has_unpacking=_call_has_unpacking(call),
                     stmt_identity=stmt_identity,
                     local_arg_positions=_local_arg_positions(call, local),
+                    content_names=_content_names(call, local),
                 )
             )
             call.func = ast.Call(
@@ -518,6 +526,22 @@ def _local_arg_positions(call: ast.Call, local: frozenset[str]) -> tuple[int, ..
         return ()
     values = [*call.args, *(kw.value for kw in call.keywords)]
     return tuple(i for i, v in enumerate(values) if _names_read(v) & local)
+
+
+def _content_names(call: ast.Call, local: frozenset[str]) -> frozenset[str]:
+    """Free names *call* reads only inside computed arguments (see
+    ``CallSite.content_names``). None under unpacking, whose arguments the
+    runtime refuses to key at all."""
+    if _call_has_unpacking(call):
+        return frozenset()
+    elsewhere = _names_read(call.func)
+    inside: set[str] = set()
+    for value in [*call.args, *(kw.value for kw in call.keywords)]:
+        if isinstance(value, ast.Name):
+            elsewhere.add(value.id)
+        else:
+            inside |= _names_read(value)
+    return frozenset(inside - elsewhere - local)
 
 
 def _computed_arg_positions(call: ast.Call, local: frozenset[str] = frozenset()) -> tuple[int, ...]:

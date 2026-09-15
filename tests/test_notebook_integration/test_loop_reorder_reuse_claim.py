@@ -226,7 +226,10 @@ def test_subscript_store_and_undirected_append_both_reuse_by_default(nb_runner, 
     ])
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert _calls(log) == 4, "baseline did not run both loops"
+    # Two, not four: the append loop makes the store loop's calls -- the same
+    # function on the same values -- and a call is keyed on what it receives,
+    # not on the statement it sits in, so its first run is served already.
+    assert _calls(log) == 2, "the store loop did not run, or the append loop ran its calls again"
 
     before = _calls(log)
     nb_runner.run_cell(3)

@@ -20,12 +20,18 @@ other.
 
 import ast
 import copy as _copy
+import datetime as _dt
+import decimal as _decimal
+import dis as _dis
+import fractions as _fractions
 import functools
 import hashlib
 import inspect as _inspect
 import logging
+import pathlib as _pathlib
 import sys
 import time as _time
+import types as _types
 from collections.abc import Callable, Mapping
 from types import ModuleType as _ModuleType
 from typing import Any
@@ -271,6 +277,7 @@ def call_cache_key(
     loop_vars: dict[str, object],
     loop_var_digests: Mapping[str, str] | None = None,
     global_digests: Mapping[str, str] | None = None,
+    by_content: bool = False,
 ) -> str | None:
     """The cache key for one intercepted call, or ``None`` to refuse caching it.
 
@@ -426,10 +433,30 @@ def call_cache_key(
     one caller that populates it (:class:`CallUnit`) derives it from the same
     :func:`callee_mutated_globals` result it uses to capture, so the two cannot
     disagree about which names are covered.
+
+    **by_content** keys the call on what it receives rather than on where its
+    arguments came from. The names read only inside computed arguments
+    (``site.content_names``) leave the base: their contribution is the
+    argument's value, already in *arg_digests* -- which the caller must then
+    hash in full. And the statement's identity leaves the key: two statements
+    making the same call on the same values get the same result.
+    ``fit_score(make_features(cleaned[mid], W))`` was keyed on the lineage of
+    all of ``cleaned``, so fixing 35 of 200 machines re-fitted every one --
+    495 of 600 on identical features (r23s3) -- and renaming the variable the
+    sweep assigns to re-fitted all 180.
+
+    Only the caller can say it is safe, and :class:`CallUnit` says so only
+    when nothing the call reads can change without its key changing: every
+    argument, loop variable and global the callee reaches is plain data or
+    code. ``fetch_next(conn)`` reads a connection whose state moves under a
+    fixed lineage -- CAS-256's two statements must keep their own entries.
     """
+    free_names = set(site.free_names)
+    if by_content:
+        free_names -= site.content_names
     base = compute_cache_key(
         site.source,
-        set(site.free_names),
+        free_names,
         ctx=ctx,
         occurrence_index=site.occurrence_index,
         namespace="call",
@@ -459,7 +486,7 @@ def call_cache_key(
     }
 
     if (not arg_digests and not filtered_loop_vars and not site.stmt_identity
-            and not global_digests):
+            and not global_digests and not by_content):
         return base
     # Length-prefixed and `|`-delimited deliberately: `":".join(["a", "b"])`
     # and `":".join(["a:b"])` are the same string, so an undelimited join
@@ -485,7 +512,10 @@ def call_cache_key(
     # as that loop var's component under the shared `|`-join.
     if global_digests:
         parts.extend(f"g:{name}={digest}" for name, digest in sorted(global_digests.items()))
-    if site.stmt_identity:
+    if by_content:
+        # Marked, so a key without the statement can never equal one with it.
+        parts.append("by=content")
+    elif site.stmt_identity:
         parts.append(
             "stmt=" + hashlib.sha256(site.stmt_identity.encode("utf-8")).hexdigest()
         )
@@ -603,6 +633,138 @@ def _unwrap_callee_globals(value, metadata: Mapping[str, Any]):
 #: ``CallUnit._storable``. Exact types only: a subclass may carry state.
 _IDENTITY_FREE = frozenset({int, float, complex, bool, str, bytes, type(None)})
 
+#: Values whose content is all there is to them: nothing about them can change
+#: while their hash stays put. The test :func:`_keys_by_content` applies to
+#: everything a call reads before keying it without its statement.
+_PLAIN_ATOMS = (int, float, complex, str, bytes, type(None), _decimal.Decimal,
+                _fractions.Fraction, _dt.date, _dt.time, _dt.timedelta,
+                _pathlib.PurePath, range)
+#: How many values one call may have looked at before the answer is "not
+#: plain" -- a long list is keyed the old way rather than walked.
+_PLAIN_BUDGET = 10_000
+#: Computed arguments are hashed in full under content keying; past this many
+#: bytes the hash could cost more than the call saves, so the old key stays.
+_CONTENT_KEY_MAX_BYTES = 64 * 1024 * 1024
+
+
+def _is_plain_data(value, budget: list[int]) -> bool:
+    """True when *value* is data whose content hash covers all of its state.
+
+    Scalars, strings, dates, paths; numpy arrays and scalars without Python
+    objects inside; pandas frames, series and indexes (hashed cell by cell);
+    builtin containers of those. Anything else -- a connection, an iterator,
+    a model, a user class -- may hold state its key cannot see.
+    """
+    budget[0] -= 1
+    if budget[0] < 0:
+        return False
+    if isinstance(value, _PLAIN_ATOMS):
+        return True
+    np = sys.modules.get("numpy")
+    if np is not None:
+        if isinstance(value, np.ndarray):
+            return not value.dtype.hasobject
+        if isinstance(value, np.generic):
+            return not isinstance(value, np.object_)
+    pd = sys.modules.get("pandas")
+    if pd is not None and isinstance(value, (pd.DataFrame, pd.Series, pd.Index)):
+        return True
+    if type(value) in (list, tuple, set, frozenset):
+        return all(_is_plain_data(item, budget) for item in value)
+    if type(value) is dict:
+        return all(_is_plain_data(k, budget) and _is_plain_data(v, budget)
+                   for k, v in value.items())
+    return False
+
+
+@functools.lru_cache(maxsize=1024)
+def _code_names(code: _types.CodeType) -> frozenset[str]:
+    """Global names *code* and the functions nested in it load.
+
+    From the bytecode, not ``co_names``, which holds attribute names too:
+    ``os.open`` would read as the global ``open`` -- cash's file-tracking
+    wrapper in a notebook.
+    """
+    names = {ins.argval for ins in _dis.get_instructions(code)
+             if ins.opname in ("LOAD_GLOBAL", "LOAD_NAME")}
+    for const in code.co_consts:
+        if isinstance(const, _types.CodeType):
+            names |= _code_names(const)
+    return frozenset(names)
+
+
+def _plain_or_code(value, seen: set[int], budget: list[int]) -> bool:
+    if isinstance(value, _types.FunctionType):
+        if (getattr(value, '_is_file_tracker_patch', False)
+                or getattr(value, '_cash_cached', False)):
+            return True          # cash's own: keyed or tracked by cash itself
+        return _callee_state_is_plain(value, seen, budget)
+    if isinstance(value, (_ModuleType, type, _types.BuiltinFunctionType)):
+        return True
+    np = sys.modules.get("numpy")
+    if np is not None and isinstance(value, np.ufunc):
+        return True
+    return _is_plain_data(value, budget)
+
+
+def _callee_state_is_plain(fn, seen: set[int], budget: list[int]) -> bool:
+    """True when every global, closure cell and default *fn* can reach --
+    through the functions it calls too -- is plain data or code."""
+    if id(fn) in seen:
+        return True
+    seen.add(id(fn))
+    namespace = getattr(fn, "__globals__", None) or {}
+    for name in _code_names(fn.__code__):
+        if name in namespace and not _plain_or_code(namespace[name], seen, budget):
+            return False
+    for cell in fn.__closure__ or ():
+        try:
+            contents = cell.cell_contents
+        except ValueError:       # an empty cell: nothing bound yet
+            continue
+        if not _plain_or_code(contents, seen, budget):
+            return False
+    defaults = (*(fn.__defaults__ or ()), *(fn.__kwdefaults__ or {}).values())
+    return all(_is_plain_data(value, budget) for value in defaults)
+
+
+def _nbytes(value) -> int:
+    """Roughly how many bytes a full content hash of *value* reads."""
+    np = sys.modules.get("numpy")
+    if np is not None and isinstance(value, np.ndarray):
+        return int(value.nbytes)
+    pd = sys.modules.get("pandas")
+    if pd is not None and isinstance(value, (pd.DataFrame, pd.Series)):
+        usage = value.memory_usage(index=True, deep=False)
+        return int(usage.sum() if hasattr(usage, "sum") else usage)
+    if isinstance(value, (str, bytes)):
+        return len(value)
+    return 0
+
+
+def _keys_by_content(fn, site: CallSite, args: tuple, kwargs: dict,
+                     loop_vars: Mapping[str, object]) -> bool:
+    """Whether the call may be keyed on what it receives (see
+    :func:`call_cache_key`'s *by_content*).
+
+    Only when nothing it reads can change while its key stays put: every
+    argument, every loop variable around it, and everything the callee
+    reaches is plain data or code, and the arguments to hash in full are
+    small enough to be worth it.
+    """
+    combined = (*args, *kwargs.values())
+    budget = [_PLAIN_BUDGET]
+    if not all(_is_plain_data(value, budget) for value in combined):
+        return False
+    if not all(_is_plain_data(value, budget) for name, value in loop_vars.items()
+               if not _is_dunder_loop_var(name)):
+        return False
+    computed = sum(_nbytes(combined[pos]) for pos in site.computed_arg_positions
+                   if pos < len(combined))
+    if computed > _CONTENT_KEY_MAX_BYTES:
+        return False
+    return _callee_state_is_plain(fn, set(), budget)
+
 
 class CallUnit:
     """Caches one intercepted call against the statement backend.
@@ -702,6 +864,8 @@ class CallUnit:
             key = self._build_key(
                 site, args, kwargs,
                 self._global_digests(fn, mutated_globals) if mutated_globals else None,
+                # A callee that writes globals keys on their state: the old way.
+                fn=None if mutated_globals else fn,
             )
             if key is None:
                 # Either the key build raised, or `call_cache_key` itself
@@ -1104,7 +1268,10 @@ class CallUnit:
                     logger.debug("call unit: could not restore global %r", name)
 
     def _build_key(self, site: CallSite, args: tuple, kwargs: dict,
-                   global_digests: Mapping[str, str] | None = None) -> str | None:
+                   global_digests: Mapping[str, str] | None = None,
+                   fn=None) -> str | None:
+        """The call's key. With *fn*, keyed on what it receives when
+        :func:`_keys_by_content` allows it."""
         if site.has_unpacking:
             # `*args`/`**kwargs` unpacking means the call's live arity is not
             # statically known. `site.computed_arg_positions` is a STATIC
@@ -1120,14 +1287,17 @@ class CallUnit:
             # is merely slow.
             return None
         try:
-            arg_digests = self._arg_digests(site, args, kwargs)
+            loop_vars = self._current_loop_vars()
+            by_content = fn is not None and _keys_by_content(fn, site, args, kwargs, loop_vars)
+            arg_digests = self._arg_digests(site, args, kwargs, full=by_content)
             return call_cache_key(
                 site,
                 ctx=self._ctx_provider(),
                 arg_digests=arg_digests,
-                loop_vars=self._current_loop_vars(),
+                loop_vars=loop_vars,
                 loop_var_digests=self._current_loop_var_digests(),
                 global_digests=global_digests,
+                by_content=by_content,
             )
         except Exception:  # noqa: BLE001 - never let keying break the call
             logger.debug("call unit: key build failed for %s", site.source)
@@ -1172,7 +1342,8 @@ class CallUnit:
             return {}
         return digests if isinstance(digests, Mapping) else {}
 
-    def _arg_digests(self, site: CallSite, args: tuple, kwargs: dict) -> list[str]:
+    def _arg_digests(self, site: CallSite, args: tuple, kwargs: dict,
+                     full: bool = False) -> list[str]:
         """Content hashes of the live arguments at ``site.computed_arg_positions``.
 
         Positions are in ``(*args, *kwargs.values())`` order, matching how
@@ -1181,6 +1352,9 @@ class CallUnit:
         a different shape than the site predicted) is simply not appended --
         the resulting length mismatch is caught by ``call_cache_key`` itself,
         which refuses rather than mint a key with a discriminator missing.
+
+        *full* hashes every one of them in full: under content keying the
+        value is all the key knows of where the argument came from.
         """
         combined = (*args, *kwargs.values())
         local = set(getattr(site, "local_arg_positions", ()))
@@ -1190,7 +1364,7 @@ class CallUnit:
                 continue
             # A comprehension's own variable discriminates its elements, as a
             # loop variable does its iterations: full hash, never sampled.
-            hash_fn = compute_hash_full if pos in local else compute_hash
+            hash_fn = compute_hash_full if full or pos in local else compute_hash
             digests.append(hash_fn(combined[pos]))
         return digests
 
