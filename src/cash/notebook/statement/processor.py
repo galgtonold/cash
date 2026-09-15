@@ -2318,6 +2318,37 @@ class StatementProcessor:
             return
         self._miss_guard.observe(source_hash, cache_key, hit=cached_data is not None)
 
+    #: The perpetual-miss guard spares a statement whose value is written in at
+    #: most this share of what computing it cost: each write it wastes is then
+    #: nearly free, and one later hit repays all of them.
+    _CHEAP_WRITE_SHARE = 0.1
+
+    def _write_is_cheap(self, outputs: set[str], captured_vars: dict[str, Any],
+                        execution_time: float) -> bool:
+        """Whether writing *outputs* costs little next to *execution_time*.
+
+        The guard exists for values whose every write is wasted money -- a
+        bare fit re-serialising a large model, -25 s a session. Five upstream
+        edits in a row also churn a key, and that is an ordinary morning of
+        model tuning: r23s1's cross-validation, seconds to compute and a few
+        numbers to store, stopped being saved and the next restart ran every
+        CV again. Estimated with the cost model the size-aware skip uses.
+        """
+        from cash.notebook import cost_model
+        if execution_time <= 0:
+            return False
+        try:
+            write = 0.0
+            for name in outputs:
+                if name not in captured_vars:
+                    continue
+                value = captured_vars[name]
+                write += cost_model.estimated_serialize_time(
+                    type(value).__name__, estimate_object_size(value), "disk")
+        except Exception:  # noqa: BLE001 - an estimate it cannot make guards as before
+            return False
+        return write <= self._CHEAP_WRITE_SHARE * execution_time
+
     def _drain_call_unit_events(self) -> list:
         """CallUnit's own call log, merged into ``decorator_calls`` (CAS-243).
 
@@ -2746,6 +2777,7 @@ class StatementProcessor:
             not skip_cache
             and not force_persist
             and not self._miss_guard.should_serialise(source_hash)
+            and not self._write_is_cheap(outputs, captured_vars, execution_time)
         )
 
         # A statement whose hidden draw we only just discovered has a key built
