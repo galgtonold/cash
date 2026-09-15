@@ -23,8 +23,8 @@ A *failed* lookup is memoised too, but for two seconds rather than five minutes 
 
 ## Upstream simulation
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker @d9f57cde, cash/notebook/upstream/simulator.py:NotebookSimulator @cf12b488, cash/notebook/server_discovery.py:_read_notebook_code_cells @f6b1396e broad="the simulation story is the two orchestrating classes, not one method" -->
-The classic problem: you edited cell 1 but then ran cell 3 directly. Cash solves this with a virtual-lineage approach. When cell 3 runs, Cash reads the notebook's current cell state — from a live source when one is available, the saved file otherwise — and *simulates* the upstream cells — cells 1 and 2 — without executing them. It parses each upstream statement's AST to compute what its lineage hash *should* be given the current code, then compares those virtual lineages against the in-memory lineages stored from the last actual run. Only the cells whose simulated lineage differs from what is in memory are re-executed; the rest are restored straight from cache, which is also how a variable you never computed this session appears in the namespace without its cell running.
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker @bbc0481b, cash/notebook/upstream/simulator.py:NotebookSimulator @75da28c3, cash/notebook/server_discovery.py:_read_notebook_code_cells @f6b1396e broad="the simulation story is the two orchestrating classes, not one method" -->
+The classic problem: you edited cell 1 but then ran cell 3 directly. Cash solves this with a virtual-lineage approach. When cell 3 runs, Cash reads the notebook's current cell state — from a live source when one is available, the saved file otherwise — and *simulates* the upstream cells — cells 1 and 2 — without executing them. It parses each upstream statement's AST to compute what its lineage hash *should* be given the current code, then compares those virtual lineages against the in-memory lineages stored from the last actual run. Only the cells whose simulated lineage differs from what is in memory are re-executed. A value that matches is used as it is, and one missing from memory is restored straight from cache — which is how a variable you never computed this session appears in the namespace without its cell running.
 
 <!-- claim: cash/notebook/server_discovery.py:_read_notebook_code_cells @f6b1396e, cash/notebook/server_discovery.py:last_cell_source @b653689d -->
 "A live source when one is available" means, in the order Cash tries them: cell sources **pushed by cash's JupyterLab extension**, which the frontend flushes to the kernel before every execution; **Colab's frontend** (`get_ipynb`); and **VS Code's hot-exit backup**. Each of the three sees edits you have not saved. When none answers, Cash reads the saved `.ipynb` — the fallback that makes an unsaved upstream edit invisible, and the one case where Cash says so once per session on the badge. See [editing without saving](../known-limitations.md#editing-without-saving) for what each reader covers and what it does not.
@@ -87,7 +87,7 @@ Several independent signals can cause a miss. The first four feed the [cache key
     reprinting a cached value.
 
 === "Files"
-<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @ffb815f0 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @bab80523 -->
     A file you read (CSV, parquet, …) is snapshotted as mtime, size **and a content
     hash**. On every lookup the size is compared first. If it matches and so does
     everything else the snapshot recorded — the mtime to the nanosecond, which file
@@ -143,7 +143,7 @@ flowchart TD
 
 ## Mutation bumps the receiver's lineage
 
-<!-- claim: cash/notebook/cacheability.py @fbac43de broad="the three-tier mutation classification spans the module, not one function" -->
+<!-- claim: cash/notebook/cacheability.py @4fa62486 broad="the three-tier mutation classification spans the module, not one function" -->
 `items.append(x)` names `items` as a *receiver*, not as an assignment target, so nothing about it would ordinarily move. Cash classifies every standalone method call and, when the call mutates, routes the receiver into the statement's outputs — its lineage is rebuilt from the statement's source, and everything downstream misses.
 
 The classification runs in three tiers, because "does this method mutate?" is not statically decidable in general:
