@@ -82,8 +82,12 @@ def test_persist_on_incremental_frame_loop_cache_size(nb_runner, tmp_path):
     # first statement (the empty-frame seed), so nothing amplifies here.
     # (Statement scoping is deliberate -- CAS-189 keeps `persist` bound to one
     # statement precisely so it cannot spread this amplification cell-wide.)
-    assert total < FINAL_BYTES, (
-        f"cell-top persist unexpectedly persisted the frame: {total:,} bytes"
+    # The final frame may be on disk ONCE: the cell below reads `df`, and after
+    # a restart rebuilding it re-runs all 25 slow columns, so the end-of-cell
+    # rule (`end_cell_persistence`) writes it as the cell leaves it. A snapshot
+    # per add -- what CAS-160 is about -- would be 13x.
+    assert total < 2 * FINAL_BYTES, (
+        f"cell-top persist amplified the frame: {total:,} bytes"
     )
     # Nothing amplified, so the CAS-160 guard must stay silent. This is the
     # false-positive side of the guard: it must not shout at a healthy notebook.

@@ -628,6 +628,15 @@ class StatementProcessor:
         # This cell's statements so far, each with the lineages it read, for a
         # chart writer's provenance (``carrier_history``).
         self._cell_stmt_log: list[tuple[str, dict[str, str]]] = []
+        # What rebuilding a variable after a restart would re-run: the entries
+        # not on disk it was computed through, ``{cache key: seconds}``; and the
+        # key that last produced each variable in this cell (``end_cell_persistence``).
+        self._unsaved_ancestry: dict[str, dict[str, float]] = {}
+        self._cell_last_key: dict[str, str] = {}
+        # One per control structure running: the entries not on disk its body
+        # produced, and the names they were produced for.
+        self._structure_costs: list[tuple[dict[str, float], set[str]]] = []
+        self._collapsed = 0  # ancestries summed into one (``_capped``)
 
         self.set_tracking_state(tracking_state or TrackingState())
 
@@ -2070,6 +2079,104 @@ class StatementProcessor:
     def begin_cell_statement_log(self) -> None:
         """Start this cell's statement log, before its statements run."""
         self._cell_stmt_log = []
+        self._cell_last_key = {}
+
+    #: Ancestry entries kept per variable; past this they are summed into one,
+    #: which may count a shared ancestor twice -- too much persisted, never too little.
+    _MAX_UNSAVED_ANCESTRY = 256
+
+    def _note_rebuild_cost(self, cache_key: str, inputs, outputs, seconds: float, on_disk: bool) -> None:
+        """Record what rebuilding *outputs* after a restart would re-run.
+
+        Nothing, when their entry is on disk. Otherwise this statement and the
+        entries not on disk its inputs came through -- by key, so an ancestor
+        reached twice (``vs_plan = wk_store.merge(plan)``, both from ``sales``)
+        is counted once.
+        """
+        ancestry: dict[str, float] = {}
+        if not on_disk:
+            for name in inputs:
+                ancestry.update(self._unsaved_ancestry.get(name, {}))
+            ancestry[cache_key] = seconds
+            ancestry = self._capped(ancestry)
+        for name in outputs:
+            self._unsaved_ancestry[name] = ancestry
+            self._cell_last_key[name] = cache_key
+        for spent, names in self._structure_costs:
+            spent.update(ancestry)
+            names.update(outputs)
+
+    def _capped(self, ancestry: dict[str, float]) -> dict[str, float]:
+        if len(ancestry) <= self._MAX_UNSAVED_ANCESTRY:
+            return ancestry
+        self._collapsed += 1
+        return {f'collapsed:{self._collapsed}': sum(ancestry.values())}
+
+    def begin_structure_cost(self) -> None:
+        """A control structure starts: collect what its body leaves unsaved."""
+        self._structure_costs.append(({}, set()))
+
+    def end_structure_cost(self, reads, changed, success: bool) -> None:
+        """A control structure ended. A name it *changed* that no body statement
+        produced -- ``parts`` in ``for f in files: ... parts.append(d)``, which
+        the loop owns -- costs what the whole body left unsaved to rebuild, and
+        what the structure read."""
+        spent, names = self._structure_costs.pop() if self._structure_costs else ({}, set())
+        if not success:
+            return
+        ancestry = dict(spent)
+        for name in reads:
+            ancestry.update(self._unsaved_ancestry.get(name, {}))
+        ancestry = self._capped(ancestry)
+        for name in set(changed) - names:
+            self._unsaved_ancestry[name] = ancestry
+            # No entry holds its final value: the one that bound it (``parts =
+            # []``) holds what it was before the loop.
+            self._cell_last_key.pop(name, None)
+        for outer, outer_names in self._structure_costs:
+            outer.update(ancestry)
+            outer_names.update(changed)
+
+    def end_cell_persistence(self) -> None:
+        """Write to disk what this cell left that would be costly to rebuild.
+
+        A statement is persisted by its own compute time, so a cheap statement
+        over a costly input stays in RAM, and after a restart the next cell that
+        needs it rebuilds the whole chain behind it (round 23, r23s2: 49
+        statements and a 1,200-file folder re-read to restore a table cell's
+        inputs). Here each variable's final value, as the cell leaves it, is
+        judged by what rebuilding it would cost -- the entries not on disk it
+        came through -- by the same cost-model rule. The final value only: the
+        ten versions ``sales`` goes through in one cell are not worth ten copies.
+        And only a value a cell below reads (``read_by_later_cells``): what a
+        restart needs from here, not the cell's intermediates.
+        """
+        backend = getattr(self.cash_instance, 'backend', None) if self.cash_instance else None
+        persist = getattr(backend, 'persist_from_memory', None)
+        last, self._cell_last_key = self._cell_last_key, {}
+        later = self._tracking_state.read_by_later_cells
+        self._tracking_state.read_by_later_cells = None
+        if persist is None or not later:
+            return
+        costs: dict[str, float] = {}
+        for name, key in last.items():
+            if name not in later or name not in self.shell.user_ns:
+                continue
+            if self._tracking_state.variable_sources.get(name) != key:
+                continue
+            cost = sum(self._unsaved_ancestry.get(name, {}).values())
+            if cost > 0:
+                costs[key] = max(costs.get(key, 0.0), cost)
+        for key, cost in costs.items():
+            try:
+                written = persist(key, cost)
+            except Exception:  # noqa: BLE001 - persisting ahead of need must never break a cell
+                logger.debug("%s end-of-cell persistence failed for %s", _LOG_PROCESSOR, key, exc_info=True)
+                continue
+            if written:
+                for name, k in last.items():
+                    if k == key:
+                        self._unsaved_ancestry[name] = {}
 
     def _log_statement_reads(self, code: str, inputs: set[str]) -> None:
         """Record *code* with the lineages it reads, as the simulation keys them:
@@ -2680,6 +2787,9 @@ class StatementProcessor:
                 value = getattr(saved_metadata, k)
                 if value is not None:
                     metrics[k] = value
+        storage = (saved_metadata.storage if saved_metadata else None) or ()
+        self._note_rebuild_cost(cache_key, inputs, outputs, execution_time,
+                                on_disk=any(s != 'RAM' for s in storage))
 
         metrics['total_time'] = time.time() - process_start
         self.analytics_manager.record_event(
@@ -3296,6 +3406,10 @@ class StatementProcessor:
                     value = getattr(metadata, k)
                     if value is not None:
                         metrics[k] = value
+                where = [metadata.source, *(metadata.storage or ())]
+                self._note_rebuild_cost(cache_key, inputs, metadata.outputs or (),
+                                        metadata.execution_time or 0.0,
+                                        on_disk=any(s not in (None, 'RAM') for s in where))
 
             self.analytics_manager.record_event(
                 status='HIT',

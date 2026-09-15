@@ -197,6 +197,12 @@ class TrackingState:
     # Records the cache key that last produced each variable.
     variable_sources: dict[str, str] = field(default_factory=dict)
 
+    # Written by UpstreamChecker for the cell about to run; read by
+    # StatementProcessor.end_cell_persistence. The names the cells below it
+    # read: what a restart may need restored from this cell. None: not known
+    # (no notebook to read), and nothing is persisted ahead of need.
+    read_by_later_cells: frozenset[str] | None = None
+
     # Written by StatementProcessor after each execution.
     # Tracks the most recent content hash within the current session.
     current_session_hashes: dict[str, str] = field(default_factory=dict)

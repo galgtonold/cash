@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import logging
 import re
@@ -72,6 +73,17 @@ class UpstreamResult(NamedTuple):
     execution_time: float
 
 logger = logging.getLogger(__name__)
+
+
+@functools.lru_cache(maxsize=1024)
+def _cell_reads(cell_code: str) -> frozenset[str]:
+    """The names a cell reads that it does not bind first (by its source)."""
+    try:
+        clean = CodeAnalyzer.strip_magics(cell_code.replace('\r\n', '\n'))
+        inputs, _ = CodeAnalyzer.analyze_code_block(clean)
+    except (SyntaxError, ValueError, TypeError):
+        return frozenset()
+    return frozenset(inputs)
 
 
 def _nocache_written_vars(cell_code: str) -> set[str]:
@@ -1332,6 +1344,8 @@ class UpstreamChecker:
             )
             if notebook_cells is None or current_cell_idx is None:
                 return UpstreamResult([], 0.0, 0.0)
+            self._tracking_state.read_by_later_cells = frozenset().union(
+                *(_cell_reads(code) for code in notebook_cells[current_cell_idx + 1:]))
 
             # disclose any unparseable UPSTREAM cell BEFORE simulating.
             # The simulator skips such a cell (VirtualLineage._simulate_one_cell)

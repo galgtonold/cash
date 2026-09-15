@@ -860,6 +860,11 @@ class CellExecutor:
                 raw_cell, tree, all_metrics, badge_display_id,
                 hook_start, timing_breakdown,
             )
+        # What the cell left that would be costly to rebuild after a restart
+        # goes to disk now, once, as its final version.
+        t_persist = time.time()
+        self._statement_processor.end_cell_persistence()
+        timing_breakdown['persist_final'] = time.time() - t_persist
         if isinstance(result, _EarlyReturn):
             return result
 
@@ -1004,6 +1009,11 @@ class CellExecutor:
                 raw_cell, tree, all_metrics, badge_display_id,
                 hook_start, timing_breakdown,
             )
+        # What the cell left that would be costly to rebuild after a restart
+        # goes to disk now, once, as its final version.
+        t_persist = time.time()
+        self._statement_processor.end_cell_persistence()
+        timing_breakdown['persist_final'] = time.time() - t_persist
         if isinstance(result, _EarlyReturn):
             return result
 

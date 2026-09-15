@@ -154,6 +154,17 @@ class InMemoryBackend(CacheBackend):
         entry = self._store.get(key)
         return dict(entry[0]) if entry is not None else None
 
+    def peek_entry(self, key: str) -> tuple[MetadataDict, Any] | None:
+        """The stored metadata and value themselves: not copied, not counted.
+
+        For writing the entry to another tier as it is
+        (``TieredBackend.persist_from_memory``), where a copy of a large frame
+        would be pure waste. Both are this tier's own objects: never change
+        the value; where the entry is stored (``storage``, ``persist_skipped``)
+        is all the caller may update in the metadata, once it is stored elsewhere too.
+        """
+        return self._store.get(key)
+
     def get_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, counted as an access the way `get` counts one.
 

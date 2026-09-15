@@ -72,6 +72,17 @@ The `100 ms` floor is hardcoded in `factory.py`; the savings fraction is `min_ca
 > single-tier persistent backend (`Cash(backend=FileBackend(...))` or
 > `SQLiteBackend`), which writes every entry regardless of compute time.
 
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.end_cell_persistence @b8c9a025, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @1c2fe210 -->
+In a notebook, "cheaper to re-run" is judged once more at the end of each cell.
+A statement is often fast only because its inputs are there: `latest =
+sales['week'].max()` takes milliseconds, but after a restart `sales` is gone too,
+and so is everything it was built from. So for each value the cell leaves that a
+cell below it reads, Cash adds up what rebuilding it after a restart would take —
+the statement, and every statement behind it whose result is not on disk — and
+writes the value to disk when restoring it beats that, by the same
+restore-vs-recompute rule. Only the value as the cell leaves it is written, not
+each intermediate version, and not values no later cell reads.
+
 ### Worked examples
 
 Walking the policy with concrete values clarifies why each is promoted or kept in RAM. The predicted restore times below come from the conservative `_GENERIC` family the 2-argument closure assumes; a known type (e.g. a numeric DataFrame) predicts lower, so it is even more likely to persist.

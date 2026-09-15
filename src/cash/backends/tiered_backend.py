@@ -284,6 +284,101 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 return metadata, value
         return None, None
 
+    def _write_persistent_tiers(
+        self, key: str, value: Any, metadata: MetadataDict, serializer: Serializer | None,
+        cap_size: int,
+    ) -> tuple[list[str], bool, int, list[int]]:
+        """Write to every tier past RAM that takes an entry this size.
+
+        Returns ``(destinations, size_refused, refused_size, refusing_caps)``.
+        """
+        stored_destinations: list[str] = []
+        size_refused = False  # a tier skipped this object because it's too big
+        refusing_caps: list[int] = []   # the caps it was measured against
+        refused_size = cap_size         # the size that was actually compared
+        for i in range(1, len(self.backends)):
+            backend = self.backends[i]
+            cap = backend._promotion_size_cap()
+            # Guard against non-numeric caps (e.g. a MagicMock tier in
+            # tests) — treat anything that isn't a real number as no cap.
+            if isinstance(cap, bool) or not isinstance(cap, (int, float)):
+                cap = None
+            if cap is not None and cap_size and cap_size > cap:
+                # About to refuse. `cap_size` is the value's IN-MEMORY
+                # footprint (the RAM tier measures it on the way past), and
+                # what this tier stores is the SERIALIZED form -- for a
+                # frame of strings, two or more times smaller. Refusing on
+                # the memory number cost a tester their whole cache: a
+                # 160 MB entry, under their 500 MB cap by any measure they
+                # could see, was never stored because it took more than
+                # that in RAM, and `cash inspect` showed them the 160.
+                #
+                # So measure properly before refusing. Serializing is
+                # expensive, which is why it happens HERE and not on every
+                # write: this branch is reached only when the value was
+                # about to be dropped, and the alternative to the cost is a
+                # wrong answer to "will this fit".
+                true_size = self._serialized_size(value, serializer)
+                if true_size is not None and true_size <= cap:
+                    cap_size = true_size
+                else:
+                    logger.debug(
+                        "[TIERED] Skipping %s for key %r: size %d > cap %d",
+                        type(backend).__name__, key, true_size or cap_size, cap,
+                    )
+                    size_refused = True
+                    refused_size = true_size or cap_size
+                    refusing_caps.append(int(cap))
+                    continue
+            try:
+                backend.set(key, value, metadata, serializer)
+                _label = getattr(type(backend), 'source_label', None) or type(backend).__name__
+                stored_destinations.append(_label)
+            except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
+                logger.warning("[TIERED] Failed to write to backend %s: %s", type(backend).__name__, e)
+        return stored_destinations, size_refused, refused_size, refusing_caps
+
+    def persist_from_memory(self, key: str, rebuild_seconds: float) -> bool:
+        """Write an entry only the RAM tier holds to the persistent tiers, when
+        restoring it would beat rebuilding it.
+
+        ``set`` decides by the statement's own compute time, and a statement is
+        often cheap only because its inputs are there: ``latest =
+        sales['week'].max()`` takes 0.06 s, but after a restart ``sales`` is
+        gone too, and so is everything back to the folder it was read from --
+        35 s (round 23, r23s2). *rebuild_seconds* is that whole cost, and the
+        same cost-model rule decides with it. Only a notebook value (it carries
+        a cost-model family) is considered. Returns True when it was written.
+        """
+        if len(self.backends) < 2:
+            return False
+        peek = getattr(self.backends[0], 'peek_entry', None)
+        entry = peek(key) if peek is not None else None
+        if entry is None:
+            return False
+        stored_metadata, value = entry
+        if any(d != "RAM" for d in stored_metadata.get('storage') or ()):
+            return False  # on disk already
+        if stored_metadata.get('metadata_only') or stored_metadata.get('cost_model_family') is None:
+            return False
+        size = stored_metadata.get('cost_model_size_bytes', stored_metadata.get('size', 0))
+        if not self._cost_model_promote(
+                stored_metadata.get('cost_model_type_name', ''), size, rebuild_seconds,
+                self._promotion_backend_kind()):
+            return False
+        metadata = {k: v for k, v in stored_metadata.items()
+                    if k not in ('persist_skipped', 'source', 'storage')}
+        metadata['rebuild_time'] = rebuild_seconds
+        stored, size_refused, refused_size, refusing_caps = self._write_persistent_tiers(
+            key, value, metadata, None, stored_metadata.get('size') or size)
+        if not stored:
+            if size_refused:
+                self._warn_oversize_not_persisted(key, refused_size, refusing_caps)
+            return False
+        stored_metadata['storage'] = ["RAM", *stored]
+        stored_metadata.pop('persist_skipped', None)
+        return True
+
     def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
         if not self.backends:
             return
@@ -347,51 +442,10 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             # (the notebook path sets no plain 'size' key).
             cap_size = size or metadata.get('cost_model_size_bytes', 0)
 
-            size_refused = False  # a tier skipped this object because it's too big
-            refusing_caps: list[int] = []   # the caps it was measured against
-            refused_size = cap_size         # the size that was actually compared
-            for i in range(1, len(self.backends)):
-                backend = self.backends[i]
-                if not past_compute_floor:
-                    continue
-                cap = backend._promotion_size_cap()
-                # Guard against non-numeric caps (e.g. a MagicMock tier in
-                # tests) — treat anything that isn't a real number as no cap.
-                if isinstance(cap, bool) or not isinstance(cap, (int, float)):
-                    cap = None
-                if cap is not None and cap_size and cap_size > cap:
-                    # About to refuse. `cap_size` is the value's IN-MEMORY
-                    # footprint (the RAM tier measures it on the way past), and
-                    # what this tier stores is the SERIALIZED form -- for a
-                    # frame of strings, two or more times smaller. Refusing on
-                    # the memory number cost a tester their whole cache: a
-                    # 160 MB entry, under their 500 MB cap by any measure they
-                    # could see, was never stored because it took more than
-                    # that in RAM, and `cash inspect` showed them the 160.
-                    #
-                    # So measure properly before refusing. Serializing is
-                    # expensive, which is why it happens HERE and not on every
-                    # write: this branch is reached only when the value was
-                    # about to be dropped, and the alternative to the cost is a
-                    # wrong answer to "will this fit".
-                    true_size = self._serialized_size(value, serializer)
-                    if true_size is not None and true_size <= cap:
-                        cap_size = true_size
-                    else:
-                        logger.debug(
-                            "[TIERED] Skipping %s for key %r: size %d > cap %d",
-                            type(backend).__name__, key, true_size or cap_size, cap,
-                        )
-                        size_refused = True
-                        refused_size = true_size or cap_size
-                        refusing_caps.append(int(cap))
-                        continue
-                try:
-                    backend.set(key, value, metadata, serializer)
-                    _label = getattr(type(backend), 'source_label', None) or type(backend).__name__
-                    stored_destinations.append(_label)
-                except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
-                    logger.warning("[TIERED] Failed to write to backend %s: %s", type(backend).__name__, e)
+            stored, size_refused, refused_size, refusing_caps = (
+                self._write_persistent_tiers(key, value, metadata, serializer, cap_size)
+                if past_compute_floor else ([], False, cap_size, []))
+            stored_destinations.extend(stored)
 
             # The value was worth persisting (cleared the compute floor) but
             # every persistent tier refused it as too big for its cap — it will

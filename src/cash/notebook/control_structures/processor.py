@@ -333,9 +333,20 @@ class ControlStructureProcessor:
         reads_before = dict(state.statement_file_reads)
         rng_before = _global_rng_fingerprint() if isinstance(node, ast.For) else None
         from ..write_observer import observe_writes
-        with observe_writes() as written:
-            result = self._dispatch(node, ttl, silent, parent_context, raw_cell,
-                                    inherited_annotation, prev_node)
+        sp = self.statement_processor
+        begin_cost = getattr(sp, 'begin_structure_cost', None)
+        if begin_cost is not None:
+            begin_cost()
+        result = None
+        try:
+            with observe_writes() as written:
+                result = self._dispatch(node, ttl, silent, parent_context, raw_cell,
+                                        inherited_annotation, prev_node)
+        finally:
+            if begin_cost is not None:
+                changed = ({v for v, h in lineage.items() if before.get(v) != h} | set(writes)
+                           if result is not None and result.success else set())
+                sp.end_structure_cost(reads, changed, result is not None and result.success)
         if result.success:
             self._record_writes(code, reads, written)
             left = {v: h for v, h in lineage.items() if before.get(v) != h or v in writes}
