@@ -20,6 +20,11 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent.parent
 NOTEBOOK = ROOT / "examples" / "try_cash_binder.ipynb"
 
+# The fixture executes the whole ten-cell tour in a kernel (~22 s here), which
+# the unit suite's 30 s default leaves no room for on a slow runner: the timeout
+# killed the xdist worker on Windows / 3.12 CI.
+pytestmark = pytest.mark.timeout(300)
+
 
 @pytest.fixture(scope="module")
 def executed(tmp_path_factory):
