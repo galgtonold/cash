@@ -47,6 +47,32 @@ def test_each_element_gets_its_own_result(nb_runner, cell):
     assert "slow 5" in _calls(nb_runner)[before:]
 
 
+def test_an_argument_built_from_the_element_is_keyed_by_all_of_it(nb_runner):
+    """``fit_score(make_features(cleaned[mid], W)) for mid in ids`` (r23s3):
+    the argument is computed from the element, and only its value tells the
+    elements apart. That value was hashed from a sample -- a frame's shape,
+    dtypes and first five rows -- and rolling-window features all begin with
+    the same empty rows: two elements, one key, the second served the first's
+    result on a first run. It takes a global named like the variable for the
+    call to be cached at all (r23s3 had one from an earlier ``for`` loop)."""
+    nb_runner.create_notebook([
+        "import cash\n%cash_on",
+        "import time\nimport pandas as pd\n"
+        "def frame(k):\n"
+        "    return pd.DataFrame({'v': [0.0] * 5 + [float(k)] * 5})\n"
+        "def slow_sum(df):\n"
+        "    time.sleep(0.05)\n"
+        "    return float(df['v'].sum())\n"
+        "keys = [1, 2]\n"
+        "for k in keys:\n"
+        "    pass",
+        "out = {k: slow_sum(frame(k)) for k in keys}\nprint(out)",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "{1: 5.0, 2: 10.0}" in nb_runner.get_output(3), nb_runner.get_output(3)
+
+
 def test_a_callee_that_is_the_element_is_not_intercepted(nb_runner):
     """`m.predict(...)` over `models.items()` is a different callable per
     element, which no key can see: it must simply run."""

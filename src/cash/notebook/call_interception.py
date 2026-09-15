@@ -125,15 +125,20 @@ class CallSite:
     #: today's behaviour -- the pre-existing collision risk -- rather than
     #: raising.
     stmt_identity: str = ""
-    #: Positions of bare-name arguments bound by an enclosing comprehension or
-    #: lambda -- ``slow(v)`` in ``{k: slow(v) for k, v in d.items()}``. Such a
-    #: name is local to the comprehension: resolving it by name, the key found
-    #: either nothing or an unrelated global of the same name, so every element
-    #: got ONE key and the second call was served the first's result -- on the
-    #: first run with a global ``v`` around (round 22, a grid search per model
-    #: handed the SVM the logistic regression). These are also in
-    #: ``computed_arg_positions``, and are hashed in full, never sampled, for
-    #: the reason a loop variable is (see ``call_unit._loop_var_digest``).
+    #: Positions of arguments that read a name bound by an enclosing
+    #: comprehension or lambda -- ``slow(v)`` in ``{k: slow(v) for k, v in
+    #: d.items()}``. Such a name is local to the comprehension: resolving it by
+    #: name, the key found either nothing or an unrelated global of the same
+    #: name, so every element got ONE key and the second call was served the
+    #: first's result -- on the first run with a global ``v`` around (round 22,
+    #: a grid search per model handed the SVM the logistic regression). These
+    #: are also in ``computed_arg_positions``, and are hashed in full, never
+    #: sampled, for the reason a loop variable is (see
+    #: ``call_unit._loop_var_digest``): the argument's value is then all that
+    #: tells the elements apart. That holds for an argument computed from the
+    #: name too -- ``fit_score(make_features(cleaned[mid], W))`` (r23s3): a
+    #: frame's sample is its shape, dtypes and first five rows, and rolling
+    #: features all begin with the same empty rows.
     local_arg_positions: tuple[int, ...] = ()
 
 
@@ -507,12 +512,12 @@ def _call_has_unpacking(call: ast.Call) -> bool:
 
 
 def _local_arg_positions(call: ast.Call, local: frozenset[str]) -> tuple[int, ...]:
-    """Positions of bare-name arguments bound by an enclosing comprehension or
-    lambda (see ``CallSite.local_arg_positions``)."""
+    """Positions of arguments that read a name bound by an enclosing
+    comprehension or lambda (see ``CallSite.local_arg_positions``)."""
     if not local or _call_has_unpacking(call):
         return ()
     values = [*call.args, *(kw.value for kw in call.keywords)]
-    return tuple(i for i, v in enumerate(values) if isinstance(v, ast.Name) and v.id in local)
+    return tuple(i for i, v in enumerate(values) if _names_read(v) & local)
 
 
 def _computed_arg_positions(call: ast.Call, local: frozenset[str] = frozenset()) -> tuple[int, ...]:
