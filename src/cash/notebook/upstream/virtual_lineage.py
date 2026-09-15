@@ -3072,9 +3072,14 @@ class VirtualLineage:
             if normalized_prod in simulation_trace_codes:
                 directly_mismatched.add(vname)
             elif vname in virtual_lineage:
+                # Written last by this cell or one below it: ahead of the cells
+                # above, not an edit to them. This cell counts: re-running one
+                # that adds a column to a frame from above
+                # (``docs['topic'] = ...``) found the frame ahead by its own
+                # earlier write and rebuilt everything derived from it (r23s4).
                 is_downstream = any(
                     normalized_prod in notebook_cells[di]
-                    for di in range(current_cell_idx + 1, len(notebook_cells))
+                    for di in range(current_cell_idx, len(notebook_cells))
                 )
                 if not is_downstream:
                     directly_mismatched.add(vname)

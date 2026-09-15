@@ -1,7 +1,7 @@
 """An input the kernel already holds, current, is used as it is.
 
 Before a cell runs, cash simulates the cells above it and leaves alone every
-input whose value is what that simulation expects. A check overrode this
+input whose value is what that simulation expects. Two checks overrode this
 and rebuilt a value that was already current -- restored it from the cache,
 or re-ran what produced it:
 
@@ -12,6 +12,10 @@ or re-ran what produced it:
   that statement is in this cell. When it is in a cell above, a plain first
   run looked stale: round 23's r23s4 restored its 5,030-article frame this way
   on every Run All.
+* A cell that adds a column to a frame from above (``docs['topic'] = ...``)
+  leaves that frame ahead of the simulation. Re-running the cell read this as
+  an unsaved edit upstream and rebuilt everything derived from the frame
+  (r23s4: the model and vocabulary behind its topic table).
 
 Observed with a mark set on the live value from outside the notebook: a value
 rebuilt by cash is a different object and does not carry it.
@@ -66,6 +70,23 @@ def test_a_cell_reassigning_an_input_uses_the_live_value(nb_runner):
     assert "N 500" in nb_runner.get_output(3)
     # rename carries a frame's attrs to its result
     assert _marked(nb_runner, "df"), "df was rebuilt though cell 2 had just made it"
+
+
+def test_rerunning_a_cell_that_adds_a_column_keeps_what_came_from_the_frame(nb_runner):
+    nb_runner.create_notebook([
+        ON,
+        "import pandas as pd\ndocs = pd.DataFrame({'a': range(1000)})",
+        "feat = docs['a'] * 2",
+        "docs['topic'] = feat % 3\nprint('TOPICS', int(docs['topic'].sum()))",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    _mark(nb_runner, "feat")
+
+    nb_runner.run_cell(4)
+
+    assert nb_runner.get_output(4).count("TOPICS 999") == 1
+    assert _marked(nb_runner, "feat"), "feat was rebuilt though nothing above it changed"
 
 
 # What the first check is for: a re-run does not apply the cell twice.
