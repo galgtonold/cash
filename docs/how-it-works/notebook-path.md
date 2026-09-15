@@ -21,7 +21,7 @@ The shape of every statement's journey is the same:
 
 ## What happens when you run a cell
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics._execute_cell @6944c822, cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @5ffc94aa, cash/notebook/ipython/cell_executor.py:CellExecutor._execute_cell_pipeline @0b77fadf -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics._execute_cell @6944c822, cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @5ffc94aa, cash/notebook/ipython/cell_executor.py:CellExecutor._execute_cell_pipeline @f2fa76c8 -->
 `CashMagics` stands in front of IPython's `run_cell`, and hands the cell to
 `CellExecutor.execute_cell()`. Steps 2-7 below are that method's own
 seven phases (in `_execute_cell_pipeline`, inside one cell run); step 1 (interception) and step 8 (badge render) happen in
@@ -35,7 +35,7 @@ flowchart TD
     S4["<b>4. Upstream resolution</b><br/><code>CellExecutor._ensure_state_for_inputs()</code><br/><code>CodeAnalyzer.analyze_code_block()</code> → inputs &amp; outputs<br/>For each missing input: <code>Restorer.restore_variable()</code><br/><code>UpstreamChecker.check_and_reexecute()</code>: simulate upstream cells (virtual lineage), detect lineage mismatches, re-execute if needed"]
     S5["<b>5.</b> Parse the cell into statements"]
     S6["<b>6.</b> Pre-execution notifications<br/>(changed functions, reloaded modules)"]
-    S7["<b>7. For each statement:</b><br/>compute cache key · classify method mutations · <code>decide_cacheability()</code><br/>· look up cache (HIT → restore and return) · execute · drain decorator calls<br/>· observe receiver mutations · capture outputs + output lineages · store in cache<br/>If control structure → <code>ControlStructureProcessor.process()</code><br/>Else → <code>StatementProcessor.process_statement()</code>"]
+    S7["<b>7. For each statement:</b><br/>compute cache key · classify method mutations · <code>decide_cacheability()</code><br/>· look up cache (HIT → restore and return) · execute · drain decorator calls<br/>· observe receiver mutations · capture outputs + output lineages · store in cache<br/>If control structure → <code>ControlStructureProcessor.process()</code><br/>Else → <code>StatementProcessor.process_statement()</code><br/>Then, once per cell: values a later cell reads go to disk when restoring beats rebuilding them"]
     S8["<b>8. Render execution badge</b><br/>(timing, per-statement status, decorator metrics)"]
     S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8
 ```
@@ -173,7 +173,7 @@ Conditionals work the same way with a different marker: `if`/`elif`/`else` and
 `# control_context:` branch hash, so only the branch that actually ran is
 cached and unused branches never pollute the key space.
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @4fbec3b2, cash/notebook/control_structures/processor.py:get_control_structure_type @eb40f97d -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @d29eef34, cash/notebook/control_structures/processor.py:get_control_structure_type @eb40f97d -->
 `while` and `with` are the exception — they are executed as a **single cacheable
 unit** through the statement processor rather than decomposed, because neither
 has an enumerable iteration space to key on.

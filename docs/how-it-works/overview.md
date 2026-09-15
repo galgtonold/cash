@@ -10,7 +10,7 @@ the tools that let you verify what Cash did.
 
 Every computation Cash touches — a notebook statement or a decorated function call — passes through the same five steps. Cash **analyzes** which variables and files the code reads and writes, **keys** the computation by fingerprinting the code together with its current inputs, **checks** the backend to see whether that exact fingerprint is already stored, then either **executes** the code fresh or **restores** the saved result, and finally **tracks** lineage so that anything downstream knows what it depends on.
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @ffb815f0, cash/notebook/function_tracker.py:FunctionTracker @1a485c19 broad="the trust thesis names two whole mechanisms - file freshness and function-source tracking - not one function each" -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @bab80523, cash/notebook/function_tracker.py:FunctionTracker @1a485c19 broad="the trust thesis names two whole mechanisms - file freshness and function-source tracking - not one function each" -->
 The trust thesis is simple: Cash recomputes whenever something relevant changed, and refuses to cache when replaying a snapshot would be wrong. If your code reads a file that was modified or calls a function whose source changed, Cash will not serve you the old answer.
 
 <!-- claim: cash/notebook/randomness.py:capture_rng_state @4bddf256, cash/notebook/randomness.py:restore_rng_state @ccba2493 -->
@@ -54,7 +54,7 @@ Non-determinism is the one case where "recompute" is not the safe answer, and Ca
     </div>
   </div>
   <div class="cash-arch-arrow" aria-hidden="true"></div>
-  <!-- claim: cash/backends/tiered_backend.py:TieredBackend @ff192887, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend broad="TieredBackend's tier ordering is a property of the class as a whole; the other three are existence claims" -->
+  <!-- claim: cash/backends/tiered_backend.py:TieredBackend @74894003, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend broad="TieredBackend's tier ordering is a property of the class as a whole; the other three are existence claims" -->
   <div class="cash-arch-node cash-arch-backend">
     <span class="cash-arch-title">Cache backend</span>
     <span class="cash-arch-sub">TieredBackend &mdash; L1 in-memory &rarr; L2 on disk &middot; pluggable: SQLite, Redis, S3</span>

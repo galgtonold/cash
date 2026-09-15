@@ -700,7 +700,7 @@ Two large objects that differ only outside the sampled region therefore hash ide
 
 ## An edit that keeps the size and timestamps
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:_unchanged_since_hashed @10dfb55f, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @ffb815f0, cash/notebook/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:_unchanged_since_hashed @10dfb55f, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @bab80523, cash/notebook/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0 -->
 Whether a file you read has changed is answered by its metadata first. If its
 size, its modification time to the nanosecond, which file it is, and on Linux
 and macOS its inode change time are all as they were when Cash hashed it — and
