@@ -11,7 +11,7 @@ from __future__ import annotations
 import importlib
 import sys
 import textwrap
-import time
+import uuid
 import warnings
 
 import pytest
@@ -56,7 +56,9 @@ PANDAS_SPELLINGS = {
 
 
 def _load(tmp_path, monkeypatch, body, extra=""):
-    name = f"ambient_{time.monotonic_ns()}"
+    # Unique per call: Windows' monotonic clock ticks every ~15.6 ms, and two
+    # tests that got one name imported each other's module (CI, Windows 3.11).
+    name = f"ambient_{uuid.uuid4().hex}"
     (tmp_path / f"{name}.py").write_text(
         HEADER + extra + textwrap.dedent(f"""
 
