@@ -117,3 +117,22 @@ def test_rerunning_a_cell_reassigning_an_input_does_not_apply_it_twice(nb_runner
 
     assert "N 499" in nb_runner.get_output(3)
     assert nb_runner.peek("len(df)") == "499"
+
+
+def test_rerunning_a_cell_after_a_later_cell_wrote_its_input(nb_runner):
+    """Re-running lands where a clean run to this cell lands: ``df`` is put
+    back to its state at the cell's start, not left with the later cell's
+    write. (Read through ``globals()``: a peek naming ``df`` is a cell at the
+    notebook's end and would bring ``df`` up to date through cell 4.)"""
+    nb_runner.create_notebook([
+        ON,
+        "import pandas as pd\ndf = pd.DataFrame({'a': range(1000)})\ndf['b'] = df['a'] * 2",
+        "df['a'] = df['a'] + 1\nprint('SUM', int(df['a'].sum()))",
+        "df['a'] = df['a'] * 10",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.run_cell(3)
+
+    assert "SUM 500500" in nb_runner.get_output(3)
+    assert nb_runner.peek("int(globals()['df']['a'].sum())") == "500500"
