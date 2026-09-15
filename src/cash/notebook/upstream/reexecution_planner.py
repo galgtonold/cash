@@ -22,7 +22,9 @@ from ..cacheability import (
 from ..cache_key import write_provenance_key
 from ..file_dep_snapshot import file_dep_is_fresh
 from .._trace import trace_event
+from ..carrier_history import carrier_history_fingerprint
 from .stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
+from .virtual_lineage import _key_lineages
 
 if TYPE_CHECKING:
     from .mismatch_classifier import MismatchClassifier
@@ -1397,13 +1399,15 @@ class ReexecutionPlanner:
             if ((changed or scheduled_inputs) and not drifted
                     and self._writer_output_already_fresh(
                         stmt_code, inputs, virtual_lineage, runtime_lineage,
-                        must_cover=scheduled_inputs)):
+                        must_cover=scheduled_inputs, simulation_trace=simulation_trace, index=i)):
                 changed = inputs_changed = False
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM] File-writer effect already fresh on disk; "
                         "not re-firing: %s", stmt_code[:60],
                     )
+            trace_event("writer_decided", stmt=stmt_code[:80], refire=changed or inputs_changed,
+                        changed=changed, scheduled_inputs=sorted(scheduled_inputs), drifted=drifted)
             if changed or inputs_changed:
                 writer_indices.append(i)
                 if self.debug:
@@ -1517,12 +1521,21 @@ class ReexecutionPlanner:
         virtual_lineage: dict | None,
         runtime_lineage: dict,
         must_cover: set[str] | frozenset[str] = frozenset(),
+        simulation_trace: list | None = None,
+        index: int | None = None,
     ) -> bool:
         """True when a writer's effect is already on disk and provably current.
 
         *must_cover*: inputs the record has to have a lineage for -- ones
         whose producer is being re-run, which it can vouch for only if it
         knows what they were.
+
+        *simulation_trace* / *index*: where the writer is in the simulation. Its
+        inputs are compared with the lineages they have THERE, which is what
+        the runtime recorded; the end of the simulation is later, and a
+        ``plt.close(fig)`` or a second chart after the write had moved ``fig``
+        on by then. A figure is compared by its drawing history instead of its
+        lineage (``carrier_history``).
 
         Consulted only for a writer that looks ``changed`` purely because its
         code was never seen THIS session (the post-restart case). Returns True —
@@ -1535,6 +1548,10 @@ class ReexecutionPlanner:
         unreadable / stale output file, or a drifted input lineage all return
         False, so the writer is scheduled exactly as before (round-3).
         """
+        def stale(reason: str, **detail) -> bool:
+            trace_event("writer_not_fresh", stmt=stmt_code[:80], reason=reason, **detail)
+            return False
+
         cash = getattr(self._virtual_lineage, 'cash_instance', None)
         backend = getattr(cash, 'backend', None) if cash is not None else None
         if backend is None or not hasattr(backend, 'get_metadata'):
@@ -1544,31 +1561,58 @@ class ReexecutionPlanner:
         except (OSError, TypeError, ValueError, AttributeError):
             return False
         if not record or not record.get('write_provenance'):
-            return False
+            return stale("no provenance")
         paths = record.get('paths') or []
         file_deps = record.get('file_deps') or {}
         if not paths or not file_deps:
-            return False
+            return stale("no files recorded")
         for path in paths:
             stored = file_deps.get(path)
             if not stored:
-                return False
+                return stale("file not recorded", path=path)
             fresh, _reason = file_dep_is_fresh(path, stored)
             if not fresh:
-                return False
+                return stale("file changed", path=path)
         # The output on disk is only the writer's CURRENT output if its inputs
         # still carry the lineage they had when it was written. A drift means
         # the file was produced from a now-stale payload.
         stored_lineages = record.get('input_lineages') or {}
         if not set(must_cover) <= set(stored_lineages):
-            return False
+            return stale("input not recorded", inputs=sorted(set(must_cover) - set(stored_lineages)))
+        entry = simulation_trace[index] if simulation_trace is not None and index is not None else None
+        histories = record.get('carrier_histories') or {}
         for var, stored_lineage in stored_lineages.items():
-            current = (virtual_lineage or {}).get(var)
+            if var in histories:
+                if entry is None or histories[var] != self._carrier_history_at(simulation_trace, index, var):
+                    return stale("figure drawn differently", var=var)
+                continue
+            current = None
+            if entry is not None:
+                # After the writer ran: what the runtime recorded.
+                current = (entry[4].get(var) if var in entry[1] else _key_lineages(entry[3]).get(var))
+            if current is None:
+                current = (virtual_lineage or {}).get(var)
             if current is None:
                 current = runtime_lineage.get(var)
             if current != stored_lineage:
-                return False
+                return stale("input changed", var=var)
         return True
+
+    @staticmethod
+    def _carrier_history_at(simulation_trace: list, index: int, carrier: str) -> str | None:
+        """The history fingerprint of figure *carrier* at the writer at *index*,
+        from the statements of the writer's cell that come before it -- the same
+        span the runtime took (``StatementProcessor._carrier_histories``)."""
+        cell = getattr(simulation_trace[index], 'cell', -1)
+        if cell == -1:
+            return None
+        first = index
+        while first > 0 and getattr(simulation_trace[first - 1], 'cell', -1) == cell:
+            first -= 1
+        return carrier_history_fingerprint(
+            [(entry[0], _key_lineages(entry[3])) for entry in simulation_trace[first:index]],
+            carrier,
+        )
 
     def _dedup_sorted_indices(self, stmts_to_run_indices: list[int]) -> list[int]:
         """Return *stmts_to_run_indices* sorted and deduplicated while preserving order."""

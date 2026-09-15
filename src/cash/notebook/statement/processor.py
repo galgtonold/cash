@@ -625,6 +625,9 @@ class StatementProcessor:
         self._cell_rng_changed: set[str] = set()
         self._cell_rng_pre: dict | None = None
         self._cell_rng_post: dict | None = None
+        # This cell's statements so far, each with the lineages it read, for a
+        # chart writer's provenance (``carrier_history``).
+        self._cell_stmt_log: list[tuple[str, dict[str, str]]] = []
 
         self.set_tracking_state(tracking_state or TrackingState())
 
@@ -2060,6 +2063,30 @@ class StatementProcessor:
         self._cell_rng_pre = None
         self._cell_rng_post = None
 
+    #: Statements logged per cell for ``carrier_history``; a longer cell (a loop's
+    #: iterations) stops logging, and its charts are judged as before.
+    _MAX_CELL_STMT_LOG = 5000
+
+    def begin_cell_statement_log(self) -> None:
+        """Start this cell's statement log, before its statements run."""
+        self._cell_stmt_log = []
+
+    def _log_statement_reads(self, code: str, inputs: set[str]) -> None:
+        """Record *code* with the lineages it reads, as the simulation keys them:
+        its inputs, and the globals its callees read."""
+        log = self._cell_stmt_log
+        if len(log) >= self._MAX_CELL_STMT_LOG:
+            return
+        from ..cache_key import called_function_dependencies
+        read = {}
+        for dep in called_function_dependencies(
+                sorted(inputs), self.shell.user_ns, self.variable_lineage, None):
+            name, _, lineage = dep.partition(':')
+            if lineage != 'ABSENT':
+                read[name] = lineage
+        read.update({n: self.variable_lineage[n] for n in inputs if n in self.variable_lineage})
+        log.append((code, read))
+
     def cell_rng_observation(self) -> tuple[set[str], dict | None, dict | None]:
         """What this cell's statements changed, and the positions either side.
 
@@ -2842,6 +2869,9 @@ class StatementProcessor:
                 'code': code,
                 'ttl': None,  # provenance must not expire out from under a reader
             }
+            histories = self._carrier_histories(code, inputs)
+            if histories:
+                record['carrier_histories'] = histories
             backend = self.cash_instance.backend if self.cash_instance else None
             if backend is not None:
                 self._stmt_restorer.persist_metadata_only(
@@ -2849,6 +2879,29 @@ class StatementProcessor:
                 )
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("%s write-provenance persistence failed", _LOG_PROCESSOR)
+
+    def _carrier_histories(self, code: str, inputs: set[str]) -> dict[str, str]:
+        """``{figure name: history fingerprint}`` for the figures writer *code* reads.
+
+        A figure's own lineage cannot vouch for it after a restart (see
+        ``carrier_history``); the history that drew it, taken from this cell's
+        statements before the write, can.
+        """
+        from ..carrier_history import FIGURE_KINDS, carrier_history_fingerprint
+        from ..upstream.stateful_carriers import stateful_carrier_kind
+
+        log = self._cell_stmt_log
+        end = next((k for k in range(len(log) - 1, -1, -1) if log[k][0] == code), None)
+        if end is None:
+            return {}
+        histories = {}
+        for name in inputs:
+            if stateful_carrier_kind(self.shell.user_ns.get(name)) not in FIGURE_KINDS:
+                continue
+            fingerprint = carrier_history_fingerprint(log[:end], name)
+            if fingerprint is not None:
+                histories[name] = fingerprint
+        return histories
 
     def _identity_coupled_call_receivers(self, tree: ast.Module | None) -> set[str]:
         """Receiver names in *tree* that are live matplotlib Figures/Axes.
@@ -4274,6 +4327,7 @@ class StatementProcessor:
         inputs, outputs = CodeAnalyzer.analyze_code_block(
             code, tree=tree, resolve_source=self._resolve_live_function_source,
             user_ns=self.shell.user_ns)
+        self._log_statement_reads(code, inputs)
         analysis_time = time.time() - t1
 
         t2 = time.time()

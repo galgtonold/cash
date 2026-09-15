@@ -849,6 +849,7 @@ class CellExecutor:
         # 7. Statement execution. The per-statement RNG observer does the
         # measuring; this only opens a fresh accumulation for the cell.
         self._statement_processor.begin_cell_rng_observation()
+        self._statement_processor.begin_cell_statement_log()
         # Remote freshness checks (a cached function reading s3:// and friends)
         # are network round trips that land on the HIT path, where the badge
         # reports a saving and nothing reports what establishing it cost. The
@@ -996,6 +997,7 @@ class CellExecutor:
 
         # 7. Statement execution (awaited). Same single observer as the sync path.
         self._statement_processor.begin_cell_rng_observation()
+        self._statement_processor.begin_cell_statement_log()
         # Remote freshness checks, measured exactly as in the sync path.
         with _measured_validation(sink=timing_breakdown):
             result = await self._execute_cell_statements_async(

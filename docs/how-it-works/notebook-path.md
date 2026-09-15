@@ -234,17 +234,20 @@ else, and the loop runs again. The loop's own variables (`parts`, `d` in
 `for f in files: d = read(f); parts.append(d)`) are not stored anywhere a
 restart can bring them back from: a cell that reads them runs the loop.
 
-<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writer_output_already_fresh @3aded0eb, cash/notebook/write_observer.py:observe_writes @cb18a8f7 -->
+<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writer_output_already_fresh @eff0744a, cash/notebook/write_observer.py:observe_writes @cb18a8f7, cash/notebook/carrier_history.py:carrier_history_fingerprint @b132b2c9 -->
 A cell that writes files (`df.to_csv(...)`, a loop saving one chart per kind)
 is not re-run after a restart just because it ran in an earlier kernel. When it
 runs, Cash records the files it actually wrote, whether the path is in the code or
 inside a helper, along with their size and modification time and the lineages
-of what it read, including the globals of the functions it calls. After a
-restart the writer is re-run only when the cell you run reads one of its files
-*and* that file is gone or changed, or one of those lineages differs: an edited
-helper, or an upstream edit to the data it writes. Writes a C extension makes
-without going through Python's `open` are not seen; such a writer is re-run as
-before.
+of what it read, including the globals of the functions it calls. A chart is
+recorded by what was drawn into it: the statements from `plt.subplots()` to the
+`savefig`, with the lineages of the data they read, since a new kernel cannot
+reproduce a lineage for the figure object itself. After a restart the writer is
+re-run only when the cell you run reads one of its files *and* that file is
+gone or changed, or one of those lineages differs: an edited helper, an edited
+line of the chart, or an upstream edit to the data it writes. Writes a C
+extension makes without going through Python's `open` are not seen; such a
+writer is re-run as before.
 
 !!! tip "The other half of the story"
     Restoration is only safe because Cash can prove the cached value is still
