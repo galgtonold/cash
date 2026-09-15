@@ -20,6 +20,7 @@ other.
 
 import ast
 import copy as _copy
+import dataclasses
 import datetime as _dt
 import decimal as _decimal
 import dis as _dis
@@ -44,6 +45,7 @@ from cash.notebook.call_interception import CallSite, _names_read
 from cash.notebook.file_tracker import FileAccessTracker
 from cash.notebook.object_hashing import compute_hash, compute_hash_full, is_identity_fallback_hash
 from cash.notebook.randomness import capture_rng_state, rng_modules_changed
+from cash.notebook._trace import trace_event
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,7 @@ def call_site_is_cacheable(
     is_stateful_call: Callable[[str], bool],
     scan_forbidden: Callable[[str, Mapping[str, Any], ast.Module | None], list[str]],
     variable_lineage: Mapping[str, str] | None = None,
+    local_names: frozenset[str] = frozenset(),
 ) -> tuple[bool, list[str]]:
     """Judge one call node by the statement path's own rules.
 
@@ -83,10 +86,16 @@ def call_site_is_cacheable(
     check cash normally makes": a rewrite-time call site has no reads to
     check against yet, and lineage is asked again, for real, wherever the
     runtime half of this feature evaluates the call.
+
+    ``local_names`` -- what an enclosing comprehension or lambda binds -- are
+    not inputs with a lineage to look up: the key holds their values
+    (``CallSite.local_arg_positions``). Counted as inputs, they found no
+    lineage and refused the call, so a call in a comprehension was cached
+    only when a global of the same name happened to exist.
     """
     tree = ast.Module(body=[ast.Expr(value=call_node)], type_ignores=[])
     code = ast.unparse(call_node)
-    inputs = _names_read(call_node) if variable_lineage is not None else set()
+    inputs = _names_read(call_node) - local_names if variable_lineage is not None else set()
     return decide_cacheability(
         code=code,
         tree=tree,
@@ -629,6 +638,32 @@ def _unwrap_callee_globals(value, metadata: Mapping[str, Any]):
     return _UNWRAP_FAILED, None
 
 
+#: The many-cheap-calls guard (``CallUnit._entry_for``), in the numbers
+#: ``for_handler`` uses to run a loop as one unit: past 50 calls in one
+#: statement run, calls cheaper than this are timed plain on a few samples, and
+#: the site runs plain for the rest of the run when caching a call costs more
+#: than ``_OVERHEAD_FACTOR`` times what the call computes.
+_GUARD_AFTER_CALLS = 50
+_GUARD_CHEAP_BELOW_S = 0.05
+_PLAIN_SAMPLES = 5
+_OVERHEAD_FACTOR = 3.0
+
+
+@dataclasses.dataclass
+class _SiteRun:
+    """One call site's calls in the statement run under way."""
+
+    calls: int = 0
+    total_s: float = 0.0
+    computed: int = 0
+    compute_s: float = 0.0
+    probing: bool = False
+    plain_n: int = 0
+    plain_s: float = 0.0
+    decided: bool = False
+    plain: bool = False
+
+
 #: Result types whose identity no program can rely on -- see
 #: ``CallUnit._storable``. Exact types only: a subclass may carry state.
 _IDENTITY_FREE = frozenset({int, float, complex, bool, str, bytes, type(None)})
@@ -819,6 +854,12 @@ class CallUnit:
         # working unchanged.
         self._loop_var_digests_provider = loop_var_digests_provider or (lambda: {})
         self.call_log: list[dict] = []
+        #: Per call site, how its calls went in the statement run under way
+        #: (see :meth:`_entry_for`); emptied by :meth:`begin_statement`.
+        self._site_runs: dict[CallSite, _SiteRun] = {}
+        #: What the call just made would have cost to compute: its run time on
+        #: a miss, its recorded cost on a hit, ``None`` when it ran plain.
+        self._last_compute: float | None = None
         #: Cache keys of sites known to mutate an argument or consume RNG,
         #: discovered by observing a MISS (see `wrap`). Permanent for the life
         #: of this `CallUnit` (one notebook session): once a site is known to
@@ -849,10 +890,65 @@ class CallUnit:
             return float(value)
         return _COST_FLOOR_S
 
+    def begin_statement(self) -> None:
+        """A new statement run: every site starts over (see :meth:`_entry_for`)."""
+        self._site_runs.clear()
+
+    def _entry_for(self, fn, site: CallSite, invoke):
+        """*invoke* behind the many-cheap-calls guard.
+
+        A call in a comprehension is made once per element, and caching one
+        costs a key, a lookup, a store and a file tracker of its own: ~14 ms a
+        call around a function reading one small file, 5,030 of them in
+        r23s4's ``[read_doc(p) for p in paths]`` -- 8.4 s became 71.6 s. A
+        ``for`` loop has ``for_handler._should_execute_loop_as_single_unit``
+        for exactly this; a comprehension is one statement, so it is decided
+        here, by measurement, with the loop's own numbers: past
+        ``_GUARD_AFTER_CALLS`` calls in one statement run, if the calls are
+        cheap, a few are run plain and timed, and when caching a call costs
+        more than ``_OVERHEAD_FACTOR`` times what it computes the rest of
+        the statement's calls to this site run plain. Running plain is always
+        correct; it is only uncached.
+        """
+        @functools.wraps(fn)
+        def _entry(*args, **kwargs):
+            run = self._site_runs.get(site)
+            if run is None:
+                run = self._site_runs[site] = _SiteRun()
+            if run.plain:
+                return fn(*args, **kwargs)
+            if run.probing:
+                started = _time.perf_counter()
+                result = fn(*args, **kwargs)
+                run.plain_s += _time.perf_counter() - started
+                run.plain_n += 1
+                if run.plain_n >= _PLAIN_SAMPLES:
+                    run.probing = False
+                    cached = run.total_s / run.calls
+                    plain = run.plain_s / run.plain_n
+                    run.plain = cached > (1 + _OVERHEAD_FACTOR) * plain
+                    run.decided = True
+                    trace_event("call_site_decided", source=site.source, calls=run.calls,
+                                cached_ms=round(cached * 1000, 3),
+                                plain_ms=round(plain * 1000, 3), plain=run.plain)
+                return result
+            self._last_compute = None
+            started = _time.perf_counter()
+            result = invoke(*args, **kwargs)
+            run.total_s += _time.perf_counter() - started
+            run.calls += 1
+            if self._last_compute is not None:
+                run.compute_s += self._last_compute
+                run.computed += 1
+            if (not run.decided and run.calls >= _GUARD_AFTER_CALLS and run.computed
+                    and run.compute_s / run.computed < _GUARD_CHEAP_BELOW_S):
+                run.probing = True
+            return result
+        return _entry
+
     def wrap(self, fn, site: CallSite):
         func_name = self._func_name(fn)
 
-        @functools.wraps(fn)
         def _invoke(*args, **kwargs):
             # CAS-260: globals this callee writes. Resolved per call rather
             # than once per `wrap`, because the underlying source analysis is
@@ -903,6 +999,7 @@ class CallUnit:
                 self._replay_output(metadata)
                 self._restore_globals(fn, mutated_globals, captured_globals)
                 self._record(func_name, site, key, cache_hit=True, elapsed=0.0, time_saved=recorded_cost)
+                self._last_compute = recorded_cost or 0.0
                 return value
 
             # The call runs inside the STATEMENT's ambient capture
@@ -989,9 +1086,10 @@ class CallUnit:
                         callee_globals=captured,
                     )
             self._record(func_name, site, key, cache_hit=False, elapsed=elapsed)
+            self._last_compute = elapsed
             return result
 
-        return _invoke
+        return self._entry_for(fn, site, _invoke)
 
     def _call_capturing_output(self, fn, args: tuple, kwargs: dict) -> tuple[Any, str, str]:
         """Run *fn*, returning ``(result, stdout_text, stderr_text)``.

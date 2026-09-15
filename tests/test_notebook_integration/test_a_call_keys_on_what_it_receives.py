@@ -14,9 +14,8 @@ scores re-fitted all 180 of them.
 A call whose inputs are all plain data now keys on the features it receives
 and leaves the statement out, as long as nothing it reads can change while
 its key stays put (CAS-256's ``fetch_next(conn)`` keeps its statement).
-Written here as a ``for`` loop: a call inside a comprehension is cached only
-when a notebook variable shares the comprehension's variable name (r23s3 had
-one), which is a matter of its own. Counted with ``os.write``: a cached
+Written here as a ``for`` loop; the comprehension form keys the same way.
+Counted with ``os.write``: a cached
 callee's own writes to a variable would be restored on a hit and count the
 same either way.
 """

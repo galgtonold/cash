@@ -2416,7 +2416,7 @@ class StatementProcessor:
             # it at all) is what ``call_site_is_cacheable`` exists for; wiring it
             # here means an eligible-but-uncacheable site is never wrapped in
             # the first place, so a doomed key is never even attempted.
-            def gate(call: ast.Call) -> bool:
+            def gate(call: ast.Call, local: frozenset[str] = frozenset()) -> bool:
                 # `call_site_is_cacheable` runs the full `decide_cacheability`
                 # / `analyze_statement` / `scan_for_forbidden_functions` stack
                 # against a bare `ast.Expr(Call)` sub-expression -- a shape the
@@ -2443,6 +2443,7 @@ class StatementProcessor:
                         variable_lineage=self.variable_lineage,
                         is_stateful_call=self._check_callable_stateful,
                         scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
+                        local_names=local,
                     )[0]
                 except Exception:  # noqa: BLE001 - fail closed to "don't wrap"
                     # Not `ast.unparse(call)` in this message: that can itself

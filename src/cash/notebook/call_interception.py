@@ -354,6 +354,8 @@ class CallCache:
 
     def set_sites(self, sites: list[CallSite]) -> None:
         self._sites = sites
+        # One call per statement run: each site's guard starts over.
+        self._call_unit.begin_statement()
 
     def drain_call_log(self) -> list[dict]:
         """Events :class:`~cash.notebook.call_unit.CallUnit` recorded since the
@@ -448,13 +450,25 @@ def wrap_eligible_calls(
     ``dict(...)`` as the outermost call; at runtime it is a class and was not
     wrapped, and ``score(df, k)`` inside it was never considered -- a
     backtest was recomputed in full on an unchanged re-run (round 22).
+
+    A gate with a ``local`` parameter is also handed the names an enclosing
+    comprehension or lambda binds around the call: they have no lineage, and
+    the key holds their values (``CallSite.local_arg_positions``).
     """
-    def skip(call: ast.Call) -> bool:
+    import inspect
+    try:
+        gate_takes_local = gate is not None and 'local' in inspect.signature(gate).parameters
+    except (TypeError, ValueError):
+        gate_takes_local = False
+
+    def skip(call: ast.Call, local: frozenset[str] = frozenset()) -> bool:
         if namespace is not None:
             callee = _static_callee(call.func, namespace)
             if callee is not _NOT_FOUND and not interceptable(callee):
                 return True
-        return gate is not None and not gate(call)
+        if gate is None:
+            return False
+        return not (gate(call, local=local) if gate_takes_local else gate(call))
 
     new_tree = copy.deepcopy(tree)
     sites: list[CallSite] = []
@@ -604,7 +618,7 @@ def eligible_call_nodes(stmt: ast.stmt) -> list[ast.Call]:
 
 
 def _eligible_calls_in_scope(
-    stmt: ast.stmt, skip: Callable[[ast.Call], bool] | None = None,
+    stmt: ast.stmt, skip: Callable[[ast.Call, frozenset[str]], bool] | None = None,
 ) -> list[tuple[ast.Call, frozenset[str]]]:
     """:func:`eligible_call_nodes`, each call paired with the names an enclosing
     comprehension or lambda binds around it (see ``CallSite.local_arg_positions``).
@@ -644,7 +658,7 @@ def _bound_names(node: ast.AST) -> set[str]:
 
 
 def _collect(node: ast.AST, targets: set[str], found: list, local: frozenset[str],
-             skip: Callable[[ast.Call], bool] | None = None) -> None:
+             skip: Callable[[ast.Call, frozenset[str]], bool] | None = None) -> None:
     if isinstance(node, _LOCAL_SCOPES):
         local = local | _bound_names(node)
     if (isinstance(node, ast.Call) and not (_names_read(node) & targets)
@@ -652,7 +666,7 @@ def _collect(node: ast.AST, targets: set[str], found: list, local: frozenset[str
             # callable per element (`m.predict(X)` over `models.items()`), and
             # nothing in the key can see which: never intercepted.
             and not (_names_read(node.func) & local)
-            and not (skip is not None and skip(node))):
+            and not (skip is not None and skip(node, local))):
         found.append((node, local))
         return  # accepted -- do not search inside it
     for child in ast.iter_child_nodes(node):

@@ -118,3 +118,17 @@ def test_omitting_variable_lineage_never_asks_the_missing_lineage_question():
         scan_forbidden=lambda code, ns, tree: [],
     )
     assert ok, reasons
+
+
+def test_a_comprehension_variable_needs_no_lineage():
+    """``{k: slow(v + 0) for k, v in d.items()}``: ``k`` and ``v`` belong to
+    the comprehension, and the key holds their values. Asked for a lineage
+    they refused the call -- cached then only when a notebook variable of
+    the same name happened to exist."""
+    call = ast.parse("{k: slow(v + 0) for k, v in d.items()}").body[0].value.value
+    common = dict(user_ns={"slow": _compute, "d": {}}, annotation=None,
+                  is_stateful_call=lambda name: False,
+                  scan_forbidden=lambda code, ns, tree: [],
+                  variable_lineage={"slow": "s", "d": "d"})
+    assert not call_site_is_cacheable(call, **common)[0]
+    assert call_site_is_cacheable(call, local_names=frozenset({"k", "v"}), **common)[0]

@@ -47,14 +47,51 @@ def test_each_element_gets_its_own_result(nb_runner, cell):
     assert "slow 5" in _calls(nb_runner)[before:]
 
 
+COUNTED = ("import os, time\n"
+           "def slow(v):\n"
+           "    fd = os.open('counted.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+           "    os.write(fd, b'slow %d|' % v)\n"
+           "    os.close(fd)\n"
+           "    time.sleep(0.05)\n"
+           "    return v * 10\n"
+           "d = {'a': 1, 'b': 2}")
+
+
+def _counted(runner) -> list[str]:
+    log = Path(runner.work_dir) / "counted.log"
+    return [c for c in log.read_text().split("|") if c] if log.exists() else []
+
+
+@pytest.mark.parametrize("cell", [
+    "out = [slow(v) for v in d.values()]\nprint(dict(zip(d, out)))",
+    "out = {k: slow(v + 0) for k, v in d.items()}\nprint(out)",
+], ids=["bare_element", "computed_from_element"])
+def test_a_call_in_a_comprehension_is_cached_with_no_global_of_its_name(nb_runner, cell):
+    """The comprehension's variable has no lineage, and the key holds its
+    value; counted as an input needing one, it refused the call -- which was
+    then cached only when a global of the same name happened to exist
+    (r23s1's per-model CV never was)."""
+    nb_runner.create_notebook(["import cash\n%cash_on", COUNTED, cell])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "'a': 10, 'b': 20" in nb_runner.get_output(3), nb_runner.get_output(3)
+
+    nb_runner.set_cell_source(2, COUNTED.replace("{'a': 1, 'b': 2}", "{'a': 1, 'b': 5}"))
+    before = len(_counted(nb_runner))
+    nb_runner.run_all()
+    assert "'a': 10, 'b': 50" in nb_runner.get_output(3), nb_runner.get_output(3)
+    assert _counted(nb_runner)[before:] == ["slow 5"]
+
+
 def test_an_argument_built_from_the_element_is_keyed_by_all_of_it(nb_runner):
     """``fit_score(make_features(cleaned[mid], W)) for mid in ids`` (r23s3):
     the argument is computed from the element, and only its value tells the
     elements apart. That value was hashed from a sample -- a frame's shape,
     dtypes and first five rows -- and rolling-window features all begin with
     the same empty rows: two elements, one key, the second served the first's
-    result on a first run. It takes a global named like the variable for the
-    call to be cached at all (r23s3 had one from an earlier ``for`` loop)."""
+    result on a first run -- with a global named like the variable around, as
+    r23s3 had from an earlier ``for`` loop, which was then what let the call
+    be cached at all."""
     nb_runner.create_notebook([
         "import cash\n%cash_on",
         "import time\nimport pandas as pd\n"

@@ -322,6 +322,15 @@ element, which no key can see, so it is not intercepted. The same holds for a
 lambda's parameters, and for an argument computed from the element
 (`make_features(cleaned[mid], W)`): it too is hashed in full.
 
+<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @d3d55381, cash/notebook/call_unit.py:_GUARD_AFTER_CALLS == 50, cash/notebook/call_unit.py:_OVERHEAD_FACTOR == 3.0 -->
+A comprehension makes its call once per element, and caching each one has a
+cost of its own — a key, a lookup, a store. So past 50 calls in one run of the
+statement, cash times a few of them uncached; when caching a call costs more
+than three times what the call does — `[read_doc(p) for p in paths]` over
+thousands of small files — the rest of that run's calls run uncached, the same
+rule by which a long `for` loop is run as one unit. A call that does real work,
+like fitting a model per element, is never re-run to be timed.
+
 <!-- claim: cash/notebook/call_unit.py:_keys_by_content @b1716a9c, cash/notebook/call_unit.py:call_cache_key @cdb14ce0, cash/notebook/call_unit.py:_CONTENT_KEY_MAX_BYTES == 67108864 -->
 **The key holds what the call receives.** When everything a call reads is plain
 data — numbers, strings, dates, numpy arrays, pandas frames, and lists or dicts
