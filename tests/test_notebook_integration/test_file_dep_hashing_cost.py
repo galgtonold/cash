@@ -104,7 +104,11 @@ def _counts_for(nb_runner, cell):
     nb_runner.run_cell(cell)
     table = ast.literal_eval(nb_runner.peek(READ))
     print(f"cell {cell}: {{run: [lookups, digests]}} = {table}")
-    return max(v[0] for v in table.values()), max(v[1] for v in table.values())
+    # Nothing counted at all is the best case, not a broken counter: inputs
+    # that are settled and unchanged are not read (`_unchanged_since_hashed`).
+    # The loop test's cell reads its files, so there the counter does count.
+    return (max((v[0] for v in table.values()), default=0),
+            max((v[1] for v in table.values()), default=0))
 
 
 def test_a_loop_over_files_digests_each_file_once(nb_runner, _counting):

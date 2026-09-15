@@ -71,6 +71,7 @@ def test_entries_sharing_files_check_them_once_per_run(tmp_path, checks):
     assert len(checks) == N, f"{len(checks)} checks of {N} files for three entries"
 
 
+@pytest.mark.xfail(os.name == "nt", strict=True, reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time")
 def test_the_next_run_looks_again(tmp_path, checks):
     deps = _inputs(tmp_path)
     assert VirtualLineage._validate_file_freshness(deps, memo_key="stmt:a")

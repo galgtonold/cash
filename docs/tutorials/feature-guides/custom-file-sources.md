@@ -303,29 +303,29 @@ Cash checks freshness on every lookup, not at write time. `_auto_file_deps_fresh
 
 A matching size *and* a matching content hash is fresh, **regardless of the mtime**. Touching a file does not invalidate an auto-tracked dependency.
 
-**Why a content hash and not just mtime+size?** Because `(mtime, size)` was ambiguous in both directions, and both failure modes were real bugs. A touch-only change (identical bytes, bumped mtime) recomputed needlessly; a same-size edit written under an mtime the check couldn't distinguish was missed and served stale. Content is the signal that actually answers the question. The cost is bounded by checking size first and by sampling large files (below), so the common case is still one `stat()` and — only when the size matches — a bounded read.
+**Why a content hash and not just mtime+size?** Because `(mtime, size)` was ambiguous in both directions, and both failure modes were real bugs. A touch-only change (identical bytes, bumped mtime) recomputed needlessly; a same-size edit written under an mtime the check couldn't distinguish was missed and served stale. So the content decides whenever the metadata moved. When nothing moved — the size, the modification time to the nanosecond, which file it is, and on Linux and macOS the inode change time are as recorded, and the file had been left alone for ten seconds before it was hashed — the file is not read at all: the common case is one `stat()`. That gives up an edit that keeps the size and puts the timestamp back, on Windows (see [known limitations](../../known-limitations.md#an-edit-that-keeps-the-size-and-timestamps)).
 
 ### Large files are sampled, not fully hashed
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @91117625, cash/notebook/file_dep_snapshot.py:file_content_hash @35a8fc69, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @ffb815f0, cash/notebook/file_dep_snapshot.py:file_content_hash @35a8fc69, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
 Hashing a multi-GB parquet on every lookup would defeat the point of caching, so the hash is size-bounded (`file_content_hash`), at a threshold you can move (`file_hash_full_max_bytes`):
 
 - Files **≤ 256 MiB** (`_HASH_FULL_MAX_BYTES`) are hashed **in full**.
 - Files **> 256 MiB** are **sampled** at three deterministic, size-derived offsets — head, middle, and tail, **256 KiB each** (`_HASH_SAMPLE_REGION_BYTES`) — with the byte length folded into the digest.
 
 <!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == 5.0 -->
-A full hash costs about 0.72 ms per MiB, and within one process it is reused for up to five seconds against the file's stat fields (in a notebook, also for the rest of the cell run), so an aggregate whose ten cached helpers read the same fifty inputs hashes each input once, and a check inside that window costs a `stat()`. The window has one consequence on Windows: an edit that leaves the size and every timestamp alone — an `np.memmap` write, a write with the mtime put back — is seen by a running process up to five seconds late (see [known limitations](../../known-limitations.md#an-edit-that-keeps-size-and-timestamps-in-a-running-process)).
+A full hash costs about 0.72 ms per MiB, and it is only taken when the file's metadata moved (above). Within one process a digest is reused for up to five seconds against the file's stat fields (in a notebook, also for the rest of the cell run), so an aggregate whose ten cached helpers read the same fifty freshly written inputs hashes each input once.
 
-A sampled hash on its own would miss an edit that changes only unsampled interior bytes while preserving the exact size. **It doesn't, because sampled files carry a timestamp backstop**: above the cap a matching hash is trusted only when the mtime *also* matches, so any real in-place write is caught (`stale_reason` reads `'mtime-sampled'`). Below the cap the hash is authoritative and mtime is ignored, which is what makes a content-preserving `touch` free.
+A sampled hash on its own would miss an edit that changes only unsampled interior bytes while preserving the exact size. **It doesn't, because sampled files carry a timestamp backstop**: above the cap a matching hash is trusted only when the mtime *also* matches, so any real in-place write is caught (`stale_reason` reads `'mtime-sampled'`). Below the cap, once the metadata has moved, the hash is authoritative and mtime is ignored, which is what makes a content-preserving `touch` free.
 
-That comparison is **exact on the integer nanoseconds**, not a tolerance — here the timestamp stands in for bytes the hash never read, and a tolerance is a window an edit can sit inside. What it catches depends on the resolution the restoring tool stores: whole seconds (a plain `tar` ustar header, rsync's protocol) cannot reproduce the original nanoseconds, so the edit shows up; the exact nanoseconds (`cp -p`, `shutil.copystat`, GNU tar's pax headers) reproduce them, and it does not. See [known limitations](../../known-limitations.md#a-very-large-file-edited-in-place-with-its-timestamp-put-back).
+That comparison is **exact on the integer nanoseconds**, not a tolerance — here the timestamp stands in for bytes the hash never read, and a tolerance is a window an edit can sit inside. What it catches depends on the resolution the restoring tool stores: whole seconds (a plain `tar` ustar header, rsync's protocol) cannot reproduce the original nanoseconds, so the edit shows up; the exact nanoseconds (`cp -p`, `shutil.copystat`, GNU tar's pax headers) reproduce them, and it does not. See [known limitations](../../known-limitations.md#an-edit-that-keeps-the-size-and-timestamps).
 
 The tradeoff therefore inverted rather than disappearing. What you pay for a large file is the opposite error: **touching** it — `touch`, a re-checkout that rewrites identical bytes, an rsync that resets timestamps — forces one spurious recompute. That is the safe direction to be wrong in, and it is why the two regimes differ:
 
 | File size | Hash covers | mtime | You can be surprised by |
 |---|---|---|---|
-| ≤ 256 MiB | every byte | ignored | nothing — content decides |
-| > 256 MiB | head/middle/tail | must also match | a needless recompute after a touch |
+| ≤ 256 MiB | every byte | ignored once it moved | an edit that puts the timestamp back (Windows) |
+| > 256 MiB | head/middle/tail | must also match | the same, and a needless recompute after a touch |
 
 If a spurious recompute on a multi-GB input is itself too expensive, write a `DataSource` subclass whose `state_token()` returns whatever cheap, authoritative version marker your data already has (a manifest hash, an ETag, a build id) and pass it via `depends_on=`.
 
@@ -333,7 +333,7 @@ If a spurious recompute on a multi-GB input is itself too expensive, write a `Da
 
 It used to be cached. The fingerprint was taken at store time, so it described the *new* file while the result came from the old one, and every later call was a hit with the old answer — for as long as the entry lived. Writing the file via a temp file and a rename did not help, because the rename lands before the store.
 
-One residual: a same-size edit that also puts the file's mtime back, landing during the call, leaves the size and timestamps identical on Windows. See [known limitations](../../known-limitations.md#a-very-large-file-edited-in-place-with-its-timestamp-put-back).
+One residual: a same-size edit that also puts the file's mtime back leaves the size and timestamps identical on Windows, during the call or after it. See [known limitations](../../known-limitations.md#an-edit-that-keeps-the-size-and-timestamps).
 
 ## Caveats
 

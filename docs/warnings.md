@@ -266,10 +266,10 @@ cheaper:
 * `file_hash_full_max_bytes` decides where cash stops hashing a file in full and
   starts sampling three regions of it. Sampling is cheaper **per file** and no
   cheaper per file *count*, so it helps with a few huge inputs and not with
-  hundreds of small ones. Lowering it below a file you edit in place with
-  `np.memmap` is a correctness trade on Windows, not just a cost one: such a
-  write moves no timestamp there, so above the threshold it is not seen (see
-  [known limitations](known-limitations.md#a-very-large-file-edited-in-place-with-its-timestamp-put-back)).
+  hundreds of small ones. It does not help a file you edit in place with
+  `np.memmap` on Windows: such a write moves no timestamp, so it is not seen
+  at any threshold until something touches the file (see
+  [known limitations](known-limitations.md#an-edit-that-keeps-the-size-and-timestamps)).
 
 **When it is safe to ignore.** When the numbers say the trade is still worth it
 — half a second of checking against a five-minute pipeline is a good deal, and
@@ -1884,12 +1884,13 @@ every later call would be a cache hit with the old answer — silently, for as
 long as the entry lived. Not caching is the only honest option: nothing can say
 which version of the file the result came from.
 
-<!-- claim: cash/notebook/file_tracker.py:FileAccessTracker._digest_now @eaa4904d, cash/notebook/file_dep_snapshot.py:snapshot_file_deps @571bfc89 -->
+<!-- claim: cash/notebook/file_tracker.py:FileAccessTracker._digest_now @eaa4904d, cash/notebook/file_dep_snapshot.py:snapshot_file_deps @fb281ba3 -->
 A writer that moves neither the size nor a timestamp — an `np.memmap` write on
-Windows — does not trigger this warning, and does not need to: a file under
-the full-hash cap is fingerprinted by its content **when the function first
-reads it**, so the entry describes the version the result was computed from.
-The next call sees the file's content differ and recomputes.
+Windows — does not trigger this warning. A file under the full-hash cap is
+fingerprinted by its content **when the function first reads it**, so the entry
+still describes the version the result was computed from; but nothing about the
+file tells a later call it changed, so it is not seen until the file is touched
+(see [known limitations](known-limitations.md#an-edit-that-keeps-the-size-and-timestamps)).
 
 Two shapes produce it:
 

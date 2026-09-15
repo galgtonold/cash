@@ -87,11 +87,18 @@ Several independent signals can cause a miss. The first four feed the [cache key
     reprinting a cached value.
 
 === "Files"
-<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @91117625 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @ffb815f0 -->
     A file you read (CSV, parquet, …) is snapshotted as mtime, size **and a content
-    hash**. On every lookup the size is compared first, and when it matches, the
-    content hash decides — so a bare `touch` no longer invalidates, and a same-size
-    edit within the same second no longer slips through. Files over 256 MiB are hashed
+    hash**. On every lookup the size is compared first. If it matches and so does
+    everything else the snapshot recorded — the mtime to the nanosecond, which file
+    it is, and on Linux and macOS the inode change time — and the file had been left
+    alone for ten seconds before it was hashed, it is unchanged and is not read.
+    Otherwise the content hash decides — so a bare `touch` does not invalidate, and a
+    same-size edit within the same second does not slip through. The one edit this
+    lets through is on Windows: a same-size write that puts the mtime back, or a
+    `np.memmap` write, which moves no timestamp at all (see
+    [known limitations](../known-limitations.md#an-edit-that-keeps-the-size-and-timestamps)).
+    Files over 256 MiB are hashed
     by sampling three size-derived regions rather than in full; since that partial
     hash can't see an edit *outside* those regions, sampled files additionally
     require the timestamps to match — to the **nanosecond**, not to a tolerance,
@@ -102,9 +109,7 @@ Several independent signals can cause a miss. The first four feed the [cache key
     plain `tar` ustar header, rsync's protocol — drops the sub-second part, so
     the restored value differs and the edit is caught. Linux and macOS catch even the exact
     case through the inode change time; Windows has no second timestamp to fall
-    back on, and `file_hash_full_max_bytes` is the way to buy
-    certainty there — it costs about 0.72 ms per MiB, paid once per file per
-    process because the digest is memoized. The check runs
+    back on. The check runs
     against the file deps of the statement itself *and* those inherited from its
     input variables, so a changed CSV invalidates the whole chain that read it.
 

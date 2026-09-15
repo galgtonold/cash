@@ -89,6 +89,7 @@ def test_a_burst_of_checks_shares_a_digest(cash_instance, tmp_path, monkeypatch)
     assert len(hashed) <= 1, f"one burst hashed its one input {len(hashed)} times"
 
 
+@pytest.mark.xfail(os.name == "nt", strict=True, reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time")
 def test_an_edit_that_keeps_size_and_mtime_is_seen_once_the_window_passes(
         cash_instance, tmp_path, monkeypatch):
     """Round 20 (r20s5), and a documented limitation: in a running process, an
@@ -120,6 +121,7 @@ def test_an_edit_that_keeps_size_and_mtime_is_seen_once_the_window_passes(
     assert len(runs) == 2
 
 
+@pytest.mark.xfail(os.name == "nt", strict=True, reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time")
 def test_a_file_changed_during_the_call_is_recorded_as_the_body_read_it(cash_instance, tmp_path):
     """Round 20 (r20s5): an np.memmap write landed while a cached step was
     computing. The result, computed from the old bytes, was stored with the

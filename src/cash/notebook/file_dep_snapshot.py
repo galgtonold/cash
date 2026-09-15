@@ -25,7 +25,10 @@ ambiguous freshness signal and fails two opposite ways: a touch-only change
 (sub-resolution / same-second write) is missed. We therefore record a
 content hash at snapshot time and treat CONTENT as authoritative whenever the
 size matches: the cheap size check runs first (and never hashes on the
-size-differs path), and only when the size is equal do we hash to decide.
+size-differs path), and only when the size is equal do we hash to decide --
+unless nothing else moved either: a file whose timestamps and identity are as
+recorded, and that had settled before it was hashed, is not read again
+(``_unchanged_since_hashed``).
 """
 
 from __future__ import annotations
@@ -82,7 +85,10 @@ _ABSENT_MARKER = "absent"
 # per-check one -- which is what makes covering the ordinary CSV affordable.
 # Raised from 64 MiB in round 19: an 80 MiB .npy written through np.memmap on
 # Windows changes neither its size nor any timestamp, so above the cap only
-# content can see it, and a stale answer came back 3 of 3.
+# content can see it, and a stale answer came back 3 of 3. Content is now read
+# only when the metadata moved (``_unchanged_since_hashed``), so that write is
+# not seen below the cap either, until the file is touched -- a documented
+# limitation; the cap still decides how a file whose metadata moved is hashed.
 _HASH_FULL_MAX_BYTES_DEFAULT = 256 * 1024 * 1024      # 256 MiB
 
 
@@ -358,7 +364,8 @@ def snapshot_file_deps(
     authoritative freshness signal when the size is ambiguous. It is omitted
     only when the file cannot be read at snapshot time.
 
-    *known* maps a path to ``(stat when read, content hash when read)``: that
+    *known* maps a path to ``(stat when read, content hash when read[, time
+    it was hashed])``: that
     hash is used while the stat is still the same, so the entry describes the
     file as the body read it (see ``FileAccessTracker.read_digests``).
     """
@@ -371,27 +378,36 @@ def snapshot_file_deps(
             continue
         entry: dict[str, Any] = {"mtime": st.st_mtime, "size": st.st_size}
         read = known.get(f) if known else None
+        hashed_at = None
         if read is not None and read[0] == (st.st_size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0)):
+            # Hashed when the body read it; when, if the tracker noted it.
             content_hash = read[1]
+            hashed_at = read[2] if len(read) > 2 else None
         else:
+            hashed_at = time.time()  # before the read: an edit after it is not in the digest
             content_hash = file_content_hash(f, st.st_size, full_hash_max, st)
         if content_hash is not None:
             entry["hash"] = content_hash
+            if hashed_at is not None:
+                entry["hashed_at"] = hashed_at
         # The integer nanoseconds alongside the float. ``st_mtime`` is derived
         # FROM this by CPython, not the other way round, so the float is the
         # lossy one -- and the sampled comparison below is an equality test
         # where every lost digit is a window an edit can hide in.
         entry["mtime_ns"] = st.st_mtime_ns
-        if st.st_size > full_hash_max:
-            # Sampled regime only, where mtime is load-bearing rather than a
-            # convenience -- see ``file_dep_is_fresh``. On POSIX ``st_ctime``
-            # is the inode CHANGE time: it moves on any write and no ordinary
-            # tool restores it, so it catches the edit that `cp -p`, `rsync -a`
-            # or `tar -x` hides by putting mtime back. On Windows it is the
-            # creation time and this buys nothing, which is why it is recorded
-            # as an extra signal rather than relied on.
+        # On POSIX ``st_ctime`` is the inode CHANGE time: it moves on any write
+        # and no ordinary tool restores it, so it catches the edit that `cp -p`,
+        # `rsync -a` or `tar -x` hides by putting mtime back. On Windows it is
+        # the creation time and buys nothing, which is why it is an extra
+        # signal rather than one relied on.
+        entry["ctime_ns"] = getattr(st, "st_ctime_ns", 0)
+        # Which file it was: two releases laid down by one deploy can share size
+        # and timestamps exactly, and a re-pointed junction swaps one for the
+        # other under the same path (CAS-108).
+        entry["dev"], entry["ino"] = st.st_dev, st.st_ino
+        entry["sampled"] = st.st_size > full_hash_max
+        if entry["sampled"]:
             entry["ctime"] = st.st_ctime
-            entry["ctime_ns"] = getattr(st, "st_ctime_ns", 0)
         snapshot[f] = entry
     return snapshot
 
@@ -613,6 +629,41 @@ def stats_from_listings(paths: Iterable[str]) -> dict[str, os.stat_result]:
     return found
 
 
+def _unchanged_since_hashed(st: os.stat_result, stored: dict[str, Any]) -> bool:
+    """Is the file as it was when its recorded digest was taken, by its metadata alone?
+
+    Size and modification time to the nanosecond, and on Linux and macOS the
+    inode change time, which no tool puts back -- all as recorded -- and the
+    file had been left alone for ``_HASH_MEMO_MIN_AGE_SECONDS`` before it was
+    hashed. That last condition is what keeps a coarse clock honest: a file
+    written moments before its digest was taken can be written again within
+    the same timestamp tick, so it is read, as before. One that had settled
+    cannot be changed afterwards without its timestamp moving -- unless
+    something puts the timestamp back, or writes without moving it (a Windows
+    ``np.memmap`` write). Those are not seen: see known-limitations.
+
+    Re-reading every input at every check is what this saves -- 1,312 exports
+    re-hashed before each cell of round 23's r23s2, about 5 s a cell, and
+    again after every restart. The digest still decides whenever the metadata
+    moved: a ``touch`` or a byte-identical re-download stays fresh.
+    """
+    hashed_at = stored.get("hashed_at")
+    mtime_ns = stored.get("mtime_ns")
+    if hashed_at is None or mtime_ns is None:
+        return False  # written before this was recorded: the digest decides
+    if st.st_mtime_ns != mtime_ns:
+        return False
+    # The same file, where the stat says which: a directory listing's does not
+    # (``st_ino`` 0), and that is the cost of taking one listing for thousands
+    # of files rather than a stat each (see ``stats_from_listings``).
+    if st.st_ino and stored.get("ino") is not None and (
+            (st.st_dev, st.st_ino) != (stored.get("dev"), stored.get("ino"))):
+        return False
+    if os.name != "nt" and stored.get("ctime_ns") != getattr(st, "st_ctime_ns", None):
+        return False
+    return hashed_at - st.st_mtime > _HASH_MEMO_MIN_AGE_SECONDS
+
+
 def file_dep_is_fresh(
     resolved_path: str, stored: dict[str, Any], full_hash_max: int | None = None,
     listed: os.stat_result | None = None,
@@ -621,7 +672,8 @@ def file_dep_is_fresh(
 
     *stored* is a snapshot entry (``{'mtime', 'size'[, 'hash']}``). The size is
     checked first — it proves staleness cheaply and we never hash on the
-    size-differs path. When the size matches and a content hash was recorded,
+    size-differs path. When nothing else moved either, the file is not read
+    (``_unchanged_since_hashed``). Otherwise, when a content hash was recorded,
     the content hash is authoritative: equal content is FRESH even if the mtime
     moved (touch), and differing content is STALE even if the mtime
     is indistinguishable (same-size quick edit). Snapshots written
@@ -680,6 +732,8 @@ def file_dep_is_fresh(
     if stored_size is not None and st.st_size != stored_size:
         return False, "size"
     if stored_hash is not None:
+        if _unchanged_since_hashed(st, stored):
+            return True, None
         if full_hash_max is None:
             full_hash_max = _full_hash_max_bytes()
         cur_hash = file_content_hash(resolved_path, st.st_size, full_hash_max, st)
@@ -687,9 +741,10 @@ def file_dep_is_fresh(
             # Recorded in one regime and checked in the other -- the size is
             # the same, so `file_hash_full_max_bytes` moved across it. The
             # two digests are not comparable, and "content changed" blamed
-            # the data for a setting (round 20). Only sampled snapshots
-            # record a ctime.
-            recorded_sampled = "ctime_ns" in stored or "ctime" in stored
+            # the data for a setting (round 20). A snapshot says which; one
+            # written before it did records a ctime only when sampled.
+            recorded_sampled = (stored["sampled"] if "sampled" in stored
+                                else "ctime_ns" in stored or "ctime" in stored)
             if recorded_sampled != (st.st_size > full_hash_max):
                 return False, "hash-mode"
             return False, "content"

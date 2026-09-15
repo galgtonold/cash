@@ -698,91 +698,52 @@ Two large objects that differ only outside the sampled region therefore hash ide
 
 ---
 
-## A very large file, edited in place, with its timestamp put back
+## An edit that keeps the size and timestamps
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @91117625, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
-Files up to `file_hash_full_max_bytes` (**256 MiB** by default) are hashed in
-full, so their content decides and none of this applies. Above that, the hash
-covers three 256 KiB regions — head, middle and tail — and the file's
-timestamps stand in for the bytes it never reads.
+<!-- claim: cash/notebook/file_dep_snapshot.py:_unchanged_since_hashed @10dfb55f, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @ffb815f0, cash/notebook/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0 -->
+Whether a file you read has changed is answered by its metadata first. If its
+size, its modification time to the nanosecond, which file it is, and on Linux
+and macOS its inode change time are all as they were when Cash hashed it — and
+it had been left alone for ten seconds before that — it counts as unchanged and
+is not read again. Only when one of them moved does the content decide, so a
+`touch` or a byte-identical re-download still costs nothing. That is what keeps
+a notebook over thousands of input files from re-reading all of them before
+every cell and after every restart.
 
-One shape gets through all of it, and it takes every one of these at once:
+A file hashed within ten seconds of being written is read on every check, as
+before: it may be written again within the same timestamp tick, which a
+coarse clock (FAT, some network shares) cannot tell apart.
 
-1. the file is **larger than 256 MiB**, so it is sampled;
-2. the edit leaves the **size unchanged**;
-3. it lands **outside all three sampled regions**;
-4. its **mtime is restored afterwards at full nanosecond precision**;
-5. you are on **Windows**, where `st_ctime` is the creation time and does not
-   move on a write.
+The price is an edit that moves no timestamp. On Linux and macOS there is none:
+any write moves the inode change time, and no ordinary tool puts it back. On
+**Windows** there are two:
 
-Condition 4 is narrower than it sounds, because it depends on the resolution
-the restoring tool actually stores. `cp -p`, `shutil.copystat`,
-`robocopy /COPY:T` and GNU tar's pax headers carry the full nanoseconds and
-reproduce them exactly — and so does the Windows one-liner for it,
-PowerShell's `(Get-Item f).LastWriteTime = $saved`, which writes back NTFS's
-full 100 ns value. A format that carries only whole seconds — a plain
-`tar` ustar header, rsync's protocol — drops the sub-second part, so the
-restored timestamp differs and the edit **is** caught. On Linux and macOS
-condition 5 fails too: the inode change time moves on any write and no ordinary
-tool puts it back, so the edit is caught there regardless.
+- an in-place write whose modification time is **put back** afterwards at full
+  precision — `os.utime`, `shutil.copystat`, `cp -p`, `robocopy /COPY:T`,
+  PowerShell's `(Get-Item f).LastWriteTime = $saved`. A tool that stores whole
+  seconds — a plain `tar` ustar header, rsync's protocol — cannot reproduce the
+  nanoseconds, so its edit is seen;
+- a write through **`np.memmap(path, mode="r+")`**, which moves neither NTFS's
+  LastWriteTime nor its change time (measured on an 80 MiB `.npy`: SHA changed,
+  size and every timestamp did not).
 
-On Windows one writer needs no restoring at all: a memory-mapped write —
-`np.memmap(path, mode="r+")`, then assigning into it — changes the bytes and
-leaves NTFS's LastWriteTime *and* its change time exactly as they were
-(measured on an 80 MiB `.npy`: SHA changed, size, `st_mtime_ns` and change time
-did not, and a cached reader was served the old contents 3 times in 3). Above
-the threshold that edit is invisible on Windows. The default threshold was
-raised from 64 MiB to 256 MiB for exactly this, so an ordinary array file is
-hashed in full.
+Such a file is served as it was until its size or a timestamp changes. On a
+notebook lookup over many files in one Windows directory, which file it is comes
+from a directory listing, which does not say — so a junction re-pointed at a
+copy whose files have the same sizes and timestamps is not seen there either.
 
-**What to do:** raise the threshold above the file, and content decides again
-on every platform:
+**What to do:** after writing a file this way, touch it — `os.utime(path)` or
+`Path(path).touch()`. Its content is then read, and if it changed, everything
+that read it recomputes. To make one function recompute regardless, clear it
+(`f.cache_clear()`).
 
-<!-- test:skip reason="illustrative: the point is the setting, not a value" -->
-```python
-cash.configure(file_hash_full_max_bytes=512 * 1024 * 1024)   # or CASH_FILE_HASH_FULL_MAX_BYTES
-```
-
-The price is a full read of the file the first time a process checks it —
-about 0.72 ms per MiB, so 370 ms for a 512 MiB input — and again at most every
-five seconds while it keeps being checked; in between, a check is a `stat`
-(see [the next section](#an-edit-that-keeps-size-and-timestamps-in-a-running-process)
-for what that window means). If that trade goes
-bad, [`CACHE-FRESHNESS-COST`](warnings.md#cache-freshness-cost) says so with
-both numbers.
-
----
-
-## An edit that keeps size and timestamps, in a running process
-
-<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == 5.0, cash/notebook/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0, cash/notebook/file_dep_snapshot.py:file_content_hash @35a8fc69 -->
-Within one process, a data file's content hash is reused for **up to five
-seconds** while the file's size, modification time and inode change time stay
-the same — and only for a file that had not been touched for ten seconds
-before. That is what keeps an aggregate over fifty inputs, or a loop over one
-large input, from re-reading them on every call. In a notebook the hash is
-also reused for the rest of the **cell run** it was taken in, however long
-that takes: a cell over thousands of input files outlasts five seconds on its
-own, and re-reading all of them for every statement derived from them cost
-minutes per cell. The next cell run reads them again.
-
-The edit that gets through: one that leaves every one of those fields as it
-was. On Linux and macOS any write moves the inode change time, so there is
-none. On **Windows** there are two — a write through `np.memmap(mode="r+")`,
-which moves no timestamp at all, and an in-place write followed by `os.utime`
-putting the old modification time back. A cached call made within those five
-seconds in the **same process** — or later in the same notebook cell run — is
-served the result for the file as it was. The next check after that reads
-the file and recomputes, and nothing wrong is stored for later: an entry
-records the file as its function read it, so a new process always compares
-against the right version.
-
-If your long-running process has another program patching its inputs this way
-and must see the change on the very next call, clear the function
-(`f.cache_clear()`) after the patch, or name the file with `file_depends_on=`
-and bump its modification time when you write it. Making every call re-read
-the file instead was tried and reverted: it cost a loop over a 200 MB input
-about 0.14 s per iteration.
+<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == 5.0 -->
+When the metadata did move, a file up to `file_hash_full_max_bytes` (**256 MiB**
+by default) is hashed in full, and a larger one at three 256 KiB regions — head,
+middle and tail — with its timestamps standing in for the bytes the sample never
+reads. A digest taken in a running process is reused for five seconds (in a
+notebook, for the rest of the cell run), so a burst of calls over the same inputs
+reads each once.
 
 ---
 

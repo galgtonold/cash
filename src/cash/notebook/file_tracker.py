@@ -1217,6 +1217,9 @@ class FileAccessTracker:
         # nothing extra: the snapshot reuses it while the stat is unchanged.
         self._hash_on_read = hash_on_read
         self.read_digests: dict[str, str] = {}
+        # When each of those digests was taken (``file_dep_is_fresh`` trusts an
+        # unchanged file only if it had settled by then).
+        self.read_hashed_at: dict[str, float] = {}
         #: Time spent hashing inside the block, which is cash's, not the body's.
         self.read_hash_seconds = 0.0
         # Remote URLs are kept in their own set, never in ``accessed_files``:
@@ -1411,6 +1414,7 @@ class FileAccessTracker:
                 self.read_stats[abs_path] = st
                 if self._hash_on_read:
                     if digest is None:
+                        self.read_hashed_at[abs_path] = time.time()
                         digest = self._digest_now(abs_path, st[0])
                     if digest is not None:
                         self.read_digests[abs_path] = digest

@@ -4015,7 +4015,8 @@ class Cash:
             snapshot_dependencies,
         )
         read_stats = getattr(tracker, "read_stats", {})
-        known = {path: (read_stats[path], digest)
+        hashed_at = getattr(tracker, "read_hashed_at", {})
+        known = {path: (read_stats[path], digest, hashed_at.get(path))
                  for path, digest in getattr(tracker, "read_digests", {}).items()
                  if path in read_stats}
         deps = snapshot_dependencies(

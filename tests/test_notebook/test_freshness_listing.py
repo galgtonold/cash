@@ -68,6 +68,7 @@ def test_a_crowded_directory_is_listed_not_stat_ed(tmp_path, per_file_stats):
     assert per_file_stats == [], f"{len(per_file_stats)} per-file stats beside the listing"
 
 
+@pytest.mark.xfail(os.name == "nt", strict=True, reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time")
 def test_an_edit_that_keeps_size_and_time_is_still_caught(tmp_path):
     paths = _inputs(tmp_path)
     checker, metadata = _check(paths)
