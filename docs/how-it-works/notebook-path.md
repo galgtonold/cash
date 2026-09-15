@@ -243,7 +243,8 @@ of what it read, including the globals of the functions it calls. A chart is
 recorded by what was drawn into it: the statements from `plt.subplots()` to the
 `savefig`, with the lineages of the data they read, since a new kernel cannot
 reproduce a lineage for the figure object itself. After a restart the writer is
-re-run only when the cell you run reads one of its files *and* that file is
+re-run only when the cell you run reads one of its files (a folder it makes or
+clears counts as read when the cell reads a file inside it) *and* that file is
 gone or changed, or one of those lineages differs: an edited helper, an edited
 line of the chart, or an upstream edit to the data it writes. Writes a C
 extension makes without going through Python's `open` are not seen; such a

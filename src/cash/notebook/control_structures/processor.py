@@ -355,6 +355,15 @@ class ControlStructureProcessor:
             # nothing still moves the generators when it hits in a new kernel.
             if not any(_status(m) == CacheStatus.RESTORED for m in result.metrics):
                 self._persist_outcome(node, code, reads, before, outcome, rng_before)
+                # What the loop read, for the planner of a later kernel -- as a
+                # statement's reads are kept (``_persist_read_provenance``). A
+                # restored iteration records no read, hence the same condition.
+                # ``for f in files: pd.read_csv(f)`` names no path a reader can
+                # resolve, so without it the read set of every cell below was
+                # unknown after a restart, no writer could be ruled out as
+                # unread, and a table cell under a chart cell re-drew the charts
+                # with everything they read (round 23, r23s2).
+                self.statement_processor._persist_read_provenance(code, files)
         return result
 
     def _record_writes(self, code: str, reads, written: set[str]) -> None:

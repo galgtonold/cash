@@ -693,6 +693,7 @@ class NotebookSimulator:
                 # statement read when it last ran was persisted for this.
                 r = self._persisted_reads(src)
             if r is None:
+                trace_event("read_path_unknown", stmt=src[:90])
                 fully_known = False
             else:
                 paths.update(r)

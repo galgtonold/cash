@@ -87,6 +87,43 @@ def _control_body_touches(code: str, sibling_names: set[str]) -> bool:
     return False
 
 
+def _literal_path_bindings(simulation_trace: list | None) -> dict[str, str]:
+    """``{name: path}`` for names the notebook binds to one literal path.
+
+    ``OUT = Path('report')``, ``EXPORTS = BASE / 'exports'``: what a writer's
+    ``OUT / 'chart.png'`` means when the kernel does not hold ``OUT`` yet.
+    A name bound more than once, or by anything else, is left out.
+    """
+    from ..cacheability import _resolve_literal_path
+    bound: dict[str, str | None] = {}
+    for entry in simulation_trace or ():
+        outputs = entry[1]
+        if not outputs:
+            continue
+        value = None
+        try:
+            node = ast.parse(entry[0]).body
+        except (SyntaxError, ValueError, TypeError):
+            node = []
+        if (len(node) == 1 and isinstance(node[0], ast.Assign) and len(node[0].targets) == 1
+                and isinstance(node[0].targets[0], ast.Name)):
+            known = {k: v for k, v in bound.items() if v is not None}
+            value = _resolve_literal_path(node[0].value, known)
+        for name in outputs:
+            bound[name] = value if name not in bound or bound[name] == value else None
+    return {name: path for name, path in bound.items() if path is not None}
+
+
+def _only_defines(code: str) -> bool:
+    """True when *code* only defines functions or classes."""
+    try:
+        body = ast.parse(textwrap.dedent(code)).body
+    except (SyntaxError, ValueError, TypeError):
+        return False
+    return bool(body) and all(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in body)
+
+
 def _root_name(node: ast.AST) -> str | None:
     """``axes[0]`` / ``ax.twinx()`` / ``*axs`` -> the name they are reached from."""
     while isinstance(node, (ast.Attribute, ast.Subscript, ast.Starred, ast.Call)):
@@ -1008,6 +1045,12 @@ class ReexecutionPlanner:
             statement_write_repeatability,
             statement_writes_files,
         )
+        if _only_defines(stmt_code):
+            # ``def save_page(...)`` writes nothing when it runs; its callers do,
+            # and they are writers above. Taken for one, it had no provenance to
+            # vouch for it after a restart, was re-fired, and pulled every write
+            # of its cell along (round 23, r23s2).
+            return False
         if statement_writes_files(stmt_code):
             return True
         if statement_calls_user_writer(stmt_code, self._user_ns()) is not None:
@@ -1337,7 +1380,7 @@ class ReexecutionPlanner:
             # reads. Its write runs when the user runs its own
             # cell; reconstruction of an unrelated cell must never re-fire it.
             unread = self._writer_output_unread(
-                stmt_code, relevant_read_paths, relevant_read_paths_known,
+                stmt_code, relevant_read_paths, relevant_read_paths_known, simulation_trace,
             )
             trace_event("writer_considered", stmt=stmt_code[:80], unread=unread,
                         read_paths_known=relevant_read_paths_known,
@@ -1422,23 +1465,26 @@ class ReexecutionPlanner:
         writer's output does not resolve."""
         forms: set[str] = set()
         for w in writer_indices:
-            written = self._writer_paths(simulation_trace[w][0])
+            written = self._writer_paths(simulation_trace[w][0], simulation_trace)
             if not written:
                 return None
             for p in written:
                 forms |= self._normalize_path_forms(p)
         return forms
 
-    def _writer_paths(self, stmt_code: str) -> set[str] | None:
+    def _writer_paths(self, stmt_code: str, simulation_trace: list | None = None) -> set[str] | None:
         """The paths a writer writes: from its code, else from the record it
         left when it last ran.
 
         After a kernel restart ``OUT`` in ``OUT / 'table.csv'`` is not bound
         yet, so the code alone no longer resolves -- and every writer looked
-        like it might feed the cell being run.
+        like it might feed the cell being run. A name the notebook binds to a
+        literal path (``OUT = Path('report')``) resolves from *simulation_trace*;
+        a folder removed by ``shutil.rmtree(OUT)`` leaves no record to fall back on.
         """
         user_ns = getattr(getattr(self._virtual_lineage, 'shell', None), 'user_ns', None)
-        written = statement_written_paths(stmt_code, namespace=user_ns)
+        namespace = {**_literal_path_bindings(simulation_trace), **(user_ns or {})}
+        written = statement_written_paths(stmt_code, namespace=namespace)
         if written:
             return written
         cash = getattr(self._virtual_lineage, 'cash_instance', None)
@@ -1483,6 +1529,7 @@ class ReexecutionPlanner:
         stmt_code: str,
         relevant_read_paths: set[str] | None,
         relevant_read_paths_known: bool,
+        simulation_trace: list | None = None,
     ) -> bool:
         """True when a writer's output file is read by no relevant consumer.
 
@@ -1494,14 +1541,16 @@ class ReexecutionPlanner:
         """
         if not relevant_read_paths_known or relevant_read_paths is None:
             return False
-        written = self._writer_paths(stmt_code)
+        written = self._writer_paths(stmt_code, simulation_trace)
         if not written:
             return False  # unresolvable target -> stay conservative
         read_forms: set[str] = set()
         read_dirs: list[str] = []
+        read_places: list[str] = []
         for rp in relevant_read_paths:
             read_forms |= self._normalize_path_forms(rp)
             resolved = resolve_file_dep_path(rp) or rp
+            read_places.append(os.path.normcase(os.path.abspath(resolved)))
             if os.path.isdir(resolved):
                 # A listed / globbed folder: whatever is written inside it is
                 # read by the next listing.
@@ -1511,6 +1560,10 @@ class ReexecutionPlanner:
                 return False  # this output IS read by a relevant consumer
             where = os.path.normcase(os.path.abspath(resolve_file_dep_path(wp) or wp))
             if any(where.startswith(d) for d in read_dirs):
+                return False
+            # A folder made or removed (``OUT.mkdir()``): read by whatever
+            # reads a file inside it.
+            if any(place.startswith(where + os.sep) for place in read_places):
                 return False
         return True
 

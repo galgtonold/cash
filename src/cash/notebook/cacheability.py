@@ -756,6 +756,11 @@ _PATH_ARG0_WRITE_METHODS: frozenset[str] = frozenset({
     'to_excel', 'to_hdf', 'to_stata', 'savefig',
 })
 
+# ``os.<f>(PATH)`` / ``shutil.<f>(PATH)`` calls that make or remove a folder.
+_FOLDER_FUNCTIONS: frozenset[str] = frozenset({
+    'mkdir', 'makedirs', 'rmdir', 'removedirs', 'rmtree',
+})
+
 # Keyword names that carry the output path across the recognised write calls.
 _PATH_KWARG_NAMES: frozenset[str] = frozenset({
     'path', 'path_or_buf', 'fname', 'excel_writer', 'file',
@@ -871,6 +876,15 @@ def _write_call_path(
         return None, False
     if isinstance(func, ast.Attribute):
         method = func.attr
+        # A folder made or removed -- ``OUT.mkdir()``, ``os.makedirs(OUT)``,
+        # ``shutil.rmtree(OUT)``: its effect is the folder. Unresolved, the
+        # ``rmtree`` + ``mkdir`` a report cell starts with could never be ruled
+        # out as unread, and a cell below it re-ran the whole report after a
+        # restart (round 23, r23s2).
+        if method in ('mkdir', 'rmdir') and not call.args:
+            return _resolve_literal_path(func.value, namespace), True
+        if _get_base_name(func.value) in ('os', 'shutil') and method in _FOLDER_FUNCTIONS:
+            return _call_path_argument(call, 0, namespace, _PATH_KWARG_NAMES), True
         # Path(PATH).write_text(...) / Path(PATH).write_bytes(...)
         if method in ('write_text', 'write_bytes'):
             recv = func.value
