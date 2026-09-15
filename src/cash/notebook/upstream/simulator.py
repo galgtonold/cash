@@ -266,6 +266,8 @@ class NotebookSimulator:
         # reset it to that assignment and drop the intermediate cells' mutations.
         # Computed lazily (only when an in-place no-lineage candidate exists).
         upstream_inplace_mutated: set[str] | None = None
+        # Names this cell changes without producing them again; lazily too.
+        lineage_invisible: set[str] | None = None
         for var_name in required_inputs:
             # A user variable shadowing a builtin name is tracked in
             # variable_lineage; only skip genuine (untracked) builtins.
@@ -286,6 +288,26 @@ class NotebookSimulator:
                 continue
             live_value = self.shell.user_ns.get(var_name)
             live_lineage = getattr(live_value, '_cash_lineage_hash', None)
+            # The value is the one the simulation of the cells above says this
+            # cell starts from: current, and not this cell's own earlier output.
+            # The checks below compare it with what the LAST statement writing
+            # it read -- this cell's starting state only when that statement
+            # is in this cell. When it is in a cell above (``df['b'] = ...``
+            # there, ``df['a'] = ...`` here), a first run looked stale and the
+            # value was rebuilt (r23s4: its article frame, every Run All).
+            # Only when each write this cell makes moves the value's lineage:
+            # ``del df['b']`` or ``lst.append(x)`` changes it in place and
+            # leaves the lineage where it was, so a re-run would pass for a
+            # first run -- those keep the checks below.
+            if (live_lineage is not None and virtual_lineage is not None
+                    and live_lineage == virtual_lineage.get(var_name)
+                    and not (current_cell_method_receivers
+                             and var_name in current_cell_method_receivers)):
+                if lineage_invisible is None:
+                    lineage_invisible = self._lineage_invisible_writes(
+                        notebook_cells, current_cell_idx)
+                if var_name not in lineage_invisible:
+                    continue
             if live_lineage is None:
                 # Primitives / builtin containers / ndarray carry no
                 # ``_cash_lineage_hash`` and their self-modifying statements skip
@@ -583,6 +605,48 @@ class NotebookSimulator:
                     var_name, base_content[:8], live_content[:8],
                 )
             broken_vars.add(var_name)
+
+    @staticmethod
+    def _lineage_invisible_writes(
+        notebook_cells: list[str] | None,
+        current_cell_idx: int | None,
+    ) -> set[str]:
+        """Names a statement of the current cell changes without producing them.
+
+        ``del df['b']``, ``lst.append(x)``: the value changes in place and its
+        lineage does not move, unlike ``df['b'] = ...``, which binds ``df`` as
+        an output. Every simple statement is looked at on its own, so one
+        nested in a loop or a branch counts; a ``def`` or ``class`` body is
+        not the cell writing anything. A cell that does not parse never ran,
+        so it has nothing to report.
+        """
+        if (not notebook_cells or current_cell_idx is None
+                or not 0 <= current_cell_idx < len(notebook_cells)):
+            return set()
+        try:
+            tree = ast.parse(notebook_cells[current_cell_idx].replace('\r\n', '\n'))
+        except SyntaxError:
+            return set()
+        invisible: set[str] = set()
+        pending: list[ast.stmt] = list(tree.body)
+        while pending:
+            node = pending.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if hasattr(node, 'body'):       # for / while / if / with / try / match
+                for field in ('body', 'orelse', 'finalbody'):
+                    pending.extend(getattr(node, field, ()) or ())
+                for part in [*getattr(node, 'handlers', ()), *getattr(node, 'cases', ())]:
+                    pending.extend(part.body)
+                continue
+            try:
+                code = ast.unparse(node)
+                _, outputs = CodeAnalyzer.analyze_code_block(code)
+                mutated = analyze_statement(code, None).top_level_mutated_vars
+            except (SyntaxError, ValueError, TypeError):
+                continue
+            invisible |= set(mutated) - set(outputs)
+        return invisible
 
     def _scan_upstream_inplace_mutations(
         self,
