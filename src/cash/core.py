@@ -2251,6 +2251,7 @@ class Cash:
                 cls = self._instance_class_carrier(value, _seen)
                 if cls is not None:
                     yield cls
+                yield from self._iter_attribute_carriers(value, _depth, _seen)
                 return
             if id(value) not in _seen:
                 _seen.add(id(value))
@@ -2299,6 +2300,52 @@ class Cash:
             cls = self._instance_class_carrier(value, _seen)
             if cls is not None:
                 yield cls
+            yield from self._iter_attribute_carriers(value, _depth, _seen)
+
+    #: ``(class, is user code)`` per class id, for ``_iter_attribute_carriers``:
+    #: the verdict is a ``sys.modules`` lookup and a qualname walk, and a list of
+    #: 50k instances must not pay it per element. The class is kept so a
+    #: recycled id is never trusted.
+    _attribute_walk_verdicts: dict = {}
+
+    def _iter_attribute_carriers(self, value: Any, _depth: int, _seen: set):
+        """Code carried by what an instance of the user's own class HOLDS.
+
+        ``f(A(1, B()))`` keyed ``A``'s code, and ``A.f`` calling ``self.b.f()``
+        reached ``B`` -- whose code, and everything it calls, never entered the
+        key: editing ``B.f`` or a function it called served the old result.
+        Only an instance whose class is user code is looked into (a library
+        object's attributes are its own business), each once per walk, bounded
+        by the same depth; attributes that are plain values cost a type test.
+        """
+        if id(value) in _seen:
+            return
+        cls = type(value)
+        key = ("user-class", id(cls))
+        verdict = self._attribute_walk_verdicts.get(key)
+        if verdict is None or verdict[0] is not cls:
+            verdict = (cls, self._is_user_code_object(cls))
+            if len(self._attribute_walk_verdicts) < 4096:
+                self._attribute_walk_verdicts[key] = verdict
+        if not verdict[1]:
+            return
+        attrs = getattr(value, "__dict__", None)
+        values: list[Any] = list(attrs.values()) if isinstance(attrs, dict) else []
+        for klass in type(value).__mro__:
+            slots = klass.__dict__.get("__slots__", ())
+            for slot in (slots,) if isinstance(slots, str) else slots:
+                if slot in ("__dict__", "__weakref__"):
+                    continue
+                try:
+                    values.append(getattr(value, slot))
+                except AttributeError:
+                    continue
+        held = [v for v in values if type(v) not in _CODELESS_PRIMS]
+        if not held:
+            return
+        _seen.add(id(value))
+        for v in held:
+            yield from self._iter_code_carriers(v, _depth + 1, _seen)
 
     def _instance_class_carrier(self, value: Any, _seen: set) -> type | None:
         """``type(value)`` if it is user code and not already seen this walk.

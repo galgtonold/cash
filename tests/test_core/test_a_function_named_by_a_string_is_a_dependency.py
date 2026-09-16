@@ -153,3 +153,62 @@ def test_a_waiver_on_that_line_silences_it(tmp_path):
     out, err = _run(tmp_path, RUNTIME_NAME.replace("{WAIVER}", "  # @cash:assume-safe"))
     assert out == "13"
     assert "KEY-DYNAMIC-DEPENDENCY" not in err, err
+
+
+# Reported next: the object whose method reaches the function is not the
+# argument but held BY it (`A(1, B())`, `A.f` calling `self.b.f()`). The
+# argument's class was folded; what the instance held was not looked into, so
+# editing `B.f`, or `fun1`/`fun2` behind it, served the old result.
+NESTED = textwrap.dedent('''
+    import sys, time
+    import cash
+
+    def fun1():
+        return fun2() + {F1}
+
+    def fun2():
+        return {F2}
+
+    FUNS = [fun1, fun2]
+
+    class B:
+        def f(self):
+            return FUNS[0](){B_EXTRA}
+
+    class A:
+        def __init__(self, x, b):
+            self.x = x
+            self.b = b
+
+        def f(self, y):
+            return self.x + y + self.b.f()
+
+    @cash.cache
+    def f(a, y):
+        print("[RUN]", file=sys.stderr)  # @cash:assume-safe
+        time.sleep(0.2)  # @cash:assume-safe
+        return a.f(y)
+
+    print(f(A(1, B()), 2))
+''')
+
+
+def _nested(**over):
+    fmt = {"F1": "1", "F2": "90", "B_EXTRA": ""}
+    fmt.update(over)
+    return NESTED.replace("{F1}", fmt["F1"]).replace("{F2}", fmt["F2"]).replace("{B_EXTRA}", fmt["B_EXTRA"])
+
+
+@pytest.mark.parametrize("edit, want", [
+    ({"F2": "100"}, "104"),
+    ({"F1": "5"}, "98"),
+    ({"B_EXTRA": " + 1000"}, "1094"),
+], ids=["function_behind_the_held_object", "function_it_calls", "held_objects_method"])
+def test_code_of_an_object_the_argument_holds_is_a_dependency(tmp_path, edit, want):
+    out, err = _run(tmp_path, _nested())
+    assert out == "94" and "[RUN]" in err
+    out, err = _run(tmp_path, _nested())
+    assert out == "94" and "[RUN]" not in err, "an unedited run must hit"
+
+    out, err = _run(tmp_path, _nested(**edit))
+    assert out == want, f"served the result from before the edit: {out}"

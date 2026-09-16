@@ -633,14 +633,16 @@ def build(schema):
 build(Schema)                    # edit Schema, call again -> used to return the old answer
 ```
 
-<!-- claim: cash/core.py:Cash._fold_code_args @0ffbe91f, cash/core.py:Cash._iter_code_carriers @af06e195 -->
+<!-- claim: cash/core.py:Cash._fold_code_args @0ffbe91f, cash/core.py:Cash._iter_code_carriers @92eb245c -->
 Your code reached through the arguments now folds into `state_hash`, so editing
 it invalidates. cash finds it in a class, a function, an instance (through its
 class), any of those nested in a list/tuple/set/dict, and an instance whose
 class is a subclass of `dict`/`list`/`tuple`/`set`/`str`/`int`/`float`/`bytes`,
 a namedtuple, an `Enum` member, a `__slots__` instance, or a callable object.
 Base classes count: editing a base invalidates a call that was passed the
-subclass.
+subclass. So do the objects an instance of your class holds: pass `A(1, B())`
+where `A.f` calls `self.b.f()`, and editing `B.f` — or a function it calls —
+invalidates too.
 
 **What that code reads counts too.** A callback that reads a module constant —
 `def double_well(x): return x**4 - x**2 + TILT * x`, passed to a cached
