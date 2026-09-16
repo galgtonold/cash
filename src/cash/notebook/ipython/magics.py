@@ -1750,7 +1750,22 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 traceback.print_exc()
 
     def _get_bug_report_context(self) -> dict:
-        """Collect runtime environment info for the pre-filled bug report URL."""
+        """Collect runtime environment info for the pre-filled bug report URL.
+
+        Once per cell run. Every badge render asked, progress renders
+        included, and each read the whole notebook again: 20 reads, 0.9-1.9 s,
+        per cell of r24s4. The notebook's source cannot change while the cell
+        runs, so the first answer stands until the next cell.
+        """
+        count = getattr(self.shell, 'execution_count', None)
+        cached = getattr(self, '_bug_report_context_cache', None)
+        if cached is not None and cached[0] == count:
+            return cached[1]
+        context = self._collect_bug_report_context()
+        self._bug_report_context_cache = (count, context)
+        return context
+
+    def _collect_bug_report_context(self) -> dict:
         try:
             from cash import __version__ as _v
         except Exception:

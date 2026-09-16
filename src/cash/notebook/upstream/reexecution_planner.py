@@ -4,6 +4,7 @@ import ast
 import builtins
 import logging
 import os
+import stat
 import re
 import textwrap
 import types
@@ -1347,7 +1348,6 @@ class ReexecutionPlanner:
         the read set is fully known and the writer's own path resolves; every
         uncertain case falls through to the prior (conservative) behaviour.
         """
-        self._read_index = None  # this pass's (``_read_path_index``)
         tracking = getattr(self._classifier, '_tracking_state', None)
         executed_writes = getattr(tracking, 'executed_write_stmt_codes', None)
         if executed_writes is None:
@@ -1527,25 +1527,44 @@ class ReexecutionPlanner:
 
     def _read_path_index(self, relevant_read_paths) -> tuple[set[str], list[str], list[str]]:
         """``(comparable forms, folders listed, places)`` of the paths read, once
-        per writer pass (``_find_stale_file_writer_indices``) rather than once per
-        writer: each is a resolve and an ``isdir``, and 12 writers over 1,312
-        read files made 44,000 of them before one restarted cell (r23s2)."""
+        per set of read paths rather than once per writer: each is a resolve and
+        an ``isdir``, and 12 writers over 1,312 read files made 44,000 of them
+        before one restarted cell (r23s2). The simulator and the planner ask
+        with the same set in one check, so it is kept across passes too; r24s4's
+        10,000 documents were indexed twice per cell, 1.8 s, and each resolved
+        twice."""
         cached = getattr(self, '_read_index', None)
-        if cached is not None and cached[0] is relevant_read_paths:
-            return cached[1]
+        if cached is not None and cached[0] is relevant_read_paths and cached[1] == len(relevant_read_paths):
+            return cached[2]
         read_forms: set[str] = set()
         read_dirs: list[str] = []
         read_places: list[str] = []
         for rp in relevant_read_paths:
-            read_forms |= self._normalize_path_forms(rp)
-            resolved = resolve_file_dep_path(rp) or rp
+            # One stat answers both "is it there" and "is it a folder" for a
+            # path that has not moved; only a missing one takes the relocation
+            # fallbacks and a second look.
+            try:
+                is_dir = stat.S_ISDIR(os.stat(rp).st_mode)
+                resolved = rp
+            except (OSError, ValueError, TypeError):
+                try:
+                    resolved = resolve_file_dep_path(rp) or rp
+                except (OSError, ValueError, TypeError):
+                    resolved = rp
+                is_dir = resolved != rp and os.path.isdir(resolved)
+            for candidate in {resolved, rp}:
+                try:
+                    read_forms.add(os.path.normcase(os.path.abspath(candidate)))
+                    read_forms.add(os.path.normcase(os.path.basename(candidate)))
+                except (OSError, ValueError, TypeError):
+                    continue
             read_places.append(os.path.normcase(os.path.abspath(resolved)))
-            if os.path.isdir(resolved):
+            if is_dir:
                 # A listed / globbed folder: whatever is written inside it is
                 # read by the next listing.
                 read_dirs.append(os.path.normcase(os.path.abspath(resolved)) + os.sep)
         index = (read_forms, read_dirs, read_places)
-        self._read_index = (relevant_read_paths, index)
+        self._read_index = (relevant_read_paths, len(relevant_read_paths), index)
         return index
 
     def _writer_output_unread(
