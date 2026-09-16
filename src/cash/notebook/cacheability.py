@@ -669,9 +669,32 @@ def _locally_opened_handles(tree: ast.AST) -> set[str]:
     return handles
 
 
+def _writes_to_console(call: ast.Call) -> bool:
+    """``os.write(1 | 2, ...)``, ``sys.stdout.write(...)``, ``sys.stderr.write(...)``.
+
+    Output, like ``print``, not a file. Counted as a write whose repeatability
+    was unknown, a step marker (``os.write(2, f"RUN {step}")``) inside a helper
+    made every statement calling it a file writer; after a restart none had a
+    record of its files, so all were re-fired, and the fits feeding them with
+    them: a cell reading only the loaded frame ran 70 statements (round 24,
+    r24s1).
+    """
+    func = call.func
+    if not (isinstance(func, ast.Attribute) and func.attr in ('write', 'writelines')):
+        return False
+    base = func.value
+    if isinstance(base, ast.Name) and base.id == 'os' and func.attr == 'write':
+        fd = call.args[0] if call.args else None
+        return isinstance(fd, ast.Constant) and fd.value in (1, 2)
+    return (isinstance(base, ast.Attribute) and base.attr in ('stdout', 'stderr', '__stdout__', '__stderr__')
+            and isinstance(base.value, ast.Name) and base.value.id == 'sys')
+
+
 def _call_repeatability(call: ast.Call, local_handles: frozenset[str] = frozenset()) -> str | None:
     """Repeatability of one call node, or ``None`` if it is not a file write."""
     func = call.func
+    if _writes_to_console(call):
+        return None
     if isinstance(func, ast.Name) and func.id == 'open':
         mode = _open_mode_node(call)
         if mode is None:
@@ -1203,7 +1226,7 @@ class _SideEffectVisitor(ast.NodeVisitor):
 
             if isinstance(node.func, ast.Attribute):
                 method = node.func.attr
-                if method in _WRITE_METHODS:
+                if method in _WRITE_METHODS and not _writes_to_console(node):
                     base = _get_base_name(node.func.value)
                     self.effects.append(SideEffectInfo(
                         kind='file_write',
