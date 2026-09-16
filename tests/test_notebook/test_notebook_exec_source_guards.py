@@ -42,12 +42,23 @@ def test_an_ordinary_comment_does_not_change_a_function_s_identity():
     assert source_identity_digest(base) == source_identity_digest(commented)
 
 
-def test_a_cash_directive_does_change_it():
-    """DELIBERATE. A waiver changes how the function is treated, so it changes
-    what the function IS. A miss after adding one is correct -- do not 'fix' it."""
+def test_a_directive_that_changes_caching_does_change_it():
+    """``no-cache``, ``persist``, ``ttl`` and ``allow-random`` change how results
+    are cached, so they move the key."""
+    base = "def f(n):\n    return n * 2\n"
+    directed = "def f(n):\n    return n * 2  # @cash:no-cache\n"
+    assert source_identity_digest(base) != source_identity_digest(directed)
+
+
+def test_a_purity_waiver_does_not_change_it():
+    """``assume-safe`` only silences a purity warning; the function computes the
+    same thing either way. It used to move the key on purpose ("it changes how
+    the function is treated"), and adding it to a line of a cached function
+    threw away what was cached -- the maintainer's call (2026-09-16): a waiver is
+    not a reason to recompute."""
     base = "def f(n):\n    return n * 2\n"
     waived = "def f(n):\n    return n * 2  # @cash:assume-safe\n"
-    assert source_identity_digest(base) != source_identity_digest(waived)
+    assert source_identity_digest(base) == source_identity_digest(waived)
 
 
 def test_a_control_body_still_executes(cell_runner):

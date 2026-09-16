@@ -142,6 +142,20 @@ def test_cash_annotation_breaks_identity(annotation):
     assert not _same(BASE, edited)
 
 
+@pytest.mark.parametrize("waiver", ["# @cash:assume-safe", "# @cash: assume-safe", "# @cash:assumesafe"])
+def test_a_purity_waiver_leaves_identity_alone(waiver):
+    """``assume-safe`` only silences a purity warning: the function computes
+    the same thing with it, so adding it must not throw away what was cached
+    (a user added it to a line of a cached function and the next call
+    recomputed)."""
+    edited = f"""
+        def f(n):
+            total = n * 2  {waiver}
+            return total
+        """
+    assert _same(BASE, edited)
+
+
 def test_differing_annotation_values_differ():
     a = """
         def f(n):

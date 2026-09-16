@@ -110,6 +110,13 @@ def _canonical_number(text: str) -> str:
         return text
 
 
+#: Directives that only silence a purity warning. The function computes the
+#: same thing with or without one, so it is prose to the key: adding
+#: ``# @cash:assume-safe`` to a line of a cached function recomputed it, and
+#: removing it again recomputed it once more.
+_WAIVERS = frozenset({"assume-safe", "assumesafe"})
+
+
 def _annotation_atom(comment: str) -> str | None:
     """Return a normalized atom for a ``# @cash:`` comment, else ``None``.
 
@@ -123,6 +130,8 @@ def _annotation_atom(comment: str) -> str | None:
     if match is None:
         return None
     directive = match.group(1).lower()
+    if directive in _WAIVERS:
+        return None
     value = match.group(2)
     return f"@cash:{directive}" + (f"={value}" if value else "")
 
