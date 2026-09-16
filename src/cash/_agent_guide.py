@@ -46,6 +46,14 @@ stored (too cheap, a side effect, or `# @cash:no-cache`). Check the running tota
 with `%cash_stats` ("Net time saved" — honest, and it will report a **loss** if
 you cached something too cheap).
 
+Two things to know when reading a captured notebook:
+
+- **Read the labels, not your prints, to tell what ran.** A `CACHED` statement
+  replays the stdout and stderr it printed when it last ran, so a
+  `print("RUN load", file=sys.stderr)` marker shows up either way.
+- **If you only have the HTML badge's output**, its first few hundred
+  characters are CSS. Don't parse it; switch to `%cash_badge print` and re-run.
+
 ## The six rules that keep you correct
 
 1. **Cache pure + expensive only.** Same code + same inputs → restored. Editing
