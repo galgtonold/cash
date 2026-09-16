@@ -7523,6 +7523,12 @@ class Cash:
             label = f"{mod_name}.{attr}"
             if isinstance(value, types.ModuleType) or isinstance(value, type):
                 continue
+            if is_cls and Cash._wraps_code(value):
+                # Read statically, a classmethod, property or cached_property is
+                # its descriptor, which is neither callable nor data: hashing it
+                # warned KEY-UNHASHABLE-GLOBAL for `A.make(v)`, whose code is
+                # followed like any method's (round 25).
+                continue
             if callable(value) and not isinstance(value, (dict, list, tuple, set)):
                 # A class method/staticmethod/classmethod is handled by the
                 # helper-source / self-dep channels; only recurse into a
@@ -7563,6 +7569,16 @@ class Cash:
             if h is not None:
                 parts.append((label, h))
         return parts
+
+    @staticmethod
+    def _wraps_code(value: Any) -> bool:
+        """Is *value* a descriptor around a function (classmethod, staticmethod,
+        property, cached_property, partialmethod...)?"""
+        if isinstance(value, (classmethod, staticmethod, property, functools.cached_property,
+                              functools.partialmethod)):
+            return True
+        return hasattr(type(value), "__get__") and any(
+            callable(getattr(value, name, None)) for name in ("__func__", "fget", "func"))
 
     def _safe_global_hash(self, value: Any, func_name: str, label: str) -> str | None:
         """Hash *value* for the key, warning once and skipping if it cannot be."""
