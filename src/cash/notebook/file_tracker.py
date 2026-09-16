@@ -282,6 +282,12 @@ def _module_package_dir(module_name: str) -> str | None:
     return _norm_dir(os.path.dirname(file)) if file else None
 
 
+#: module name -> (a metadata module?, read plumbing?, top-level name). A read
+#: walks the whole stack, ~30 frames in a kernel, and a folder read does it for
+#: every file: 5,030 reads re-classified the same modules (round 25, r25s4).
+_MODULE_KIND: dict[str, tuple[bool, bool, str]] = {}
+
+
 def incidental_read(path: str, own_package: str | None = None) -> str | None:
     """Why the read of *path* happening now is not the user's data, or None.
 
@@ -299,10 +305,16 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
     reader_seen = False
     while frame is not None:
         module = frame.f_globals.get("__name__") or ""
-        if _in_modules(module, _METADATA_MODULES):
+        kind = _MODULE_KIND.get(module)
+        if kind is None:
+            kind = (_in_modules(module, _METADATA_MODULES), _in_modules(module, _READ_PLUMBING),
+                    module.split(".")[0])
+            if len(_MODULE_KIND) < 8192:
+                _MODULE_KIND[module] = kind
+        is_metadata, is_plumbing, top = kind
+        if is_metadata:
             return "package metadata"
         code = frame.f_code
-        top = module.split(".")[0]
         # `__main__` is the user's notebook or script -- in a kernel its module
         # object is the ipykernel launcher in site-packages, which must not make
         # a notebook statement look like a library.
@@ -316,7 +328,7 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
                 if (getattr(spec, "_initializing", False) and isinstance(origin, str)
                         and _under(_nc(origin), installed)):
                     return "library import"
-            if not reader_seen and not _in_modules(module, _READ_PLUMBING):
+            if not reader_seen and not is_plumbing:
                 reader_seen = True
                 package_dir = _module_package_dir(module) if module else None
                 if (package_dir and _under(package_dir, installed)
@@ -477,10 +489,10 @@ def _credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
     depth = 0
     while frame is not None and depth < 64:
         code = frame.f_code
-        filename = code.co_filename
-        if _is_cash_wrapper(filename):
+        kind = _frame_kind(code.co_filename)
+        if kind == "wrapper":
             break                    # the cached call's own wrapper: the walk ends
-        if _is_user_file(filename):
+        if kind == "user":
             tracker._note_reading_code(code)
             _record_read(code, abs_path, stat)
         frame, depth = frame.f_back, depth + 1
@@ -489,6 +501,19 @@ def _credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
 _UNTRACKED_REALPATH: dict[str, str] = {}
 _UNTRACKED_STAT: dict[str, tuple[float, Any]] = {}
 _FRAME_KIND: dict[str, str] = {}
+
+
+def _frame_kind(filename: str) -> str:
+    """``wrapper`` (the cached call's own), ``cash``, ``user`` or ``other``,
+    remembered per filename: every read walks the stack."""
+    kind = _FRAME_KIND.get(filename)
+    if kind is None:
+        kind = ("wrapper" if _is_cash_wrapper(filename)
+                else "cash" if filename and os.path.normcase(filename).startswith(_CASH_PACKAGE_DIR)
+                else "user" if _is_user_file(filename) else "other")
+        if len(_FRAME_KIND) < 8192:
+            _FRAME_KIND[filename] = kind
+    return kind
 
 
 def _note_untracked_read(path: Any) -> None:
@@ -503,14 +528,7 @@ def _note_untracked_read(path: Any) -> None:
         codes = []
         depth = 0
         while frame is not None and depth < 64:
-            filename = frame.f_code.co_filename
-            kind = _FRAME_KIND.get(filename)
-            if kind is None:
-                kind = ("wrapper" if _is_cash_wrapper(filename)
-                        else "cash" if filename and os.path.normcase(filename).startswith(_CASH_PACKAGE_DIR)
-                        else "user" if _is_user_file(filename) else "other")
-                if len(_FRAME_KIND) < 8192:
-                    _FRAME_KIND[filename] = kind
+            kind = _frame_kind(frame.f_code.co_filename)
             if kind == "wrapper":
                 break
             if kind == "cash" and not codes:
@@ -1395,8 +1413,9 @@ class FileAccessTracker:
             # This resolves symlinks and normalizes the path, making it
             # stable across os.chdir() calls. Resolved once per cell run
             # (``realpath_this_run``): a loop reads the same files again.
-            from cash.notebook.file_dep_snapshot import realpath_this_run
-            abs_path = normalize_path(realpath_this_run(raw_path))
+            from cash.notebook.file_dep_snapshot import realpath_of_read_this_run
+            resolved, read_lstat = realpath_of_read_this_run(raw_path)
+            abs_path = normalize_path(resolved)
         except (TypeError, ValueError, OSError) as e:
             logger.debug("[TRACKER] Could not track file path %r: %s", path, e)
             return
@@ -1415,7 +1434,7 @@ class FileAccessTracker:
         if why is not None:
             logger.debug("[TRACKER] Ignoring %s read %r", why, abs_path)
             return
-        self._add_tracked(abs_path)
+        self._add_tracked(abs_path, lstat=read_lstat)
         try:
             _credit_read_to_stack(abs_path, self)
         except Exception:  # noqa: BLE001 - attribution is an aid; the read counts regardless
@@ -1449,19 +1468,23 @@ class FileAccessTracker:
         except (TypeError, ValueError, OSError):
             logger.debug("[TRACKER] Could not record unresolved path for %r", path)
 
-    def _add_tracked(self, abs_path: str, digest: str | None = None) -> None:
+    def _add_tracked(self, abs_path: str, digest: str | None = None, lstat: Any = None) -> None:
         """Record *abs_path* on this tracker and, when propagation is enabled,
         on the enclosing tracker(s) too - so nested cached reads count as the
         outer cached function's deps. Manual tracker nesting stays isolated.
 
         *digest* is the content hash an inner tracker already took of the same
-        read, handed up so the outer one does not hash the file again."""
+        read, handed up so the outer one does not hash the file again.
+
+        *lstat* is the stat taken while resolving the path, of a regular file
+        that is not a link, so it is the stat the file would have given."""
         self.accessed_files.add(abs_path)
         if abs_path not in self.read_stats and os.path.isabs(abs_path):
             # Absolute paths only: a relative twin is re-resolved against the
             # cwd at check time, and a chdir during the call would make its
             # stat look like a change that never happened.
-            st = _regular_file_stat(abs_path)
+            st = (_regular_file_stat(abs_path) if lstat is None
+                  else (lstat.st_size, lstat.st_mtime_ns, getattr(lstat, "st_ctime_ns", 0)))
             if st is not None:
                 self.read_stats[abs_path] = st
                 if self._hash_on_read:

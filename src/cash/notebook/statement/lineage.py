@@ -100,9 +100,10 @@ class StatementLineageBuilder:
         user_ns = self.shell.user_ns
 
         file_hash_component = ""
+        file_stats: dict[str, Any] = {}
         if accessed_files or accessed_remote:
             file_hash_component = compute_file_hash_component(
-                accessed_files or set(), accessed_remote
+                accessed_files or set(), accessed_remote, stats_out=file_stats,
             )
         if cache_key:
             tracking_state.statement_file_reads[cache_key] = (
@@ -172,7 +173,7 @@ class StatementLineageBuilder:
             tracking_state.variable_sources[var_name] = cache_key
 
             self._file_deps.update_for_var(tracking_state, var_name, accessed_files, inputs, value,
-                                           rebind=var_name not in inputs)
+                                           rebind=var_name not in inputs, stats=file_stats)
 
         # After all outputs' lineages are recorded, replay derivation bumps:
         # a mutation of a base/frame bumps its live-alias derivatives

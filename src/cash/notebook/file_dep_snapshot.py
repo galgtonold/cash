@@ -229,6 +229,55 @@ _REALPATH_MEMO: dict[tuple[str, str], str] = {}
 _REALPATH_MEMO_EPOCH: int | None = None
 
 
+def _remember_realpath(key: tuple[str, str], resolved: str) -> None:
+    if len(_REALPATH_MEMO) < 65536:
+        _REALPATH_MEMO[key] = resolved
+        # A resolved path resolves to itself, and callers hand it back in
+        # both spellings: the tracker records ``normalize_path`` of it, and
+        # the lineage component resolves that record again.
+        _REALPATH_MEMO[("", resolved)] = resolved
+        _REALPATH_MEMO[("", normalize_path(resolved))] = resolved
+
+
+def realpath_of_read_this_run(path: str) -> tuple[str, os.stat_result | None]:
+    """:func:`realpath_this_run` for a file about to be read, and its stat when
+    that is what answered.
+
+    ``realpath`` costs two ``_getfinalpathname`` calls per file on Windows, and
+    a folder read paid them for all 5,030 files in one directory: a quarter of
+    what cash added to the read (round 25, r25s4). A regular file that is not
+    itself a link or reparse point resolves to its directory's real path plus
+    its name, so the directory is resolved once; the ``lstat`` that shows it is
+    such a file is also the stat the read needs. Anything else -- a link, a
+    missing file, a short ``~`` name -- is resolved in full.
+    """
+    import stat as _stat
+    if _HASH_EPOCH is None:
+        return os.path.realpath(path), None
+    key = ("" if os.path.isabs(path) else os.getcwd(), path)
+    if _REALPATH_MEMO_EPOCH == _HASH_EPOCH:
+        resolved = _REALPATH_MEMO.get(key)
+        if resolved is not None:
+            return resolved, None
+    absolute = os.path.abspath(path)
+    parent, name = os.path.split(absolute)
+    if name and name not in (".", "..") and "~" not in name and parent != absolute:
+        try:
+            st = os.lstat(absolute)
+        except (OSError, ValueError):
+            st = None
+        if (st is not None and _stat.S_ISREG(st.st_mode)
+                and not getattr(st, "st_file_attributes", 0) & _REPARSE_POINT):
+            resolved = os.path.join(realpath_this_run(parent), name)
+            _remember_realpath(key, resolved)
+            return resolved, st
+    return realpath_this_run(path), None
+
+
+#: ``FILE_ATTRIBUTE_REPARSE_POINT``: a symlink or junction on Windows.
+_REPARSE_POINT = 0x400
+
+
 def realpath_this_run(path: str) -> str:
     """``os.path.realpath(path)``, remembered for the rest of the cell run.
 
@@ -251,13 +300,7 @@ def realpath_this_run(path: str) -> str:
     resolved = _REALPATH_MEMO.get(key)
     if resolved is None:
         resolved = os.path.realpath(path)
-        if len(_REALPATH_MEMO) < 65536:
-            _REALPATH_MEMO[key] = resolved
-            # A resolved path resolves to itself, and callers hand it back in
-            # both spellings: the tracker records ``normalize_path`` of it, and
-            # the lineage component resolves that record again.
-            _REALPATH_MEMO[("", resolved)] = resolved
-            _REALPATH_MEMO[("", normalize_path(resolved))] = resolved
+        _remember_realpath(key, resolved)
     return resolved
 
 

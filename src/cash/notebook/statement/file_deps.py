@@ -50,6 +50,7 @@ _SCALAR_TYPES = (int, float, str, bool, bytes, type(None))
 def compute_file_hash_component(
     accessed_files: set[str],
     accessed_remote: set[str] | None = None,
+    stats_out: dict[str, os.stat_result] | None = None,
 ) -> str:
     """Compute a hash component from accessed file paths and their stats.
 
@@ -68,6 +69,10 @@ def compute_file_hash_component(
     Remote URLs are deliberately kept out of ``executed_file_deps``: that set is
     ``stat``-ed and ``getmtime``-d by its consumers, so a URL there contributes
     nothing at best. The key component alone is sufficient. See CAS-237.
+
+    *stats_out*, when given, receives each local file's stat, so the caller
+    need not stat the same files again (a folder of 5,030 files was stat-ed
+    three times after the read, round 25).
     """
     notebook_dir = None
     try:
@@ -78,22 +83,33 @@ def compute_file_hash_component(
         logger.debug("[PROCESSOR] Failed to get notebook directory for file hash")
 
     file_components = []
+    # Relative to the notebook, per directory: a folder's files share one.
+    rel_dirs: dict[str, str | None] = {}
     for f in sorted(accessed_files):
-        if os.path.exists(f):
+        try:
             canonical_path = normalize_path(realpath_this_run(f))
-            display_path = canonical_path
-            if notebook_dir:
+            stat = os.stat(canonical_path)
+        except (OSError, ValueError):
+            continue  # gone, or never a file
+        display_path = canonical_path
+        if notebook_dir:
+            head, _, name = canonical_path.rpartition('/')
+            if head not in rel_dirs:
                 try:
-                    rel_path = normalize_path(os.path.relpath(canonical_path, notebook_dir))
-                    if not rel_path.startswith('../../../'):
-                        display_path = rel_path
+                    # A drive or filesystem root keeps its separator: `C:` alone
+                    # means the current directory on C:.
+                    root = head + '/' if (not head or head.endswith(':')) else head
+                    rel_dirs[head] = normalize_path(os.path.relpath(root, notebook_dir))
                 except (ValueError, OSError):
-                    pass  # Cross-drive relpath fails on Windows; fall back to absolute
-            try:
-                stat = os.stat(canonical_path)
-                file_components.append(f"{display_path}:{stat.st_mtime}:{stat.st_size}")
-            except OSError:
-                pass  # File may have been removed between exists() and stat()
+                    rel_dirs[head] = None  # Cross-drive relpath fails on Windows; keep absolute
+            rel_dir = rel_dirs[head]
+            if rel_dir is not None:
+                rel_path = name if rel_dir == '.' else f"{rel_dir}/{name}"
+                if not rel_path.startswith('../../../'):
+                    display_path = rel_path
+        if stats_out is not None:
+            stats_out[f] = stat
+        file_components.append(f"{display_path}:{stat.st_mtime}:{stat.st_size}")
 
     for url in sorted(accessed_remote or ()):
         # The URL is the identity and the token is the state, exactly as
@@ -159,8 +175,12 @@ class StatementFileDeps:
         inputs: set[str],
         value: Any,
         rebind: bool = False,
+        stats: dict[str, os.stat_result] | None = None,
     ) -> None:
         """Record direct and inherited file dependencies for *var_name*.
+
+        *stats* are the files' stats already taken for the lineage component
+        (``compute_file_hash_component``'s *stats_out*), reused for the mtimes.
 
         *rebind* -- the statement bound a fresh value to the name (it is not
         also one of the statement's inputs): the files the OLD value came from
@@ -194,6 +214,10 @@ class StatementFileDeps:
             if var_name not in executed_file_mtimes:
                 executed_file_mtimes[var_name] = {}
             for fpath in accessed_files:
+                known = stats.get(fpath) if stats else None
+                if known is not None:
+                    executed_file_mtimes[var_name][fpath] = known.st_mtime
+                    continue
                 with contextlib.suppress(OSError):  # File may have been deleted between execution and capture
                     executed_file_mtimes[var_name][fpath] = os.path.getmtime(fpath)
         # 2. Propagate file dependencies from input variables (unless output is scalar).

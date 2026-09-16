@@ -79,3 +79,53 @@ def test_a_relative_path_follows_a_chdir(tmp_path, monkeypatch):
         file_dep_snapshot.end_file_state_epoch()
     assert first != second
     assert second.endswith(os.path.join("two", "data.csv"))
+
+
+# Round 25 (r25s4): a folder of 5,030 small files still paid a full `realpath`
+# per file -- two `_getfinalpathname` calls each on Windows. A regular file that
+# is not a link resolves through its directory, resolved once.
+from cash.notebook.file_dep_snapshot import realpath_of_read_this_run  # noqa: E402
+
+
+def test_files_in_one_directory_resolve_the_directory_once(tmp_path, resolutions):
+    files = []
+    for i in range(20):
+        f = tmp_path / f"doc{i}.md"
+        f.write_text("x")
+        files.append(f)
+    file_dep_snapshot.begin_file_state_epoch()
+    try:
+        got = [realpath_of_read_this_run(str(f)) for f in files]
+    finally:
+        file_dep_snapshot.end_file_state_epoch()
+    assert len(resolutions) == 1, resolutions
+    for f, (resolved, st) in zip(files, got):
+        assert os.path.normcase(resolved) == os.path.normcase(os.path.realpath(str(f)))
+        assert st is not None and st.st_size == 1
+
+
+def test_a_linked_file_is_resolved_to_its_target(tmp_path):
+    target = tmp_path / "real" / "data.csv"
+    target.parent.mkdir()
+    target.write_text("x")
+    link = tmp_path / "link.csv"
+    try:
+        os.symlink(target, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("cannot create a symlink here")
+    file_dep_snapshot.begin_file_state_epoch()
+    try:
+        resolved, st = realpath_of_read_this_run(str(link))
+    finally:
+        file_dep_snapshot.end_file_state_epoch()
+    assert st is None
+    assert os.path.normcase(normalize_path(resolved)).endswith(os.path.normcase("real/data.csv"))
+
+
+def test_a_missing_file_resolves_in_full(tmp_path, resolutions):
+    file_dep_snapshot.begin_file_state_epoch()
+    try:
+        resolved, st = realpath_of_read_this_run(str(tmp_path / "absent.csv"))
+    finally:
+        file_dep_snapshot.end_file_state_epoch()
+    assert st is None and resolutions
