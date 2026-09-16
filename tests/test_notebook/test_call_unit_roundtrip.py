@@ -95,23 +95,25 @@ def test_a_computed_argument_is_hashed_into_the_key(call_unit_harness):
     assert calls == [5, 9], "two distinct computed-argument values must not collapse to one key"
 
 
-def test_unpacking_call_is_never_cached(call_unit_harness):
+def test_unpacking_call_is_keyed_on_every_value_it_receives(call_unit_harness):
     """CAS-243 review C2: ``*args``/``**kwargs`` unpacking makes the live
     arity dynamic, so ``computed_arg_positions`` (a STATIC, fail-closed-to-
     "every position" count from the AST) cannot be trusted to match the
-    RUNTIME flattened argument list. Reproduced end to end before the fix:
-    ``compute(*make_pair())`` hashed only the first unpacked element,
-    ``len(arg_digests) == len(computed_arg_positions)`` (both 1) passed the
-    mismatch check "by accident", and a second, genuinely different
-    ``make_pair()`` result was served the first call's cached value. The fix
-    refuses the whole site outright via ``CallSite.has_unpacking``.
+    RUNTIME flattened argument list. Reproduced end to end before that fix:
+    ``compute(*make_pair())`` hashed only the first unpacked element, and a
+    second, genuinely different ``make_pair()`` result was served the first
+    call's cached value. The site was then refused outright.
+
+    Round 25 (r25s5) keys it instead, on every value that arrived and each
+    keyword's name, when the call may be keyed on content: the second pair
+    still computes its own value, and the first pair again is a hit.
     """
     calls = []
 
-    def compute(*args):
-        calls.append(args)
+    def compute(*args, **kwargs):
+        calls.append((args, kwargs))
         time.sleep(0.05)
-        return sum(args)
+        return sum(args) + sum(kwargs.values())
 
     # `compute(*pair)`: one static position (the Starred expression itself),
     # but two live arguments once unpacked -- exactly the shape that fooled
@@ -133,8 +135,12 @@ def test_unpacking_call_is_never_cached(call_unit_harness):
     # (3, wrong) instead of computing its own (4).
     assert wrapped(1, 2) == 3
     assert wrapped(1, 3) == 4, "a second, different unpacked call was served a stale value"
-    assert calls == [(1, 2), (1, 3)], "an unpacking call must never be treated as a cache hit"
-    assert unit.call_log == [], "an unpacking call must not even be recorded as an attempted key"
+    assert wrapped(1, 2) == 3
+    assert calls == [((1, 2), {}), ((1, 3), {})], "the repeated pair should have been a hit"
+    # A keyword's name is part of what arrived.
+    assert wrapped(1, a=2) == 3
+    assert wrapped(1, b=2) == 3
+    assert len(calls) == 4, "a value under another keyword was served from the first"
 
 
 def test_a_mismatched_digest_count_runs_uncached(call_unit_harness):

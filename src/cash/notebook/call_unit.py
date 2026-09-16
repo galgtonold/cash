@@ -1448,6 +1448,8 @@ class CallUnit:
                    fn=None) -> str | None:
         """The call's key. With *fn*, keyed on what it receives when
         :func:`_keys_by_content` allows it."""
+        if site.has_unpacking and fn is not None:
+            return self._build_unpacked_key(site, args, kwargs, fn)
         if site.has_unpacking:
             # `*args`/`**kwargs` unpacking means the call's live arity is not
             # statically known. `site.computed_arg_positions` is a STATIC
@@ -1478,6 +1480,45 @@ class CallUnit:
                 global_digests=global_digests,
                 by_content=by_content,
                 name_digests=name_digests,
+            )
+        except Exception:  # noqa: BLE001 - never let keying break the call
+            logger.debug("call unit: key build failed for %s", site.source)
+            return None
+
+    def _build_unpacked_key(self, site: CallSite, args: tuple, kwargs: dict, fn) -> str | None:
+        """The key of a call with ``*``/``**`` unpacking, keyed on what it received.
+
+        ``fit_series(g, **TUNED.get(dept, {}))`` in a comprehension ran uncached
+        (r25s5): positions written in the source say nothing about the values
+        that arrive, so the site was refused (CAS-243: ``compute(*pair())``
+        had keyed the first of two values). What did arrive is in hand here:
+        every positional value, and every keyword with its name, hashed in
+        full. Only when the call may be keyed on content at all
+        (:func:`_keys_by_content`); otherwise refused as before.
+        """
+        try:
+            count = len(args) + len(kwargs)
+            received = dataclasses.replace(
+                site,
+                computed_arg_positions=tuple(range(count)),
+                local_arg_positions=tuple(range(count)),
+                name_arg_positions=(),
+                has_unpacking=False,
+            )
+            loop_vars = self._current_loop_vars()
+            if not _keys_by_content(fn, received, args, kwargs, loop_vars):
+                return None
+            digests = [compute_hash_full(value) for value in args]
+            digests.extend(f"{name}:{compute_hash_full(kwargs[name])}" for name in sorted(kwargs))
+            if loop_vars:
+                loop_vars = _loop_vars_the_call_can_read(fn, received, loop_vars, None)
+            return call_cache_key(
+                received,
+                ctx=self._ctx_provider(),
+                arg_digests=digests,
+                loop_vars=loop_vars,
+                loop_var_digests=self._current_loop_var_digests(),
+                by_content=True,
             )
         except Exception:  # noqa: BLE001 - never let keying break the call
             logger.debug("call unit: key build failed for %s", site.source)

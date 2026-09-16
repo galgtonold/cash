@@ -159,7 +159,8 @@ class CallSite:
     #: not: the sweep's ``make_features(cleaned[mid], W)`` and the pick's
     #: ``make_features(cleaned[mid], BEST_W)`` hand ``fit_score`` the same
     #: features, and keyed on the text the pick re-fitted all of them
-    #: (round 25, r25s3). Empty under unpacking, which is never content-keyed.
+    #: (round 25, r25s3). Under unpacking, the callee alone: the key then
+    #: holds every value received, with its keyword.
     content_source: str = ""
 
 
@@ -561,9 +562,7 @@ def _local_arg_positions(call: ast.Call, local: frozenset[str]) -> tuple[int, ..
 def _content_names(call: ast.Call, local: frozenset[str]) -> frozenset[str]:
     """Free names *call* reads only inside computed arguments (see
     ``CallSite.content_names``). None under unpacking, whose arguments the
-    runtime refuses to key at all."""
-    if _call_has_unpacking(call):
-        return frozenset()
+    runtime keys only on what arrived (see ``_content_source``)."""
     elsewhere = _names_read(call.func)
     inside: set[str] = set()
     for value in [*call.args, *(kw.value for kw in call.keywords)]:
@@ -580,7 +579,13 @@ def _content_source(call: ast.Call, local: frozenset[str]) -> str:
     to hash keeps its lineage by name, and a placeholder would let
     ``f(A, B)`` and ``f(B, A)`` share a key."""
     if _call_has_unpacking(call):
-        return ""
+        # What arrives is only known at run time, and then every value is
+        # hashed with its keyword (`CallUnit._unpacked_site`): the spelling
+        # of the arguments says nothing more.
+        try:
+            return f"{ast.unparse(call.func)}(*<received>)"
+        except Exception:  # noqa: BLE001 - no content key for this site
+            return ""
     computed = set(_computed_arg_positions(call, local))
     shape = copy.deepcopy(call)
     for i in range(len(shape.args)):
