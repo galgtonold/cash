@@ -741,6 +741,39 @@ def _exec_source_for_node(
         return None
 
 
+
+def _set_written_later(executor: Any, names: frozenset[str]) -> None:
+    """Tell the statement processor which names the rest of the cell writes."""
+    processor = getattr(executor, '_statement_processor', None)
+    if processor is not None:
+        processor.written_later_in_cell = names
+
+
+def _written_later_in_cell(body: list[ast.stmt]) -> list[frozenset[str]]:
+    """For each top-level statement, the names a LATER statement of the cell
+    writes -- rebinds or changes in place.
+
+    A value every one of whose names is written again before the cell ends is
+    an intermediate: the cell leaves a later version, and the end-of-cell pass
+    writes that one to disk when restoring beats rebuilding
+    (``TieredBackend.persist_from_memory``). Writing each intermediate to disk
+    as it was made cost r24s2's cleaning cell 3.8 s of pickling on a cold run,
+    for ~500 MB versions of ``sales`` that nothing restores.
+    """
+    outputs: list[set[str]] = []
+    for node in body:
+        try:
+            _inputs, outs = CodeAnalyzer.analyze_code_block(ast.unparse(node))
+        except Exception:  # noqa: BLE001 - unknown writes defer nothing
+            outs = set()
+        outputs.append(set(outs))
+    later: list[frozenset[str]] = [frozenset()] * len(body)
+    acc: set[str] = set()
+    for i in range(len(body) - 1, -1, -1):
+        later[i] = frozenset(acc)
+        acc |= outputs[i]
+    return later
+
 class CellExecutor:
     """Run a single notebook cell through the cached-execution pipeline.
 
@@ -1764,6 +1797,7 @@ class CellExecutor:
         ])
         total_steps_unified = upstream_step_count + len(tree.body)
         stmt_occurrence_counts: dict[str, int] = {}
+        written_later = _written_later_in_cell(tree.body)
 
         for i, node in enumerate(tree.body):
             try:
@@ -1824,11 +1858,15 @@ class CellExecutor:
                         if not ctrl_result.success:
                             raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
                     else:
-                        buffered_result_outputs = self._process_regular_stmt(
-                            stmt_code, annotation, occ, is_last, all_metrics,
-                            buffered_result_outputs, display_code=stmt_display,
-                            exec_source=stmt_exec_source,
-                        )
+                        _set_written_later(self, written_later[i])
+                        try:
+                            buffered_result_outputs = self._process_regular_stmt(
+                                stmt_code, annotation, occ, is_last, all_metrics,
+                                buffered_result_outputs, display_code=stmt_display,
+                                exec_source=stmt_exec_source,
+                            )
+                        finally:
+                            _set_written_later(self, frozenset())
 
                     self._magics._cancel_progress_badge()
                     t_badge = time.time()
@@ -1900,6 +1938,7 @@ class CellExecutor:
         ])
         total_steps_unified = upstream_step_count + len(tree.body)
         stmt_occurrence_counts: dict[str, int] = {}
+        written_later = _written_later_in_cell(tree.body)
 
         for i, node in enumerate(tree.body):
             try:
@@ -1969,11 +2008,15 @@ class CellExecutor:
                         if not ctrl_result.success:
                             raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
                     else:
-                        buffered_result_outputs = await self._process_regular_stmt_async(
-                            stmt_code, annotation, occ, is_last, all_metrics,
-                            buffered_result_outputs, display_code=stmt_display,
-                            exec_source=stmt_exec_source,
-                        )
+                        _set_written_later(self, written_later[i])
+                        try:
+                            buffered_result_outputs = await self._process_regular_stmt_async(
+                                stmt_code, annotation, occ, is_last, all_metrics,
+                                buffered_result_outputs, display_code=stmt_display,
+                                exec_source=stmt_exec_source,
+                            )
+                        finally:
+                            _set_written_later(self, frozenset())
 
                     self._magics._cancel_progress_badge()
                     t_badge = time.time()

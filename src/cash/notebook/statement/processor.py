@@ -4471,6 +4471,11 @@ class StatementProcessor:
         # re-wrap that mutated dict at the end so the returned view carries
         # the storage info on to the badge metrics.
         wire = metadata.to_dict()
+        # An intermediate of this cell (``cell_executor._written_later_in_cell``)
+        # stays in RAM; the cell's final version is persisted at its end.
+        later = getattr(self, 'written_later_in_cell', frozenset())
+        if not force_persist and outputs and later and set(outputs) <= later:
+            wire['defer_persist'] = True
 
         try:
             self.cash_instance.backend.set(cache_key, payload, wire)

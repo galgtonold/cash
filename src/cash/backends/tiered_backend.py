@@ -368,7 +368,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 self._promotion_backend_kind()):
             return False
         metadata = {k: v for k, v in stored_metadata.items()
-                    if k not in ('persist_skipped', 'source', 'storage')}
+                    if k not in ('persist_skipped', 'source', 'storage', 'defer_persist')}
         metadata['rebuild_time'] = rebuild_seconds
         stored, size_refused, refused_size, refusing_caps = self._write_persistent_tiers(
             key, value, metadata, None, stored_metadata.get('size') or size)
@@ -429,8 +429,15 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             # real type; otherwise fall through to the 2-arg promotion_policy
             # (injected test lambdas, the decorator path, legacy metadata).
             family = metadata.get('cost_model_family')
+            deferred = bool(metadata.pop('defer_persist', False)) and not force_persist
+            if original_metadata is not None:
+                original_metadata.pop('defer_persist', None)
             if force_persist:
                 past_compute_floor = True
+            elif deferred:
+                # A version the same cell replaces: the end-of-cell pass
+                # persists the final one (``persist_from_memory``).
+                past_compute_floor = False
             elif family is not None:
                 past_compute_floor = self._cost_model_promote(
                     metadata.get('cost_model_type_name', ''),
@@ -470,6 +477,8 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             if len(self.backends) > 1 and not any(d != "RAM" for d in stored_destinations):
                 if size_refused:
                     original_metadata['persist_skipped'] = 'size'
+                elif deferred:
+                    original_metadata['persist_skipped'] = 'replaced_in_cell'
                 elif not past_compute_floor:
                     original_metadata['persist_skipped'] = 'compute'
 
