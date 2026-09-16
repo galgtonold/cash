@@ -66,8 +66,13 @@ def test_editing_how_a_frame_is_shown_keeps_what_is_built_from_it(nb_runner, sho
 
 
 def test_a_chain_that_changes_the_frame_still_counts(nb_runner):
-    """``pop`` removes the column whatever comes after it."""
-    nb_runner.create_notebook([ON, SETUP, "df.pop('b').round(2)", TOTAL,
+    """``pop`` removes the column whatever comes after it.
+
+    The frame is over the 1 MiB up to which a call keys on the value of an
+    argument passed by name: a small ``df`` holds the same values after the
+    edit, and ``slow_total(df)`` is then rightly served."""
+    setup = SETUP.replace("range(1000), 'b': [0.123] * 1000", "range(300_000), 'b': [0.123] * 300_000")
+    nb_runner.create_notebook([ON, setup, "df.pop('b').round(2)", TOTAL,
                                "print(list(df.columns))"])
     nb_runner.start_kernel()
     nb_runner.run_all()

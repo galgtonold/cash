@@ -12,6 +12,8 @@ from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_interception import wrap_eligible_calls
 from cash.notebook.call_unit import (
     _CONTENT_KEY_MAX_BYTES,
+    _NAME_CONTENT_MAX_BYTES,
+    CallUnit,
     _keys_by_content,
     call_cache_key,
 )
@@ -51,6 +53,38 @@ def test_a_name_that_only_feeds_an_argument_leaves_the_key():
     site = _site()
     assert _key(site, _ctx("before"), True) == _key(site, _ctx("after-a-fix"), True)
     assert _key(site, _ctx("before"), False) != _key(site, _ctx("after-a-fix"), False)
+
+
+BY_NAME = "models = {key: fit_series(g, PARAMS, cutoff) for key, g in groups}"
+
+
+def _by_name_key(cutoff_lineage, cutoff_value, params=None):
+    site = _site(BY_NAME)
+    ctx = CacheKeyContext(variable_lineage={"PARAMS": "p", "cutoff": cutoff_lineage,
+                                            "fit_series": "f", "groups": "g"}, user_ns={})
+    args = (None, params or {"alpha": 0.5}, cutoff_value)
+    return call_cache_key(site, ctx=ctx, arg_digests=["group"], loop_vars={},
+                          by_content=True, name_digests=CallUnit._name_digests(site, args, {}))
+
+
+def test_the_site_knows_which_arguments_are_passed_by_name():
+    assert dict(_site(BY_NAME).name_arg_positions) == {"PARAMS": 1, "cutoff": 2}
+    # read elsewhere in the call too: not only an argument
+    assert _site("x = f(a, a + 1)").name_arg_positions == ()
+
+
+def test_an_argument_passed_by_name_is_keyed_on_its_value():
+    # r24s5: `cutoff` is rebuilt from the frame, so its lineage moves on any fix
+    assert _by_name_key("before", 6) == _by_name_key("after-a-fix", 6)
+    assert _by_name_key("x", 6) != _by_name_key("x", 7)
+    assert _by_name_key("x", 6) != _by_name_key("x", 6, params={"alpha": 1.0})
+
+
+def test_a_big_argument_passed_by_name_keeps_its_lineage():
+    site = _site("x = f(big)")
+    big = np.zeros(_NAME_CONTENT_MAX_BYTES // 8 + 1)
+    assert CallUnit._name_digests(site, (big,), {}) == {}
+    assert CallUnit._name_digests(site, (big[:10],), {}).keys() == {"big"}
 
 
 def test_the_statement_leaves_the_key():

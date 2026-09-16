@@ -147,6 +147,12 @@ class CallSite:
     #: *by_content*): a change to ``cleaned`` that leaves this element's
     #: features as they were then keeps the call's result.
     content_names: frozenset[str] = frozenset()
+    #: ``(name, position)`` of each argument passed as a bare name that the
+    #: call reads nowhere else -- ``PARAMS`` and ``cutoff`` in
+    #: ``fit_series(g, PARAMS, cutoff)``. Under content keying the key may
+    #: hold such a value instead of the name's lineage (see
+    #: ``call_unit.call_cache_key``'s *name_digests*).
+    name_arg_positions: tuple[tuple[str, int], ...] = ()
 
 
 def interceptable(fn) -> bool:
@@ -503,6 +509,7 @@ def wrap_eligible_calls(
                     stmt_identity=stmt_identity,
                     local_arg_positions=_local_arg_positions(call, local),
                     content_names=_content_names(call, local),
+                    name_arg_positions=_name_arg_positions(call, local),
                 )
             )
             call.func = ast.Call(
@@ -556,6 +563,23 @@ def _content_names(call: ast.Call, local: frozenset[str]) -> frozenset[str]:
         else:
             inside |= _names_read(value)
     return frozenset(inside - elsewhere - local)
+
+
+def _name_arg_positions(call: ast.Call, local: frozenset[str]) -> tuple[tuple[str, int], ...]:
+    """Bare-name arguments *call* reads nowhere else (see
+    ``CallSite.name_arg_positions``); the first position of each."""
+    if _call_has_unpacking(call):
+        return ()
+    values = [*call.args, *(kw.value for kw in call.keywords)]
+    elsewhere = set(_names_read(call.func))
+    for value in values:
+        if not isinstance(value, ast.Name):
+            elsewhere |= _names_read(value)
+    found: dict[str, int] = {}
+    for i, value in enumerate(values):
+        if isinstance(value, ast.Name) and value.id not in local and value.id not in elsewhere:
+            found.setdefault(value.id, i)
+    return tuple(found.items())
 
 
 def _computed_arg_positions(call: ast.Call, local: frozenset[str] = frozenset()) -> tuple[int, ...]:

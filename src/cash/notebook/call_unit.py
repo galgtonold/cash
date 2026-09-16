@@ -287,6 +287,7 @@ def call_cache_key(
     loop_var_digests: Mapping[str, str] | None = None,
     global_digests: Mapping[str, str] | None = None,
     by_content: bool = False,
+    name_digests: Mapping[str, str] | None = None,
 ) -> str | None:
     """The cache key for one intercepted call, or ``None`` to refuse caching it.
 
@@ -459,10 +460,19 @@ def call_cache_key(
     argument, loop variable and global the callee reaches is plain data or
     code. ``fetch_next(conn)`` reads a connection whose state moves under a
     fixed lineage -- CAS-256's two statements must keep their own entries.
+
+    **name_digests** (content keying only) are full hashes of arguments passed
+    as a bare name, ``{name: digest}``: those names leave the base too. A
+    setting passed by name (``fit_series(g, PARAMS, cutoff)``) was keyed on
+    its lineage, and ``cutoff = work['date'].max() - 28d`` is rebuilt from
+    the frame, so fixing one store re-fitted all 360 (r24s5). The caller
+    leaves a large value out, keeping its lineage: hashing a big frame on
+    every call would cost more than the dict lookup it replaces.
     """
     free_names = set(site.free_names)
     if by_content:
         free_names -= site.content_names
+        free_names -= set(name_digests or ())
     base = compute_cache_key(
         site.source,
         free_names,
@@ -522,6 +532,8 @@ def call_cache_key(
     if global_digests:
         parts.extend(f"g:{name}={digest}" for name, digest in sorted(global_digests.items()))
     if by_content:
+        # Prefixed `n:` so a name cannot share a slot with a loop var or a global.
+        parts.extend(f"n:{name}={digest}" for name, digest in sorted((name_digests or {}).items()))
         # Marked, so a key without the statement can never equal one with it.
         parts.append("by=content")
     elif site.stmt_identity:
@@ -680,6 +692,9 @@ _PLAIN_BUDGET = 10_000
 #: Computed arguments are hashed in full under content keying; past this many
 #: bytes the hash could cost more than the call saves, so the old key stays.
 _CONTENT_KEY_MAX_BYTES = 64 * 1024 * 1024
+#: An argument passed by name is hashed per call only up to this size; a
+#: bigger one keeps its lineage, a dict lookup.
+_NAME_CONTENT_MAX_BYTES = 1024 * 1024
 
 
 def _is_plain_data(value, budget: list[int]) -> bool:
@@ -1388,6 +1403,7 @@ class CallUnit:
             loop_vars = self._current_loop_vars()
             by_content = fn is not None and _keys_by_content(fn, site, args, kwargs, loop_vars)
             arg_digests = self._arg_digests(site, args, kwargs, full=by_content)
+            name_digests = self._name_digests(site, args, kwargs) if by_content else None
             return call_cache_key(
                 site,
                 ctx=self._ctx_provider(),
@@ -1396,6 +1412,7 @@ class CallUnit:
                 loop_var_digests=self._current_loop_var_digests(),
                 global_digests=global_digests,
                 by_content=by_content,
+                name_digests=name_digests,
             )
         except Exception:  # noqa: BLE001 - never let keying break the call
             logger.debug("call unit: key build failed for %s", site.source)
@@ -1439,6 +1456,18 @@ class CallUnit:
             logger.debug("call unit: loop_var_digests_provider failed for this call")
             return {}
         return digests if isinstance(digests, Mapping) else {}
+
+    @staticmethod
+    def _name_digests(site: CallSite, args: tuple, kwargs: dict) -> dict[str, str]:
+        """Full hashes of the small arguments passed as a bare name (see
+        :func:`call_cache_key`'s *name_digests*). Past
+        ``_NAME_CONTENT_MAX_BYTES`` a value keeps its lineage instead."""
+        combined = (*args, *kwargs.values())
+        digests = {}
+        for name, pos in getattr(site, "name_arg_positions", ()):
+            if pos < len(combined) and _nbytes(combined[pos]) <= _NAME_CONTENT_MAX_BYTES:
+                digests[name] = compute_hash_full(combined[pos])
+        return digests
 
     def _arg_digests(self, site: CallSite, args: tuple, kwargs: dict,
                      full: bool = False) -> list[str]:

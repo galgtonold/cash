@@ -331,7 +331,7 @@ thousands of small files — the rest of that run's calls run uncached, the same
 rule by which a long `for` loop is run as one unit. A call that does real work,
 like fitting a model per element, is never re-run to be timed.
 
-<!-- claim: cash/notebook/call_unit.py:_keys_by_content @b1716a9c, cash/notebook/call_unit.py:call_cache_key @cdb14ce0, cash/notebook/call_unit.py:_CONTENT_KEY_MAX_BYTES == 67108864 -->
+<!-- claim: cash/notebook/call_unit.py:_keys_by_content @b1716a9c, cash/notebook/call_unit.py:call_cache_key @cca59dd6, cash/notebook/call_unit.py:_CONTENT_KEY_MAX_BYTES == 67108864, cash/notebook/call_unit.py:_NAME_CONTENT_MAX_BYTES == 1048576 -->
 **The key holds what the call receives.** When everything a call reads is plain
 data — numbers, strings, dates, numpy arrays, pandas frames, and lists or dicts
 of those — its key is the function it calls and the values it is handed. An
@@ -348,7 +348,18 @@ for W in WINDOWS:
 
 Fix the data of a few machines in `cleaned` and `fit_score` runs again only for
 them — `make_features` still runs for every machine, since its result is the
-argument being hashed. Rename `sc` and nothing is fitted again; the same call in
+argument being hashed. A setting handed over by name counts by its value too:
+in `fit_series(g, PARAMS, cutoff)` with `cutoff = df["date"].max() - pd.Timedelta(days=28)`,
+fixing one group's rows re-fits that group only, although `cutoff` is
+recomputed from the frame. A frame passed by name that is over 1 MiB counts by
+where it came from instead, since hashing it on every call would cost more
+than it saves.
+
+A frame's value includes its index. Dropping rows and then renumbering
+(`reset_index(drop=True)`) shifts the index of every row after the dropped
+ones, so each group taken from that frame counts as changed even when its data
+is not. Leave the index as it is upstream, or reset it inside the function
+that receives the group, and the unchanged groups stay served. Rename `sc` and nothing is fitted again; the same call in
 another cell is served too. A call that reads anything whose state can change
 while its value hashes the same — a connection, an iterator, an object of your
 own class, through an argument or a global its function uses — keeps its

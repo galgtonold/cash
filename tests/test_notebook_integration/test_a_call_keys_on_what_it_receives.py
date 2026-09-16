@@ -115,3 +115,59 @@ def test_the_same_call_in_another_cell_is_served(nb_runner):
 
     assert _fits(nb_runner) == 12
     assert "CHECK" in nb_runner.get_output(6), nb_runner.get_output(6)
+
+
+# Round 24's r24s5 fitted a forecast per store and item:
+#     cutoff = work["date"].max() - pd.Timedelta(days=28)
+#     models = {key: fit_series(g, PARAMS, cutoff) for key, g in work.groupby(...)}
+# Fixing ONE store's data re-fitted all 360. ``cutoff`` and ``PARAMS`` are
+# passed by name, and a bare name was still keyed on where it came from: the
+# cutoff is recomputed from the frame, so its lineage moves although its
+# value does not.
+STORES = (
+    "import os, time\n"
+    "import pandas as pd\n"
+    "def fit_series(g, params, cutoff):\n"
+    "    fd = os.open('fits.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+    "    os.write(fd, b'fit|')\n"
+    "    os.close(fd)\n"
+    "    time.sleep(0.02)\n"
+    "    train = g[g['day'] <= cutoff]\n"
+    "    return round(float(train['v'].mean() * params['alpha']), 6)"
+)
+WORK = ("FIX = {fix}\n"
+        "work = pd.DataFrame({{'store': [s for s in range(6) for _ in range(10)],\n"
+        "                      'day': [d for _ in range(6) for d in range(10)],\n"
+        "                      'v': [float(s * 10 + d + (5 if s in FIX else 0)) for s in range(6) for d in range(10)]}})")
+FIT = ("PARAMS = {'alpha': 0.5}\n"
+       "cutoff = work['day'].max() - 3\n"
+       "models = {key: fit_series(g, PARAMS, cutoff) for key, g in work.groupby('store')}\n"
+       "print('MODELS', round(sum(models.values()), 6))")
+
+
+def test_fixing_one_group_refits_only_it_when_settings_are_passed_by_name(nb_runner):
+    nb_runner.create_notebook(["import cash\n%cash_on", STORES, WORK.format(fix="[]"), FIT])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "MODELS 84.0" in nb_runner.get_output(4), nb_runner.get_output(4)
+    assert _fits(nb_runner) == 6
+
+    nb_runner.set_cell_source(3, WORK.format(fix="[2]"))
+    nb_runner.run_all()
+
+    assert "MODELS 86.5" in nb_runner.get_output(4), nb_runner.get_output(4)
+    # Measured before: 6, every store.
+    assert _fits(nb_runner) - 6 == 1
+
+
+def test_a_setting_passed_by_name_still_refits_when_its_value_changes(nb_runner):
+    nb_runner.create_notebook(["import cash\n%cash_on", STORES, WORK.format(fix="[]"), FIT])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert _fits(nb_runner) == 6
+
+    nb_runner.set_cell_source(4, FIT.replace("'alpha': 0.5", "'alpha': 1.0"))
+    nb_runner.run_cell(4)
+
+    assert "MODELS 168.0" in nb_runner.get_output(4), nb_runner.get_output(4)
+    assert _fits(nb_runner) - 6 == 6
