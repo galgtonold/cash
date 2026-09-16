@@ -757,12 +757,16 @@ site.
 memo: a `_SEEN = {}` it fills in to avoid repeating work, a handle it builds
 lazily on first use, a compiled pattern. Nothing outside reads it for its own
 sake, and dropping it from the key costs nothing because it is derived from
-inputs the key already carries. Do not ignore it when the variable is program
+inputs the key already carries. The same holds for a bill or a log you are
+happy for a hit to skip, like `LEDGER.record(result)` counting provider calls:
+put `# @cash:assume-safe` on the line that moves it, and Cash neither keys on
+that variable nor warns, in that function and in any cached function that calls
+it. Do not ignore it when the variable is program
 state something else reads — configuration, a counter, a registry, a list of
 results. Note too that `@cash.cache(assume_safe=True)` does not silence this
 one, because it is decided by watching the call rather than by reading the
-source; a filter on `CashImpurityWarning` is the only way to mute it, and muting
-it is rarely what you want.
+source; the line waiver above, or a filter on `CashImpurityWarning`, are the
+ways to mute it.
 
 ## IMPURE-SIDE-EFFECTS {#impure-side-effects}
 

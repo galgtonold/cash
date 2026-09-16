@@ -223,6 +223,11 @@ class PurityReport:
     opaque_callees: tuple[str, ...] = ()
     helper_bindings: tuple[tuple[str, tuple[str, ...], Any], ...] = ()
     unkeyable: tuple[str, ...] = ()
+    #: Binding paths every call site of which is on a ``# @cash:assume-safe``
+    #: line (``LEDGER.record(r)  # @cash:assume-safe``). The code is still
+    #: followed; the data the bound object carries is not keyed, because the
+    #: audited effect is what moves it (a ledger's count, a client's stats).
+    waived_bindings: frozenset[tuple[str, tuple[str, ...]]] = frozenset()
 
     @property
     def is_clean(self) -> bool:
@@ -1694,6 +1699,8 @@ class PurityAnalyzer:
         unkeyable: list[str] = []
         # id(callee) -> the first call-site binding that reached it
         caller_paths: dict[int, tuple[str, tuple[str, ...]]] = {}
+        waived_paths: set[tuple[str, tuple[str, ...]]] = set()
+        unwaived_paths: set[tuple[str, tuple[str, ...]]] = set()
 
         def _note_binding(callee: Any, path: tuple[str, tuple[str, ...]] | None) -> None:
             if path is None or path in seen_bindings:
@@ -2004,11 +2011,18 @@ class PurityAnalyzer:
                 for layer in layers:
                     stack.append((layer, depth + 1, False))  # noqa: B023 - same
 
+            audited = _audited_lines(src)[0] if "@cash:" in src else frozenset()
             for call_node in visitor.called_callable_nodes + visitor.impure_call_nodes:
+                site_path = _call_site_path(_callee_chain(call_node.func))
+                if site_path is not None:
+                    start = getattr(call_node, "lineno", 0)
+                    end = getattr(call_node, "end_lineno", None) or start
+                    on_waived = any(n in audited for n in range(start, end + 1))
+                    (waived_paths if on_waived else unwaived_paths).add(site_path)
                 _queue_helper(
                     _resolve_callee(call_node.func, namespace),
                     getattr(call_node, "lineno", 0),
-                    _call_site_path(_callee_chain(call_node.func)),
+                    site_path,
                 )
 
             # A helper referenced by NAME but reached through a value -- not in
@@ -2038,6 +2052,7 @@ class PurityAnalyzer:
             helper_resolution_paths=helper_paths,
             opaque_callees=tuple(sorted(set(opaque))),
             helper_bindings=tuple(bindings),
+            waived_bindings=frozenset(waived_paths - unwaived_paths),
             unkeyable=tuple(unkeyable),
         )
 

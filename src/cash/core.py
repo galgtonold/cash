@@ -5186,7 +5186,11 @@ class Cash:
             result = Cash._unsafe_uses_of(
                 tree, freevars, bare_args=False, mutating_methods_only=True,
             )
-            provisional = Cash._unsafe_uses_of(tree, freevars) - result
+            suspected = Cash._unsafe_uses_of(tree, freevars) - result
+            provisional = Cash._unsafe_uses_of(
+                tree, suspected, waived=Cash._waived_use_filter(func))
+            # Only on waived lines: as for globals (`_read_global_data_names`).
+            result = result | (suspected - provisional)
         if len(self._capture_use_cache) < 4096:
             self._capture_use_cache[code] = result
             # Kept in lockstep with the cache above so the two can never
@@ -5197,7 +5201,8 @@ class Cash:
     @staticmethod
     def _unsafe_uses_of(tree: ast.AST, names: set[str], *,
                         bare_args: bool = True,
-                        mutating_methods_only: bool = False) -> frozenset:
+                        mutating_methods_only: bool = False,
+                        waived: Callable[[ast.AST], bool] | None = None) -> frozenset:
         """Return the subset of *names* the AST body *may mutate*.
 
         Disqualifying uses of a name ``n``: method calls on it
@@ -5225,6 +5230,9 @@ class Cash:
         published stale labels with nothing to see. `ALIASES[v]`, `v in
         ALIASES`, `d = ALIASES; d.get(v)` and a bare read all tracked
         correctly, which is what made it so hard to believe.
+
+        ``waived`` skips uses on a ``# @cash:assume-safe`` line: the effect
+        there was audited as one a hit may lose (see `_waived_use_filter`).
         """
         unsafe: set[str] = set()
         write_methods: frozenset[str] = frozenset()
@@ -5232,6 +5240,8 @@ class Cash:
             from cash.notebook.purity import _WRITE_METHODS
             write_methods = _WRITE_METHODS
         for node in ast.walk(tree):
+            if waived is not None and isinstance(node, (ast.Call, ast.stmt)) and waived(node):
+                continue
             if isinstance(node, ast.Call):
                 f = node.func
                 if (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
@@ -5258,6 +5268,31 @@ class Cash:
                     if isinstance(root, ast.Name) and root.id in names:
                         unsafe.add(root.id)
         return frozenset(unsafe)
+
+    @staticmethod
+    def _waived_use_filter(func: Callable) -> Callable[[ast.AST], bool] | None:
+        """A predicate: is a node of *func*'s dedented source on a waived line?
+
+        Line numbers in that tree count from the ``def``; the waiver is read
+        from the file. ``None`` when the file position is unknown.
+        """
+        try:
+            filename = inspect.getsourcefile(func) or inspect.getfile(func)
+            first = inspect.getsourcelines(func)[1]
+        except SOURCE_RETRIEVAL_ERRORS:
+            return None
+        if not filename:
+            return None
+        from .effect_observer import _line_waived
+        offset = max(first, 1) - 1
+
+        def waived(node: ast.AST) -> bool:
+            start = getattr(node, "lineno", None)
+            if start is None:
+                return False
+            end = getattr(node, "end_lineno", None) or start
+            return any(_line_waived(filename, offset + n) for n in range(start, end + 1))
+        return waived
 
     def _fold_closure(self, func: Callable, func_name: str, state_hash: str,
                       _depth: int = 0) -> str:
@@ -5826,7 +5861,14 @@ class Cash:
                 hard = Cash._unsafe_uses_of(
                     tree, candidates, bare_args=False, mutating_methods_only=True,
                 )
-                provisional = Cash._unsafe_uses_of(tree, candidates) - hard
+                suspected = Cash._unsafe_uses_of(tree, candidates) - hard
+                provisional = Cash._unsafe_uses_of(
+                    tree, suspected, waived=Cash._waived_use_filter(func))
+                # Suspected only on waived lines (`LEDGER.record(r)  #
+                # @cash:assume-safe`): the audited effect moves it on every
+                # call, so keying on it made every hit impossible and demoting
+                # it warned about the very line that was audited.
+                hard |= suspected - provisional
                 candidates -= hard
             except SOURCE_RETRIEVAL_ERRORS:
                 # No source: keep the old conservative answer. Without an AST
@@ -6878,6 +6920,8 @@ class Cash:
         # were both served stale).
         carried: list[str] = []
         for module_name, chain, _ref in report.helper_bindings:
+            if (module_name, chain) in report.waived_bindings:
+                continue
             live = resolve_binding(module_name, chain)
             if live is func:
                 continue
