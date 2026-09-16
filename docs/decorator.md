@@ -1405,7 +1405,7 @@ keyed by path, it was 18× faster.
 
 ### Writing one function's results to disk however cheap
 
-<!-- claim: cash/backends/file_backend.py:FileBackend @85c03104 broad="a bare FileBackend has no promotion policy: the claim is about the class as a whole" -->
+<!-- claim: cash/backends/file_backend.py:FileBackend @75cb926d broad="a bare FileBackend has no promotion policy: the claim is about the class as a whole" -->
 A result that took milliseconds is kept in memory only
 ([why](cost-model.md)) — and a cheap aggregate over rows another call already
 parsed looks exactly like that, though a new process must parse the file again

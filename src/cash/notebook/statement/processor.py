@@ -504,6 +504,13 @@ from ..randomness import (
 
 
 
+
+def _version_slot(source_hash: str, outputs: set[str]) -> str:
+    """What makes two stored results versions of one statement: its source and
+    the names it binds. Two cells with the same statement share a slot; a
+    version one of them reads in this process is never pruned for the other."""
+    return hashlib.sha256(f"{source_hash}|{','.join(sorted(outputs))}".encode()).hexdigest()[:32]
+
 class StatementProcessor:
     """
     Processes and caches individual Python statements.
@@ -4399,6 +4406,7 @@ class StatementProcessor:
             force_persist=force_persist,
             output_lineages=self._lineage.build_output_lineages(self._tracking_state, outputs),
             ttl=ttl,
+            version_slot=_version_slot(source_hash, outputs),
             **cost_fields,
         )
 

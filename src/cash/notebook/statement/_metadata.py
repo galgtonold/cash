@@ -51,6 +51,10 @@ class StatementCacheMetadata:
     cost_model_restore_seconds: float | None = None
     cost_model_type_name: str | None = None
     cost_model_family: str | None = None
+    # Entries sharing a slot are versions of one statement: the same source and
+    # outputs, keyed on different inputs. The disk tier prunes the superseded
+    # ones by what they are worth (``cash.backends.versions``).
+    version_slot: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {

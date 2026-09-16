@@ -28,6 +28,7 @@ from .entry_format import (
     update_metadata_in_place,
 )
 from .rank_index import RankIndex
+from .versions import VersionIndex, superseded_to_drop
 from .serialization import PickleSerializer, Serializer
 
 logger = logging.getLogger(__name__)
@@ -326,6 +327,10 @@ class FileBackend(CacheBackend):
         self._clock_loaded = False
         self._gdsf_base: dict[str, float | None] = {}
         self._rank_index = RankIndex(self.cache_dir, _untracked)
+        # Each statement's versions, pruned as they are written (versions.py).
+        # A key this process has read is in use and never pruned.
+        self._versions = VersionIndex(self.cache_dir, _untracked)
+        self._read_keys: set[str] = set()
         # Whether _current_size_bytes is an absolute on-disk total (True) or
         # only this process's running delta (False). See _ensure_size_scanned.
         self._size_scanned = False
@@ -727,6 +732,8 @@ class FileBackend(CacheBackend):
                         "access stats not flushed", key,
                     )
                 self._access_flushed[key] = now
+                if meta and meta.get('version_slot'):
+                    self._versions.touch(key, meta.get('last_access', now))
                 if meta and ranked:
                     with self._lock:
                         base = self._gdsf_base.get(key)
@@ -860,6 +867,7 @@ class FileBackend(CacheBackend):
 
             with self._lock:
                 self._dirty_metadata.add(key)
+                self._read_keys.add(key)
                 # Re-based at the clock of its next use (a ranking or the
                 # access flush), so a read never loads the rank index on the
                 # caller's thread.
@@ -1153,6 +1161,30 @@ class FileBackend(CacheBackend):
             key, self._do_set_sync,
             key, path, meta_for_write, serialized_value,
         )
+        slot = metadata.get('version_slot')
+        if slot:
+            self._prune_versions(slot, key, len(serialized_value),
+                                 metadata.get('execution_time') or 0.0)
+
+    def _prune_versions(self, slot: str, key: str, size: int, cost: float) -> None:
+        """Remove the superseded versions of *key*'s statement that are not
+        worth their bytes (``versions.superseded_to_drop``). Best effort: a
+        failure here leaves entries for the byte cap, never loses the new one."""
+        try:
+            versions = self._versions.record(slot, key, size, cost, time.time())
+            gone = [k for k in versions
+                    if k != key and not os.path.exists(self._get_path(k))]
+            for k in gone:
+                versions.pop(k)
+            drop = superseded_to_drop(versions, key, self._read_keys)
+            for k in drop:
+                self.delete(k)
+            if gone or drop:
+                self._versions.forget(gone + drop)
+            if drop:
+                logger.debug("Pruned %d superseded version(s) of slot %s", len(drop), slot)
+        except (OSError, CacheBackendError) as exc:
+            logger.debug("Version pruning failed for %r: %s", key, exc)
 
     def _do_set_sync(self, key: str, path: str, metadata: dict,
                      serialized_value: bytes) -> None:
@@ -1718,6 +1750,7 @@ class FileBackend(CacheBackend):
                     logger.debug("Could not remove cache file %s during clear", f, exc_info=True)
         # The priorities describe entries that no longer exist.
         self._rank_index.remove()
+        self._versions.remove()
         with self._lock:
             self._metadata_cache.clear()
             self._dirty_metadata.clear()
