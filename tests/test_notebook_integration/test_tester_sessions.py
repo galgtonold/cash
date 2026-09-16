@@ -1,4 +1,4 @@
-"""Replay what the round-22 testers did, step by step, against a plain run.
+"""Replay what the round-22 and round-24 testers did, step by step, against a plain run.
 
 See ``session_harness`` for the steps and what is checked after each, and
 ``sessions_r22`` for the sessions. Each session runs twice: with cash's
@@ -14,7 +14,10 @@ pytest.importorskip("matplotlib")
 pytest.importorskip("sklearn")
 
 from session_harness import Player  # noqa: E402
-from sessions_r22 import SESSIONS  # noqa: E402
+from sessions_r22 import SESSIONS as R22  # noqa: E402
+from sessions_r24 import SESSIONS as R24  # noqa: E402
+
+SESSIONS = R22 + R24
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream, pytest.mark.timeout(900)]
 
