@@ -3527,7 +3527,11 @@ class StatementProcessor:
 
             source_module_names = self._collect_import_source_modules(tree_check)
             has_reloaded = bool((import_names | source_module_names) & self.recently_reloaded_modules)
-            all_present = all(name in self.shell.user_ns for name in import_names)
+            # Present is not enough: the name must hold what the import would
+            # bind. `import array` then `from array import array` found `array`
+            # present and skipped, leaving the module where the class belongs.
+            all_present = (all(name in self.shell.user_ns for name in import_names)
+                           and self._import_bindings_hold(tree_check))
 
             if has_reloaded:
                 self.recently_reloaded_modules -= source_module_names
@@ -4632,6 +4636,36 @@ class StatementProcessor:
         if not names:
             return False
         return not all(name in self.shell.user_ns for name in names)
+
+    def _import_bindings_hold(self, tree: ast.AST) -> bool:
+        """Does every name an import-only *tree* binds already hold the object
+        that import would bind? Answered from ``sys.modules`` without importing
+        anything; anything not already loaded, or relative, is "no"."""
+        import sys
+        missing = object()
+        ns = self.shell.user_ns
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name not in sys.modules:
+                        return False
+                    name = alias.asname or alias.name.split('.')[0]
+                    expected = sys.modules.get(alias.name if alias.asname else name)
+                    if expected is None or ns.get(name, missing) is not expected:
+                        return False
+            elif isinstance(node, ast.ImportFrom):
+                if node.level or not node.module:
+                    return False
+                module = sys.modules.get(node.module)
+                if module is None:
+                    return False
+                for alias in node.names:
+                    expected = getattr(module, alias.name, missing)
+                    if expected is missing:
+                        expected = sys.modules.get(f"{node.module}.{alias.name}", missing)
+                    if expected is missing or ns.get(alias.asname or alias.name, missing) is not expected:
+                        return False
+        return True
 
     def _get_redundant_import_names(self, tree: ast.AST) -> set[str] | None:
         """
