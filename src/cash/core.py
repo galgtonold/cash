@@ -1668,7 +1668,7 @@ class Cash:
         # a provider registry read by a client helper warned on every first
         # call. Carrying the owning mapping is what makes the after-hash look
         # at the same variable the before-hash did.
-        self._pending_capture_watch: dict[str, tuple[str, str, Any]] = {}
+        self._pending_capture_watch: dict[str, tuple[str, str, Any, Any]] = {}
         # func_name -> RNG modules that function was OBSERVED drawing from.
         # Learned on a miss; only these functions get a seed-epoch in their key.
         self._rng_drawing_funcs: dict[str, set[str]] = {}
@@ -5390,7 +5390,7 @@ class Cash:
                     continue
                 captures.append((name, h))
                 if provisional is None or name in provisional:
-                    self._pending_capture_watch[name] = (h, "closure", None)
+                    self._pending_capture_watch[name] = (h, "closure", None, func)
         if not captures:
             return state_hash
         clo = self._serialize_args(func_name, tuple(captures), {})
@@ -6797,7 +6797,7 @@ class Cash:
                 carried = self._carried_global_hash(v, root_module)
                 if carried is not None:
                     parts.append((f"{name}#carried", carried))
-                    watch[name] = (carried, "carrier", (g, name))
+                    watch[name] = (carried, "carrier", (g, name), None)
                 continue
             try:
                 stabilized = self._stabilize_for_global_hash(v, self._data_callable_identity)
@@ -6808,7 +6808,7 @@ class Cash:
                 if provisional is None or name in provisional:
                     # `g`, not the decorated function's globals: this may be a
                     # helper's module (see `_fold_helper_read_globals`).
-                    watch[name] = (h, "global", g)
+                    watch[name] = (h, "global", g, func)
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
                 self._warn_once(
                     CashImpurityWarning,
@@ -7523,7 +7523,7 @@ class Cash:
                     carried = self._carried_global_hash(value, getattr(func, "__module__", None))
                     if carried is not None:
                         parts.append((f"{label}#carried", carried))
-                        watch[label] = (carried, "carrier", (vars(obj), attr))
+                        watch[label] = (carried, "carrier", (vars(obj), attr), None)
                         continue
                 # One level only: fold the constants the helper itself reads.
                 # Deeper recursion would drag in whole transitive namespaces for
@@ -9513,7 +9513,7 @@ class Cash:
         own_globals = getattr(func, "__globals__", None)
         cells = dict(zip(getattr(code, "co_freevars", ()) or (),
                          getattr(func, "__closure__", ()) or ()))
-        for name, (before, scope, owner) in watched.items():
+        for name, (before, scope, owner, reader) in watched.items():
             try:
                 if scope == "closure":
                     cell = cells.get(name)
@@ -9547,19 +9547,63 @@ class Cash:
                              "it changes it", func_name, name)
                 continue
             self._mutating_globals.setdefault((code, scope), set()).add(name)
-            where = ("variable it captures" if scope == "closure"
-                     else "module global")
+            if scope == "closure":
+                where = f"variable it captures '{name}'"
+            else:
+                module = owner.get("__name__") if isinstance(owner, dict) else None
+                if module in MAIN_MODULE_NAMES and reader is not None:
+                    module = resolve_main_module(reader)
+                where = f"module global '{module}.{name}'" if module else f"module global '{name}'"
+            site = Cash._describe_scope_use(reader, name, func)
             self._warn_once(
                 CashImpurityWarning,
                 func_name,
                 name,
-                f"@cash.cache on {func_name}: calling it modifies the {where} "
-                f"'{name}', so '{name}' can no longer be tracked for "
+                f"@cash.cache on {func_name}: calling it modifies the {where}"
+                f"{site}, so '{name}' can no longer be tracked for "
                 f"invalidation and a cache hit will not repeat that change.",
                 code="IMPURE-SCOPE-MUTATION",
                 fix="pass the value in as an argument and return the new one, "
-                    "instead of reaching out and rewriting it.",
+                    "instead of reaching out and rewriting it; or, if a cache hit "
+                    "may skip the change (a bill, a log), put "
+                    "`# @cash:assume-safe` on the line named.",
             )
+
+    @staticmethod
+    def _describe_scope_use(reader: Any, name: str, cached: Any) -> str:
+        """`` -- through `X.f()` in mod.helper (file:line)`` for the warning, or ``""``.
+
+        *reader* is the function whose read of *name* was watched: the cached
+        function, or a helper several calls below it. The move itself may be
+        deeper still (a method of the object), but this is the line in code the
+        user wrote that reaches it -- the first use that may mutate, the same
+        rule that made the name provisional. Only runs when warning.
+        """
+        if reader is None:
+            return ""
+        try:
+            lines, first = inspect.getsourcelines(reader)
+            filename = inspect.getsourcefile(reader) or inspect.getfile(reader)
+            source = textwrap.dedent("".join(lines))
+            tree = ast.parse(source)
+        except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError):
+            return ""
+        best = None
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Call, ast.Assign, ast.AugAssign, ast.Delete)):
+                continue
+            if name not in Cash._unsafe_uses_of(node, {name}):
+                continue
+            if best is None or (node.lineno, node.col_offset) < (best.lineno, best.col_offset):
+                best = node
+        if best is None:
+            return ""
+        lineno = max(first, 1) - 1 + best.lineno
+        text = " ".join((ast.get_source_segment(source, best) or "").split())
+        if len(text) > 80:
+            text = text[:77] + "..."
+        inside = "" if reader is cached else f" in {Cash._get_func_key(reader)}"
+        return f" -- through `{text}`{inside} ({filename}:{lineno})"
 
     def _refuses_identity_coupled(self, func_name: str, result: Any) -> bool:
         """True when *result* must never be stored, because storing it would

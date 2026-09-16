@@ -732,8 +732,10 @@ it; return a modified copy to get the caching back.
 function *reads* into its cache key, so that changing one invalidates the entry.
 It hashed those values again when the first call returned and found one had
 moved — which means calling the function is what moves it. The message names the
-variable and says whether it is a module global or a variable captured from an
-enclosing scope.
+variable (with its module, for a global) and the line that reaches it, with its
+file and line number. That line can be in a helper several calls below the
+cached function (`through LEDGER.record(result) in docmind.llm.complete`); the
+write itself may be deeper still, in a method of the object that line calls.
 
 <!-- claim: cash/core.py:Cash._learn_mutating_captures @12b6edac -->
 **Why it matters.** Two things follow, and neither is visible at the call site.
