@@ -42,6 +42,7 @@ magic-error path instead.
 from __future__ import annotations
 
 import ast
+import contextlib
 import hashlib
 import sys
 import time
@@ -742,6 +743,23 @@ def _exec_source_for_node(
 
 
 
+def _builtin_trap(shell: Any):
+    """The shell's builtin trap, which IPython enters around every cell it runs.
+
+    It puts ``get_ipython`` (and ``display``) into ``builtins`` for the cell's
+    duration. cash runs a cell's statements itself, outside IPython's run, so
+    they ran without it: pandas imported in a cached cell asked ``get_ipython()``,
+    got NameError, decided it was in a terminal and set ``display.max_columns``
+    to 0 instead of 20 -- tables printed differently with cash on (round 25,
+    r25s1). Anything else that detects a notebook that way was fooled too. The
+    trap nests, so IPython's own run inside it is unaffected.
+    """
+    trap = getattr(shell, 'builtin_trap', None)
+    if trap is None or not hasattr(trap, '__enter__'):
+        return contextlib.nullcontext()
+    return trap
+
+
 def _set_written_later(executor: Any, names: frozenset[str]) -> None:
     """Tell the statement processor which names the rest of the cell writes."""
     processor = getattr(executor, '_statement_processor', None)
@@ -826,7 +844,8 @@ class CellExecutor:
         # Each file is hashed at most once per cell run (file_dep_snapshot).
         begin_file_state_epoch()
         try:
-            return self._execute_cell_pipeline(raw_cell, args, kwargs, original_run_cell)
+            with _builtin_trap(self.shell):
+                return self._execute_cell_pipeline(raw_cell, args, kwargs, original_run_cell)
         finally:
             end_file_state_epoch()
 
@@ -980,7 +999,8 @@ class CellExecutor:
         # Each file is hashed at most once per cell run (file_dep_snapshot).
         begin_file_state_epoch()
         try:
-            return await self._execute_cell_pipeline_async(raw_cell, args, kwargs, original_run_cell)
+            with _builtin_trap(self.shell):
+                return await self._execute_cell_pipeline_async(raw_cell, args, kwargs, original_run_cell)
         finally:
             end_file_state_epoch()
 
