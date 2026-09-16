@@ -18,6 +18,7 @@ import importlib.util
 import logging
 import os
 import pathlib
+import stat
 import sys
 import threading
 import time
@@ -709,6 +710,57 @@ def _patch_pathlib_listing() -> None:
                 setattr(owner, name, staticmethod(wrapper))
             except (AttributeError, TypeError) as e:
                 logger.debug("[FILE_TRACKER] Failed to patch %s.%s: %s", owner.__name__, name, e)
+
+
+def _track_regular_file(path: Any) -> None:
+    """Record *path* as read when a tracker is active and it is a regular file.
+
+    For the metadata calls (``Path.stat``, ``os.path.getsize`` ...): what they
+    report is the file's, so the file is a dependency -- a directory has no
+    content to hash, and an absent path raised before this was reached.
+    ``os.stat``, not ``os.path.isfile``: that one is patched to record a
+    NEGATIVE answer as an absent dependency.
+    """
+    tracker = _active_tracker.get()
+    if tracker is None or not isinstance(path, (str, bytes, os.PathLike)):
+        return
+    try:
+        if stat.S_ISREG(os.stat(path).st_mode):
+            tracker._track_path(path)
+    except (OSError, ValueError, TypeError):
+        return
+
+
+def _patch_pathlib_stat() -> None:
+    """Track the file ``Path.stat()`` looks at.
+
+    Round 24's r24s4 ended an export cell with
+    ``print({p.name: p.stat().st_size for p in sorted(OUT.glob('*.csv'))})``:
+    the folder's listing was a dependency and its names had not changed, so
+    after the exports above were rewritten the line was served from the cache
+    with the old sizes. Patched where ``stat`` is defined on ``Path``'s MRO,
+    since pathlib has moved it between versions.
+    """
+    owner = next((k for k in pathlib.Path.__mro__ if 'stat' in k.__dict__), None)
+    if owner is None:
+        return
+    original = owner.__dict__['stat']
+    if getattr(original, '_is_file_tracker_patch', False) or not callable(original):
+        return
+
+    @functools.wraps(original)
+    def tracked_path_stat(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        if _active_tracker.get() is not None and stat.S_ISREG(result.st_mode):
+            _track_regular_file(self)
+        return result
+
+    tracked_path_stat._is_file_tracker_patch = True
+    tracked_path_stat._original_func = original
+    try:
+        setattr(owner, 'stat', tracked_path_stat)
+    except (AttributeError, TypeError) as e:
+        logger.debug("[FILE_TRACKER] Failed to patch %s.stat: %s", owner.__name__, e)
 
 
 def _patch_thread_pool_submit() -> None:
@@ -1513,6 +1565,7 @@ class FileAccessTracker:
         # io.open patch above misses every pathlib read. See the function.
         _patch_pathlib_accessor()
         _patch_pathlib_listing()
+        _patch_pathlib_stat()
 
         # 2c. Work handed to a thread pool runs under the submitter's tracker,
         # and work handed to a process pool reports what it read back to it.

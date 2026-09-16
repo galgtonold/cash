@@ -50,6 +50,7 @@ The default handler set is registered in `FileDependencyRegistry._initialize_def
 | `glob` | `glob`, `iglob` — tracks the *directory* enumerated (see below) |
 | `os` | `listdir`, `scandir` — tracks the *directory* enumerated (see below) |
 | `os.path` | `exists`, `isfile` (and their `genericpath` originals) — records a path that was looked for and was **not** there (see below) |
+| `pathlib` | `Path.stat()` on a regular file — so `p.stat().st_size` or `.st_mtime` shown after the file changed is the new value, not the cached one |
 
 The pandas entry is the glob `read_*`, expanded by `_find_patch_targets` against the live `pandas` module — so any reader pandas adds in a future release is picked up too. Both top-level reads (`pd.read_csv`) and submodule reads (`pd.read_csv` via the `pandas.io.parsers` shim) flow through the patched attribute.
 
