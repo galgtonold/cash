@@ -33,6 +33,8 @@ warnings / exceptions / cache-key components.
 """
 from __future__ import annotations
 
+from ._annotation_refs import annotation_referents
+
 import ast
 import dataclasses
 import functools
@@ -1748,21 +1750,33 @@ class PurityAnalyzer:
         # from another class's body -- they are followed for correctness, not
         # audited, and analyzing them reports every ``self.x = x`` in an
         # ordinary __init__ as a scope mutation.
+        def _queue_hash_only(target: Any, owner: Any, depth: int) -> None:
+            if target is None or target is owner or not callable(target):
+                return
+            if getattr(target, "_cash_cached", False):
+                return
+            if is_pure(target) or is_stateful(target):
+                return
+            if not _is_user_code(target, root_module):
+                return
+            stack.append((target, depth + 1, True))
+
+        def _queue_annotation_refs(obj: Any, depth: int) -> None:
+            """Queue, hash-only, the user classes and functions *obj*'s
+            annotations name (see ``cash._annotation_refs``): pydantic runs a
+            field type's validators, a ``get_type_hints`` builder constructs it."""
+            if depth >= self._MAX_DEPTH:
+                return
+            for target in annotation_referents(obj, lambda o: _is_user_code(o, root_module)):
+                _queue_hash_only(target, obj, depth)
+
         def _queue_class_refs(cls: Any, tree: ast.AST, depth: int) -> None:
             """Queue user-code objects a CLASS body constructs, hash-only."""
             if not isinstance(cls, type) or depth >= self._MAX_DEPTH:
                 return
             for called in _called_names_in_tree(tree):
-                target = _resolve_in_class_namespaces(cls, called)
-                if target is None or target is cls or not callable(target):
-                    continue
-                if getattr(target, "_cash_cached", False):
-                    continue
-                if is_pure(target) or is_stateful(target):
-                    continue
-                if not _is_user_code(target, root_module):
-                    continue
-                stack.append((target, depth + 1, True))
+                _queue_hash_only(_resolve_in_class_namespaces(cls, called), cls, depth)
+            _queue_annotation_refs(cls, depth)
 
         stack: list[tuple[Callable[..., Any], int, bool]] = [(root_func, 0, False)]
         if (isinstance(root_func, types.FunctionType) and hasattr(root_func, "__wrapped__")
@@ -2039,6 +2053,13 @@ class PurityAnalyzer:
                 _val = namespace.get(_name)
                 if inspect.isfunction(_val) or inspect.ismethod(_val):
                     _queue_helper(_val, 0, _call_site_path((_name,)))
+                elif isinstance(_val, type):
+                    # A user class named but not called by a user path:
+                    # `A.model_validate(d)` (a library method) or `build(A, d)`.
+                    # Its code shapes the result all the same; followed for the
+                    # key, not audited.
+                    _queue_hash_only(_val, func, depth)
+            _queue_annotation_refs(func, depth)
 
         # Stable order: by where (insertion) then line then kind.
         all_issues_sorted = tuple(sorted(

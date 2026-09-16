@@ -104,11 +104,16 @@ def test_class_referenced_from_a_method_body_is_seen(cash):
 
 # --- controls against over-invalidation --------------------------------
 
-def test_annotation_only_reference_is_not_followed(cash):
-    """A type hint has no runtime effect, so editing it must NOT invalidate.
+def test_annotation_only_reference_is_followed(cash):
+    """A class named only in a type hint is followed, like code the body loads.
 
-    ``__annotations__`` holds the NAME, so a reference-follower that reads
-    annotations would invalidate on a change that cannot alter any result.
+    This was a control the other way: a hint has no runtime effect, so editing
+    its class must not invalidate. For a family of libraries it does have one --
+    pydantic runs a field type's validators, a ``typing.get_type_hints``
+    builder constructs it -- and there, ignoring it served stale results
+    (``test_a_class_named_in_an_annotation_is_a_dependency.py``). The trade
+    taken: a hint that really is inert costs a recompute when its class is
+    edited, never a stale value.
     """
     src = """
         class Unused:
@@ -121,7 +126,7 @@ def test_annotation_only_reference_is_not_followed(cash):
         """
     o1 = build(src.format(v="1"), name="Owner")
     o2 = build(src.format(v="2"), name="Owner")
-    assert cash._code_surface_hash(o1) == cash._code_surface_hash(o2)
+    assert cash._code_surface_hash(o1) != cash._code_surface_hash(o2)
 
 
 def test_stdlib_reference_is_not_followed(cash):

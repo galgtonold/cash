@@ -738,8 +738,13 @@ The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
   folded is folded too. If a cached function builds an `A`, and `A`'s
   `field(default_factory=lambda: B())` constructs a `B`, then editing `B`
   invalidates — even though `B` appears nowhere in the function or in `A`'s
-  own body. Names the code *loads* are followed; type annotations are not,
-  since `value: B` never runs and editing a hint cannot change a result.
+  own body. Names the code *loads* are followed, and so are the classes and
+  functions your **type annotations** name: pydantic runs the validators of a
+  field typed `b: B`, and anything built on `typing.get_type_hints` (cattrs,
+  dacite, a builder of your own) constructs `B` from the hint, so editing `B`
+  invalidates. A hint that really is inert costs a recompute when its class is
+  edited, never a stale answer. A class your function names without calling
+  it (`A.model_validate(d)`, `build(A, d)`) is followed the same way.
 
   The limit worth knowing: reachability is **static**. Cash follows names
   your code refers to, so code selected at *runtime* — a class pulled out of

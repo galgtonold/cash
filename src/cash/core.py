@@ -6244,10 +6244,13 @@ class Cash:
         exists -- because what a NAME is bound to can change underneath us,
         and that change is precisely what must invalidate.
 
-        Names come from ``co_names``, i.e. what the code actually LOADS.
-        Annotations are not consulted: ``__annotations__`` holds ``'B'`` as a
-        string for a hint that never runs, so following them would invalidate
-        on a change that cannot alter any result.
+        Names come from ``co_names``, i.e. what the code actually LOADS, and
+        from *obj*'s annotations. Annotations used to be skipped as hints that
+        never run, but pydantic runs ``B``'s validators for a field ``b: B``
+        and a ``typing.get_type_hints`` builder constructs ``B`` from ``A``'s
+        hints: editing ``B`` served the old result (see
+        ``cash._annotation_refs``). A hint that really is inert costs a
+        recompute when its class is edited, never a stale value.
         """
         pairs = None
         try:
@@ -6302,6 +6305,13 @@ class Cash:
                 consider(glb.get(name))
                 for module in modules:
                     consider(getattr(module, name, None))
+        if isinstance(obj, type) or callable(obj):
+            from ._annotation_refs import annotation_referents
+            seen_ids = {id(t) for t in targets}
+            for value in annotation_referents(obj, self._is_user_code_object):
+                if id(value) not in seen_ids:
+                    seen_ids.add(id(value))
+                    consider(value)
         return targets
 
     def _code_surface_hash(self, obj: Any) -> str | None:
