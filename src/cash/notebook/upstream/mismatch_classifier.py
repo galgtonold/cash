@@ -15,6 +15,7 @@ import re
 import types
 
 from .._protocols import TrackingState
+from .._trace import trace_event
 from ..analysis import CodeAnalyzer
 from ..cacheability import analyze_statement
 from ..cache_status import CacheStatus
@@ -103,6 +104,16 @@ class MismatchClassifier:
         compare that with the live lineage instead. Walks the loop-derived
         inputs only; everything else gets the lineage checks.
         """
+        # A function or class reads the globals it names when it RUNS, so it
+        # holds no copy of them to go stale. `def draw_importance(ax)` records
+        # `results` among its inputs; taking that as "built on an older results"
+        # rebuilt the chart functions after the comparison cell re-ran, with
+        # `results = {}` and not the loop that fills it: UpstreamStateError,
+        # 'logreg', on a run order with no edit (r25s1). A VALUE computed by
+        # calling one is still walked through it: `best = score(1)` read `rows`.
+        user_ns = getattr(self.shell, 'user_ns', {}) or {}
+        if isinstance(user_ns.get(var_name), (types.FunctionType, type)):
+            return False
         seen: set[str] = set()
         todo = [var_name]
         while todo:
@@ -115,6 +126,8 @@ class MismatchClassifier:
                     continue
                 live = self.variable_lineage.get(inp)
                 if live is not None and live != built_on:
+                    trace_event("built_on_older_input", var=var_name, via=name, input=inp,
+                                built_on=str(built_on)[:12], live=str(live)[:12])
                     if self.debug:
                         logger.debug("[UPSTREAM_DEBUG] '%s' was built on an older '%s' (%s, now %s)",
                                      name, inp, str(built_on)[:8], live[:8])
