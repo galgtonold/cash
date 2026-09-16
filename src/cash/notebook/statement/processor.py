@@ -4482,9 +4482,16 @@ class StatementProcessor:
             #. Only durable destinations count.
             self._account_persisted_bytes(code, prediction, wire)
 
+        # The metadata-only record keeps a RAM-only value's lineage across a
+        # restart. A value written to a persistent tier carries its metadata
+        # already, and asking for the record made the disk tier wait for that
+        # write (``FileBackend.set_metadata_only``) only to skip it: r24s2's
+        # cleaning cell spent 5.8 s of its cold run there, on ~500 MB frames
+        # whose write was meant to happen in the background.
+        persisted = any(d != "RAM" for d in (wire.get('storage') or ()))
         try:
             backend = self.cash_instance.backend
-            if backend is not None:
+            if backend is not None and not persisted:
                 self._stmt_restorer.persist_metadata_only(backend, cache_key, wire)
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
