@@ -83,6 +83,43 @@ class MismatchClassifier:
                     logger.debug("[UPSTREAM_DEBUG] Loop input '%s' lineage changed: virtual=%s, actual=%s",
                           inp_name, expected_lineage[:8], actual_inp_lineage[:8])
                 return True
+        return self._built_on_an_older_input(var_name, vars_derived_from_loops, loop_target_vars)
+
+    def _built_on_an_older_input(
+        self,
+        var_name: str,
+        vars_derived_from_loops: set[str],
+        loop_target_vars: set[str],
+    ) -> bool:
+        """True when *var_name*, or a loop-derived value it was built from, was
+        built on an input that has been rebuilt since.
+
+        The input check above compares simulated lineages with live ones, and a
+        loop-derived chain agrees with itself there even when nothing in it was
+        re-run: after the sweep re-ran on edited data, ``best = pick(sweep)``
+        and ``best_scores = f(best)`` still looked current (round 24, r24s3,
+        silent). What each value was built from is recorded when it ran, so
+        compare that with the live lineage instead. Walks the loop-derived
+        inputs only; everything else gets the lineage checks.
+        """
+        seen: set[str] = set()
+        todo = [var_name]
+        while todo:
+            name = todo.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            for inp, built_on in (self.executed_input_lineages.get(name) or {}).items():
+                if inp == name or inp in loop_target_vars:
+                    continue
+                live = self.variable_lineage.get(inp)
+                if live is not None and live != built_on:
+                    if self.debug:
+                        logger.debug("[UPSTREAM_DEBUG] '%s' was built on an older '%s' (%s, now %s)",
+                                     name, inp, str(built_on)[:8], live[:8])
+                    return True
+                if inp in vars_derived_from_loops:
+                    todo.append(inp)
         return False
 
     def _collect_non_module_inputs(
@@ -871,7 +908,7 @@ class MismatchClassifier:
         if self._check_inp_lineage_skip(inp, virtual_lineage, upstream_has_modifications, simulation_trace_codes):
             return False
         if inp in vars_derived_from_loops and not upstream_has_modifications and not loop_derived_trust_overridden:
-            if inp in self.shell.user_ns:
+            if inp in self.shell.user_ns and not self._built_on_an_older_input(inp, vars_derived_from_loops, set()):
                 if self.debug:
                     logger.debug("[UPSTREAM] Input '%s' is loop-derived and code matches disk. Trusting in-memory.", inp)
                 return False
