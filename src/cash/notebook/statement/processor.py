@@ -2287,7 +2287,8 @@ class StatementProcessor:
     ) -> tuple[StatementCacheMetadata | None, Any | None, float]:
         """Run cache lookup unless *skip_cache* is set."""
         if not skip_cache:
-            return self._freshness.check_cache(self._tracking_state, cache_key, ttl, inputs)
+            return self._freshness.check_cache(self._tracking_state, cache_key, ttl, inputs,
+                                               epoch=getattr(self.shell, 'execution_count', None))
         if self.debug:
             logger.debug("%s Skipping cache lookup due to missing input lineage or @cash:no-cache", _LOG_ANNOTATION)
         return None, None, 0.0
@@ -3605,8 +3606,33 @@ class StatementProcessor:
             return _tee_output()
         return capture_output(stdout=True, stderr=True, display=True)
 
+    def _forget_file_answers_if_it_wrote(self, code: str, result: Any) -> None:
+        """Drop the cell's kept file answers (``CacheFreshnessChecker.
+        forget_file_answers``) when the statement that just ran may have
+        changed a file: it was seen writing one, cash's static writer check
+        says it writes (its own text, or a user function it calls -- which
+        covers writes made in C, like pyarrow's), or it failed part-way.
+
+        Every executed statement dropped them at first, and r24s4's label loop
+        (``ax.annotate`` per topic, reading a frame built from 10,000
+        documents) re-checked all of them 52 times in one cell.
+        """
+        wrote = bool(getattr(self, '_last_written_paths', None)) or not getattr(result, 'success', False)
+        if not wrote:
+            try:
+                from ..cacheability import statement_calls_user_writer, statement_writes_files
+                wrote = (statement_writes_files(code)
+                         or statement_calls_user_writer(code, self.shell.user_ns) is not None)
+            except Exception:  # noqa: BLE001 - when unsure, check files again
+                wrote = True
+        if wrote:
+            self._freshness.forget_file_answers(getattr(self.shell, 'execution_count', None))
+
     def _execute_statement(self, code: str, stream_output: bool = False, tree: ast.Module | None = None, skip_capture: bool = False, is_last: bool = True, exec_source: str | None = None) -> tuple[Any, Any, float, set[str]]:
         """Execute statement with output capture and file tracking.
+
+        A statement that may have written a file drops the freshness answers
+        kept for the cell (``_forget_file_answers_if_it_wrote``).
 
         Args:
             code: Python code to execute.
@@ -3735,6 +3761,7 @@ class StatementProcessor:
                     outputs = []
                 captured = _EmptyCaptured()
 
+        self._forget_file_answers_if_it_wrote(code, result)
         execution_time = time.time() - start_time
         return result, captured, execution_time, accessed_files, accessed_remote
 
@@ -3840,6 +3867,7 @@ class StatementProcessor:
                     outputs = []
                 captured = _EmptyCaptured()
 
+        self._forget_file_answers_if_it_wrote(code, result)
         execution_time = time.time() - start_time
         return result, captured, execution_time, accessed_files, accessed_remote
 

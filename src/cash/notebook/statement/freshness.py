@@ -47,6 +47,9 @@ logger = logging.getLogger(__name__)
 _UNSET = object()
 
 
+#: How long a cell's statements may share the answer for a file (``forget_file_answers``).
+_ANSWERS_LAST_S = 2.0
+
 class CacheFreshnessChecker:
     """Decide whether a cache entry is still fresh.
 
@@ -64,6 +67,29 @@ class CacheFreshnessChecker:
         self._backend = backend
         self.debug = debug
         self.last_miss_reason: str | None = None
+        self._checked: dict = {}
+        self._listed: dict = {}
+        self._epoch: Any = None
+        self._answered_at = 0.0
+
+    def forget_file_answers(self, epoch: Any = None) -> None:
+        """Check files afresh from here on.
+
+        One answer per (path, snapshot) holds for as long as nothing could
+        have changed a file: until a statement executes, or the next cell. A
+        cell's statements reading the same 10,000 documents re-checked every
+        one of them per statement; on r24s4 that was 120,000 checks, 1.1 s,
+        for a cell served entirely from the cache.
+
+        Only inside a real cell (an ``int`` execution count) and for at most
+        ``_ANSWERS_LAST_S``: a file another process or a background thread
+        rewrites mid-cell is seen within that, and a caller outside any cell
+        gets one check per lookup, as before.
+        """
+        self._checked = {}
+        self._listed = {}
+        self._epoch = epoch
+        self._answered_at = time.monotonic()
 
     def check_cache(
         self,
@@ -71,6 +97,7 @@ class CacheFreshnessChecker:
         cache_key: str,
         ttl: int | None,
         inputs: set[str] | None = None,
+        epoch: Any = None,
     ) -> tuple['StatementCacheMetadata | None', Any | None, float]:
         """Look up *cache_key* and run freshness checks.
 
@@ -83,10 +110,11 @@ class CacheFreshnessChecker:
         self.last_miss_reason = None
         # A statement's own recorded deps include the ones it inherited from
         # its inputs, so the two passes below checked every file twice. One
-        # answer per (path, snapshot) per lookup: nothing runs in between.
-        self._checked: dict = {}
-        # Stats taken from directory listings for this lookup (Windows).
-        self._listed: dict = {}
+        # answer per (path, snapshot) until a statement executes or the cell
+        # changes (``forget_file_answers``); stats from directory listings too.
+        if (not isinstance(epoch, int) or epoch != self._epoch
+                or time.monotonic() - self._answered_at > _ANSWERS_LAST_S):
+            self.forget_file_answers(epoch)
 
         t3 = time.time()
         raw_metadata, cached_data = self._backend.get(cache_key)
@@ -118,10 +146,17 @@ class CacheFreshnessChecker:
 
     def _resolve_and_check(self, fpath: str, stored: Any, full_hash_max: int | None):
         """``(resolved, is_fresh, reason)`` for one dependency, once per lookup."""
+        # A tuple of the snapshot's items, not its repr: the key is built on
+        # every call, answered or not, and a sorted repr was 1 s of r24s4's
+        # 120,000 lookups against 5,000 real checks.
         try:
-            memo_key = (fpath, repr(sorted(stored.items())) if isinstance(stored, dict) else repr(stored))
+            memo_key = (fpath, tuple(stored.items()) if isinstance(stored, dict) else stored)
+            hash(memo_key)
         except TypeError:
-            memo_key = None
+            try:
+                memo_key = (fpath, repr(sorted(stored.items())) if isinstance(stored, dict) else repr(stored))
+            except TypeError:
+                memo_key = None
         checked = getattr(self, '_checked', None)
         if memo_key is not None and checked is not None and memo_key in checked:
             return checked[memo_key]
@@ -172,10 +207,12 @@ class CacheFreshnessChecker:
         full_hash_max = _full_hash_max_bytes() if file_deps else None
         if len(file_deps) >= _LISTING_MIN_FILES:
             # Many files: read their directories once rather than stat each
-            # (see ``stats_from_listings``). Taken now, at lookup, so it is as
-            # current as the stats it replaces.
-            self._listed = stats_from_listings(
-                p for p, s in file_deps.items() if isinstance(s, dict) and 'size' in s)
+            # (see ``stats_from_listings``). Taken at the first lookup that
+            # needs them, as current as the stats they replace.
+            unlisted = [p for p, s in file_deps.items()
+                        if isinstance(s, dict) and 'size' in s and p not in self._listed]
+            if len(unlisted) >= _LISTING_MIN_FILES:
+                self._listed.update(stats_from_listings(unlisted))
         for fpath, stored in file_deps.items():
             # Content is authoritative when the size matches; a bare size/mtime
             # check both over-invalidates on a touch and misses a
