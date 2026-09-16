@@ -180,7 +180,7 @@ Replaying them from cache would skip the action (a file never gets written, a
 request never gets sent). Cash's side-effect analysis flags these statements as
 **uncacheable** so they always run:
 
-<!-- claim: cash/notebook/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @7c59797e, cash/notebook/cacheability.py:_SideEffectVisitor @6c2e4302 broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
+<!-- claim: cash/notebook/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @7c59797e, cash/notebook/cacheability.py:_SideEffectVisitor @a2c89342 broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
 | Pattern | Examples | Why it's unsafe to replay |
 |---------|----------|---------------------------|
 | File writes | `open('f', 'w')`, `df.to_csv()`, `df.to_parquet()`, `Path(p).write_text()` | The file wouldn't be written on a cache hit |
@@ -194,6 +194,10 @@ Read-style calls are deliberately **not** treated as side effects:
 `requests.get()`, `urllib` fetches, and `open(...)` in read mode are safe to
 cache, exactly like reading a CSV. Only the verbs that *change* the world are
 flagged.
+
+Writing to the console is output, not a file: `os.write(2, ...)`, `sys.stderr.write(...)`
+and `sys.stdout.write(...)` count as a `print` does, so a step marker in a helper does
+not make every statement that calls it a file writer.
 
 <!-- claim: cash/notebook/cacheability.py:_WRITE_METHODS @74b44b0c, cash/notebook/cacheability.py:_WRITE_MODES @44a74dfd, cash/notebook/cacheability.py:_is_open_write_mode @ca4d33fa, cash/notebook/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @7c59797e -->
 Detection is by call shape, so it works without importing anything, with two

@@ -17,13 +17,13 @@ are the part that does not change.
 
 ## The shape of the suite
 
-**<!-- docnum:tests_total -->~10,050<!-- /docnum --> tests** across three suites,
-spread over <!-- docnum:test_files -->~1,360<!-- /docnum --> files:
+**<!-- docnum:tests_total -->~10,150<!-- /docnum --> tests** across three suites,
+spread over <!-- docnum:test_files -->~1,380<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | <!-- docnum:tests_unit -->~5,330<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
-| Notebook integration | <!-- docnum:tests_integration -->~4,340<!-- /docnum --> | Real kernels executing real notebooks, cell by cell |
+| Unit | <!-- docnum:tests_unit -->~5,400<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
+| Notebook integration | <!-- docnum:tests_integration -->~4,380<!-- /docnum --> | Real kernels executing real notebooks, cell by cell |
 | Docs | <!-- docnum:tests_docs -->~380<!-- /docnum --> | The documentation itself — see [below](#the-docs-are-tested-too) |
 
 Every one runs on **<!-- docnum:platforms -->15<!-- /docnum --> platform combinations** — Python
@@ -88,7 +88,7 @@ through a real harness. There is no whitelist to maintain, so a new page is
 covered the day it lands. Sample output in the docs is checked against what the
 code actually prints.
 
-**Prose is pinned to source.** Around **<!-- docnum:claims -->~380<!-- /docnum --> claims** across
+**Prose is pinned to source.** Around **<!-- docnum:claims -->~390<!-- /docnum --> claims** across
 the documentation carry an anchor naming the function that decides them, plus a
 fingerprint of that function's normalized source:
 

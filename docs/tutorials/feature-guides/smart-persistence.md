@@ -72,7 +72,7 @@ The `100 ms` floor is hardcoded in `factory.py`; the savings fraction is `min_ca
 > single-tier persistent backend (`Cash(backend=FileBackend(...))` or
 > `SQLiteBackend`), which writes every entry regardless of compute time.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.end_cell_persistence @b8c9a025, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @1c2fe210 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.end_cell_persistence @b8c9a025, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @9fe37a85 -->
 In a notebook, "cheaper to re-run" is judged once more at the end of each cell.
 A statement is often fast only because its inputs are there: `latest =
 sales['week'].max()` takes milliseconds, but after a restart `sales` is gone too,
@@ -81,7 +81,10 @@ cell below it reads, Cash adds up what rebuilding it after a restart would take 
 the statement, and every statement behind it whose result is not on disk — and
 writes the value to disk when restoring it beats that, by the same
 restore-vs-recompute rule. Only the value as the cell leaves it is written, not
-each intermediate version, and not values no later cell reads.
+each intermediate version, and not values no later cell reads. The same holds
+while the cell runs: a statement whose every output a later statement of the
+cell writes again (`sales = sales.merge(...)` three times over) keeps its result
+in RAM, and `# @cash:persist` still writes it.
 
 ### Worked examples
 
@@ -129,10 +132,10 @@ so the two paths differ here.)
 
 ## Inspecting where a value actually landed
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @8732e6d1, cash/backends/tiered_backend.py:TieredBackend.get @d9642778 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @0e2e9f5f, cash/backends/tiered_backend.py:TieredBackend.get @d9642778 -->
 The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']`. This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (set in `TieredBackend.get`).
 
-When it went no further than RAM, `metadata['persist_skipped']` says why: `"compute"` (the compute floor or the cost model) or `"size"` (a tier's size cap).
+When it went no further than RAM, `metadata['persist_skipped']` says why: `"compute"` (the compute floor or the cost model), `"size"` (a tier's size cap), or `"replaced_in_cell"` (a later statement of the same cell writes that name again, so the version the cell leaves is the one written).
 
 For debugging, turn on debug output — `CASH_DEBUG=1`, or:
 
