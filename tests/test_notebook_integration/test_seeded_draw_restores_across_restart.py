@@ -22,7 +22,7 @@ C_ON = "import cash\n%cash_on\n%cash_badge print"
 DRAW = (
     "import numpy as np\n"
     "np.random.seed(2024)\n"
-    "val = float(np.linalg.svd(np.random.rand(900, 900), compute_uv=False).sum())\n"
+    "val = float(np.linalg.svd(np.random.rand(1500, 1500), compute_uv=False).sum())\n"
     "print('VAL %.8f' % val)"
 )
 
