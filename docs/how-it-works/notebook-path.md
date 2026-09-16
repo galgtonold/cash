@@ -234,6 +234,14 @@ else, and the loop runs again. The loop's own variables (`parts`, `d` in
 `for f in files: d = read(f); parts.append(d)`) are not stored anywhere a
 restart can bring them back from: a cell that reads them runs the loop.
 
+<!-- claim: cash/notebook/cacheability.py:module_setting_receivers @ea97b798 -->
+A setting kept on a module, such as `plt.rcParams.update({...})`, `plt.style.use("ggplot")`,
+`pd.set_option(...)`, `np.seterr(...)` or `warnings.filterwarnings(...)`, lives
+in the library and not in any variable Cash stores. A top-level call like these
+counts as a change to the module, so after a restart a cell that uses the
+module runs the setting line again before it draws or prints. Before this, a
+chart drawn after a restart silently lost the notebook's style.
+
 <!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writer_output_already_fresh @eff0744a, cash/notebook/write_observer.py:observe_writes @cb18a8f7, cash/notebook/carrier_history.py:carrier_history_fingerprint @b132b2c9 -->
 A cell that writes files (`df.to_csv(...)`, a loop saving one chart per kind)
 is not re-run after a restart just because it ran in an earlier kernel. When it

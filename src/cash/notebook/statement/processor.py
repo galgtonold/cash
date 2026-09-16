@@ -469,6 +469,7 @@ from ..cacheability import (
     standalone_call_arg_targets,
     chain_is_pure,
     standalone_method_call_inner_methods,
+    module_setting_receivers,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
 )
@@ -3142,6 +3143,7 @@ class StatementProcessor:
             return set(), set(), set(), False
         tier1 = standalone_method_mutation_receivers(tree)
         inner = standalone_method_call_inner_methods(tree)
+        settings = module_setting_receivers(tree)
         verdict = self.mutation_verdicts.get(source_hash)
         pre_route: set[str] = set()
         observe: set[str] = set()
@@ -3149,8 +3151,14 @@ class StatementProcessor:
         for base, method in candidates:
             receiver = self.shell.user_ns.get(base)
             if isinstance(receiver, types.ModuleType):
-                continue  # ``time.sleep()`` / ``np.foo()`` is a module function
-                          # call, not a method mutation of the receiver.
+                # ``time.sleep()`` / ``np.foo()`` is a module function call, not
+                # a method mutation of the receiver -- unless it changes a
+                # setting the module keeps (``pd.set_option``,
+                # ``plt.rcParams.update``): that is the module's own state, and
+                # it is replayed with the module only if it is counted as such.
+                if base in settings:
+                    pre_route.add(base)
+                continue
             if base in tier1:
                 pre_route.add(base)
                 continue

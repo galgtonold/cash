@@ -67,6 +67,8 @@ __all__ = [
     "KNOWN_PURE_METHODS",
     "standalone_method_call_inner_methods",
     "chain_is_pure",
+    "module_setting_receivers",
+    "MODULE_SETTING_FUNCTIONS",
     "RECEIVER_READONLY_WRITE_METHODS",
 ]
 
@@ -3562,6 +3564,51 @@ def standalone_method_call_inner_methods(
             method = f'plot.{method}'
         inner[(base, method)] = inner.get((base, method), frozenset()) | methods
     return inner
+
+
+#: Module functions that change a setting the module keeps: ``pd.set_option``,
+#: ``plt.style.use``, ``np.seterr``, ``warnings.filterwarnings``. Matched with
+#: :func:`module_setting_receivers`, which also takes ``set`` and any ``set_*``.
+MODULE_SETTING_FUNCTIONS = frozenset({
+    'use', 'rc', 'seterr', 'filterwarnings', 'simplefilter', 'resetwarnings',
+    'basicConfig', 'reset_option',
+})
+
+
+def module_setting_receivers(tree: ast.Module | None) -> frozenset[str]:
+    """Names a top-level bare call changes a module's setting through.
+
+    ``plt.rcParams.update({...})``, ``sys.path.append(p)``: a mutating method on
+    something a name holds -- which, when the name is a module, is that
+    module's state. ``pd.set_option(...)``, ``plt.style.use(...)``: a function
+    that sets. Returned by NAME; only a caller with the namespace can tell the
+    name is a module, and only then does this apply (``np.append(a, 1)`` is
+    neither: a function on the module itself, returning a new array).
+
+    Such a statement binds nothing, so rebuilding variables after a restart
+    never reached it: r24s2's charts came out in matplotlib's default style
+    because ``plt.rcParams.update`` in the setup cell was not replayed.
+    Counted as a change to the module, it is replayed with the import.
+    """
+    if tree is None:
+        return frozenset()
+    names: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+            continue
+        func = node.value.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        base = _extract_receiver_base_name(func.value)
+        if not base:
+            continue
+        method = func.attr
+        on_attribute = isinstance(func.value, ast.Attribute)
+        if ((on_attribute and method in MUTATING_METHODS)
+                or method == 'set' or method.startswith('set_')
+                or method in MODULE_SETTING_FUNCTIONS):
+            names.add(base)
+    return frozenset(names)
 
 
 def chain_is_pure(method: str, inner: frozenset[str]) -> bool:

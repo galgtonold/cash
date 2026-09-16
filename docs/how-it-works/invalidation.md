@@ -143,7 +143,7 @@ flowchart TD
 
 ## Mutation bumps the receiver's lineage
 
-<!-- claim: cash/notebook/cacheability.py @f233f242 broad="the three-tier mutation classification spans the module, not one function" -->
+<!-- claim: cash/notebook/cacheability.py @5b14961e broad="the three-tier mutation classification spans the module, not one function" -->
 `items.append(x)` names `items` as a *receiver*, not as an assignment target, so nothing about it would ordinarily move. Cash classifies every standalone method call and, when the call mutates, routes the receiver into the statement's outputs — its lineage is rebuilt from the statement's source, and everything downstream misses.
 
 The classification runs in three tiers, because "does this method mutate?" is not statically decidable in general:
@@ -152,7 +152,7 @@ The classification runs in three tiers, because "does this method mutate?" is no
 2. **Identity-coupled receivers** — a method call on a live matplotlib `Axes`/`Figure` draws on it whatever it returns, so it always counts as a mutation; so does handing one to a call (`df.plot(ax=ax)`), which mutates the *axes*, not `df` — pandas' plotting calls leave the frame's lineage alone.
 3. **Observed** — for everything else Cash content-hashes the receiver before and after execution and records the verdict, keyed by the statement's source hash.
 
-That verdict dictionary is shared with the upstream simulation, which cannot observe execution and therefore reads the runtime's recorded answer; an unknown verdict is treated as mutating. Because the bump is derived from the statement's *source* in both engines, the runtime and the simulation compute byte-identical lineages — the invariant the whole restore path rests on. Module receivers are excluded (`time.sleep()` is a module function call, not a mutation).
+That verdict dictionary is shared with the upstream simulation, which cannot observe execution and therefore reads the runtime's recorded answer; an unknown verdict is treated as mutating. Because the bump is derived from the statement's *source* in both engines, the runtime and the simulation compute byte-identical lineages — the invariant the whole restore path rests on. Module receivers are excluded (`time.sleep()` is a module function call, not a mutation), except for a top-level call that changes a setting the module keeps — `plt.rcParams.update(...)`, `pd.set_option(...)`, `plt.style.use(...)` — which bumps the module so the setting is replayed after a restart.
 
 ## Randomness: re-seeding invalidates the draws below it
 

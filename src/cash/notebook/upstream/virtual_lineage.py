@@ -37,6 +37,7 @@ from ..cacheability import (
     standalone_call_arg_targets,
     chain_is_pure,
     standalone_method_call_inner_methods,
+    module_setting_receivers,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
 )
@@ -437,6 +438,7 @@ class VirtualLineage:
             return fam
         tier1 = standalone_method_mutation_receivers(tree)
         inner = standalone_method_call_inner_methods(tree)
+        settings = module_setting_receivers(tree)
         receivers: set[str] = set()
         source_hash = hashlib.sha256(stmt_code.encode('utf-8')).hexdigest()
         verdict = self.mutation_verdicts.get(source_hash)
@@ -445,7 +447,11 @@ class VirtualLineage:
         for base, method in candidates:
             receiver = self.shell.user_ns.get(base)
             if is_module(base):
-                continue  # module function call, not a method mutation
+                # a module function call, not a method mutation -- unless it
+                # changes a setting the module keeps (mirrors the runtime)
+                if base in settings:
+                    receivers.add(base)
+                continue
             if base in tier1:
                 receivers.add(base)
                 continue
