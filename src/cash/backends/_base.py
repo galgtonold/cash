@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 import contextlib
 import logging
+import math
 import os
 import queue
 import sys
@@ -19,6 +20,33 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 __all__ = ["CacheMetadata", "MetadataDict", "CacheBackend", "PendingWrites"]
+
+#: Cost assumed for an entry whose execution time is unknown -- written without
+#: one (raw backend use), or ranked with nothing recorded about it. Small, so an
+#: entry of known cost outranks it.
+UNKNOWN_COST_S = 0.001
+
+#: Value-per-byte steps per doubling (see `gdsf_value`): 1/16 octave, ~4.4%.
+_GDSF_STEPS_PER_OCTAVE = 16
+
+
+def gdsf_value(metadata: MetadataDict | dict, size: int) -> float:
+    """The value term of a GreedyDual-Size-Frequency priority, both tiers' ranking.
+
+    ``hits * execution_time / size``, rounded down to a 1/16-octave step.
+    Unrounded, a one-byte size difference decided between entries of equal
+    cost -- and the newest entry is often the one a byte bigger (a longer
+    key), so it went first: recency inverted among equals, and the
+    evict-after-write warning fired on a healthy cache. Real values span
+    seven orders of magnitude, so a 4% step costs no ranking that matters,
+    and ties fall through to recency as they should.
+    """
+    cost = metadata.get('execution_time') or 0.0
+    if cost <= 0:
+        cost = UNKNOWN_COST_S
+    hits = metadata.get('access_count', 0) + 1
+    value = hits * cost / max(1, size)
+    return 2.0 ** (math.floor(math.log2(value) * _GDSF_STEPS_PER_OCTAVE) / _GDSF_STEPS_PER_OCTAVE)
 
 # Serializes the one-time, per-instance creation of a backend's in-process
 # per-key lock registry (see ``CacheBackend._inprocess_key_lock``). A single

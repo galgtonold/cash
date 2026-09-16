@@ -393,9 +393,7 @@ def test_ranking_reads_no_entry_files(tmp_path):
     finally:
         ef.read_entry = real
 
-    assert len(backend._evict_queue) + len(backend._evict_crumbs) == 40, (
-        f"{len(backend._evict_queue)} + {len(backend._evict_crumbs)} ranked"
-    )
+    assert len(backend._evict_queue) == 40, f"{len(backend._evict_queue)} ranked"
     assert opened == [], f"ranking opened {len(opened)} entry files"
     assert backend._metadata_cache == {}, "ranking pulled metadata into memory"
 
@@ -517,28 +515,25 @@ def test_crumbs_are_not_shredded_to_free_space_they_cannot_free(tmp_path):
     b.shutdown()
 
 
-def test_crumbs_are_evicted_normally_when_they_can_close_the_gap(tmp_path):
-    """The control, and the more common case: ordinary LRU is preserved.
+def test_a_big_entry_worth_its_bytes_is_not_taken_for_being_big(tmp_path):
+    """The control: "always take the big one first" is not the rule.
 
-    Without it, "always take the big one first" would pass the arm above while
-    evicting an expensive entry every time a few cheap ones would have done.
+    Without it, the arm above would pass for a policy that evicts an expensive
+    entry every time a few cheap ones would have done. Ranking is by value per
+    byte, so a 1 MB result that took 30 s outranks 64 KB ones that took 50 ms
+    (3e-5 s/B against 8e-7), and the small ones go -- although they are older
+    and could not close the gap one at a time.
     """
     cache = tmp_path / "cache"
-    sizes = {f"small:{i}": 64 * 1024 for i in range(400)}
-    sizes["big"] = 4 * 1024 * 1024
-    order = [f"small:{i}" for i in range(400)] + ["big"]
-    path_of = _seed_sized(cache, sizes, order)
+    b = FileBackend(str(cache), max_size_bytes=2_200_000, flush_interval=0)
+    for i in range(20):
+        b.set(f"small:{i}", b"x" * 64 * 1024, {"execution_time": 0.05})
+        b._writes.wait_all()
+    b.set("big", b"x" * 1024 * 1024, {"execution_time": 30.0})
+    b._writes.wait_all()
 
-    total = sum(sizes.values())
-    b = FileBackend(str(cache), max_size_bytes=int(total * 0.95), flush_interval=0)
-    b._ensure_size_scanned()
-    b._check_and_evict()
-
-    survivors = {f.name for f in os.scandir(cache) if f.name.endswith(ENTRY_SUFFIX)}
-    assert os.path.basename(path_of("big")) in survivors, (
-        "the big entry was evicted even though the crumbs could cover the gap"
-    )
-    assert len(survivors) < 401, "nothing was evicted at all"
+    assert os.path.exists(b._get_path("big")), "the expensive big entry was evicted"
+    assert not os.path.exists(b._get_path("small:0")), "nothing cheap was evicted"
     b.shutdown()
 
 
@@ -722,8 +717,8 @@ def test_dominant_size_is_byte_weighted_not_the_mean(tmp_path):
     would stay quiet precisely where the advice matters.
     """
     b = FileBackend(str(tmp_path / "c"), max_size_bytes=80 * 1024 * 1024)
-    b._evict_queue = deque([(f"/big", 64 * 1024 * 1024, 0.0)])
-    b._evict_crumbs = deque([(f"/c{i}", 2 * 1024, 0.0) for i in range(3000)])
+    b._evict_queue = deque([(f"/big", 64 * 1024 * 1024, 0.0)]
+                           + [(f"/c{i}", 2 * 1024, 0.0) for i in range(3000)])
 
     dominant = b._dominant_entry_size()
     mean = (64 * 1024 * 1024 + 3000 * 2 * 1024) / 3001

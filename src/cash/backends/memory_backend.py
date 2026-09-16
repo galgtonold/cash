@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from ._base import CacheBackend, MetadataDict
+from ._base import CacheBackend, MetadataDict, gdsf_value
 from .serialization import Serializer
 from .. import _plain_data
 from .._sizing import pandas_nbytes
@@ -198,27 +198,49 @@ class InMemoryBackend(CacheBackend):
             return metadata, self._safe_deep_copy(value, key)
         return None, None
 
-    def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
+    def set(self, key: str, value: Any, metadata: MetadataDict | None = None,
+            serializer: Serializer | None = None) -> bool | None:
+        """Store *value*; returns False if it was refused (see below)."""
         metadata = self._init_metadata(metadata, key)
-
-        if 'storage' not in metadata:
-            metadata['storage'] = ['RAM']
 
         # Plain data is sized, checked and copied from ONE look at it: three
         # separate walks were most of promoting two million parsed rows here.
         plain = _plain_data.profile(value)
         dict_rows_size = None if plain is not None else _plain_data.dict_rows_profile(value)
         if dict_rows_size is not None:
+            size = dict_rows_size
+        elif plain is None:
+            size = self._get_object_size(value)
+        else:
+            size = plain[0]
+
+        # A value above the eviction target can never stay: the byte cap evicts
+        # down to 90% of the cap, and it would be the last one standing. It
+        # used to be stored anyway, and the eviction took every older entry and
+        # then the value itself -- one oversized write, or one restore of a big
+        # disk entry (read-repair promotes into this tier with no size gate),
+        # emptied the tier. Refused here, before the copy: copying a frame of
+        # gigabytes only to throw it away is its own cost. The previous value
+        # for the key goes too, or a later read would serve it as current.
+        if self._max_size_bytes is not None and size > self._max_size_bytes * 0.9:
+            if key in self._store:
+                self._drop(key)
+            return False
+
+        if 'storage' not in metadata:
+            metadata['storage'] = ['RAM']
+
+        if dict_rows_size is not None:
             # csv.DictReader / JSON records with immutable values: a new dict
             # per row is a complete copy, built in C (round 20: dict rows were
             # 10x slower to cache than the same data as tuples).
-            size, immutable = dict_rows_size, False
+            immutable = False
             stored = list(map(dict, value))
         elif plain is None:
-            size, immutable = self._get_object_size(value), False
+            immutable = False
             stored = self._safe_deep_copy(value, key)
         else:
-            size, immutable, levels = plain
+            _size, immutable, levels = plain
             stored = _plain_data.copy_plain(value, immutable, levels)[1]
         metadata['size'] = size
 
@@ -400,10 +422,6 @@ class InMemoryBackend(CacheBackend):
         if evicted_count > 0:
             self._try_malloc_trim()
 
-    #: Cost assumed for an entry written without an ``execution_time`` (raw
-    #: backend use). Small, so an entry of known cost outranks it.
-    _UNKNOWN_COST_S = 0.001
-
     def _touch(self, key: str) -> None:
         """Record a write or read: it re-bases the entry's GDSF priority."""
         self._gdsf_base[key] = self._gdsf_clock
@@ -412,11 +430,7 @@ class InMemoryBackend(CacheBackend):
 
     def _gdsf_priority(self, key: str, meta: MetadataDict) -> float:
         """``H = L + hits * execution_time / size``, L as of the last access."""
-        cost = meta.get('execution_time') or 0.0
-        if cost <= 0:
-            cost = self._UNKNOWN_COST_S
-        hits = meta.get('access_count', 0) + 1
-        return self._gdsf_base.get(key, 0.0) + hits * cost / max(1, meta.get('size', 1))
+        return self._gdsf_base.get(key, 0.0) + gdsf_value(meta, meta.get('size', 1))
 
     def _evict_to_byte_cap(self) -> None:
         """Evict by value per byte until under ~90% of the byte cap.
@@ -425,8 +439,8 @@ class InMemoryBackend(CacheBackend):
         goes first, and the clock ``L`` rises to each victim's H, so an entry
         that stops being read ages below newer ones however valuable it was.
         Recency alone treated a 30 s result like a 50 ms one of the same size,
-        and 4 MB like 1 MB; in a trace-driven eviction simulation that
-        difference was most of the loss. In a notebook: a folder loop's
+        and 4 MB like 1 MB; in the eviction simulation (benchmarks/eviction_sim)
+        that difference was most of the loss. In a notebook: a folder loop's
         per-file frames (20 ms each) were all dropped for a later cell's
         full-table copies (0.1-3 s per 570 MB), so the loop's next run read
         every file again (round 23, r23s2). Ties go to the least recently

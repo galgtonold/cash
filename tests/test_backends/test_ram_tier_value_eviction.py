@@ -4,8 +4,8 @@ Ranking by recency alone treats a 30-second result the same as a 50 ms one of
 the same size, and a 4 MB value the same as a 1 MB one. GDSF keeps
 ``H = L + hits * execution_time / size`` per entry, evicts the lowest H, and
 raises the clock L to each victim's H, so an entry that stops being read
-eventually ages out however valuable it was. A trace-driven simulation of
-cash's eviction chose it; the notebook-level case is
+eventually ages out however valuable it was. See benchmarks/eviction_sim for
+the trace simulation behind the choice; the notebook-level case is
 tests/test_notebook_integration/test_ram_tier_keeps_loop_entries.py.
 
 Every test uses a 10 MB cap and ~1 MB values, so the arithmetic in each
@@ -135,6 +135,100 @@ def test_pressure_eviction_ranks_an_unread_costly_result_above_a_cheap_read_one(
 
     assert _held(b, "costly")
     assert not _held(b, "cheap")
+
+
+# ---------------------------------------------------------------------------
+# A value the cap can never hold is refused, not allowed to empty the tier.
+# ---------------------------------------------------------------------------
+
+def _hot_tier():
+    """Twenty 1 MB entries, each read once, under a 100 MB cap."""
+    b = InMemoryBackend(max_size_bytes=100 * MB, max_memory_percent=1.0)
+    for i in range(20):
+        _put(b, f"small-{i}", MB, 5.0)
+        b.get(f"small-{i}")
+    return b
+
+
+def test_a_value_over_the_eviction_target_is_refused_not_stored():
+    """Break caught: an oversized write is accepted, then evicts everything
+    older and itself.
+
+    The byte cap evicts down to 90% of the cap, so a value above that can
+    never stay. It used to be stored anyway: the eviction took all twenty
+    hot entries and then the new value, leaving an empty tier.
+    """
+    b = _hot_tier()
+    _put(b, "huge", 95 * MB, 1000.0)
+
+    assert not _held(b, "huge")
+    assert all(_held(b, f"small-{i}") for i in range(20))
+    assert b._current_size_bytes < 25 * MB
+
+
+def test_a_big_value_under_the_target_is_still_stored():
+    """Control arm: the refusal is for values the cap cannot hold, not for
+    big ones. 85 MB fits under the 90 MB target, and at 1000 s it is worth
+    more per byte than the 1 MB entries, so they make room for it."""
+    b = _hot_tier()
+    _put(b, "big", 85 * MB, 1000.0)
+
+    assert _held(b, "big")
+    assert b._current_size_bytes <= 100 * MB
+
+
+def test_refusing_a_replacement_drops_the_old_value_for_that_key():
+    """Break caught: the refused value leaves the key's previous value in
+    place, where a later read would return it as current."""
+    b = _hot_tier()
+    _put(b, "k", MB, 1.0)
+    _put(b, "k", 95 * MB, 1000.0)
+
+    assert not _held(b, "k")
+    assert sum(_held(b, f"small-{i}") for i in range(20)) == 20
+
+
+def test_restoring_a_big_disk_entry_does_not_empty_the_ram_tier(tmp_path):
+    """Break caught: read-repair promotes a disk hit into RAM with no size
+    gate, so every restore of a value over the RAM cap flushed the tier.
+
+    Disk holds a 12 MB value; the RAM tier (10 MB cap) holds six hot 1 MB
+    entries. Reading the big value serves it from disk and leaves RAM as
+    it was.
+    """
+    from cash.backends import FileBackend, TieredBackend
+
+    ram = InMemoryBackend(max_size_bytes=CAP, max_memory_percent=1.0)
+    disk = FileBackend(str(tmp_path / "d"), flush_interval=0)
+    tiered = TieredBackend([ram, disk], promotion_policy=lambda e, s: True)
+    disk.set("huge", b"x" * (12 * MB), {"execution_time": 60.0})
+    disk._writes.wait_all()
+    for i in range(6):
+        _put(ram, f"hot-{i}", MB, 5.0)
+
+    meta, value = tiered.get("huge")
+
+    assert value is not None and len(value) == 12 * MB
+    assert all(_held(ram, f"hot-{i}") for i in range(6))
+    assert not _held(ram, "huge")
+    disk.shutdown()
+
+
+def test_a_refused_value_is_not_reported_as_held_in_ram(tmp_path):
+    """Break caught: the tiered write lists RAM among a value's destinations
+    even when RAM refused it -- the badge and the miss explanation read that
+    list."""
+    from cash.backends import FileBackend, TieredBackend
+
+    ram = InMemoryBackend(max_size_bytes=CAP, max_memory_percent=1.0)
+    disk = FileBackend(str(tmp_path / "d"), flush_interval=0)
+    tiered = TieredBackend([ram, disk], promotion_policy=lambda e, s: True)
+    meta = {"execution_time": 60.0}
+    tiered.set("huge", b"x" * (12 * MB), meta)
+    disk._writes.wait_all()
+
+    assert meta["storage"] == ["DISK"]
+    disk.shutdown()
 
 
 def test_an_entry_without_execution_time_is_still_evictable():

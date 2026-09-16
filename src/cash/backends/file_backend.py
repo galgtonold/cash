@@ -1,9 +1,10 @@
-"""File-based cache backend with LRU eviction and optional compression."""
+"""File-based cache backend with value-per-byte eviction and optional compression."""
 
 from __future__ import annotations
 
 import glob
 import gzip
+import heapq
 import logging
 import os
 import pickle
@@ -17,7 +18,7 @@ from typing import Any
 from cash.exceptions import CacheBackendError
 from cash.utils import replace_with_retry
 
-from ._base import CacheBackend, MetadataDict, PendingWrites
+from ._base import CacheBackend, MetadataDict, PendingWrites, gdsf_value
 from .entry_format import (
     ENTRY_SUFFIX,
     MAGIC,
@@ -26,6 +27,7 @@ from .entry_format import (
     read_entry,
     update_metadata_in_place,
 )
+from .rank_index import RankIndex
 from .serialization import PickleSerializer, Serializer
 
 logger = logging.getLogger(__name__)
@@ -305,11 +307,25 @@ class FileBackend(CacheBackend):
         # filename is a SHA-256 of the key, so eviction -- which ranks by
         # walking the directory -- cannot recover the key any other way.
         self._paths: dict[str, str] = {}
-        # Eviction candidates, oldest first, consumed across passes and
-        # rebuilt when empty. Split by size: see _rebuild_evict_queue.
-        self._evict_queue: deque[tuple[str, int]] = deque()
-        self._evict_crumbs: deque[tuple[str, int]] = deque()
-        self._evict_crumb_bytes = 0
+        # Eviction candidates, least valuable per byte first, consumed across
+        # passes and rebuilt when empty: see _rebuild_evict_queue. Items are
+        # (path, size, ranked_at); each one's GDSF priority is in _rank_h.
+        self._evict_queue: deque[tuple[str, int, float]] = deque()
+        self._rank_h: dict[str, float] = {}
+        # Entries this process wrote AFTER the ranking was taken, as a heap
+        # of (priority, seq, path, size, ranked_at). Under LRU the newest
+        # entry was never a candidate; under GDSF a cheap 4 MB value can be
+        # the least valuable thing in the cache the moment it lands.
+        self._evict_fresh: list[tuple[float, int, str, int, float]] = []
+        self._ranked = False
+        # GreedyDual's clock L, and each touched key's L as of its last write
+        # (None: read since, re-based at next use). The clock is resumed from
+        # the rank index on first need, so a new process does not restart it
+        # at zero and rank everything it writes below everything on disk.
+        self._gdsf_clock = 0.0
+        self._clock_loaded = False
+        self._gdsf_base: dict[str, float | None] = {}
+        self._rank_index = RankIndex(self.cache_dir, _untracked)
         # Whether _current_size_bytes is an absolute on-disk total (True) or
         # only this process's running delta (False). See _ensure_size_scanned.
         self._size_scanned = False
@@ -650,6 +666,9 @@ class FileBackend(CacheBackend):
             if self._stop_event.wait(self._flush_interval):
                 break
             self._flush_metadata(periodic=True)
+            # Buffered rank records reach the file within one interval, so
+            # another process ranking this directory sees them.
+            self._rank_index.flush()
 
     #: Seconds between persisted access stamps for one entry, while the
     #: process runs; everything outstanding is flushed at shutdown.
@@ -691,17 +710,32 @@ class FileBackend(CacheBackend):
                 keys_to_flush = list(self._dirty_metadata)
                 self._dirty_metadata.clear()
 
+        # A read raises an entry's priority, so each flushed access is also a
+        # rank-index record -- which is how an entry written before the index
+        # existed, and still in use, gets ranked by what it is worth.
+        ranked = bool(self._max_size_bytes)
+        if ranked and keys_to_flush:
+            self._ensure_clock()
+        records: list[tuple[str, float]] = []
         for key in keys_to_flush:
             try:
                 meta = self._metadata_cache.get(key)
-                if meta and not update_metadata_in_place(self._get_path(key), meta):
+                path = self._get_path(key)
+                if meta and not update_metadata_in_place(path, meta):
                     logger.debug(
                         "Metadata for %r no longer fits its reserved region; "
                         "access stats not flushed", key,
                     )
                 self._access_flushed[key] = now
+                if meta and ranked:
+                    with self._lock:
+                        base = self._gdsf_base.get(key)
+                        if base is None:
+                            base = self._gdsf_base[key] = self._gdsf_clock
+                    records.append((self._stem(path), self._priority(meta, os.path.getsize(path), base)))
             except (OSError, pickle.PickleError) as exc:
                 logger.debug("Failed to flush metadata for key %r: %s", key, exc)
+        self._rank_index.append(records)
 
     def _remember(self, key: str, metadata: dict) -> None:
         """Cache one entry's metadata, and the way back from its filename.
@@ -826,6 +860,10 @@ class FileBackend(CacheBackend):
 
             with self._lock:
                 self._dirty_metadata.add(key)
+                # Re-based at the clock of its next use (a ranking or the
+                # access flush), so a read never loads the rank index on the
+                # caller's thread.
+                self._gdsf_base[key] = None
 
             if metadata.get('compressed', False):
                 try:
@@ -1072,6 +1110,11 @@ class FileBackend(CacheBackend):
             self._write_seq += 1
             self._write_seq_by_key[key] = self._write_seq
 
+        # Only a capped tier ever ranks, so only a capped tier keeps the
+        # rank index: uncapped, it would be a file that only grows.
+        if self._max_size_bytes:
+            self._record_rank(key, path, metadata, len(blob))
+
     def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
         """Serialize the value on the calling thread, then write to disk
         in the background. ``set()`` returns once the bytes are captured;
@@ -1216,6 +1259,7 @@ class FileBackend(CacheBackend):
             self._metadata_cache.pop(key, None)
             self._dirty_metadata.discard(key)
             self._write_seq_by_key.pop(key, None)
+            self._gdsf_base.pop(key, None)
             self._paths.pop(path, None)
             self._current_size_bytes -= size_to_remove
 
@@ -1228,46 +1272,86 @@ class FileBackend(CacheBackend):
 
     # Evict-after-write is only a treadmill signal if the evicted entry was
     # written within roughly this many writes — something older getting
-    # evicted is healthy LRU, not thrash. Only writes bump the counter.
+    # evicted is healthy turnover, not thrash. Only writes bump the counter.
     _EVICT_WARN_RECENT_OPS = 3
 
-    #: An entry smaller than this fraction of the cap is a "crumb": evicting it
-    #: barely moves the total. Crumbs are still evicted, but only when they can
-    #: actually close the gap, or when nothing bigger is left.
-    _EVICT_CRUMB_FRACTION = 0.001
+    @staticmethod
+    def _stem(path: str) -> str:
+        return os.path.basename(path)[: -len(ENTRY_SUFFIX)]
+
+    @staticmethod
+    def _priority(metadata: dict, size: int, base: float) -> float:
+        """GDSF: ``H = L + hits * execution_time / size``, L as of *base*.
+        An entry with nothing recorded about it ranks at `UNKNOWN_COST_S`."""
+        return base + gdsf_value(metadata, size)
+
+    def _ensure_clock(self) -> None:
+        """Resume the GDSF clock from the rank index, once per process.
+
+        Only writers and the access flush need it, and both run off the
+        caller's thread. A read-only process never pays for the file.
+        """
+        if self._clock_loaded:
+            return
+        _ranks, clock, _count = self._rank_index.load()
+        with self._lock:
+            self._gdsf_clock = max(self._gdsf_clock, clock)
+            self._clock_loaded = True
+
+    def _record_rank(self, key: str, path: str, metadata: dict, size: int) -> None:
+        """A write: store its priority, and make it a candidate at once."""
+        self._ensure_clock()
+        with self._lock:
+            clock = self._gdsf_clock
+            self._gdsf_base[key] = clock
+            priority = self._priority(metadata, size, clock)
+            if self._ranked:
+                heapq.heappush(self._evict_fresh, (
+                    priority, self._write_seq_by_key.get(key, 0), path, size, time.time(),
+                ))
+        self._rank_index.append([(self._stem(path), priority)])
 
     def _rebuild_evict_queue(self) -> None:
-        """Rank every entry for eviction from one ``scandir``, oldest first.
+        """Rank every entry for eviction, least valuable per byte first.
 
-        This used to open and unpickle every entry in the directory to sort by
-        ``last_access``, which cost 44us per entry warm -- 0.9s at 20k, ~4.4s
-        at 100k -- on the write worker, so every queued write waited behind
-        it. It also kept all that metadata in RAM for the process lifetime,
-        about 1.7KB an entry, 170MB at 100k.
+        **What it ranks by.** GreedyDual-Size-Frequency: the lowest
+        ``H = L + hits * execution_time / size`` goes first, and the clock L
+        rises to each victim's H (`_check_and_evict`), so an entry that stops
+        being read drops below newer ones and ages out, however valuable it
+        was. It used to be LRU plus a size split: entries under 0.1% of the cap
+        were taken first whenever they alone could close the gap. That split
+        ignored recency across the two classes, and its threshold grew with
+        the cap -- in the eviction simulator (benchmarks/eviction_sim) the
+        policy lost 18% of the achievable savings at a cap of twice the live
+        set, against 7.5% for plain LRU and 1.7% for GDSF.
 
-        ``scandir`` answers the same question at 1.6us per entry (31ms at 20k,
-        180ms at 100k -- 25x) and holds ~100 bytes each, because mtime IS
-        last access: recording a read rewrites the header in place, so the
-        file's modification time moves with it, and an entry nobody has read
-        keeps its write time, which is exactly what LRU wants for it.
+        **Where H comes from.** One ``scandir`` for sizes and mtimes, plus the
+        rank index (`rank_index.RankIndex`): one line per write and access
+        flush, read here in one pass. Not from the entries themselves --
+        opening every entry to read its header cost 111 us an entry warm and
+        5.7 ms cold on Windows (antivirus scans each open), 2.2 s to 113 s per
+        ranking at 20k entries, against ~2 us for the walk. Entries this
+        process has written or read are ranked from what it knows in memory,
+        which is fresher than any flushed line. An entry with no record at all (written
+        before the index existed, or with the index lost) ranks as if its cost
+        were unknown and small. An old entry that is still used gets a record
+        on its first access flush, so what stays unranked is what nobody reads.
+
+        **Ties** -- equal cost and size, the common case for untouched
+        entries -- go to the least recently used, then to the older write.
+        mtime is last access (recording a read rewrites the header in place),
+        overridden by an unflushed in-memory ``last_access``, and broken by the
+        write sequence because a filesystem stamps mtimes in steps (~0.57 ms
+        on ext4): a burst of small writes shares one mtime, and ``sorted`` then
+        keeps ``scandir`` order, which is a hash.
 
         The ranking is a QUEUE, consumed across many eviction passes and
-        rebuilt only when it runs out. That matters more than the per-entry
-        cost: in steady state a full cache evicts on most writes, so a
-        directory walk per pass would be far worse than the walk-once-and-hold
-        design it replaces, however cheap the walk.
-
-        **Split by size, oldest-first within each half.** ``scandir`` already
-        returns the size alongside the mtime, so this costs nothing. Without
-        it, a cache holding a few huge entries and many tiny ones chews
-        through the tiny ones freeing almost nothing per delete, and reaches
-        the huge one anyway -- so the tiny ones are destroyed for nothing, and
-        each one is a recompute. Measured on 3000 x 2KB plus one 64MB entry,
-        needing 22.7MB freed: **3001 entries evicted and the whole 69.9MB
-        cache emptied**, against 1 eviction when the big entry happened to be
-        the oldest.
+        rebuilt only when it runs out: a full cache evicts on most writes, so a
+        walk per pass would put one on nearly every write. Entries this process
+        writes after it was taken join `_evict_fresh` instead (see
+        `_record_rank`). The index is compacted here when it has grown past
+        twice the directory.
         """
-        crumb = max(1, int((self._max_size_bytes or 0) * self._EVICT_CRUMB_FRACTION))
         ranks: dict[str, tuple[float, int]] = {}
         try:
             with _untracked(), os.scandir(self.cache_dir) as entries:
@@ -1285,66 +1369,70 @@ class FileBackend(CacheBackend):
             logger.debug("Could not scan %s to rank evictions", self.cache_dir,
                          exc_info=True)
 
-        # Where this process knows better, use what it knows. A read updates
-        # `last_access` in memory at once but only reaches mtime when the
-        # flusher writes it back -- up to `flush_interval` later, and never at
-        # all when the flusher is switched off. Ranking on mtime alone would
-        # then degrade to eviction by write order, and a just-read entry would
-        # be taken ahead of one nobody has touched.
-        #
-        # The two are directly comparable: `st_mtime` and `time.time()` are
-        # both seconds since the epoch.
-        # Ties are broken by the write sequence, which is exact where mtime is
-        # quantized. A filesystem records timestamps in steps -- ~0.57ms on
-        # ext4 -- and a burst of small writes is faster than that, so an entire
-        # cache-full of entries can share ONE mtime: measured at 15 entries
-        # across 2 distinct values. `sorted` is stable, so a tie group then
-        # keeps `scandir` order, which is a hash, and LRU degenerates into
-        # evicting whatever the directory happens to list first -- including
-        # the entry written moments ago, whose eviction then trips the
-        # treadmill warning on a perfectly healthy cache.
-        #
-        # `last_access` above does not cover this: it is recorded BEFORE the
-        # file is written, so mtime is the newer of the two and the override
-        # never fires on a fresh write. The write sequence is a counter this
-        # process already maintains for the warning itself, so it costs a dict
-        # lookup. Entries this process never wrote sort first within their tie
-        # group (0), which is right: it has no evidence they are hot.
+        indexed, index_clock, index_lines = self._rank_index.load()
+
+        prio: dict[str, float] = {}
+        recency: dict[str, float] = {}
         seqs: dict[str, int] = {}
         with self._lock:
-            for path, key in self._paths.items():
-                if path not in ranks:
+            self._gdsf_clock = max(self._gdsf_clock, index_clock)
+            self._clock_loaded = True
+            clock = self._gdsf_clock
+            for path, (mtime, size) in ranks.items():
+                recency[path] = mtime
+                key = self._paths.get(path)
+                meta = self._metadata_cache.get(key) if key is not None else None
+                if meta is not None:
+                    last_access = meta.get('last_access')
+                    if last_access is not None and last_access > mtime:
+                        recency[path] = last_access
+                    seqs[path] = self._write_seq_by_key.get(key, 0)
+                # Only a write or a read in this process re-bases an entry.
+                # Metadata merely LOOKED AT (`get_metadata`, which freshness
+                # checks call on a statement's producers) is not a use, and
+                # re-basing it would protect exactly the entries nobody reads.
+                if meta is not None and key in self._gdsf_base:
+                    base = self._gdsf_base[key]
+                    if base is None:
+                        base = self._gdsf_base[key] = clock
+                    prio[path] = self._priority(meta, size, base)
                     continue
-                meta = self._metadata_cache.get(key)
-                last_access = meta.get('last_access') if meta else None
-                if last_access is not None and last_access > ranks[path][0]:
-                    ranks[path] = (last_access, ranks[path][1])
-                seqs[path] = self._write_seq_by_key.get(key, 0)
+                recorded = indexed.get(self._stem(path))
+                if recorded is not None:
+                    prio[path] = recorded
+                else:
+                    # Unrecorded: rank by what is known of its cost (nothing,
+                    # for an entry this process has not even looked at) from
+                    # the start of the clock -- as old as anything can be.
+                    prio[path] = self._priority(meta or {}, size, 0.0)
 
-        ordered = sorted(ranks.items(), key=lambda kv: (kv[1][0], seqs.get(kv[0], 0)))
-        # Deques: both are drained from the front across many passes, and
-        # list.pop(0) would make that quadratic in a large cache. Each item
-        # carries the mtime it was RANKED at, so `_touched_since` can tell
-        # whether the entry has been read in the meantime.
-        self._evict_queue = deque(
-            (p, s, m) for p, (m, s) in ordered if s >= crumb)
-        self._evict_crumbs = deque(
-            (p, s, m) for p, (m, s) in ordered if s < crumb)
-        self._evict_crumb_bytes = sum(s for _p, s, _m in self._evict_crumbs)
+        ordered = sorted(ranks, key=lambda p: (prio[p], recency[p], seqs.get(p, 0)))
+        # A deque: drained from the front across many passes, and list.pop(0)
+        # would make that quadratic in a large cache. Each item carries the
+        # recency it was RANKED at, so `_touched_since` can tell whether the
+        # entry has been read in the meantime.
+        self._evict_queue = deque((p, ranks[p][1], recency[p]) for p in ordered)
+        self._rank_h = prio
+        self._evict_fresh = []
+        self._ranked = True
 
-    def _evict_order(self, need: int):
-        """The two queues, in the order this pass should consume them.
+        if index_lines > 2 * len(ranks) + 64:
+            self._rank_index.compact({self._stem(p): prio[p] for p in ordered}, clock)
 
-        Crumbs first when they can actually close the gap -- that is ordinary
-        LRU and the common case, since a cache of evenly-sized entries puts
-        everything in one queue and the other is empty. Only when the crumbs
-        provably cannot cover *need* do the larger entries go first: at that
-        point the large ones are going to be taken regardless, and taking the
-        crumbs as well destroys them for nothing.
-        """
-        if self._evict_crumb_bytes >= need:
-            return (self._evict_crumbs, self._evict_queue)
-        return (self._evict_queue, self._evict_crumbs)
+    def _pop_candidate(self) -> tuple[str, int, float, float] | None:
+        """The next victim, ``(path, size, ranked_at, priority)``: the lower
+        of the ranking's head and the freshest writes' head."""
+        head = self._evict_queue[0] if self._evict_queue else None
+        fresh = self._evict_fresh[0] if self._evict_fresh else None
+        if head is None and fresh is None:
+            return None
+        if head is not None:
+            head_key = (self._rank_h.get(head[0], 0.0), head[2])
+        if fresh is None or (head is not None and head_key <= (fresh[0], fresh[4])):
+            path, size, ranked_at = self._evict_queue.popleft()
+            return path, size, ranked_at, self._rank_h.pop(path, 0.0)
+        priority, _seq, path, size, ranked_at = heapq.heappop(self._evict_fresh)
+        return path, size, ranked_at, priority
 
     def _touched_since(self, path: str, key: str | None, ranked_at: float) -> bool:
         """Has this entry been read or rewritten since it was ranked?
@@ -1354,12 +1442,11 @@ class FileBackend(CacheBackend):
         this check that read does not protect it: measured, an entry read
         moments earlier -- with a strictly newer mtime than its neighbour --
         was still evicted first, because the queue had it at the head from
-        before the read.
+        before the read. A read raises an entry's priority, so the snapshot's
+        value is stale either way.
 
-        That is a regression against the design this queue replaced, which
-        re-sorted from live in-memory ``last_access`` on every pass. The queue
-        buys a 25x cheaper ranking; this restores the freshness it cost, for
-        one ``stat`` on an entry that is about to be deleted anyway.
+        Dropped rather than re-ranked: the next rebuild ranks it properly, and
+        re-queueing risks a loop over an entry that keeps being read.
 
         Both signals, because they cover different readers. A read in THIS
         process updates ``last_access`` in memory at once but only reaches
@@ -1398,6 +1485,7 @@ class FileBackend(CacheBackend):
                 self._metadata_cache.pop(key, None)
                 self._dirty_metadata.discard(key)
                 self._write_seq_by_key.pop(key, None)
+                self._gdsf_base.pop(key, None)
                 self._paths.pop(path, None)
             self._current_size_bytes -= freed
 
@@ -1410,7 +1498,7 @@ class FileBackend(CacheBackend):
         return freed
 
     def _check_and_evict(self) -> None:
-        """Evict items if over max size."""
+        """Evict the least valuable entries per byte while over the cap."""
         if not self._max_size_bytes:
             return
 
@@ -1427,11 +1515,11 @@ class FileBackend(CacheBackend):
         evicted_recent = False
         n_evicted = 0
         rebuilt = False
+        own_key = getattr(self._writes._tls, "current_key", None)
 
         while self._current_size_bytes > target:
-            need = self._current_size_bytes - target
-            queues = self._evict_order(need)
-            if not any(queues):
+            candidate = self._pop_candidate()
+            if candidate is None:
                 if rebuilt:
                     # Every candidate that existed when this pass began has
                     # been considered, and the cache is still over its cap --
@@ -1442,42 +1530,31 @@ class FileBackend(CacheBackend):
                     break
                 self._rebuild_evict_queue()
                 rebuilt = True
-                if not any((self._evict_queue, self._evict_crumbs)):
+                if not self._evict_queue and not self._evict_fresh:
                     break
                 continue
 
-            queue = queues[0] if queues[0] else queues[1]
-            path, size, ranked_at = queue.popleft()
-            if queue is self._evict_crumbs:
-                self._evict_crumb_bytes -= size
+            path, _size, ranked_at, priority = candidate
             key = self._paths.get(path)
 
-            # Read since it was ranked? Then it is no longer the coldest thing
-            # in the cache, whatever the snapshot said. Dropped from the queue
-            # rather than re-queued: the next rebuild ranks it properly, and
-            # re-queueing risks a loop over an entry that keeps being read.
             if self._touched_since(path, key, ranked_at):
                 continue
 
-            # Never evict a key that has a write in flight.
+            # Never evict a key that has ANOTHER write in flight.
             #
             # `delete` drains that write, and this loop runs ON the single
             # PendingWrites worker -- so draining a write QUEUED BEHIND the
             # one currently executing waits for a task that cannot start until
             # this one returns. The write thread hangs permanently, and the
-            # atexit flush behind it hangs with it.
+            # atexit flush behind it hangs with it. Reproduced against a 6KB
+            # cap; the process never exited. A path this process has never
+            # touched cannot have a write in flight here.
             #
-            # Reachable without contriving anything: an entry's mtime is still
-            # its PREVIOUS write's, because the queued write has not landed
-            # yet, so re-computing a long-idle entry while the cache sits near
-            # its cap makes that entry the obvious LRU victim. Reproduced
-            # against a 6KB cap; the process never exited.
-            #
-            # Skipping is also right on the merits. An entry being written
-            # right now is the newest thing in the cache, not the oldest, and
-            # the next write re-checks the cap anyway. A path this process has
-            # never touched cannot have a write in flight here.
-            if key is not None and self._writes.has_pending(key):
+            # The write running right now is the exception: it has already
+            # landed (this loop runs after it), nothing is left to wait for,
+            # and by value per byte the value it stored may well be the first
+            # thing that ought to go.
+            if key is not None and key != own_key and self._writes.has_pending(key):
                 continue
 
             # Was this entry written only a couple of ops ago?
@@ -1487,7 +1564,13 @@ class FileBackend(CacheBackend):
 
             if self._forget_path(path):
                 n_evicted += 1
+                with self._lock:
+                    self._gdsf_clock = max(self._gdsf_clock, priority)
 
+        if n_evicted:
+            # The clock is what lets the next process resume the ranking
+            # instead of restarting it at zero.
+            self._rank_index.append([], clock=self._gdsf_clock)
         if evicted_recent:
             self._warn_evict_after_write(n_evicted)
 
@@ -1544,7 +1627,7 @@ class FileBackend(CacheBackend):
         message claims.
         """
         sizes = [s for _p, s, _m in self._evict_queue]
-        sizes.extend(s for _p, s, _m in self._evict_crumbs)
+        sizes.extend(s for _h, _seq, _p, s, _m in self._evict_fresh)
         if not sizes:
             return None
         sizes.sort()
@@ -1633,14 +1716,19 @@ class FileBackend(CacheBackend):
                 except OSError:
                     # Best-effort removal during cache clear; file may be locked
                     logger.debug("Could not remove cache file %s during clear", f, exc_info=True)
+        # The priorities describe entries that no longer exist.
+        self._rank_index.remove()
         with self._lock:
             self._metadata_cache.clear()
             self._dirty_metadata.clear()
             self._write_seq_by_key.clear()
             self._paths.clear()
             self._evict_queue.clear()
-            self._evict_crumbs.clear()
-            self._evict_crumb_bytes = 0
+            self._rank_h.clear()
+            self._evict_fresh = []
+            self._ranked = False
+            self._gdsf_base.clear()
+            self._gdsf_clock = 0.0
             self._current_size_bytes = 0
 
     def shutdown(self) -> None:
@@ -1652,6 +1740,7 @@ class FileBackend(CacheBackend):
             self._flusher_thread.join(timeout=1.0)
         if self._initialized:
             self._flush_metadata()
+            self._rank_index.flush()
 
     def list_entries(self) -> list[dict[str, Any]]:
         self._ensure_initialized()
