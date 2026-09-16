@@ -633,7 +633,7 @@ def build(schema):
 build(Schema)                    # edit Schema, call again -> used to return the old answer
 ```
 
-<!-- claim: cash/core.py:Cash._fold_code_args @a7362464, cash/core.py:Cash._iter_code_carriers @af06e195 -->
+<!-- claim: cash/core.py:Cash._fold_code_args @0ffbe91f, cash/core.py:Cash._iter_code_carriers @af06e195 -->
 Your code reached through the arguments now folds into `state_hash`, so editing
 it invalidates. cash finds it in a class, a function, an instance (through its
 class), any of those nested in a list/tuple/set/dict, and an instance whose
@@ -648,6 +648,13 @@ integrator — folds the constant's value as well as its own bytecode, whether i
 arrives as a function, a bound method, or a callable instance. Changing `TILT`
 invalidates the call. It used not to: the code was keyed and the data it read
 was not, so a physics-breaking edit produced a green, cached test run.
+
+So do the functions that code calls — by name, through a module
+(`helpers.fun1()`), or by a name written out as a string
+(`getattr(helpers, "fun1")()`, `globals()["fun1"]()`). A function it picks by a
+value only known at runtime (`getattr(helpers, name)()`) cannot be followed; cash
+warns once, naming the method and the line
+([`KEY-DYNAMIC-DEPENDENCY`](warnings.md#key-dynamic-dependency)).
 
 This channel walks the **cached function's own bound arguments** — what the
 caller handed it, *plus any parameter default the caller left out* — and nothing
@@ -713,7 +720,7 @@ flowchart TD
     F -->|Yes| G[Return cached value]
 ```
 
-<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @a7362464 -->
+<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @0ffbe91f -->
 The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
 
 - `state_hash` folds in the function's own source hash + every

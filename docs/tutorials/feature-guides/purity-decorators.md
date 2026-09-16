@@ -731,7 +731,7 @@ won't flag on it, and any function whose body calls
 
 ### What the analyzer looks at
 
-<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @a63770e5 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @25beed4f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
+<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @af950ef0 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @25beed4f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
 The decorator-side analyzer walks the function body AND
 **module-bounded helpers** (functions defined in the same top-level
 package, or any non-installed-library code) and any **closure-bound
@@ -747,7 +747,9 @@ it flags:
     - **Raises** (see the warning box above): `eval`/`exec`/`compile`,
       `getattr(obj, name)()` with a non-constant name, `importlib`, and
       `getattr(mod, "exec")(...)` — the constant-name spelling that reaches
-      the same builtin.
+      the same builtin. Any other constant name is read as the attribute it
+      spells: `getattr(helpers, "fun1")()` is analysed, and followed as a
+      helper, exactly like `helpers.fun1()`.
     - **Warns**: calling something out of a table that cannot reach the
       cache key — one built inside the body (`t = {...}; t[key]()`), one
       hanging off a parameter (`router.table[key]()`), or a runtime namespace

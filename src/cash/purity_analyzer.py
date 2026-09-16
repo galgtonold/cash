@@ -640,6 +640,29 @@ class _PurityVisitor(ast.NodeVisitor):
             ))
             return
 
+        # getattr(obj, "name")(...) with a constant identifier is obj.name(...)
+        # spelled differently. Analysed as written it reached nothing: an edit
+        # to the function it names was served stale, with no warning
+        # (`getattr(helpers, "fun1")()`). Judged, and followed as a helper, as
+        # the attribute call it is.
+        if (
+            isinstance(func_node, ast.Call)
+            and isinstance(func_node.func, ast.Name)
+            and func_node.func.id == "getattr"
+            and len(func_node.args) == 2
+            and not func_node.keywords
+            and isinstance(func_node.args[1], ast.Constant)
+            and isinstance(func_node.args[1].value, str)
+            and func_node.args[1].value.isidentifier()
+        ):
+            spelled = ast.copy_location(ast.Call(
+                func=ast.copy_location(ast.Attribute(
+                    value=func_node.args[0], attr=func_node.args[1].value, ctx=ast.Load()),
+                    func_node),
+                args=node.args, keywords=node.keywords), node)
+            self._record_call(spelled)
+            return
+
         # Calling whatever a subscript yields -- but ONLY when the table
         # itself cannot reach the cache key. Deferred to `finalize_taint`,
         # because whether the base is a body-local depends on assignments

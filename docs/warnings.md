@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @5bc9f88c, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @52e0181e, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 The one exception is the import-time notice from `cash.experimental`: it is a
@@ -1065,6 +1065,32 @@ wrote `depends_on=[json.loads]`, or named any other stdlib or pinned
 third-party builtin, that target is not going to change under you between runs,
 so an invalidation you were never going to need costs nothing. Take it
 seriously only when the opaque target is code you compile yourself.
+
+## KEY-DYNAMIC-DEPENDENCY {#key-dynamic-dependency}
+
+<!-- claim: cash/core.py:Cash._warn_untrackable_in_carrier_once @1055dc4d -->
+**What happened.** An object you passed to a cached function carries code — a
+method of its class, or the function itself — and that code picks what it calls
+from a value at runtime: `getattr(module, name)()` with `name` in a variable,
+`eval`, a dynamic import. The message names the method, the line, the argument
+and the cached function. It is given once for each method and cached function.
+
+**Why it matters.** Cash folds the code of what you pass into the key, and the
+functions that code calls by name. A function picked by a runtime value it
+cannot follow: edit it, run again, and the old result comes back. In the cached
+function's own body the same line stops caching with an error; code reached
+through an argument is only found when the call runs, so it warns instead.
+
+**What to do.** Call the function by name where you can — `getattr(module,
+"fun1")()` with the name written out is followed, like `module.fun1()`. If the
+name really is chosen at runtime, list the candidates with
+`@cash.cache(depends_on=[...])`, or put `# @cash:assume-safe` on that line once
+you have checked that a stale result cannot matter; that silences it.
+
+**When it is safe to ignore.** When the functions that value can pick never
+change while you work — a fixed table of library functions, say — or when
+whatever they return cannot change the cached result. Put the waiver on the
+line then, so the decision is written down where the next reader looks.
 
 ## KEY-DYNAMIC-DEP-FAILED {#key-dynamic-dep-failed}
 

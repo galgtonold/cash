@@ -193,6 +193,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
                                # after it was returned; keyed by content now
     "KEY-INSTANCE-STATE",      # a bound method's instance could not be hashed;
                                # falling back to its process-local identity
+    "KEY-DYNAMIC-DEPENDENCY",  # code reached through an argument resolves a
+                               # dependency at runtime (getattr(m, name)(), eval)
     "KEY-OPAQUE-CALLABLE",     # a callable reached the call but its code could
                                # not be hashed, so editing it changes nothing
     "KEY-SOURCE-CHANGED",      # a cached function's or helper's file was edited

@@ -2095,6 +2095,53 @@ class Cash:
             return Cash._is_user_code_object(wrapped)
         return Cash._is_user_code_object(type(carrier))
 
+    _WARNED_UNTRACKABLE_CARRIER: set = set()
+
+    def _warn_untrackable_in_carrier_once(self, carrier: Any, func_name: str = "?",
+                                          param: str | None = None) -> None:
+        """Say once that code reached through an argument resolves a dependency
+        at runtime, so an edit behind it will NOT invalidate.
+
+        The cached function's own body refuses such a line
+        (``untrackable_dep``); a method of an argument's class was never
+        analysed, and ``getattr(MOD, name)()`` there served a stale result in
+        silence. ``# @cash:assume-safe`` on the line waives it, as it does in
+        the function itself.
+        """
+        from .purity_analyzer import ISSUE_UNTRACKABLE_DEP, get_analyzer
+        from .source_norm import _class_functions
+
+        functions = (_class_functions(carrier) if isinstance(carrier, type)
+                     else [getattr(carrier, "__func__", carrier)])
+        for fn in functions:
+            if not isinstance(fn, types.FunctionType):
+                continue
+            mark = (id(fn.__code__), func_name)
+            if mark in Cash._WARNED_UNTRACKABLE_CARRIER:
+                continue
+            Cash._WARNED_UNTRACKABLE_CARRIER.add(mark)
+            try:
+                issues = [i for i in get_analyzer().analyze(fn).issues
+                          if i.kind == ISSUE_UNTRACKABLE_DEP]
+            except Exception:  # noqa: BLE001 - never break a call
+                continue
+            if not issues:
+                continue
+            first = issues[0]
+            where = f"the argument `{param}` of {func_name}" if param else f"a call of {func_name}"
+            what = (
+                f"{fn.__qualname__}, reached through {where}, resolves a dependency "
+                f"from a runtime value (line {first.line}: {first.description}), so an "
+                f"edit to what it reaches will NOT invalidate the cache."
+            )
+            fix = (
+                "call what it needs by name, or name it with "
+                "@cash.cache(depends_on=[...]); put `# @cash:assume-safe` on that "
+                "line once you have checked a stale result cannot matter."
+            )
+            log_diagnostic(logger, "KEY-DYNAMIC-DEPENDENCY", what, fix)
+            warn_diagnostic(CashImpurityWarning, "KEY-DYNAMIC-DEPENDENCY", what, fix)
+
     def _warn_unhashable_code_once(self, carrier: Any, func_name: str = "?",
                                    param: str | None = None) -> None:
         """Tell the user once that a reached type's code is NOT in the key.
@@ -2318,6 +2365,8 @@ class Cash:
                         # or in the cached function itself, invalidated.
                         if self._is_user_code_carrier(carrier):
                             parts.extend(self._carrier_read_global_parts(carrier, func_name))
+                            if warn:
+                                self._warn_untrackable_in_carrier_once(carrier, func_name, param)
                     elif warn and self._is_user_code_carrier(carrier):
                         # User code we could not hash: a C-extension type, an
                         # exotic descriptor, a ``functools.partial`` (whose
@@ -6126,22 +6175,44 @@ class Cash:
 
         targets: list[Any] = []
         seen_names: set[str] = set()
+
+        def consider(value: Any) -> None:
+            if value is None or value is obj:
+                return
+            if not (isinstance(value, type) or callable(value)):
+                return
+            try:
+                if self._is_opaque(value) or not self._is_user_code_object(value):
+                    return
+            except Exception:  # noqa: BLE001 - never break a call
+                return
+            targets.append(value)
+
         for code, glb in pairs:
             for name in code.co_names:
                 if name in seen_names:
                     continue
                 seen_names.add(name)
-                value = glb.get(name)
-                if value is None or value is obj:
-                    continue
-                if not (isinstance(value, type) or callable(value)):
-                    continue
-                try:
-                    if self._is_opaque(value) or not self._is_user_code_object(value):
-                        continue
-                except Exception:  # noqa: BLE001 - never break a call
-                    continue
-                targets.append(value)
+                consider(glb.get(name))
+            # A name spelled as a string: `getattr(MOD, "fun1")()`,
+            # `globals()["fun1"]`. The string is a constant, not a loaded name,
+            # so `co_names` never had it, and an edit to `fun1` reached through
+            # an argument's method was served stale. Resolved in the code's
+            # module and in the user modules it loads; a string that only
+            # happens to match a function costs a needless recompute, never a
+            # stale value.
+            names = [c for c in code.co_consts
+                     if isinstance(c, str) and c.isidentifier() and c not in seen_names]
+            if not names:
+                continue
+            modules = [glb.get(n) for n in code.co_names]
+            modules = [m for m in modules if isinstance(m, types.ModuleType)
+                       and self._is_user_module(m)]
+            for name in names:
+                seen_names.add(name)
+                consider(glb.get(name))
+                for module in modules:
+                    consider(getattr(module, name, None))
         return targets
 
     def _code_surface_hash(self, obj: Any) -> str | None:
