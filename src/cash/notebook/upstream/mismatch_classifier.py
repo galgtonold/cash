@@ -9,6 +9,7 @@ dicts. Pure-phase invariants land in a later refactor.
 """
 
 import ast
+import hashlib
 import logging
 import re
 import types
@@ -780,7 +781,8 @@ class MismatchClassifier:
         if inp_producing_code is None:
             return False
         normalized_inp_code = re.sub(r'# __iteration_context__:.*?\n', '', inp_producing_code).strip()
-        return normalized_inp_code not in simulation_trace_codes
+        return (normalized_inp_code not in simulation_trace_codes
+                and self._ran_the_notebook_version(inp, simulation_trace_codes))
 
     def _all_tainted_inputs_valid(
         self,
@@ -848,6 +850,24 @@ class MismatchClassifier:
             logger.debug("[UPSTREAM] Tainted stmt, inputs missing, cascading: %s...", stmt_code[:60])
         return set(), 0.0, 0.0, False
 
+    def _ran_the_notebook_version(self, inp: str, simulation_trace_codes: set[str]) -> bool:
+        """Whether the kernel has run, for *inp*, a statement the notebook holds now.
+
+        A value built by code that is not in the notebook is trusted as an
+        unsaved edit: the user changed a cell, ran it and has not saved. Then
+        the saved version ran before it, so it is in the variable's history.
+        The other way round it is not: an edit that was saved but never run
+        leaves the old value in memory, and trusting it served it. r24s5 edited
+        ``models = {...}`` and ran a cell that needed only the edited function,
+        then one whose back-test loop reads ``models``: the loop re-ran on the
+        dict the old statement had built (silent; old and new code agreed).
+        """
+        history = self.executed_cell_hashes.get(inp)
+        if not history:
+            return False
+        return any(hashlib.sha256(code.encode('utf-8')).hexdigest() in history
+                   for code in simulation_trace_codes)
+
     def _check_inp_lineage_skip(
         self,
         inp: str,
@@ -871,7 +891,7 @@ class MismatchClassifier:
         if inp_prod_code is None:
             return False
         norm_code = re.sub(r'# __iteration_context__:.*?\n', '', inp_prod_code).strip()
-        if norm_code not in simulation_trace_codes:
+        if norm_code not in simulation_trace_codes and self._ran_the_notebook_version(inp, simulation_trace_codes):
             if self.debug:
                 logger.debug("[UPSTREAM] Input '%s' lineage mismatch but produced by unsaved edit. Trusting in-memory.", inp)
             return True
