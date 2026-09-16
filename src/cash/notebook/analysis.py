@@ -300,6 +300,16 @@ class _FlowVisitor(ast.NodeVisitor):
                 if len(self.scopes) == 1:
                     self.outputs.add(parent_name)
                     self.modified_objects.add(parent_name)
+            # What selects the element is read too: `too_high` in
+            # `sales.loc[too_high, ['price']] /= 100`. Unread, it was no input,
+            # so a restart rebuilt the statement without its producer --
+            # UpstreamStateError, `name 'too_high' is not defined` (round 25,
+            # r25s2) -- and an edit to the mask did not re-key the statement.
+            target = node.target
+            while isinstance(target, (ast.Subscript, ast.Attribute)):
+                if isinstance(target, ast.Subscript):
+                    self.visit(target.slice)
+                target = target.value
         if node.value:
             self.visit(node.value)
 
