@@ -49,7 +49,7 @@ class NoCache(P.Policy):
         pass
 
 
-def simulate(params: Params, disk, ram, live_hints=False):
+def simulate(params: Params, disk, ram, live_hints=False, touch_hints=False, liveset_hints=False):
     proj = Project(params)
     eng = Engine(proj, disk, ram)
     frontier = None
@@ -58,6 +58,22 @@ def simulate(params: Params, disk, ram, live_hints=False):
         if kind == "restart":
             eng.restart()
         elif kind == "run":
+            if touch_hints:
+                # cash's upstream simulator computes the current key of every
+                # statement above the cell before it runs; loop iterations it
+                # cannot enumerate without executing, so they are not touched.
+                keys = [proj.key(sid) for sid in proj.nb_stmts[op[1]]
+                        if proj.stmts[sid].cell <= op[2] and not proj.stmts[sid].loop_iters]
+                for pol in (disk, ram):
+                    if pol is not None:
+                        pol.hint("touch", keys=keys)
+            if liveset_hints and frontier is not None:
+                # the notebook's FULL live set: every top-level statement of
+                # its current source (loop iterations are not enumerable)
+                nb = op[1]
+                keys = {proj.key(sid) for sid in proj.nb_stmts[nb]
+                        if proj.stmts[sid].cell < frontier[nb] and not proj.stmts[sid].loop_iters}
+                disk.hint("liveset", nb=nb, keys=keys)
             eng.run_cell(op[1], op[2])
         elif kind in ("frontier", "edited"):
             if kind == "frontier":
@@ -125,6 +141,10 @@ POLICIES = {
     "Supersede2+GDSF-noage": lambda cap: P.SupersedeAware(cap, keep=2, inner=P.GDSF, age_on_dead=False),
     "Supersede+CostLRU-t500": lambda cap: P.SupersedeAware(cap, keep=1, inner=P.CostLRU, inner_kw={"tau": 500}),
     "CostLRU-t8000": lambda cap: P.CostLRU(cap, tau=8000),
+    "GDSF+touch": lambda cap: P.TouchedGDSF(cap),
+    "OwnerGC-g5": lambda cap: P.OwnerGC(cap, grace=5),
+    "OwnerGC-g20": lambda cap: P.OwnerGC(cap, grace=20),
+    "OwnerGC-g100": lambda cap: P.OwnerGC(cap, grace=100),
     "GDSF-s8": lambda cap: P.SampledGDSF(cap, k=8),
     "GDSF-s32": lambda cap: P.SampledGDSF(cap, k=32),
     "GDSF-s128": lambda cap: P.SampledGDSF(cap, k=128),
@@ -132,6 +152,8 @@ POLICIES = {
                                                         age_on_dead=False),
 }
 NEEDS_LIVE = {n for n in POLICIES if n.startswith(("LiveGC", "Hybrid"))}
+NEEDS_TOUCH = {"GDSF+touch"}
+NEEDS_LIVESET = {n for n in POLICIES if n.startswith("OwnerGC")}
 
 
 def main():
@@ -198,7 +220,8 @@ def main():
                 t0 = time.time()
                 pol = POLICIES[n](cap)
                 if a.tier == "disk":
-                    eng = simulate(prm, pol, P.CashRAM(ram_cap), live_hints=n in NEEDS_LIVE)
+                    eng = simulate(prm, pol, P.CashRAM(ram_cap), live_hints=n in NEEDS_LIVE,
+                                   touch_hints=n in NEEDS_TOUCH, liveset_hints=n in NEEDS_LIVESET)
                     h = eng.disk_hits
                 else:
                     eng = simulate(prm, Unlimited(), pol, live_hints=n in NEEDS_LIVE)

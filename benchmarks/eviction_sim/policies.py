@@ -627,6 +627,27 @@ class GDSF(Policy):
         return None
 
 
+class TouchedGDSF(GDSF):
+    """GDSF where "the notebook still needs this" counts as a use.
+
+    Before a cell runs, cash's upstream simulator computes the key every
+    statement above it would request. ``hint('touch', keys=...)`` re-bases
+    those entries to the current clock (as a read would), without counting a
+    hit. Superseded entries stop being touched and age out through the
+    clock; nothing is ever marked dead, so an entry the simulator cannot
+    enumerate (loop iterations, call units, decorator calls) is simply
+    ranked as plain GDSF ranks it.
+    """
+    name = "GDSF+touch"
+
+    def hint(self, kind, **kw):
+        if kind != "touch":
+            return
+        for key in kw["keys"]:
+            if key in self.size:
+                self._push(key)          # H = L(now) + freq * cost / size
+
+
 class SampledGDSF(GDSF):
     """GDSF that evicts the lowest-H of ``k`` uniformly sampled entries
     instead of the global minimum (the approach Redis takes for LRU/LFU).
@@ -837,6 +858,63 @@ class HybridGC(SupersedeAware):
 
     def _dead(self, key):
         return key not in self.live and super()._dead(key)
+
+
+class OwnerGC(_DeadFirst):
+    """The deployable form of generation-awareness for notebooks.
+
+    Each top-level statement entry is tagged at write time with the NOTEBOOK
+    that wrote it (loop iterations and call units are not tagged: nothing
+    enumerates them). ``hint('liveset', nb=..., keys=...)`` delivers that
+    notebook's full current live set -- the key every top-level statement of
+    its current source would request. An entry is dead only if all of:
+
+    * it is tagged, and its owner's live set is known;
+    * it is not in that live set;
+    * it has been out of it for more than ``grace`` of the owner's runs,
+      so the version an undo would restore is still protected.
+
+    Everything else is ranked by the inner policy (GDSF, touched: being in a
+    live set re-bases an entry as a read would).
+    """
+
+    def __init__(self, cap, grace=20, inner=GDSF):
+        super().__init__(cap, inner=inner, age_on_dead=False)
+        self.grace = grace
+        self.name = f"OwnerGC(grace={grace})+{inner.__name__}"
+        self.owner = {}          # key -> notebook
+        self.live = {}           # notebook -> set of keys
+        self.runs = defaultdict(int)
+        self.last_live = {}      # key -> owner's run count when last live
+
+    def hint(self, kind, **kw):
+        if kind != "liveset":
+            return
+        nb, keys = kw["nb"], kw["keys"]
+        self.runs[nb] += 1
+        self.live[nb] = keys
+        for k in keys:
+            self.last_live[k] = self.runs[nb]
+            if k in self.g.size:
+                self.g.now = self.now
+                self.g._push(k)          # touch: re-base to the current clock
+
+    def _on_insert(self, key, size, cost, meta):
+        super()._on_insert(key, size, cost, meta)
+        if meta and not meta.get("loop") and meta.get("nb") is not None:
+            self.owner[key] = meta["nb"]
+            self.last_live[key] = self.runs[meta["nb"]]
+
+    def _on_remove(self, key):
+        super()._on_remove(key)
+        self.owner.pop(key, None)
+        self.last_live.pop(key, None)
+
+    def _dead(self, key):
+        nb = self.owner.get(key)
+        if nb is None or nb not in self.live or key in self.live[nb]:
+            return False
+        return self.runs[nb] - self.last_live.get(key, 0) > self.grace
 
 
 class LiveSetGC(_DeadFirst):

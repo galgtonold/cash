@@ -199,7 +199,7 @@ class Engine:
 
     def _lookup(self, key, size, compute, slot):
         self.requests += 1
-        meta = {"slot": slot}
+        meta = {"slot": slot, "nb": self.proj.stmts[slot[0]].nb, "loop": len(slot) > 1}
         if self.ram is not None and self.ram.access(key, size, compute - self.ram_cost(size), meta):
             self.ram_hits += 1
             self.hits += 1
@@ -221,7 +221,7 @@ class Engine:
         return False
 
     def _store(self, key, size, compute, slot):
-        meta = {"slot": slot}
+        meta = {"slot": slot, "nb": self.proj.stmts[slot[0]].nb, "loop": len(slot) > 1}
         # RAM admission = Gate 0 (10 ms floor) + Gate A against the RAM copy cost
         if (self.ram is not None and compute >= 0.01
                 and self.ram_cost(size) <= max(0.05, 0.8 * compute)):
