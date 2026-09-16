@@ -559,8 +559,12 @@ class ReexecutionPlanner:
             for v in sorted(inputs):
                 if v in user_ns or hasattr(builtins, v):
                     continue
-                if any(p < i and v in simulation_trace[p][1] for p in scheduled):
-                    continue
+                # The LATEST producer before the statement must run, not just
+                # any earlier one: a scheduled `sales['timestamp'] = ...` does
+                # not stand in for the `sales['refund'] = ...` between it and
+                # its reader. Accepting it rebuilt a cleaning cell without the
+                # refund write after a restart, and the summary below showed 0
+                # refunds for three stores, silently (round 25, r25s2).
                 p = self._latest_producer(simulation_trace, v, before=i)
                 if p is not None and p not in scheduled:
                     scheduled.add(p)
