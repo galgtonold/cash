@@ -32,8 +32,9 @@ reaches this module when the loop is decomposed per-iteration.
 ``for_handler._should_execute_loop_as_single_unit`` routes a large-enough loop
 to the single-unit fast path instead, gated by
 ``_MIN_ITERATIONS_FOR_SINGLE_UNIT``, ``_PER_STMT_OVERHEAD_SEC``, and
-``_MIN_OVERHEAD_SEC`` in that module. Calls inside a single-unit loop never
-reach the interceptor at all. For the precise threshold, see
+``_MIN_OVERHEAD_SEC`` in that module. Calls inside a single-unit loop are
+searched per body statement (``_eligible_calls_in_loop``) and cached only when
+keyed on the values they receive. For the precise threshold, see
 ``docs/known-limitations.md``'s "A long for-append loop can stop caching"
 section, whose numbers are pinned to those constants by a claim-anchor test
 (``tests/docs/test_claim_anchors.py``).
@@ -43,7 +44,7 @@ import ast
 import copy
 import types
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -162,6 +163,10 @@ class CallSite:
     #: (round 25, r25s3). Under unpacking, the callee alone: the key then
     #: holds every value received, with its keyword.
     content_source: str = ""
+    #: Inside a loop cached as one unit (see ``_eligible_calls_in_loop``): no
+    #: name read there has a lineage the key can trust, so the call is cached
+    #: only when keyed on what it receives, and otherwise runs plain.
+    in_loop_unit: bool = False
 
 
 def interceptable(fn) -> bool:
@@ -489,7 +494,8 @@ def wrap_eligible_calls(
     sites: list[CallSite] = []
     seen: Counter[str] = Counter()
     for stmt in new_tree.body:
-        calls = _eligible_calls_in_scope(stmt, skip)
+        in_loop_unit = isinstance(stmt, ast.For) and namespace is not None
+        calls = _eligible_calls_in_scope(stmt, skip, namespace=namespace)
         if not calls:
             continue
         # Computed ONCE per enclosing statement, before any call inside it is
@@ -520,6 +526,7 @@ def wrap_eligible_calls(
                     content_names=_content_names(call, local),
                     name_arg_positions=_name_arg_positions(call, local),
                     content_source=_content_source(call, local),
+                    in_loop_unit=in_loop_unit,
                 )
             )
             call.func = ast.Call(
@@ -660,7 +667,9 @@ def eligible_call_nodes(stmt: ast.stmt) -> list[ast.Call]:
     entries for one piece of work.
 
     **Only simple statements are searched, and that is a safety rule rather
-    than a simplification.** Cash can execute a loop as a single unit, in which
+    than a simplification.** (A loop run as one unit is searched per body
+    statement by ``_eligible_calls_in_loop``, which applies this rule to each.)
+    Cash can execute a loop as a single unit, in which
     case the node handed here is the ``ast.For`` itself — which has no
     assignment target, so the free-variable rule would exclude nothing and every
     call in the body would look eligible, including the side-effecting one the
@@ -679,10 +688,16 @@ def eligible_call_nodes(stmt: ast.stmt) -> list[ast.Call]:
 
 def _eligible_calls_in_scope(
     stmt: ast.stmt, skip: Callable[[ast.Call, frozenset[str]], bool] | None = None,
+    namespace: Mapping[str, object] | None = None,
 ) -> list[tuple[ast.Call, frozenset[str]]]:
     """:func:`eligible_call_nodes`, each call paired with the names an enclosing
     comprehension or lambda binds around it (see ``CallSite.local_arg_positions``).
-    A call *skip* returns ``True`` for is not taken; its inside is searched."""
+    A call *skip* returns ``True`` for is not taken; its inside is searched.
+
+    With *namespace*, a ``for`` statement is searched too (see
+    :func:`_eligible_calls_in_loop`)."""
+    if isinstance(stmt, ast.For) and namespace is not None:
+        return _eligible_calls_in_loop(stmt, skip, namespace)
     if not isinstance(stmt, _SIMPLE_STATEMENTS):
         return []
     targets = _target_names(stmt)
@@ -690,6 +705,109 @@ def _eligible_calls_in_scope(
     for root in _search_roots(stmt):
         _collect(root, targets, found, frozenset(), skip)
     return found
+
+
+def _eligible_calls_in_loop(
+    loop: ast.For, skip: Callable[[ast.Call, frozenset[str]], bool] | None,
+    namespace: Mapping[str, object],
+) -> list[tuple[ast.Call, frozenset[str]]]:
+    """The eligible calls of each simple statement in a loop cached as ONE unit.
+
+    A long loop runs as a single statement (``for_handler.
+    _should_execute_loop_as_single_unit``), and calls inside it never reached
+    the interceptor: fixing one store's data in r25s5's 360-iteration fit loop
+    re-fitted all 720 models. The free-variable rule stays per statement, as
+    per-iteration decomposition applies it: each body statement is searched
+    against its own targets, and an expression statement's own call is still
+    its effect, never taken (``log_it(x)``).
+
+    What the unit adds is scope. A name the loop binds or writes anywhere has
+    no lineage of its own inside it -- the unit's lineage is the whole loop's
+    -- so it is local, as a comprehension's variable is: an argument reading it
+    is keyed on its value, and a callee reading it is not taken. Neither is a
+    call whose callee, or a function or class it reaches, reads such a name as
+    a global (``def scaled(v): return sum(v) * FACTOR`` with ``FACTOR`` set in
+    the loop): nothing in the key could see it. A callee that cannot be found
+    statically is not taken either.
+    """
+    from cash.notebook.call_unit import _global_names_reached
+
+    written = frozenset(_loop_bound_names(loop))
+    # And every plain name an argument reads. The unit updates no lineage
+    # between iterations, so a global some other call in the loop mutates
+    # (`update(conf)`, `bump()`) would be keyed on its state before the loop.
+    # Its value, hashed per call, cannot be. The runtime keys such a call on
+    # content or not at all (`CallSite.in_loop_unit`).
+    local = written | frozenset(_loop_argument_names(loop, namespace))
+    reached: dict[int, bool] = {}
+
+    def reads_loop_names(call: ast.Call) -> bool:
+        callee = _static_callee(call.func, namespace)
+        if callee is _NOT_FOUND:
+            return True
+        key = id(callee)
+        if key not in reached:
+            try:
+                reached[key] = bool(_global_names_reached(callee) & written)
+            except Exception:  # noqa: BLE001 - unknown reach: not taken
+                reached[key] = True
+        return reached[key]
+
+    def loop_skip(call: ast.Call, inner: frozenset[str]) -> bool:
+        if reads_loop_names(call):
+            return True
+        return skip is not None and skip(call, inner)
+
+    found: list[tuple[ast.Call, frozenset[str]]] = []
+    for stmt in _loop_simple_statements(loop.body):
+        targets = _target_names(stmt)
+        for root in _search_roots(stmt):
+            _collect(root, targets, found, local, loop_skip)
+    return found
+
+
+def _loop_argument_names(loop: ast.For, namespace: Mapping[str, object]) -> set[str]:
+    """Names read inside any call's arguments in *loop*, other than modules,
+    classes and functions (those are code, keyed as such)."""
+    names: set[str] = set()
+    for node in ast.walk(loop):
+        if not isinstance(node, ast.Call):
+            continue
+        for value in [*node.args, *(kw.value for kw in node.keywords)]:
+            for name in _names_read(value):
+                bound = namespace.get(name, _NOT_FOUND)
+                if isinstance(bound, (types.ModuleType, type, types.FunctionType,
+                                      types.BuiltinFunctionType)):
+                    continue
+                names.add(name)
+    return names
+
+
+def _loop_simple_statements(body: list[ast.stmt]):
+    """Simple statements of a loop body, through nested ``for`` and ``if``."""
+    for stmt in body:
+        if isinstance(stmt, _SIMPLE_STATEMENTS):
+            yield stmt
+        elif isinstance(stmt, (ast.For, ast.If)):
+            yield from _loop_simple_statements(stmt.body)
+            yield from _loop_simple_statements(stmt.orelse)
+
+
+def _loop_bound_names(loop: ast.For) -> set[str]:
+    """Every name *loop* binds, deletes or writes into, anywhere inside it."""
+    names: set[str] = set()
+    for node in ast.walk(loop):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            names.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names.update((a.asname or a.name).split(".")[0] for a in node.names)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            names.update(node.names)
+        elif isinstance(node, ast.stmt) and isinstance(node, _SIMPLE_STATEMENTS):
+            names |= _target_names(node)
+    return names
 
 
 def _search_roots(stmt: ast.stmt) -> list[ast.AST]:

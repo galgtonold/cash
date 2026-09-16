@@ -1467,6 +1467,8 @@ class CallUnit:
         try:
             loop_vars = self._current_loop_vars()
             by_content = fn is not None and _keys_by_content(fn, site, args, kwargs, loop_vars)
+            if getattr(site, "in_loop_unit", False) and not by_content:
+                return None
             arg_digests = self._arg_digests(site, args, kwargs, full=by_content)
             name_digests = self._name_digests(site, args, kwargs) if by_content else None
             if by_content and loop_vars:
