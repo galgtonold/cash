@@ -153,6 +153,14 @@ class CallSite:
     #: hold such a value instead of the name's lineage (see
     #: ``call_unit.call_cache_key``'s *name_digests*).
     name_arg_positions: tuple[tuple[str, int], ...] = ()
+    #: The call as its content key sees it: each computed argument replaced by
+    #: a placeholder for its position (``fit_score(_arg0)``). Under content
+    #: keying that argument's value is in the key, so how it was spelled is
+    #: not: the sweep's ``make_features(cleaned[mid], W)`` and the pick's
+    #: ``make_features(cleaned[mid], BEST_W)`` hand ``fit_score`` the same
+    #: features, and keyed on the text the pick re-fitted all of them
+    #: (round 25, r25s3). Empty under unpacking, which is never content-keyed.
+    content_source: str = ""
 
 
 def interceptable(fn) -> bool:
@@ -510,6 +518,7 @@ def wrap_eligible_calls(
                     local_arg_positions=_local_arg_positions(call, local),
                     content_names=_content_names(call, local),
                     name_arg_positions=_name_arg_positions(call, local),
+                    content_source=_content_source(call, local),
                 )
             )
             call.func = ast.Call(
@@ -563,6 +572,28 @@ def _content_names(call: ast.Call, local: frozenset[str]) -> frozenset[str]:
         else:
             inside |= _names_read(value)
     return frozenset(inside - elsewhere - local)
+
+
+def _content_source(call: ast.Call, local: frozenset[str]) -> str:
+    """*call* with its computed arguments as positional placeholders (see
+    ``CallSite.content_source``). Bare names stay: one whose value is too big
+    to hash keeps its lineage by name, and a placeholder would let
+    ``f(A, B)`` and ``f(B, A)`` share a key."""
+    if _call_has_unpacking(call):
+        return ""
+    computed = set(_computed_arg_positions(call, local))
+    shape = copy.deepcopy(call)
+    for i in range(len(shape.args)):
+        if i in computed:
+            shape.args[i] = ast.Name(id=f"_arg{i}", ctx=ast.Load())
+    offset = len(shape.args)
+    for i, kw in enumerate(shape.keywords):
+        if offset + i in computed:
+            kw.value = ast.Name(id=f"_arg{offset + i}", ctx=ast.Load())
+    try:
+        return ast.unparse(shape)
+    except Exception:  # noqa: BLE001 - degrade to the spelled source
+        return ""
 
 
 def _name_arg_positions(call: ast.Call, local: frozenset[str]) -> tuple[tuple[str, int], ...]:

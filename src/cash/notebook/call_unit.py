@@ -470,14 +470,21 @@ def call_cache_key(
     every call would cost more than the dict lookup it replaces.
     """
     free_names = set(site.free_names)
+    source, occurrence = site.source, site.occurrence_index
     if by_content:
         free_names -= site.content_names
         free_names -= set(name_digests or ())
+        # The call's shape, not its spelling: the computed arguments' values
+        # are in the key. And no occurrence: the same call on the same values
+        # twice in a cell is the same result, which is what content keying
+        # already asserts across statements.
+        if getattr(site, "content_source", ""):
+            source, occurrence = site.content_source, 0
     base = compute_cache_key(
-        site.source,
+        source,
         free_names,
         ctx=ctx,
-        occurrence_index=site.occurrence_index,
+        occurrence_index=occurrence,
         namespace="call",
     ).cache_key
     # Refuse rather than mint a key we cannot justify. `computed_arg_positions`
@@ -790,6 +797,62 @@ def _nbytes(value) -> int:
     if isinstance(value, (str, bytes)):
         return len(value)
     return 0
+
+
+def _global_names_reached(fn, seen: set[int] | None = None, depth: int = 0) -> set[str]:
+    """Global names *fn* loads, and those of the functions it reaches, bounded."""
+    seen = set() if seen is None else seen
+    code = getattr(fn, "__code__", None)
+    if code is None or id(fn) in seen or depth > 6:
+        return set()
+    seen.add(id(fn))
+    names = set(_code_names(code))
+    namespace = getattr(fn, "__globals__", None) or {}
+    for name in list(names):
+        value = namespace.get(name)
+        if isinstance(value, _types.FunctionType):
+            names |= _global_names_reached(value, seen, depth + 1)
+        elif isinstance(value, type) and id(value) not in seen:
+            # A class the callee builds or calls into: its methods read globals too.
+            seen.add(id(value))
+            for member in vars(value).values():
+                member = getattr(member, "__func__", member)
+                if isinstance(member, _types.FunctionType):
+                    names |= _global_names_reached(member, seen, depth + 1)
+    return names
+
+
+def _loop_vars_the_call_can_read(fn, site: CallSite, loop_vars: Mapping[str, object],
+                                 name_digests: Mapping[str, str] | None) -> dict[str, object]:
+    """The enclosing loops' variables a content-keyed call can still read
+    without them being in its key.
+
+    A loop variable is in a call's key to close a channel the arguments do not
+    cover: hidden state behind a name, or a global the callee reads. Keyed on
+    what it receives, a call's arguments are hashed by value, so a loop
+    variable passed in (`make_features(cleaned[mid], win)`) is already there,
+    and one the call never reads cannot change its result. Kept anyway, it
+    made the sweep's keys differ from the same call outside a loop: scoring
+    with the chosen window re-fitted all 200 machines the sweep had just fitted
+    (round 25, r25s3). Kept: a loop variable the callee, or a function it
+    calls, reads as a global; and one named in the call itself but not hashed
+    by value (an argument too big to hash per call). Only a variable the
+    arguments carry is dropped: one the call does not mention stays, since
+    what the callee can reach is followed through functions and classes but
+    not every path (a dispatch table, an object's attribute).
+    """
+    hashed = set(name_digests or ()) | set(site.content_names)
+    reached = None
+    kept = {}
+    for key, value in loop_vars.items():
+        bare = key.split(":", 1)[1] if ":" in key else key
+        if bare in hashed:
+            if reached is None:
+                reached = _global_names_reached(fn)
+            if bare not in reached:
+                continue
+        kept[key] = value
+    return kept
 
 
 def _keys_by_content(fn, site: CallSite, args: tuple, kwargs: dict,
@@ -1404,6 +1467,8 @@ class CallUnit:
             by_content = fn is not None and _keys_by_content(fn, site, args, kwargs, loop_vars)
             arg_digests = self._arg_digests(site, args, kwargs, full=by_content)
             name_digests = self._name_digests(site, args, kwargs) if by_content else None
+            if by_content and loop_vars:
+                loop_vars = _loop_vars_the_call_can_read(fn, site, loop_vars, name_digests)
             return call_cache_key(
                 site,
                 ctx=self._ctx_provider(),

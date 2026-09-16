@@ -171,3 +171,22 @@ def test_a_setting_passed_by_name_still_refits_when_its_value_changes(nb_runner)
 
     assert "MODELS 168.0" in nb_runner.get_output(4), nb_runner.get_output(4)
     assert _fits(nb_runner) - 6 == 6
+
+
+# Round 25's r25s3 swept windows in a loop -- `for win in WINDOWS: sc = {mid:
+# fit_score(make_features(cleaned[mid], win)) ...}` -- then scored every machine
+# with the chosen window in the next cell, `{... make_features(cleaned[mid],
+# BEST_WIN) ...}`: all 200 fits ran again. The sweep's keys carried the loop's
+# variable; the pick, outside any loop, had none to match.
+PICK = ("BEST_W = 5\n"
+        "best = {mid: fit_score(make_features(cleaned[mid], BEST_W)) for mid in sorted(cleaned)}\n"
+        "print('BEST', round(sum(best.values()), 6))")
+
+
+def test_the_chosen_setting_is_served_from_the_sweep(nb_runner):
+    nb_runner.create_notebook(_cells() + [PICK])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    assert "BEST" in nb_runner.get_output(6), nb_runner.get_output(6)
+    assert _fits(nb_runner) == 12, "the pick re-fitted what the sweep had just fitted"
