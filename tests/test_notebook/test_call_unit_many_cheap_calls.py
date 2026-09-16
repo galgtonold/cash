@@ -81,3 +81,21 @@ def test_expensive_calls_are_never_run_plain_to_measure_them(call_unit_harness, 
         wrapped(i)
 
     assert ran == [], "an expensive call was run again instead of served"
+
+
+def test_calls_a_hit_could_not_beat_stop_being_cached(call_unit_harness, slow_lookup):
+    """Round 25 (r25s5): ``add_features(g)`` over 360 groups, ~5 ms a call,
+    cost ~8 ms more a call to cache and still under 4x its work, so it kept
+    being cached. Keying and looking it up alone cost as much as the call: a
+    hit would never have been faster. Measured on the same samples, a site
+    whose key and lookup cost at least the call runs plain."""
+    def work(v):
+        time.sleep(0.0015)         # under the 2 ms lookup; well under 4x the miss
+        return v * 2
+
+    unit = call_unit_harness(lineage={"work": "w"}, user_ns={})
+    wrapped = unit.wrap(work, SITE)
+
+    assert [wrapped(i) for i in range(N)] == [i * 2 for i in range(N)]
+
+    assert len(slow_lookup) == cu._GUARD_AFTER_CALLS, "calls no hit could beat kept being looked up"

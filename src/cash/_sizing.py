@@ -67,11 +67,36 @@ def _index_bytes(index: Any) -> int:
     return int(index.nbytes)
 
 
+def _arrays_bytes(obj: Any) -> int | None:
+    """A frame's column arrays summed straight from its block manager, or None
+    when a column needs a closer look (objects, categories) or the manager's
+    shape is not the one known. ``items()`` boxes every column as a Series:
+    ~1.5 ms a call for a 20-column group frame, sized once per element of a
+    comprehension over 360 of them (round 25, r25s5)."""
+    try:
+        arrays = obj._mgr.arrays
+    except Exception:  # noqa: BLE001 - a private attribute: any surprise means "no"
+        return None
+    total = 0
+    for arr in arrays:
+        dtype = getattr(arr, "dtype", None)
+        if dtype is None or _holds_python_objects(dtype) or str(dtype) == "category":
+            return None
+        nbytes = getattr(arr, "nbytes", None)
+        if not isinstance(nbytes, int):
+            return None
+        total += nbytes
+    return total
+
+
 def pandas_nbytes(obj: Any) -> int | None:
     """The size of a DataFrame or Series, index included; None for anything else."""
     kind = type(obj).__name__
     try:
         if kind == "DataFrame":
+            fast = _arrays_bytes(obj)
+            if fast is not None:
+                return _index_bytes(obj.index) + fast
             return _index_bytes(obj.index) + sum(_column_bytes(col) for _, col in obj.items())
         if kind == "Series":
             return _index_bytes(obj.index) + _column_bytes(obj)

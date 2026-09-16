@@ -666,6 +666,10 @@ _GUARD_AFTER_CALLS = 50
 _GUARD_CHEAP_BELOW_S = 0.05
 _PLAIN_SAMPLES = 5
 _OVERHEAD_FACTOR = 3.0
+#: ... and when keying and looking a call up costs more than this share of the
+#: call itself: the hit that follows also restores the value, so it would save
+#: next to nothing.
+_HIT_MUST_SAVE = 0.75
 
 
 @dataclasses.dataclass
@@ -674,6 +678,9 @@ class _SiteRun:
 
     calls: int = 0
     total_s: float = 0.0
+    #: Of ``total_s``, what building the key and looking it up cost: all a
+    #: hit pays, so a call cheaper than it is never worth caching.
+    key_s: float = 0.0
     computed: int = 0
     compute_s: float = 0.0
     probing: bool = False
@@ -792,6 +799,10 @@ def _nbytes(value) -> int:
         return int(value.nbytes)
     pd = sys.modules.get("pandas")
     if pd is not None and isinstance(value, (pd.DataFrame, pd.Series)):
+        from cash._sizing import pandas_nbytes
+        sized = pandas_nbytes(value)
+        if sized is not None:
+            return int(sized)
         usage = value.memory_usage(index=True, deep=False)
         return int(usage.sum() if hasattr(usage, "sum") else usage)
     if isinstance(value, (str, bytes)):
@@ -938,6 +949,7 @@ class CallUnit:
         #: What the call just made would have cost to compute: its run time on
         #: a miss, its recorded cost on a hit, ``None`` when it ran plain.
         self._last_compute: float | None = None
+        self._last_key_s: float | None = None
         #: Cache keys of sites known to mutate an argument or consume RNG,
         #: discovered by observing a MISS (see `wrap`). Permanent for the life
         #: of this `CallUnit` (one notebook session): once a site is known to
@@ -1004,17 +1016,26 @@ class CallUnit:
                     run.probing = False
                     cached = run.total_s / run.calls
                     plain = run.plain_s / run.plain_n
-                    run.plain = cached > (1 + _OVERHEAD_FACTOR) * plain
+                    keyed = run.key_s / run.calls
+                    # Too dear to cache, or a hit could not save a quarter of
+                    # the call: a hit pays the key and lookup, then the restore
+                    # (round 25, r25s5: 4.4 ms calls, ~4 ms to key).
+                    run.plain = (cached > (1 + _OVERHEAD_FACTOR) * plain
+                                 or keyed >= _HIT_MUST_SAVE * plain)
                     run.decided = True
                     trace_event("call_site_decided", source=site.source, calls=run.calls,
                                 cached_ms=round(cached * 1000, 3),
+                                keyed_ms=round(keyed * 1000, 3),
                                 plain_ms=round(plain * 1000, 3), plain=run.plain)
                 return result
             self._last_compute = None
+            self._last_key_s = None
             started = _time.perf_counter()
             result = invoke(*args, **kwargs)
             run.total_s += _time.perf_counter() - started
             run.calls += 1
+            if self._last_key_s is not None:
+                run.key_s += self._last_key_s
             if self._last_compute is not None:
                 run.compute_s += self._last_compute
                 run.computed += 1
@@ -1034,6 +1055,7 @@ class CallUnit:
             # a module" filter genuinely depends on the live namespace. Empty
             # for nearly every callee, and every branch below short-circuits on
             # empty, so an ordinary call pays one memo lookup.
+            key_started = _time.perf_counter()
             mutated_globals = callee_mutated_globals(fn)
             key = self._build_key(
                 site, args, kwargs,
@@ -1055,6 +1077,7 @@ class CallUnit:
                 return fn(*args, **kwargs)
 
             hit, value, recorded_cost, metadata = self._lookup(key)
+            self._last_key_s = _time.perf_counter() - key_started
             if hit:
                 value, captured_globals = _unwrap_callee_globals(value, metadata)
                 if value is _UNWRAP_FAILED:

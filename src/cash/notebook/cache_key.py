@@ -405,16 +405,36 @@ _ATTRIBUTE_OPS = frozenset({
 })
 
 
-def _global_names(code_obj: Any) -> set[str]:
+#: code object -> its global names. A code object never changes, and a call
+#: made per element of a comprehension disassembled its callee every time:
+#: 1,470 walks for 355 calls, a quarter of what caching them cost (round 25,
+#: r25s5).
+_GLOBAL_NAMES_MEMO: dict[Any, frozenset[str]] = {}
+
+
+def _global_names(code_obj: Any) -> frozenset[str]:
     """``co_names`` entries *code_obj* uses as something other than an attribute."""
     if code_obj is None:
-        return set()
+        return frozenset()
     try:
-        return {ins.argval for ins in dis.get_instructions(code_obj)
-                if ins.opname not in _ATTRIBUTE_OPS and isinstance(ins.argval, str)
-                and ins.argval in code_obj.co_names}
+        found = _GLOBAL_NAMES_MEMO.get(code_obj)
+    except TypeError:
+        found = None
+    if found is not None:
+        return found
+    try:
+        found = frozenset(ins.argval for ins in dis.get_instructions(code_obj)
+                          if ins.opname not in _ATTRIBUTE_OPS and isinstance(ins.argval, str)
+                          and ins.argval in code_obj.co_names)
     except (TypeError, ValueError):
-        return set(code_obj.co_names)      # unknown: treat every name as a global
+        return frozenset(code_obj.co_names)      # unknown: treat every name as a global
+    try:
+        if len(_GLOBAL_NAMES_MEMO) >= 4096:
+            _GLOBAL_NAMES_MEMO.clear()
+        _GLOBAL_NAMES_MEMO[code_obj] = found
+    except TypeError:
+        pass
+    return found
 
 
 def _attribute_only_names(code_obj: Any) -> set[str]:
