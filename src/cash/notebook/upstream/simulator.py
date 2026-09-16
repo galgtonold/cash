@@ -687,6 +687,71 @@ class NotebookSimulator:
             return None
         return set(record.get('paths') or ())
 
+    @staticmethod
+    def _statements_the_cell_depends_on(
+        required_inputs: set[str] | None, simulation_trace: list,
+    ) -> set[int]:
+        """Trace positions whose outputs the current cell's inputs derive from.
+
+        Only these can make a file the cell's reconstruction reads. Before this
+        scope, one unresolvable read anywhere above -- a helper's
+        ``pd.read_parquet(path)`` -- let every stale writer in the notebook
+        re-fire, and with them the fits feeding their charts: a sanity-check
+        cell reading only the loaded frame took 309 s (round 24, r24s1).
+        """
+        if required_inputs is None:
+            return set(range(len(simulation_trace)))
+        needed = set(required_inputs)
+        relevant: set[int] = set()
+        for i in range(len(simulation_trace) - 1, -1, -1):
+            outputs, inputs = simulation_trace[i][1], simulation_trace[i][2]
+            if outputs & needed:
+                relevant.add(i)
+                needed |= set(inputs)
+        return relevant
+
+    def _defs_whose_callers_recorded_reads(
+        self, simulation_trace: list, relevant: set[int], efd: dict,
+    ) -> set[int]:
+        """Relevant ``def`` statements whose reads are already known elsewhere.
+
+        Defining a function reads nothing; its body reads when a statement
+        calls it, and the tracker records that against the caller's outputs
+        (or, after a restart, the caller's persisted reads). A path the body
+        leaves unresolvable (``pd.read_csv(path)``) then says nothing unknown.
+        A caller that is itself such a ``def`` counts when it is covered.
+        """
+        defs: dict[int, str] = {}
+        for i in relevant:
+            code = simulation_trace[i][0]
+            if not code.lstrip().startswith(('def ', 'async def ', '@')):
+                continue
+            try:
+                body = ast.parse(code).body
+            except SyntaxError:
+                continue
+            if len(body) == 1 and isinstance(body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
+                defs[i] = body[0].name
+
+        def recorded(i: int) -> bool:
+            outputs = simulation_trace[i][1]
+            if outputs and all(efd.get(o) for o in outputs):
+                return True
+            return self._persisted_reads(simulation_trace[i][0]) is not None
+
+        covered: set[int] = set()
+        changed = True
+        while changed:
+            changed = False
+            for i, name in defs.items():
+                if i in covered:
+                    continue
+                callers = [j for j in relevant if j > i and name in simulation_trace[j][2]]
+                if callers and all((j in covered) if j in defs else recorded(j) for j in callers):
+                    covered.add(i)
+                    changed = True
+        return covered
+
     def _compute_relevant_read_paths(
         self,
         required_inputs: set[str] | None,
@@ -762,9 +827,13 @@ class NotebookSimulator:
             else:
                 paths.update(r)
 
-        for entry in simulation_trace:
+        relevant = self._statements_the_cell_depends_on(required_inputs, simulation_trace)
+        covered_defs = self._defs_whose_callers_recorded_reads(simulation_trace, relevant, efd)
+        for i, entry in enumerate(simulation_trace):
+            if i not in relevant:
+                continue
             code = entry[0]
-            if 'read' in code or 'open(' in code or 'load' in code:
+            if i not in covered_defs and ('read' in code or 'open(' in code or 'load' in code):
                 _collect(code, entry[1])
             # What the tracker recorded behind this statement's outputs counts
             # too, whatever the code looks like: a reader static analysis does

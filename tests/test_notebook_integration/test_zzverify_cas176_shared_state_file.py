@@ -13,10 +13,11 @@ cell, per-cell variable names) so no variable edge can explain the result:
   * 4 cells, ONE shared file     -> 4 / 3 / 2 / 1 executions per run_all
   * 4 cells, FOUR separate files -> 4 / 3 / 2 / 1  (byte-identical)
 
-Sharing therefore makes no difference at all. What drives the churn is the
-number of *file-writing cells*: every writer cell re-executes every PRECEDING
-writer cell's write statement, so a run_all costs N(N+1)/2 executions instead
-of N, forever, on an unedited notebook.
+That was the finding: every writer cell re-executed every PRECEDING writer
+cell's write statement, so a run_all cost N(N+1)/2 executions instead of N,
+forever, on an unedited notebook. Since writers are scoped to what the running
+cell depends on, four separate files run 1 / 1 / 1 / 1; the shared file, which
+each cell really reads, still runs 4 / 3 / 2 / 1.
 """
 import json
 
@@ -85,11 +86,14 @@ def test_four_cells_sharing_one_state_file_amplify_quadratically(nb_runner, tmp_
     assert per_run == {"a": 4.0, "b": 3.0, "c": 2.0, "d": 1.0}, per_run
 
 
-def test_four_cells_with_separate_files_amplify_identically(nb_runner, tmp_path):
-    """The falsifier: swap the shared file for four private ones and NOTHING
-    changes. The sharing is not the mechanism."""
+def test_four_cells_with_separate_files_run_once_each(nb_runner, tmp_path):
+    """The falsifier used to show four private files amplifying exactly like one
+    shared file. A writer is now re-run only for a cell that depends on what it
+    wrote, so with private files every cell runs once per run_all, as in a
+    plain kernel (round 24, r24s1). The shared file still amplifies: each cell
+    reads the file the one before it wrote."""
     per_run = _measure(
         nb_runner, {k: tmp_path / f"s_{k}.json" for k in ("a", "b", "c", "d")},
         "4 cells, FOUR SEPARATE files",
     )
-    assert per_run == {"a": 4.0, "b": 3.0, "c": 2.0, "d": 1.0}, per_run
+    assert per_run == {"a": 1.0, "b": 1.0, "c": 1.0, "d": 1.0}, per_run
