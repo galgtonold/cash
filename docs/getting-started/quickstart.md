@@ -118,9 +118,8 @@ is stale but `features` is not, and repairs exactly that:
     Nothing is corrupted when it happens: you get the value your kernel actually
     holds, which is the same thing plain Jupyter would give you. What you lose is
     the safety net — cash's upstream check is only ever as current as the cells it
-    read. cash tells you which case you are in: it prints *"cash cannot see
-    unsaved edits here"* once per session, and only when reading the saved file.
-    Full detail in
+    read. JupyterLab with cash's extension, VS Code and Colab give cash the live
+    cells; elsewhere, save before running a cell below an edit. Full detail in
     [editing without saving](../known-limitations.md#editing-without-saving).
 
 You get the same result you'd get from *Run All*, at the cost of the one cheap

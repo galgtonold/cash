@@ -31,7 +31,6 @@ class StalenessTracker:
         # Which reader supplied the cells cash checked against. "file" means the
         # saved .ipynb, i.e. cash CANNOT see unsaved edits; the live readers can.
         self._source: str | None = None
-        self._announced_unverifiable = False
 
     def observe(self, *, running_code: str, file_code: str | None,
                 notebook_path: str | None) -> bool:
@@ -80,7 +79,6 @@ class StalenessTracker:
         self._saved_at = None
         self._hint = None
         self._source = None
-        self._announced_unverifiable = False
 
     # Readers that see what is on screen rather than what was last saved.
     _LIVE_SOURCES = frozenset({"colab", "vscode-backup", "extension"})
@@ -92,18 +90,6 @@ class StalenessTracker:
     def can_verify(self) -> bool:
         """True when the cells came from a reader that sees unsaved edits."""
         return self._source in self._LIVE_SOURCES
-
-    def take_unverifiable_announcement(self) -> bool:
-        """True exactly once per session, when freshness cannot be verified.
-
-        Edge-triggered on purpose: the condition is permanent for the session,
-        so a level-triggered warning would appear on every cell and be tuned out
-        long before it mattered.
-        """
-        if self._source is None or self.can_verify() or self._announced_unverifiable:
-            return False
-        self._announced_unverifiable = True
-        return True
 
 
 #: Matches a leading ``%%cash`` cell-magic line (optionally with args, e.g.

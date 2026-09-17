@@ -147,43 +147,26 @@ def test_a_raising_tracker_does_not_crash_the_notification_builder(tmp_path):
     assert not any(m.get("status") == "WARNING" for m in all_metrics)
 
 
-def test_an_unverifiable_source_is_announced_once(tmp_path):
-    """Loud, but once. A row on every cell forever is noise users tune out --
-    and this warning has to be believed the once it matters."""
-    from cash.notebook.ipython.cell_executor import unverifiable_notification
-    from cash.notebook.staleness import StalenessTracker
-
+def test_reading_the_saved_file_adds_no_row(tmp_path):
+    """Round 25: "cash cannot see unsaved edits here" on every fresh kernel,
+    for all five testers, in headless runs where nothing can be unsaved; none
+    could act on it. Only a proven-stale file is reported."""
     t = StalenessTracker()
     t.note_source("file")
-    first = unverifiable_notification(t)
-    assert first is not None
-    assert first["status"] == "WARNING"
-    assert "cannot" in first["code"].lower()
+    executor = CellExecutor.__new__(CellExecutor)
+    executor._upstream_checker = types.SimpleNamespace(staleness=t)
+    executor._statement_processor = types.SimpleNamespace(function_tracker=object())
+    executor.shell = types.SimpleNamespace(user_ns={})
+    executor._debug = False
 
-    assert unverifiable_notification(t) is None, "announced twice in one session"
+    all_metrics = executor._build_pre_execution_notifications("x = 1", [], [])
+
+    assert not [m for m in all_metrics if m.get("status") == "WARNING"], all_metrics
 
 
-def test_a_verifiable_source_says_nothing(tmp_path):
-    """The control. Colab and the VS Code backup both give live cells, so there
-    is nothing to warn about and the row must not appear."""
-    from cash.notebook.ipython.cell_executor import unverifiable_notification
-    from cash.notebook.staleness import StalenessTracker
-
+def test_a_verifiable_source_is_recorded_as_such(tmp_path):
+    """Colab and the VS Code backup both give live cells."""
     for source in ("colab", "vscode-backup"):
         t = StalenessTracker()
         t.note_source(source)
-        assert unverifiable_notification(t) is None, source
         assert t.can_verify() is True, source
-
-
-def test_the_unverifiable_message_survives_a_legacy_console(tmp_path):
-    """Same ASCII-safety contract as `staleness_notification`'s sibling test
-    above, for the unverifiable row. Named distinctly so it does not shadow
-    that test -- two module-level functions sharing a name silently collapse
-    to one collected test, and the point here is both rows are covered."""
-    from cash.notebook.ipython.cell_executor import unverifiable_notification
-    from cash.notebook.staleness import StalenessTracker
-
-    t = StalenessTracker()
-    t.note_source("file")
-    unverifiable_notification(t)["code"].encode("ascii")

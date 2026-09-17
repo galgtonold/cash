@@ -204,30 +204,6 @@ def staleness_notification(tracker) -> dict | None:
     }
 
 
-def unverifiable_notification(tracker) -> dict | None:
-    """Badge row said ONCE when cash cannot see unsaved edits at all.
-
-    Distinct from `staleness_notification`, which reports proven staleness. This
-    reports a missing capability: cash is reading the saved file, so an edit you
-    have not saved is invisible to it and it cannot promise the check was
-    current. That is permanent for the session, hence once.
-
-    ASCII only, and short enough to survive print mode's 80-char row cap -- see
-    `staleness_notification` for why both matter.
-    """
-    if not tracker.take_unverifiable_announcement():
-        return None
-    return {
-        'status': 'WARNING',
-        'code': ("[!] cash cannot see unsaved edits here -- Save before running "
-                 "to be sure. It is reading the saved notebook file."),
-        'is_upstream': True,
-        'total_time': 0.0,
-        'execution_time': 0.0,
-        'outputs': [],
-    }
-
-
 def discarded_writes_notification(seen_before: int) -> tuple[dict | None, int]:
     """Badge row said when a cache write failed and was thrown away.
 
@@ -242,10 +218,9 @@ def discarded_writes_notification(seen_before: int) -> tuple[dict | None, int]:
     and the only report was a logger warning at kernel shutdown, which in a
     notebook means never.
 
-    Loud on every occurrence rather than once per session, unlike
-    `unverifiable_notification`: that one reports a permanent property of the
-    environment, where this reports work being lost right now, and a second
-    occurrence is a second lost result rather than a repeat of the same news.
+    Loud on every occurrence: this reports work being lost right now, and a
+    second occurrence is a second lost result rather than a repeat of the same
+    news.
 
     ASCII only and short, for the reasons `staleness_notification` gives -- the
     print renderer caps a row at 80 characters.
@@ -1532,11 +1507,14 @@ class CellExecutor:
             return []
 
     def _make_staleness_metrics(self) -> list[ProcessResult]:
-        """Return WARNING notifications from the staleness tracker's two checks.
+        """Return the WARNING notification for a proven-stale notebook file.
 
-        Two independent rows share this guard: `staleness_notification` (proven
-        stale -- loud every occurrence) and `unverifiable_notification`
-        (freshness cannot be verified at all -- loud once per session). Guarded
+        Only proof is reported. A once-per-session "cash cannot see unsaved
+        edits here" row used to join it whenever cash read the saved file; it
+        fired on every fresh kernel of every headless run, where nothing can be
+        unsaved, and no round-25 tester could act on it. Where edits CAN be
+        unsaved -- JupyterLab with the extension, VS Code, Colab -- cash reads
+        the live cells. Guarded
         like `_make_function_change_metrics` / `_make_opaque_warning_metrics`
         above. Nothing in `StalenessTracker`'s current implementation raises,
         but this is a diagnostic nicety layered on top of upstream resolution
@@ -1552,9 +1530,6 @@ class CellExecutor:
             stale = staleness_notification(tracker)
             if stale is not None:
                 notifications.append(stale)
-            unverifiable = unverifiable_notification(tracker)
-            if unverifiable is not None:
-                notifications.append(unverifiable)
             return notifications
         except Exception as exc:  # noqa: BLE001 - a diagnostic must never break execution
             logger.debug("Failed to check notebook staleness: %s", exc)

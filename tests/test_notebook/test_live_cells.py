@@ -384,7 +384,6 @@ def test_wiring_the_unsaved_edits_notice_fires_again_once_a_snapshot_expires():
     live = StalenessTracker()
     live.note_source(sd.last_cell_source())
     assert live.can_verify()
-    assert not live.take_unverifiable_announcement()
 
     expire()
 
@@ -393,7 +392,6 @@ def test_wiring_the_unsaved_edits_notice_fires_again_once_a_snapshot_expires():
     dead = StalenessTracker()
     dead.note_source(sd.last_cell_source())
     assert not dead.can_verify()
-    assert dead.take_unverifiable_announcement()
 
 
 #: A path that cannot exist, so the file reader contributes nothing and the only

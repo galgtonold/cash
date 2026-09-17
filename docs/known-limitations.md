@@ -577,8 +577,7 @@ anyone reading the saved file.
 <!-- claim: cash/notebook/live_cells.py:expire @47a3dfed -->
 **Turning it off.** `jupyter labextension disable cash-live-cells`, then reload
 the page — **no kernel restart needed**: cash falls back to the saved file
-exactly as it does for a user who never had the extension, and says so once on
-the badge. That works because a pushed snapshot is only good for the one
+exactly as it does for a user who never had the extension. That works because a pushed snapshot is only good for the one
 execution it preceded; the moment the pushes stop, the next execution reads the
 saved `.ipynb` again. (Measured on a kernel that had already been receiving
 pushes: the outgoing page can get one last push in as it unloads, so in the
@@ -601,9 +600,8 @@ this one.
 Disabling does not remove the installed directory, and the proactive `Ctrl+S` tip
 `%cash_on` prints is gated on that directory being present — so a disabled
 extension, like a split install, keeps the tip suppressed. You are still told,
-just reactively rather than up front: the once-per-session "cash cannot see
-unsaved edits here" notice keys on the read that actually happened, so it is
-right in both cases.
+just reactively rather than up front: a cell run against a notebook file that
+is provably behind what the kernel ran gets a "Notebook file is stale" row.
 
 <!-- claim: cash/notebook/live_cells.py:handle_message @3f85127c -->
 **Two tabs on the same notebook can silently mute each other.** Each browser
@@ -616,8 +614,8 @@ count pulls ahead, the other tab's pushes are dropped as "older" — not
 merged, not chosen by recency. Edit in tab A after the last cell you ran
 anywhere, then run a cell in tab B: cash can serve **tab A's** edited text
 for **tab B's** execution, believing it current — and because a push did
-land, from A, the "cash cannot see unsaved edits here" notice stays
-suppressed right along with it.
+land, from A, nothing marks the cells as read from anywhere but the live
+tabs.
 
 Unlike the single-tab gaps above, `expire()` does not bound this to one
 execution. It still clears the store after every run, but tab A keeps
@@ -633,7 +631,7 @@ not running, there is nothing to diverge on and this never triggers.
 **What to do:** avoid editing the same notebook open in two tabs at once, or
 save (`Ctrl+S` / `Cmd+S`) before switching tabs to run a cell.
 
-<!-- claim: cash/notebook/vscode_backup.py:live_cells @b86cd33f, cash/notebook/staleness.py:StalenessTracker.take_unverifiable_announcement @fecc0722 -->
+<!-- claim: cash/notebook/vscode_backup.py:live_cells @b86cd33f, cash/notebook/staleness.py:StalenessTracker.can_verify @e81260f6 -->
 **On VS Code, cash reads your unsaved edits directly.** VS Code keeps dirty
 editors in a backup file so it can restore after a crash, and cash reads its
 cells from there instead of the saved `.ipynb` — so editing one cell and running
@@ -643,17 +641,18 @@ matches the file on disk, so it can never substitute one stale copy for another.
 
 This relies on an internal detail of VS Code that could change in a future
 release. When it does — or when the backup is missing because hot exit is
-disabled — cash falls back to reading the saved file and says so once, rather
-than silently losing the guarantee.
+disabled — cash falls back to reading the saved file.
 
 **What it still cannot see:** editing one cell and running a *different* one,
 wherever no live reader applies — a JupyterLab session with no working extension
 (split install, extension disabled, the first execution on a fresh kernel, or a
 frontend that has stopped pushing), and a VS Code session with no usable backup. There the cell you ran matches what
 cash read, so there is nothing to compare and no warning — a real hole, not an
-oversight, since there is no other copy of the notebook to check against. It is
-no longer silent about the gap, though: the first time a session cannot verify
-freshness this way, cash says so once on the badge.
+oversight, since there is no other copy of the notebook to check against. Cash
+does not announce it: a once-per-session notice used to, and it fired on every
+fresh kernel of every headless run (papermill, nbconvert), where nothing can be
+unsaved, so it was noise to everyone who saw it. A cell run against a file that
+is provably behind what the kernel ran still gets a "Notebook file is stale" row.
 
 **What to do:** save the notebook (`Ctrl+S` / `Cmd+S`) after editing a cell you
 aren't about to run, in any session where cash has no live reader — and before a
@@ -661,9 +660,7 @@ cold `Run All` on JupyterLab. Autosave exists in JupyterLab but runs on a timer,
 so a quick edit-then-run lands inside the window. **Google Colab is exempt** —
 there cash reads cells live from the frontend via `get_ipynb`, so there is
 nothing to save. **So are JupyterLab with the bundled extension, and a VS Code
-session with a usable hot-exit backup** — both above. If you are unsure which
-you have, the badge settles it: cash says *"cash cannot see unsaved edits here"*
-once per session, and only when it is reading the saved file.
+session with a usable hot-exit backup** — both above.
 
 ### Others
 
