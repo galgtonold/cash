@@ -264,6 +264,10 @@ def _file_part(issues: list[PurityIssue]) -> str:
 _FRESH_CONSTRUCTOR_NAMES: frozenset[str] = frozenset({
     "list", "dict", "set", "bytearray",
     "defaultdict", "OrderedDict", "Counter", "deque",
+    # Builtins that BUILD a new object from an iterable: `sorted(rows)` is the
+    # common one -- a parser sorting its rows and then touching one warned
+    # about a side effect on its own list.
+    "sorted", "frozenset", "bytes", "tuple",
 })
 _FRESH_CONSTRUCTOR_ATTRS: frozenset[str] = frozenset({
     # numpy fresh-array factories
@@ -274,6 +278,16 @@ _FRESH_CONSTRUCTOR_ATTRS: frozenset[str] = frozenset({
     "DataFrame", "Series",
     # generic "make me a fresh copy"
     "copy", "deepcopy", "fromkeys",
+    # Aggregations and reshapes that return a NEW frame/array/scalar. Missing
+    # these made ordinary pandas -- `g = df.groupby(...).sum()` then
+    # `g["col"] = ...` -- read as a mutation of caller state (found attacking
+    # the decorator before round 26).
+    "sum", "mean", "median", "min", "max", "std", "var", "count", "size",
+    "nunique", "quantile", "agg", "aggregate", "transform", "apply",
+    "first", "last", "unique", "value_counts", "to_dict", "to_list", "tolist",
+    # numpy builders, spelled as module attributes
+    "concatenate", "stack", "hstack", "vstack", "dstack", "column_stack",
+    "tile", "repeat", "where", "clip", "round", "argsort",
 })
 
 # Mutable-literal AST nodes (a fresh container by construction).

@@ -847,7 +847,7 @@ much to care:
   (`df = load(p); df = df[mask]; df["x"] = ...`). The same frame changed
   *before* the copy is still flagged: it may be the helper's own object.
 
-<!-- claim: cash/purity_flow.py:_FreshFlow._check_insertion @e358f5d7, cash/purity_flow.py:_FreshFlow._loop_targets @38092866, cash/purity_flow.py:is_log_line @9a65b406, cash/purity_flow.py:is_read_only_sql @e845f859 -->
+<!-- claim: cash/purity_flow.py:_FreshFlow._check_insertion @e358f5d7, cash/purity_flow.py:_FreshFlow._loop_targets @38092866, cash/purity_flow.py:is_log_line @9f27e0d3, cash/purity_flow.py:is_read_only_sql @e845f859 -->
   The same goes for the elements of a container the function built and filled
   only with objects of its own — the per-key accumulator every parser writes:
   `by_user[k].append(x)` on a local `defaultdict(list)`,

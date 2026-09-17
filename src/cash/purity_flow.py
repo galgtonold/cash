@@ -31,11 +31,22 @@ __all__ = ["fresh_name_nodes", "receiver_is_fresh", "LogOnlyFlow", "is_log_helpe
 
 _FRESH_CONSTRUCTOR_NAMES = frozenset({
     "list", "dict", "set", "bytearray", "defaultdict", "OrderedDict", "Counter", "deque",
+    "sorted", "frozenset", "bytes", "tuple",
 })
 _FRESH_CONSTRUCTOR_ATTRS = frozenset({
     "zeros", "empty", "ones", "full", "array", "asarray",
     "zeros_like", "empty_like", "ones_like", "full_like", "arange", "linspace",
     "DataFrame", "Series", "copy", "deepcopy", "fromkeys",
+    # Aggregations and reshapes that return a NEW frame/array/scalar. Missing
+    # these made ordinary pandas -- `g = df.groupby(...).sum()` then
+    # `g["col"] = ...` -- read as a mutation of caller state (found attacking
+    # the decorator before round 26).
+    "sum", "mean", "median", "min", "max", "std", "var", "count", "size",
+    "nunique", "quantile", "agg", "aggregate", "transform", "apply",
+    "first", "last", "unique", "value_counts", "to_dict", "to_list", "tolist",
+    # numpy builders, spelled as module attributes
+    "concatenate", "stack", "hstack", "vstack", "dstack", "column_stack",
+    "tile", "repeat", "where", "clip", "round", "argsort",
 })
 _FRESH_LITERAL_NODES = (ast.List, ast.Dict, ast.Set, ast.ListComp, ast.DictComp, ast.SetComp)
 
@@ -209,8 +220,30 @@ def _callee_name(func: ast.AST) -> str | None:
     return None
 
 
+#: Methods that build a container of NEW objects: `df.to_dict("records")` is a
+#: new list of new dicts, so writing into one of them touches nothing the
+#: caller holds.
+_DEEP_BUILDER_ATTRS = frozenset({"to_dict", "to_records", "tolist", "to_list"})
+
+#: Builtins that rebuild a container, element for element. `sorted(rows)` of a
+#: deep-fresh list is deep-fresh: a parser sorting its rows and then editing
+#: one warned about a side effect on its own data (found attacking the
+#: decorator before round 26).
+_DEEP_REBUILDERS = frozenset({"sorted", "list", "tuple", "set", "dict", "reversed"})
+
+
 def _deep_value(value: ast.AST | None, fresh: set[str]) -> bool:
     """Does *value* build a container whose elements are all fresh or immutable?"""
+    if isinstance(value, ast.Call):
+        func = value.func
+        if isinstance(func, ast.Attribute) and func.attr in _DEEP_BUILDER_ATTRS:
+            return True
+        if (isinstance(func, ast.Name) and func.id in _DEEP_REBUILDERS
+                and len(value.args) == 1):
+            inner = value.args[0]
+            if isinstance(inner, ast.Name):
+                return _DEEP + inner.id in fresh
+            return _deep_value(inner, fresh)
     if isinstance(value, (ast.List, ast.Set, ast.Tuple)):
         return not any(isinstance(e, ast.Starred) for e in value.elts) and all(
             _fresh_or_immutable(e, fresh) for e in value.elts)
@@ -576,6 +609,15 @@ def _is_log_sink(call: ast.Call, log_helpers: frozenset[str] = frozenset()) -> b
     if not isinstance(f, ast.Attribute):
         return False
     recv = f.value
+    # `logging.getLogger(__name__).info(...)` in one expression: the receiver is
+    # a CALL, so the name test below saw nothing and every function logging that
+    # way was reported (found attacking the decorator before round 26).
+    if isinstance(recv, ast.Call) and f.attr in _LOG_METHODS:
+        callee = recv.func
+        made_by = (callee.attr if isinstance(callee, ast.Attribute)
+                   else callee.id if isinstance(callee, ast.Name) else "")
+        if made_by == "getLogger":
+            return True
     recv_name = (recv.attr if isinstance(recv, ast.Attribute)
                  else recv.id if isinstance(recv, ast.Name) else "")
     if f.attr in _LOG_METHODS and "log" in recv_name.lower():
@@ -611,6 +653,15 @@ def is_log_line(call: ast.Call) -> bool:
     if not isinstance(f, ast.Attribute):
         return False
     recv = f.value
+    # `logging.getLogger(__name__).info(...)` in one expression: the receiver is
+    # a CALL, so the name test below saw nothing and every function logging that
+    # way was reported (found attacking the decorator before round 26).
+    if isinstance(recv, ast.Call) and f.attr in _LOG_METHODS:
+        callee = recv.func
+        made_by = (callee.attr if isinstance(callee, ast.Attribute)
+                   else callee.id if isinstance(callee, ast.Name) else "")
+        if made_by == "getLogger":
+            return True
     recv_name = (recv.attr if isinstance(recv, ast.Attribute)
                  else recv.id if isinstance(recv, ast.Name) else "")
     if f.attr in _LOG_METHODS and "log" in recv_name.lower():
