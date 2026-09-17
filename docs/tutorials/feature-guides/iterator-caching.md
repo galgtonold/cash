@@ -22,7 +22,7 @@ A generator is one-shot. The object you'd cache after the first call is already 
 1. **Materialize to a list.** Cheap to retrieve, but the entire result has to fit in RAM both at cache-write time and at every cache-read. A 50 GB log scanner that streams comfortably becomes a 50 GB allocation.
 2. **Materialize to chunks.** Stream into bounded buffers, write each one as a separate cache entry, and replay them lazily. Memory stays bounded by chunk size on both ends. Cash takes this path.
 
-<!-- claim: cash/core.py:_is_one_shot_iterator @d99fbe0d -->
+<!-- claim: cash/core.py:_is_one_shot_iterator @1fe45c2a -->
 Detection happens in `_is_one_shot_iterator`, which returns True when `iter(value) is value`. Generators, generator expressions, `map`/`filter`/`zip` results, and any custom class whose `__iter__` returns `self` all qualify. Plain collections (`list`, `dict`, `set`, `tuple`, `range`, `str`) fail that test and are cached as ordinary blobs — they are already reusable.
 
 ## Quick start

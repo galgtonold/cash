@@ -963,6 +963,13 @@ def _is_one_shot_iterator(value: Any) -> bool:
     ``iter()`` - those are safely cacheable as-is.
     """
     try:
+        if isinstance(value, io.IOBase):
+            # A file object is its own iterator, so this path claimed it: the
+            # caller got a replay iterator with no `read`, `write`, `name` or
+            # `fileno`, and the handle was drained to build the chunks (found
+            # attacking the decorator before round 26). A handle is not a
+            # stream of values to replay -- it is a handle.
+            return False
         return iter(value) is value
     except TypeError:
         return False
