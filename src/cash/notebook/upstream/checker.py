@@ -1444,9 +1444,7 @@ class UpstreamChecker:
             # behind what the replay restored (see record_replayed_file_deps).
             self.simulator.record_replayed_file_deps(rerecorded)
 
-            all_metrics = restored_info + executed_metrics
-
-            all_metrics.sort(key=lambda m: m.get('position', 999999))
+            all_metrics = self._in_notebook_order(restored_info + executed_metrics, notebook_cells)
 
             return UpstreamResult(all_metrics, total_restore_time, total_execution_time)
 
@@ -1923,6 +1921,42 @@ class UpstreamChecker:
             return
 
     @staticmethod
+    def _in_notebook_order(metrics: list, notebook_cells: list[str] | None) -> list:
+        """*metrics* in the order their statements stand in the notebook.
+
+        The restores came first and the re-runs after them, so the badge's
+        Upstream list read ``^CACHED: results[name] = evaluate(...)`` above
+        ``^EXECUTED: results = {}`` -- an order nothing ran in (round 25,
+        r25s1). The restores carried a simulation-trace position and the
+        re-runs none. Both are placed by their statement's place in the
+        notebook; a loop's passes carry their loop's (``stmt_code``, stamped
+        by ``_reexecute_statements``) and keep their order. A metric whose
+        statement is not found keeps its place after the ones that are.
+        """
+        order: dict[str, int] = {}
+        for cell in notebook_cells or ():
+            try:
+                tree = ast.parse(CodeAnalyzer.strip_magics(cell.replace('\r\n', '\n')))
+            except (SyntaxError, ValueError):
+                continue
+            for node in tree.body:
+                at = len(order)
+                order.setdefault(ast.unparse(node), at)
+                # A restored loop pass is keyed by its body statement.
+                for sub in ast.walk(node):
+                    if sub is not node and isinstance(sub, ast.stmt):
+                        order.setdefault(ast.unparse(sub), at)
+        end = len(order)
+
+        def place(item):
+            i, m = item
+            code = m.get('upstream_statement') or m.get('code') or ''
+            code = re.sub(r'#\s*__iteration_context__:[^\n]*\n', '', code).strip()
+            return (order.get(code, end), i)
+
+        return [m for _, m in sorted(enumerate(metrics), key=place)]
+
+    @staticmethod
     def _statement_directives(notebook_cells: list[str] | None) -> dict[str, Any]:
         """``{statement code: its # @cash: directives}`` across the notebook.
 
@@ -1998,6 +2032,7 @@ class UpstreamChecker:
                     for m in ctrl_result.metrics:
                         if m:
                             m['is_upstream'] = True
+                            m.setdefault('upstream_statement', stmt_code)
                             executed_metrics.append(m)
                     if not ctrl_result.success:
                         raise ctrl_result.error or RuntimeError("Error in upstream control structure")

@@ -1127,11 +1127,6 @@ def build_interactive_badge(
 
     upstream_all = [m for m in metrics if m.get("is_upstream", False)
                     and str(m.get("status")) != str(CacheStatus.SKIPPED)]
-    upstream_restored_like = [
-        m for m in upstream_all
-        if str(m.get("status")) in {str(CacheStatus.RESTORED), *_NOTIFICATION_STATUSES}
-    ]
-    upstream_executed = [m for m in upstream_all if m not in upstream_restored_like]
     upstream_skipped = [m for m in metrics if str(m.get("status")) == str(CacheStatus.SKIPPED)
                         and m.get("is_upstream", False)]
     current = [m for m in metrics if not m.get("is_upstream", False)]
@@ -1187,10 +1182,11 @@ def build_interactive_badge(
     sections: list[Section] = []
 
     if upstream_all or upstream_skipped:
+        # In the order given -- the notebook's -- not restores first: a list
+        # restores-then-runs showed a loop's cached passes above the ``= {}``
+        # that starts it (round 25, r25s1).
         items: list[SectionItem] = []
-        for g in _group_loop_iterations(upstream_restored_like):
-            items.append(_section_item_from_grouped(g))
-        for g in _group_loop_iterations(upstream_executed):
+        for g in _group_loop_iterations(upstream_all):
             items.append(_section_item_from_grouped(g))
         bucket = _skipped_bucket(upstream_skipped)
         if bucket is not None:
