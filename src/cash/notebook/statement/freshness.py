@@ -50,6 +50,10 @@ _UNSET = object()
 #: How long a cell's statements may share the answer for a file (``forget_file_answers``).
 _ANSWERS_LAST_S = 2.0
 
+#: Below this many dependencies the per-file answers are cheap enough.
+_SET_MEMO_MIN = 64
+
+
 class CacheFreshnessChecker:
     """Decide whether a cache entry is still fresh.
 
@@ -69,6 +73,8 @@ class CacheFreshnessChecker:
         self.last_miss_reason: str | None = None
         self._checked: dict = {}
         self._listed: dict = {}
+        #: Dependency sets verified fresh whole, while the answers above last.
+        self._fresh_sets: list[dict] = []
         self._epoch: Any = None
         self._answered_at = 0.0
 
@@ -88,6 +94,7 @@ class CacheFreshnessChecker:
         """
         self._checked = {}
         self._listed = {}
+        self._fresh_sets = []
         self._epoch = epoch
         self._answered_at = time.monotonic()
 
@@ -183,6 +190,21 @@ class CacheFreshnessChecker:
             checked[memo_key] = answer
         return answer
 
+    def _known_fresh(self, deps: dict) -> bool:
+        """Was a set equal to *deps* verified fresh while the answers last?
+
+        A loop body over a frame read from 5,000 files: every statement of
+        every iteration carries the same 5,000 dependencies, and building a
+        memo key per file per lookup was a million calls, 2.4 s of a 1.1 s
+        cell (round 25, r25s4). Comparing the whole set runs in C.
+        """
+        return len(deps) >= _SET_MEMO_MIN and any(
+            len(known) == len(deps) and known == deps for known in self._fresh_sets)
+
+    def _remember_fresh(self, deps: dict) -> None:
+        if len(deps) >= _SET_MEMO_MIN and len(self._fresh_sets) < 16:
+            self._fresh_sets.append(deps)
+
     def _invalidate_if_ttl_expired(
         self, metadata: 'StatementCacheMetadata', cached_data: Any, ttl: int,
     ) -> Any:
@@ -204,6 +226,8 @@ class CacheFreshnessChecker:
     ) -> Any:
         """Return None if any direct file dep in *metadata* is missing or modified."""
         file_deps = metadata.file_dependencies or {}
+        if self._known_fresh(file_deps):
+            return cached_data
         full_hash_max = _full_hash_max_bytes() if file_deps else None
         if len(file_deps) >= _LISTING_MIN_FILES:
             # Many files: read their directories once rather than stat each
@@ -233,6 +257,7 @@ class CacheFreshnessChecker:
                 if self.debug:
                     logger.debug("[CACHE DEBUG] File dependency stale (%s): %s", reason, resolved)
                 return None
+        self._remember_fresh(file_deps)
         return cached_data
 
     def _source_file_deps(self, tracking_state: 'TrackingState', input_var: str) -> dict | None:
@@ -306,7 +331,7 @@ class CacheFreshnessChecker:
             if not paths:
                 continue
             source_file_deps = self._source_file_deps(tracking_state, input_var)
-            if not source_file_deps:
+            if not source_file_deps or self._known_fresh(source_file_deps):
                 continue
             if full_hash_max is None:
                 full_hash_max = _full_hash_max_bytes()
@@ -314,4 +339,6 @@ class CacheFreshnessChecker:
                 if self._input_file_changed(tracking_state, input_var, fpath,
                                             source_file_deps, full_hash_max):
                     return None
+            if paths and len(paths) >= len(source_file_deps) and all(p in paths for p in source_file_deps):
+                self._remember_fresh(source_file_deps)
         return cached_data

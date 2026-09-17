@@ -29,7 +29,7 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from ...utils import normalize_path
-from ..file_dep_snapshot import realpath_this_run
+from ..file_dep_snapshot import realpath_of_read_this_run
 from ..server_discovery import get_notebook_path
 
 if TYPE_CHECKING:
@@ -87,8 +87,13 @@ def compute_file_hash_component(
     rel_dirs: dict[str, str | None] = {}
     for f in sorted(accessed_files):
         try:
-            canonical_path = normalize_path(realpath_this_run(f))
-            stat = os.stat(canonical_path)
+            # Through the directory, with the lstat that shows the file is not
+            # a link as its stat: a statement over a frame read from 5,000
+            # files resolved every path again per lineage (round 25, r25s4).
+            resolved, stat = realpath_of_read_this_run(f)
+            canonical_path = normalize_path(resolved)
+            if stat is None:
+                stat = os.stat(canonical_path)
         except (OSError, ValueError):
             continue  # gone, or never a file
         display_path = canonical_path

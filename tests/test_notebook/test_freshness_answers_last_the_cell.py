@@ -76,3 +76,26 @@ def test_outside_a_cell_every_lookup_checks(tmp_path, monkeypatch):
         fh.write("changed between lookups\n")
     _, data, _ = checker.check_cache(state, "stmt:a", None, epoch=None)
     assert data is None
+
+
+def test_a_set_already_found_fresh_is_not_walked_again(tmp_path, monkeypatch):
+    """Round 25 (r25s4): a 25-iteration loop over a frame read from 5,226
+    files. Each file was checked once, but every lookup still walked all 5,226
+    answers -- a million calls, 2.4 s of a cell that takes 1.1 s plain. A
+    dependency set found fresh whole is not walked again until the answers
+    lapse."""
+    paths, checks, checker, state = _setup(tmp_path, monkeypatch, n=100)
+    walked = []
+    real = CacheFreshnessChecker._resolve_and_check
+    monkeypatch.setattr(CacheFreshnessChecker, "_resolve_and_check",
+                        lambda self, *a, **k: walked.append(a[0]) or real(self, *a, **k))
+    for key in ("stmt:a", "stmt:b", "stmt:c"):
+        _, data, _ = checker.check_cache(state, key, None, epoch=7)
+        assert data == "value"
+    assert len(walked) == len(paths), f"walked {len(walked)} answers for {len(paths)} files"
+
+    checker.forget_file_answers(7)            # a statement ran: check again
+    with open(paths[42], "w") as fh:
+        fh.write("written by the statement that ran\n")
+    _, data, _ = checker.check_cache(state, "stmt:d", None, epoch=7)
+    assert data is None
