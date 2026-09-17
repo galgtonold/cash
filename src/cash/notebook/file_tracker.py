@@ -139,6 +139,10 @@ def _regular_file_stat(path: str) -> tuple[int, int, int] | None:
     return (st.st_size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0))
 
 
+#: The folder joblib memory-maps a parallel call's large arguments into.
+_SCRATCH_MEMMAP = "joblib_memmapping_folder_"
+
+
 def _is_pseudo_fs(path: str) -> bool:
     """True for kernel pseudo-filesystem paths, which are machine state rather
     than data and must never become cache dependencies.
@@ -1417,7 +1421,13 @@ class FileAccessTracker:
             _TRACKING_SECONDS[0] += time.perf_counter() - started
 
     def _track_path_untimed(self, path):
-        raw_path = str(path)
+        if not isinstance(path, (str, bytes, os.PathLike)):
+            # ``open(3)`` opens a file DESCRIPTOR: joblib and loky do, and
+            # ``str(3)`` was recorded as a read of ``<cwd>/3`` -- a directory
+            # every file under the cwd sits in, so every write there read as
+            # an input (round 25, r25s1).
+            return
+        raw_path = os.fsdecode(path) if isinstance(path, bytes) else str(path)
         if _is_pseudo_fs(raw_path):
             # See _PSEUDO_FS_PREFIXES. Checked BEFORE realpath, which on
             # Windows rewrites /proc/... to C:/proc/... and would slip past.
@@ -1446,6 +1456,13 @@ class FileAccessTracker:
             # permanently unfreshenable. Return before the relative-path arm
             # too — these paths are always absolute.
             logger.debug("[TRACKER] Ignoring pseudo-fs read %r", abs_path)
+            return
+        if _SCRATCH_MEMMAP in abs_path:
+            # joblib's memmaps of a parallel call's arrays: deleted when the
+            # call returns, so recorded, every entry that read them was stale
+            # for ever -- r25s1's ``cross_val_predict(n_jobs=4)`` loop re-ran
+            # on every run of the report cell (round 25).
+            logger.debug("[TRACKER] Ignoring joblib scratch read %r", abs_path)
             return
         if _is_cash_internal(abs_path):
             # See _CASH_INTERNAL_SEGMENTS. Checked after realpath so a relative
