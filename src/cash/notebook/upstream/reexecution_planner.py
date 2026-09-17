@@ -279,9 +279,18 @@ class ReexecutionPlanner:
         # a restart ``counts = build_counts(events)`` restored, was promoted
         # behind ``OUT.mkdir()``, and ran without its ``def`` -- a NameError
         # (replay corpus, churn).
-        stmts_to_run_indices = self._complete_inputs_produced_before(
-            stmts_to_run_indices, simulation_trace, virtual_lineage, virtual_modules,
-        )
+        # Inputs back, later producers forward, until neither adds anything: a
+        # producer brought in for an input may itself be followed by writes.
+        while True:
+            before = len(stmts_to_run_indices)
+            stmts_to_run_indices = self._complete_inputs_produced_before(
+                stmts_to_run_indices, simulation_trace, virtual_lineage, virtual_modules,
+            )
+            stmts_to_run_indices = self._complete_later_producers(
+                stmts_to_run_indices, simulation_trace,
+            )
+            if len(stmts_to_run_indices) == before:
+                break
 
         skipped_metrics = self._virtual_lineage._collect_skipped_statement_metrics(
             simulation_trace, stmts_to_run_indices, restored_statements_info,
@@ -571,6 +580,31 @@ class ReexecutionPlanner:
                     pending.append(p)
                     trace_event("input_producer_completion", stmt=simulation_trace[p][0][:80],
                                 var=v, consumer=simulation_trace[i][0][:80])
+        return sorted(scheduled)
+
+    def _complete_later_producers(self, stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
+        """Every statement after a re-run producer of a variable that also
+        writes it re-runs too.
+
+        Re-running ``results = {}`` leaves ``results`` as it binds it: empty,
+        unless the ``for`` loop below that fills it runs as well. The plan
+        re-ran the init and the functions reading ``results``, not the loop,
+        and the report raised ``UpstreamStateError: 'logreg'`` with the dict
+        left empty (round 25, r25s1). The backward completion cannot see it:
+        it asks for the producer BEFORE a reader, and the init is one.
+        """
+        scheduled = set(stmts_to_run_indices)
+        pending = sorted(scheduled)
+        while pending:
+            i = pending.pop(0)
+            for v in simulation_trace[i][1]:
+                for p in range(i + 1, len(simulation_trace)):
+                    if p in scheduled or v not in simulation_trace[p][1]:
+                        continue
+                    scheduled.add(p)
+                    pending.append(p)
+                    trace_event("later_producer_completion", stmt=simulation_trace[p][0][:80],
+                                var=v, after=simulation_trace[i][0][:80])
         return sorted(scheduled)
 
     def _latest_producer(self, simulation_trace: list, var: str, before: int) -> int | None:

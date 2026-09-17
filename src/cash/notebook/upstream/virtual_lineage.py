@@ -1093,11 +1093,15 @@ class VirtualLineage:
         }
         fully_rerun_mutated: set[str] = set()
         for idx in stmts_to_run_indices:
-            stmt_code = simulation_trace[idx][0]
+            stmt_code, outputs = simulation_trace[idx][0], simulation_trace[idx][1]
             if iteration_context_pattern.search(stmt_code):
                 continue
             for mv, pat in patterns.items():
-                if mv not in fully_rerun_mutated and pat.search(stmt_code):
+                # Only a statement that WRITES it: `def draw_roc` iterating
+                # `results.items()` matched the text, so the init was scheduled
+                # for a loop that was not, and `results` was re-run empty
+                # (round 25, r25s1).
+                if mv not in fully_rerun_mutated and mv in outputs and pat.search(stmt_code):
                     fully_rerun_mutated.add(mv)
         return fully_rerun_mutated
 
