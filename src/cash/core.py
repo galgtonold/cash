@@ -25,7 +25,7 @@ import time
 import types
 import weakref
 from collections import Counter, OrderedDict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sized
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
@@ -5465,6 +5465,21 @@ class Cash:
         the old digest, so entries already on disk keep hitting.
         """
         source = self._hash_callable_source(fn)
+        if isinstance(fn, type):
+            # A class's own source says nothing about what it inherits, and
+            # this channel is what the key folds: ``Worker(Base)`` calling an
+            # inherited ``run`` kept serving the old answer after ``Base.run``
+            # was rewritten -- 20 where an uncached run gives 500, in one file
+            # (found attacking the decorator before round 26). An OPAQUE base
+            # still contributes nothing, as for a class passed as an argument.
+            bases = [
+                self._hash_callable_source(base)
+                for base in fn.__mro__[1:]
+                if base is not object and not self._is_opaque(base)
+                and self._is_user_code_object(base)
+            ]
+            if bases:
+                source = f"{source}:bases:{','.join(bases)}"
         captured = self._helper_capture_part(fn)
         if captured:
             source = f"{source}:captures:{captured}"
@@ -7647,8 +7662,15 @@ class Cash:
             if param.kind is inspect.Parameter.VAR_POSITIONAL:
                 canon_args.extend(val)
             elif param.kind is inspect.Parameter.VAR_KEYWORD:
+                # Under its own name: a `**kwargs` entry may be called after a
+                # parameter, and writing both into one dict let it overwrite
+                # that parameter's value. `def request(url, /, **params)`
+                # called as `request("/a", url="x")` then keyed on the kwargs
+                # `url` alone, so every such call shared one entry and
+                # `request("/b", url="x")` was served `GET /a` (found
+                # attacking the decorator before round 26).
                 for k in sorted(val):
-                    canon_kwargs[k] = val[k]
+                    canon_kwargs[f"{name}:{k}"] = val[k]
             else:
                 canon_kwargs[name] = val
         return tuple(canon_args), canon_kwargs
@@ -7720,7 +7742,7 @@ class Cash:
                 table.pop(key, None)
         while len(table) >= self._FROZEN_CONTAINERS_MAX:
             table.pop(next(iter(table)))
-        table[id(obj)] = [obj, producer, f"frozen:{lineage}", 0, None]
+        table[id(obj)] = [obj, producer, f"frozen:{lineage}", 0, None, self._frozen_shape(obj)]
 
     def _frozen_container_hash(self, obj: Any) -> str | None:
         """The lineage a frozen list/tuple/dict is keyed by, or None once it
@@ -7730,6 +7752,11 @@ class Cash:
             return None
         entry[3] += 1
         uses = entry[3]
+        shape = self._frozen_shape(obj)
+        if len(entry) > 5 and entry[5] is not None and shape != entry[5]:
+            self._frozen_containers.pop(id(obj), None)
+            self._warn_frozen_mutated(obj, entry[1])
+            return None
         due = (self.debug or os.environ.get("CASH_DEBUG")) or uses == _FROZEN_AUDIT_FIRST or (
             uses > _FROZEN_AUDIT_FIRST and uses % _FROZEN_AUDIT_EVERY == 0)
         if due:
@@ -7773,6 +7800,57 @@ class Cash:
                 "cash.register_hasher gives the type a cheap identity instead.",
         )
 
+    def _warn_frozen_mutated(self, obj: Any, producer: Any = None) -> None:
+        """KEY-FROZEN-MUTATED: a result declared frozen is not what it was."""
+        producer = (producer or getattr(obj, "_cash_lineage_producer", None)
+                    or "a frozen=True function")
+        try:
+            obj._cash_lineage_src = LINEAGE_SRC_DECORATOR
+        except (AttributeError, TypeError):
+            pass
+        warn_diagnostic(
+            CashImpurityWarning, "KEY-FROZEN-MUTATED",
+            f"a {type(obj).__name__} returned by {producer}, which is declared "
+            f"@cash.cache(frozen=True), has been modified since it was returned. "
+            f"Calls that received it before the change may have been served "
+            f"results for the unmodified object; from now on it is keyed by its "
+            f"contents.",
+            f"take frozen=True off {producer} if its result is meant to be "
+            f"modified, or modify a copy (`obj = copy.deepcopy(obj)`) instead.",
+        )
+
+    #: How many of a container's elements the cheap audit measures.
+    _FROZEN_SHAPE_SAMPLE = 8
+
+    def _frozen_shape(self, obj: Any) -> tuple | None:
+        """What *obj* is shaped like, in O(1)-ish work, or ``None``.
+
+        The full audit hashes every byte, so it runs rarely -- the baseline at
+        the 8th use and a comparison every 64th after that. That left the
+        ordinary shape unprotected: produce a result, change it, pass it again.
+        A length, a frame's shape and dtypes, and the lengths of a few elements
+        cost nothing to read on EVERY use, and they move for the changes a
+        caller actually makes (``model["w"].append(...)``). A change they
+        cannot see -- a value overwritten in place, same length -- is still
+        caught by the full audit.
+        """
+        try:
+            shape = getattr(obj, "shape", None)
+            if shape is not None:
+                dtypes = getattr(obj, "dtypes", None)
+                dtype = (tuple(str(d) for d in dtypes) if dtypes is not None
+                         else str(getattr(obj, "dtype", "")))
+                return ("shaped", tuple(shape), dtype)
+            if isinstance(obj, (str, bytes)):
+                return None
+            values = list(obj.values())[:self._FROZEN_SHAPE_SAMPLE] if isinstance(obj, dict) else None
+            if values is None and isinstance(obj, (list, tuple)):
+                values = list(obj[:self._FROZEN_SHAPE_SAMPLE])
+            inner = tuple(len(v) for v in values or () if isinstance(v, Sized))
+            return ("sized", len(obj), inner) if isinstance(obj, Sized) else None
+        except Exception:  # noqa: BLE001 - no cheap signal is not a failure
+            return None
+
     def _audit_frozen(self, obj: Any) -> bool:
         """Is a frozen=True result still what it was? False once it is not.
 
@@ -7792,12 +7870,17 @@ class Cash:
                 wref = weakref.ref(obj, lambda _r, k=key, m=self._frozen_uses: m.pop(k, None))
             except TypeError:
                 return True
-            entry = [wref, 0, None]
+            entry = [wref, 0, None, self._frozen_shape(obj)]
             if len(self._frozen_uses) >= 4096:
                 self._frozen_uses.clear()
             self._frozen_uses[key] = entry
         entry[1] += 1
         uses = entry[1]
+        shape = self._frozen_shape(obj)
+        if entry[3] is not None and shape != entry[3]:
+            self._frozen_uses.pop(key, None)
+            self._warn_frozen_mutated(obj)
+            return False
         due = (self.debug or os.environ.get("CASH_DEBUG")) or uses == _FROZEN_AUDIT_FIRST or (
             uses > _FROZEN_AUDIT_FIRST and uses % _FROZEN_AUDIT_EVERY == 0)
         if not due:
@@ -8095,13 +8178,24 @@ class Cash:
         invisible to it, so ``df.rename(columns=...)`` (or an empty frame of
         any shape) collided with the original and returned its cached result
        . Fold the labels in as a digest prefix.
+
+        The dtypes go in for the same reason, and it is the sharper one: the
+        same values under two dtypes are two different objects to the body. A
+        tz-naive and a tz-aware series collided, and the tz-aware call was
+        served the naive one's ``TypeError: Cannot convert tz-naive
+        timestamps``; so did ``int64``/``Int64`` (pd.NA semantics),
+        ``int64``/``int32`` and a categorical against an object column (found
+        attacking the decorator before round 26).
         """
         try:
             import pandas as pd
+            index_dtypes = [str(dt) for dt in getattr(value.index, "dtypes", [value.index.dtype])]
             if type_name == 'DataFrame':
-                schema = f"{list(value.columns)!r}:{list(value.index.names)!r}:"
+                schema = (f"{list(value.columns)!r}:{list(value.index.names)!r}:"
+                          f"{[str(dt) for dt in value.dtypes]!r}:{index_dtypes!r}:")
             else:  # Series
-                schema = f"{value.name!r}:{list(value.index.names)!r}:"
+                schema = (f"{value.name!r}:{list(value.index.names)!r}:"
+                          f"{str(value.dtype)!r}:{index_dtypes!r}:")
             h = hashlib.sha256(schema.encode('utf-8'))
             h.update(pd.util.hash_pandas_object(value).values.tobytes())
             return h.hexdigest()

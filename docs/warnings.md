@@ -500,7 +500,7 @@ decorator is buying you nothing.
 
 ## CONFIG-UNKNOWN-KEY {#config-unknown-key}
 
-<!-- claim: cash/config.py:_validated_layer @758aacf4, cash/config.py:_unknown_key @62786b51 -->
+<!-- claim: cash/config.py:_validated_layer @e4ba9596, cash/config.py:_unknown_key @62786b51 -->
 **What happened.** A `[tool.cash]` table, a `[cash]` table or a cash config
 file sets a key that is not one of cash's settings. The message names it, and
 the nearest real setting when there is one:
@@ -526,7 +526,7 @@ effect and the file or variable it came from, so you can check the result.
 
 ## CONFIG-INVALID {#config-invalid}
 
-<!-- claim: cash/config.py:_validated_layer @758aacf4, cash/config.py:_warn_toml_malformed @a8078188 -->
+<!-- claim: cash/config.py:_validated_layer @e4ba9596, cash/config.py:_warn_toml_malformed @a8078188 -->
 **What happened.** Cash could not use something in its configuration. One of
 two things:
 
@@ -1126,7 +1126,7 @@ silent declaration that does nothing is worse than no declaration.
 
 ## KEY-FROZEN-MUTATED {#key-frozen-mutated}
 
-<!-- claim: cash/core.py:Cash._audit_frozen @0f673f82 -->
+<!-- claim: cash/core.py:Cash._audit_frozen @b081f1b5 -->
 **What happened.** A function is decorated `@cash.cache(frozen=True)` — a
 promise that its result is not modified after it is returned — and one of its
 results was modified anyway: a later audit found it had changed since cash

@@ -1329,7 +1329,7 @@ When the object comes from another cached function and nothing modifies it
 afterwards — a trained model, a lookup table, a feature matrix — say so on the
 function that makes it:
 
-<!-- claim: cash/core.py:Cash._audit_frozen @0f673f82, cash/core.py:Cash._frozen_array_hash @5352bc8e -->
+<!-- claim: cash/core.py:Cash._audit_frozen @b081f1b5, cash/core.py:Cash._frozen_array_hash @5352bc8e -->
 ```python
 @cash.cache(frozen=True)
 def train(data):
@@ -1340,7 +1340,7 @@ def score(model, batch):            # keys `model` by train()'s identity:
     return model.predict(batch)     # no hash per call, same key in every process
 ```
 
-<!-- claim: cash/core.py:Cash._remember_frozen_container @49d6d1c0, cash/core.py:Cash._warn_frozen_has_no_effect @a4865188 -->
+<!-- claim: cash/core.py:Cash._remember_frozen_container @b292fc7e, cash/core.py:Cash._warn_frozen_has_no_effect @a4865188 -->
 A cached function receiving a frozen result keys it by the call that produced
 it: microseconds, the same in every process, and it works for an object that
 cannot be pickled. That covers a numpy array, a pandas / polars / modin frame, a
@@ -1351,8 +1351,12 @@ For a result it cannot mark (a `set`, an object with `__slots__`),
 [`KEY-FROZEN-NO-EFFECT`](warnings.md#key-frozen-no-effect) says so rather than
 leaving `frozen=True` silently inert. A numpy array result comes back
 **read-only**, so a write raises instead of going stale. Other objects are
-**audited**: cash re-hashes one
-at an occasional use (every use under `CASH_DEBUG=1`), and if it has changed —
+**audited**: what the object is shaped like — a length, a frame's shape and
+dtypes, the lengths of a few elements — is compared on **every** use, which
+costs nothing to read and moves for the changes a caller makes
+(`model["w"].append(...)`); cash also re-hashes it in full
+at an occasional use (every use under `CASH_DEBUG=1`), which catches a change
+those cannot see, such as a value overwritten in place. If it has changed —
 say `model.fit(...)` was called on it downstream —
 [`KEY-FROZEN-MUTATED`](warnings.md#key-frozen-mutated) names the producer and
 the object is keyed by its contents from then on. A result with a `ttl=` is

@@ -108,8 +108,9 @@ configure(debug=True, min_cache_savings_pct=0.30)
 Every field below is settable via every layer. The env-var column shows
 the `CASH_*` binding; the TOML key matches the field name.
 
-<!-- claim: cash/config.py:validate_value @236951a3, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @758aacf4 -->
-Every value is checked against the field's type, whichever layer it comes
+<!-- claim: cash/config.py:validate_value @3d107380, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @e4ba9596 -->
+Every value is checked against the field's type — and, for `backend` and a
+tier's `type`, against the set of names cash has — whichever layer it comes
 from. A string is read the way an environment variable is — `"true"`, `"8"` —
 and the byte-size fields (`max_cache_size`, `file_hash_full_max_bytes`, a
 tier's `max_size_bytes`) also take a size: `"2GB"`, `"500MB"`, `"512MiB"`

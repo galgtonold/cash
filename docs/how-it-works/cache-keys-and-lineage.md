@@ -166,7 +166,7 @@ The decorator path's built-in type hashers (`Cash._try_builtin_type_hash`) cover
 
 | Type | Module | Hashing strategy |
 |------|--------|------------------|
-| `DataFrame`, `Series` | pandas | schema labels + `pd.util.hash_pandas_object()` |
+| `DataFrame`, `Series` | pandas | schema labels **and dtypes** (column, `Series.name`, index names, column and index dtypes) + `pd.util.hash_pandas_object()`. The dtypes are in the key because the same values under two of them are two different objects to the body: a tz-naive and a tz-aware series used to collide, and so did `int64`/`Int64` |
 | `ndarray` | numpy | shape + dtype + **memory order** + **all** bytes (object arrays: stable repr) |
 | `DataFrame`, `Series` | polars | `hash_rows()` / `hash()` |
 | `LazyFrame` | polars | `serialize()` — the plan **and** the data it closes over. Not `explain()`: two frames over different in-memory data print the same plan, so they collided into a wrong hit. A plan reading from a file still serializes the *path*, not the contents — see [known limitations](../known-limitations.md). |

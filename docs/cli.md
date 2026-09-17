@@ -349,8 +349,13 @@ Delete a cache directory, or just one function's entries.
     What it will **not** delete is something that isn't a cache. Every
     directory it removes — named explicitly, resolved by `--all` or
     `--tool`, or found next to a notebook — must hold a `CACHE_VERSION` stamp
-    or `.entry` files, or it is refused (exit 1). `--force` overrides that
-    for a cache that lost its stamp. The current directory, and any
+    or `.entry` files, **and nothing cash did not write**, or it is refused
+    (exit 1), naming the files it found. Looking like a cache was not enough
+    on its own: cash writes its stamp into whatever directory it is pointed
+    at, so a project with `cache_dir = "../shared_data"` lost that folder's
+    `precious.csv` to `cash clear --all`. `--force` overrides both checks —
+    for a cache that lost its stamp, or a directory you mean to empty
+    whatever is in it. The current directory, and any
     directory containing it, is refused always, `--force` or not: an
     explicit path used to go straight to `rmtree`, and `cash clear .` in a
     project deleted the project's files.

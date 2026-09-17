@@ -44,6 +44,17 @@ __all__ = [
 
 _SUPPORTED_TIER_TYPES = frozenset({"memory", "file", "sqlite", "redis", "s3", "tiered"})
 
+#: Settings whose value must be one of a fixed set, by the dataclass they
+#: belong to (see ``validate_value``).
+_NAMED_CHOICES = {"backend": _SUPPORTED_TIER_TYPES, "type": _SUPPORTED_TIER_TYPES}
+
+
+def _check_choice(name: str, value: Any) -> None:
+    """``ValueError`` when *name* must be one of a fixed set and *value* is not."""
+    allowed = _NAMED_CHOICES.get(name)
+    if allowed is not None and isinstance(value, str) and value not in allowed:
+        raise ValueError(f"{name}={value!r}: not one of {', '.join(sorted(allowed))}")
+
 
 @dataclass
 class TierConfig:
@@ -716,6 +727,7 @@ def _load_env_config() -> dict[str, Any]:
                 continue
             try:
                 value = _coerce(_field_type(field_name, TierConfig), raw, field_name)
+                _check_choice(field_name, value)
             except ValueError as e:
                 _config_notice(
                     "CONFIG-INVALID",
@@ -734,6 +746,7 @@ def _load_env_config() -> dict[str, Any]:
             continue
         try:
             value = _coerce(_field_type(key), raw, key)
+            _check_choice(key, value)
         except ValueError as e:
             _config_notice(
                 "CONFIG-INVALID",
@@ -1479,6 +1492,15 @@ def validate_value(name: str, value: Any, dataclass_type: type = CashConfig) -> 
             return float(value)
     elif base is str:
         if isinstance(value, str):
+            if name in _NAMED_CHOICES and value not in _NAMED_CHOICES[name]:
+                # Checked here so a file or env layer reports it
+                # (CONFIG-INVALID) and falls back, as every other bad value
+                # does. It used to reach the backend factory, which raised
+                # ValueError out of `import cash` -- and out of `cash info`,
+                # the command for finding out what is wrong.
+                raise ValueError(
+                    f"{name}={value!r}: not one of "
+                    f"{', '.join(sorted(_NAMED_CHOICES[name]))}")
             return value
     else:
         return value                    # lists, nested configs: checked elsewhere
@@ -1520,6 +1542,10 @@ def _validated_layer(data: dict[str, Any], label: str, *, strict: bool,
                                 _unknown_key(label, f"tiers[{i}].{k}", k, tier_valid)
                     tiers.append({k: (validate_value(k, v, TierConfig) if k in tier_valid else v)
                                   for k, v in t.items()})
+                    if tiers[-1].get("type") not in _SUPPORTED_TIER_TYPES:
+                        raise ValueError(
+                            f"tiers[{i}].type={t.get('type')!r}: not one of "
+                            f"{', '.join(sorted(_SUPPORTED_TIER_TYPES))}")
                 out[key] = tiers
             elif key in valid:
                 out[key] = validate_value(key, value)
@@ -1589,7 +1615,10 @@ def _build_config(merged: dict[str, Any], source: str) -> CashConfig:
                     # in the TOML don't blow up __init__.
                     tier_field_names = {f.name for f in fields(TierConfig)}
                     clean = {k: v for k, v in entry.items() if k in tier_field_names}
-                    tiers.append(TierConfig(**clean))
+                    try:
+                        tiers.append(TierConfig(**clean))
+                    except (ValueError, TypeError):
+                        logger.debug("dropping unusable tier %r", clean)
                 # else: malformed entry — silently skip
             cfg.tiers = tiers
         elif key in valid:
