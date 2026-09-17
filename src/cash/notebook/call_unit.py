@@ -48,6 +48,7 @@ from cash.notebook.file_tracker import FileAccessTracker
 from cash.notebook.object_hashing import compute_hash, compute_hash_full, is_identity_fallback_hash
 from cash.notebook.randomness import capture_rng_state, rng_modules_changed
 from cash.notebook._trace import trace_event
+from cash.notebook.call_refs import DIGEST_FIELD, SIZE_FIELD, digest_and_size
 
 logger = logging.getLogger(__name__)
 
@@ -665,6 +666,8 @@ def _unwrap_callee_globals(value, metadata: Mapping[str, Any]):
 #: the site runs plain for the rest of the run when caching a call costs more
 #: than ``_OVERHEAD_FACTOR`` times what the call computes.
 _GUARD_AFTER_CALLS = 50
+#: A call cheaper than this gets no content digest, so no statement refers to it.
+_REF_MIN_COMPUTE_S = 0.1
 _GUARD_CHEAP_BELOW_S = 0.05
 _PLAIN_SAMPLES = 5
 _OVERHEAD_FACTOR = 3.0
@@ -1028,6 +1031,12 @@ class CallUnit:
         self.hits_saved_s = 0.0
         self._last_hit = False
         self._last_key_s: float | None = None
+        #: ``id(result) -> (result, key, digest)`` for the call results this
+        #: cell stored or was served, so the statement holding one stores a
+        #: reference to its entry rather than a second copy (``call_refs``).
+        #: Emptied by :meth:`begin_cell`; holding the results that long keeps
+        #: an ``id`` from being reused by another object meanwhile.
+        self.held_results: dict[int, tuple[Any, str, str, int]] = {}
         #: Cache keys of sites known to mutate an argument or consume RNG,
         #: discovered by observing a MISS (see `wrap`). Permanent for the life
         #: of this `CallUnit` (one notebook session): once a site is known to
@@ -1057,6 +1066,14 @@ class CallUnit:
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return float(value)
         return _COST_FLOOR_S
+
+    def begin_cell(self) -> None:
+        """A new cell: the results held for references are let go."""
+        self.held_results.clear()
+
+    def _hold(self, key: str, value: Any, digest: str | None, size: Any) -> None:
+        if digest:
+            self.held_results[id(value)] = (value, key, digest, size if isinstance(size, int) else 0)
 
     def begin_statement(self) -> None:
         """A new statement run: every site starts over (see :meth:`_entry_for`)."""
@@ -1209,6 +1226,8 @@ class CallUnit:
                 self._replay_deps(metadata)
                 self._replay_output(metadata)
                 self._restore_globals(fn, mutated_globals, captured_globals)
+                if not captured_globals:
+                    self._hold(key, value, metadata.get(DIGEST_FIELD), metadata.get(SIZE_FIELD))
                 self._record(func_name, site, key, cache_hit=True, elapsed=0.0, time_saved=recorded_cost)
                 self._last_compute = recorded_cost or 0.0
                 self._last_hit = True
@@ -1953,6 +1972,15 @@ class CallUnit:
                 snap = None
             if snap:
                 metadata["auto_file_deps"] = snap
+        # A statement holding this result stores a reference to this entry
+        # (``call_refs``). Only for a call worth persisting -- hashing every
+        # byte of a cheap call's result would cost more than the copy saves --
+        # and not for one carrying captured globals, whose value is wrapped.
+        if elapsed >= _REF_MIN_COMPUTE_S and not callee_globals:
+            found = digest_and_size(value)
+            if found:
+                metadata[DIGEST_FIELD], metadata[SIZE_FIELD] = found
+                self._hold(key, value, *found)
         if stdout:
             metadata["stdout"] = stdout
         if stderr:

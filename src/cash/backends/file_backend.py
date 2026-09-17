@@ -1163,7 +1163,9 @@ class FileBackend(CacheBackend):
         )
         slot = metadata.get('version_slot')
         if slot:
-            self._prune_versions(slot, key, len(serialized_value),
+            # A version whose values are references to call entries weighs
+            # what those hold too (``cash.notebook.call_refs``).
+            self._prune_versions(slot, key, len(serialized_value) + int(metadata.get('call_ref_bytes') or 0),
                                  metadata.get('execution_time') or 0.0)
 
     def _prune_versions(self, slot: str, key: str, size: int, cost: float) -> None:
@@ -1177,7 +1179,13 @@ class FileBackend(CacheBackend):
             for k in gone:
                 versions.pop(k)
             drop = superseded_to_drop(versions, key, self._read_keys)
+            freed = self._call_refs_of(drop) - self._call_refs_of(k for k in versions if k not in drop)
             for k in drop:
+                self.delete(k)
+            # The call entries only the dropped versions referred to go with
+            # them. One another statement also refers to makes that one a miss
+            # -- it recomputes, never restores something else.
+            for k in freed:
                 self.delete(k)
             if gone or drop:
                 self._versions.forget(gone + drop)
@@ -1185,6 +1193,13 @@ class FileBackend(CacheBackend):
                 logger.debug("Pruned %d superseded version(s) of slot %s", len(drop), slot)
         except (OSError, CacheBackendError) as exc:
             logger.debug("Version pruning failed for %r: %s", key, exc)
+
+    def _call_refs_of(self, keys) -> set[str]:
+        refs: set[str] = set()
+        for k in keys:
+            meta = self.get_metadata(k) or {}
+            refs.update(meta.get('call_refs') or ())
+        return refs
 
     def _do_set_sync(self, key: str, path: str, metadata: dict,
                      serialized_value: bytes) -> None:

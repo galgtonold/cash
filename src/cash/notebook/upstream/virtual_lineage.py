@@ -2992,6 +2992,10 @@ class VirtualLineage:
 
             # 2. Query Memory Backend first (fastest) - Or just generic backend
             metadata, cached_data = self.cash_instance.backend.get(cache_key)
+            if cached_data is not None:
+                # Call results the entry refers to rather than copies (call_refs).
+                from cash.notebook.call_refs import resolve_call_refs
+                cached_data = resolve_call_refs(cached_data, self.cash_instance.backend)
 
             # Extract saved execution time
             saved_time = metadata.get('execution_time', 0.0) if metadata else 0.0

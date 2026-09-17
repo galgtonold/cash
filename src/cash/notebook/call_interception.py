@@ -372,6 +372,12 @@ class CallCache:
         """
         return {}
 
+    def begin_cell(self) -> None:
+        self._call_unit.begin_cell()
+
+    def held_results(self) -> dict:
+        return self._call_unit.held_results
+
     def set_sites(self, sites: list[CallSite]) -> None:
         self._sites = sites
         # One call per statement run: each site's guard starts over.

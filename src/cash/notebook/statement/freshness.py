@@ -144,6 +144,10 @@ class CacheFreshnessChecker:
             # Fixes the bug where `df` cell was cached even when the source CSV changed.
             if cached_data and inputs:
                 cached_data = self._invalidate_if_input_file_changed(tracking_state, inputs, cached_data)
+            if cached_data:
+                # Call results the entry refers to rather than copies (call_refs).
+                from cash.notebook.call_refs import resolve_call_refs
+                cached_data = resolve_call_refs(cached_data, self._backend)
 
         return metadata, cached_data, cache_check_time
 

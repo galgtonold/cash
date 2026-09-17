@@ -2100,6 +2100,8 @@ class StatementProcessor:
         """Start this cell's statement log, before its statements run."""
         self._cell_stmt_log = []
         self._cell_last_key = {}
+        if self._call_cache is not None:
+            self._call_cache.begin_cell()
 
     #: Ancestry entries kept per variable; past this they are summed into one,
     #: which may count a shared ancestor twice -- too much persisted, never too little.
@@ -4511,8 +4513,13 @@ class StatementProcessor:
             **cost_fields,
         )
 
+        variables = self._filter_safe_vars(captured_vars)
+        referenced: dict[str, int] = {}
+        if self._call_cache is not None:
+            from cash.notebook.call_refs import with_call_refs
+            variables = with_call_refs(variables, self._call_cache.held_results(), referenced)
         payload = {
-            'variables': self._filter_safe_vars(captured_vars),
+            'variables': variables,
             'stdout': captured_output.stdout,
             'stderr': captured_output.stderr,
             # Rich-display output (RichOutput objects). The 'outputs' key in
@@ -4544,6 +4551,10 @@ class StatementProcessor:
         # re-wrap that mutated dict at the end so the returned view carries
         # the storage info on to the badge metrics.
         wire = metadata.to_dict()
+        if referenced:
+            from cash.notebook.call_refs import REF_BYTES_FIELD, REFS_FIELD
+            wire[REFS_FIELD] = sorted(referenced)
+            wire[REF_BYTES_FIELD] = sum(referenced.values())
         # An intermediate of this cell (``cell_executor._written_later_in_cell``)
         # stays in RAM; the cell's final version is persisted at its end.
         later = getattr(self, 'written_later_in_cell', frozenset())
