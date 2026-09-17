@@ -1020,6 +1020,13 @@ class CallUnit:
         #: What the call just made would have cost to compute: its run time on
         #: a miss, its recorded cost on a hit, ``None`` when it ran plain.
         self._last_compute: float | None = None
+        #: Seconds this unit spent on calls beyond their own compute (keys,
+        #: lookups, stores, restores), and the compute its hits stood in for.
+        #: Monotonic; a statement reads the difference across its run (see
+        #: ``StatementProcessor._execute_and_drain``).
+        self.overhead_s = 0.0
+        self.hits_saved_s = 0.0
+        self._last_hit = False
         self._last_key_s: float | None = None
         #: Cache keys of sites known to mutate an argument or consume RNG,
         #: discovered by observing a MISS (see `wrap`). Permanent for the life
@@ -1124,9 +1131,17 @@ class CallUnit:
                 return result
             self._last_compute = None
             self._last_key_s = None
+            self._last_hit = False
             started = _time.perf_counter()
             result = invoke(*args, **kwargs)
-            run.total_s += _time.perf_counter() - started
+            spent = _time.perf_counter() - started
+            run.total_s += spent
+            if self._last_compute is not None:
+                if self._last_hit:
+                    self.overhead_s += spent
+                    self.hits_saved_s += self._last_compute
+                else:
+                    self.overhead_s += max(0.0, spent - self._last_compute)
             run.calls += 1
             if self._last_key_s is not None:
                 run.key_s += self._last_key_s
@@ -1196,6 +1211,7 @@ class CallUnit:
                 self._restore_globals(fn, mutated_globals, captured_globals)
                 self._record(func_name, site, key, cache_hit=True, elapsed=0.0, time_saved=recorded_cost)
                 self._last_compute = recorded_cost or 0.0
+                self._last_hit = True
                 return value
 
             # The call runs inside the STATEMENT's ambient capture

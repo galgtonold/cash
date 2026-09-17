@@ -2539,11 +2539,14 @@ class StatementProcessor:
         if self.debug:
             logger.debug("%s Executing (cache miss)", _LOG_CACHE_DEBUG)
 
+        marks = self._cash_time_marks()
         result, captured, execution_time, accessed_files, accessed_remote = self._execute_statement(
             code, stream_output=stream_output, tree=tree,
             skip_capture=(skip_cache and stream_output), is_last=is_last,
             exec_source=exec_source,
         )
+        wall_time = execution_time
+        execution_time = self._statement_cost(execution_time, marks)
 
         decorator_calls: list = []
         try:
@@ -2565,8 +2568,9 @@ class StatementProcessor:
         if decorator_calls:
             metrics['decorator_calls'] = decorator_calls
 
-        self._display_execution_output(captured, execution_time, silent, stream_output, metrics)
-        metrics['execution_time'] = execution_time
+        self._display_execution_output(captured, wall_time, silent, stream_output, metrics)
+        metrics['execution_time'] = wall_time
+        metrics['compute_cost'] = execution_time
 
         if not result.success:
             metrics['status'] = CacheStatus.ERROR
@@ -2600,11 +2604,14 @@ class StatementProcessor:
         if self.debug:
             logger.debug("%s Executing (cache miss)", _LOG_CACHE_DEBUG)
 
+        marks = self._cash_time_marks()
         result, captured, execution_time, accessed_files, accessed_remote = await self._execute_statement_async(
             code, stream_output=stream_output, tree=tree,
             skip_capture=(skip_cache and stream_output), is_last=is_last,
             exec_source=exec_source,
         )
+        wall_time = execution_time
+        execution_time = self._statement_cost(execution_time, marks)
 
         decorator_calls: list = []
         try:
@@ -2621,8 +2628,9 @@ class StatementProcessor:
         if decorator_calls:
             metrics['decorator_calls'] = decorator_calls
 
-        self._display_execution_output(captured, execution_time, silent, stream_output, metrics)
-        metrics['execution_time'] = execution_time
+        self._display_execution_output(captured, wall_time, silent, stream_output, metrics)
+        metrics['execution_time'] = wall_time
+        metrics['compute_cost'] = execution_time
 
         if not result.success:
             metrics['status'] = CacheStatus.ERROR
@@ -2632,6 +2640,37 @@ class StatementProcessor:
             return metrics, result, captured, execution_time, accessed_files, accessed_remote
 
         return None, result, captured, execution_time, accessed_files, accessed_remote
+
+    def _cash_time_marks(self) -> tuple[float, Any, float, float]:
+        """Cash's own clocks, read around a statement (see :meth:`_statement_cost`)."""
+        from cash.notebook.file_tracker import tracking_seconds
+        unit = getattr(getattr(self, '_call_cache', None), '_call_unit', None)
+        return (tracking_seconds(), unit, getattr(unit, 'overhead_s', 0.0),
+                getattr(unit, 'hits_saved_s', 0.0))
+
+    def _statement_cost(self, wall_time: float, marks: tuple[float, Any, float, float]) -> float:
+        """What the statement's own code cost, for storing and for crediting a hit.
+
+        The wall time under cash, less cash's own time inside it -- recording
+        file reads, keying and storing the calls it routed -- plus what the calls
+        it served from the cache would have cost. Round 25: "saved 16.50s" for a
+        folder read that takes 1.8 s without cash (r25s4), and "saved 6.55s" for
+        a dict of fits that takes 50-100 s, built from calls served from the
+        cache (r25s5). The badge's run time stays the wall time.
+        """
+        try:
+            from cash.notebook.file_tracker import tracking_seconds
+            tracking0, unit0, overhead0, saved0 = marks
+            tracking = max(0.0, tracking_seconds() - tracking0)
+            unit = getattr(getattr(self, '_call_cache', None), '_call_unit', None)
+            overhead = saved = 0.0
+            if unit is not None:
+                base_overhead, base_saved = (overhead0, saved0) if unit is unit0 else (0.0, 0.0)
+                overhead = max(0.0, getattr(unit, 'overhead_s', 0.0) - base_overhead)
+                saved = max(0.0, getattr(unit, 'hits_saved_s', 0.0) - base_saved)
+            return max(0.0, wall_time - tracking - overhead) + saved
+        except Exception:  # noqa: BLE001 - a cost estimate never breaks a statement
+            return wall_time
 
     def _post_execute(
         self,

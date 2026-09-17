@@ -516,6 +516,21 @@ def _frame_kind(filename: str) -> str:
     return kind
 
 
+#: Seconds spent recording reads, process-wide (see :func:`tracking_seconds`).
+_TRACKING_SECONDS = [0.0]
+
+
+def tracking_seconds() -> float:
+    """Seconds cash has spent recording file reads in this process.
+
+    Read before and after a statement, the difference is cash's own time inside
+    it, which is not the statement's cost: a folder read recorded 16.5 s for a
+    load that takes 1.8 s without cash, and a later hit credited all of it as
+    saved (round 25, r25s4).
+    """
+    return _TRACKING_SECONDS[0]
+
+
 def _note_untracked_read(path: Any) -> None:
     """A read made outside every cached call, credited to the user code on the stack.
 
@@ -1395,6 +1410,13 @@ class FileAccessTracker:
         return self.absent_files
 
     def _track_path(self, path):
+        started = time.perf_counter()
+        try:
+            self._track_path_untimed(path)
+        finally:
+            _TRACKING_SECONDS[0] += time.perf_counter() - started
+
+    def _track_path_untimed(self, path):
         raw_path = str(path)
         if _is_pseudo_fs(raw_path):
             # See _PSEUDO_FS_PREFIXES. Checked BEFORE realpath, which on
