@@ -557,6 +557,7 @@ class ReexecutionPlanner:
         as inputs too (``absent_callee_globals``).
         """
         user_ns = self._virtual_lineage.shell.user_ns
+        live_lineage = getattr(self._virtual_lineage, "variable_lineage", None) or {}
         scheduled = set(stmts_to_run_indices)
         pending = sorted(scheduled)
         while pending:
@@ -566,7 +567,10 @@ class ReexecutionPlanner:
                 inputs |= self._virtual_lineage.absent_callee_globals(
                     inputs, virtual_lineage, virtual_modules or set())
             for v in sorted(inputs):
-                if v in user_ns or hasattr(builtins, v):
+                if v not in user_ns and hasattr(builtins, v):
+                    continue
+                if v in user_ns and not self._live_is_behind_producer(
+                        simulation_trace, v, i, live_lineage):
                     continue
                 # The LATEST producer before the statement must run, not just
                 # any earlier one: a scheduled `sales['timestamp'] = ...` does
@@ -581,6 +585,31 @@ class ReexecutionPlanner:
                     trace_event("input_producer_completion", stmt=simulation_trace[p][0][:80],
                                 var=v, consumer=simulation_trace[i][0][:80])
         return sorted(scheduled)
+
+    def _live_is_behind_producer(self, simulation_trace: list, var: str, before: int,
+                                 live_lineage: dict) -> bool:
+        """Is live *var* NOT what its latest producer before *before* makes?
+
+        Live used to be enough. r25s3 ran the export cell (``results["f1"] =
+        ...`` in place), re-ran the sweep cell (``results`` rebound, no f1),
+        then the chart cell: the plan re-ran ``best = results.sort_values(
+        ['f1', ...])`` on the live table without the f1 write above it, and
+        raised ``UpstreamStateError: 'f1'`` (round 25).
+
+        Behind only on evidence: the live lineage is what an EARLIER producer
+        made. A live value matching no producer (a loop's iterations, an edit
+        the file does not have yet) keeps the old answer, which is what a
+        per-iteration loop's statements need.
+        """
+        p = self._latest_producer(simulation_trace, var, before=before)
+        live = live_lineage.get(var)
+        if p is None or live is None:
+            return False
+        produced = (simulation_trace[p][4] or {}).get(var)
+        if produced is None or produced == live:
+            return False
+        return any((simulation_trace[q][4] or {}).get(var) == live
+                   for q in range(p) if var in simulation_trace[q][1])
 
     def _complete_later_producers(self, stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
         """Every statement after a re-run producer of a variable that also
