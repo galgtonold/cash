@@ -1283,7 +1283,7 @@ answering it after the restart. Round 18 found the same for the cached function
 itself, in a worker that imported the old code and made its first call after
 the deploy landed.
 
-<!-- claim: cash/core.py:Cash._pin_own_source @36ccf85f -->
+<!-- claim: cash/core.py:Cash._pin_own_source @1883fac9 -->
 So cash keys that code by what is **actually running** instead: a cached
 function by the source it was imported with (its identity is taken when the
 decorator runs, not at its first call — and by its loaded bytecode when even
@@ -1364,7 +1364,7 @@ whole function's caching, not just the calls that rely on the default.
 
 ## KEY-UNHASHABLE-GLOBAL {#key-unhashable-global}
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @271b1e55 -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @60850329 -->
 **What happened.** The function reads a module-level variable — its own
 module's, or a helper's, in which case the message shows a dotted name — and
 Cash could not fingerprint that variable's value. Cash normally folds the

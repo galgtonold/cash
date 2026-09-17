@@ -427,6 +427,16 @@ class CodeAnalyzer:
         crash. Falls back to ``__name__`` then ``repr()`` when qualname is
         absent.
         """
+        # A partial reprs as ``functools.partial(<function slow at 0x...>, 1)``:
+        # an ADDRESS, so its identity differed in every process and a cached
+        # partial never hit across processes (found attacking the decorator
+        # before round 26). What it wraps is stable; what it binds reaches the
+        # key through the arguments and the function's own namespace name.
+        import functools as _functools
+        depth = 0
+        while isinstance(func, _functools.partial) and depth < 8:
+            func = func.func
+            depth += 1
         module = getattr(func, '__module__', None) or '?'
         qualname = (
             getattr(func, '__qualname__', None)

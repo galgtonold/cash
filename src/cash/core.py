@@ -243,7 +243,25 @@ def _tag_subtype(value: Any, base: type, canon: Any) -> Any:
     if type(value) is base:
         return canon
     t = type(value)
-    return ("__cash_subtype__", f"{t.__module__}.{t.__qualname__}", canon)
+    # ...and with the state the subclass carries beside its items, which the
+    # rebuild drops: `defaultdict(list)` and `defaultdict(set)` shared one
+    # entry, and a `dict` subclass holding `self.source` served the first
+    # caller's answer for every source (found attacking the decorator before
+    # round 26). Pickle carries both, so this is signal cash had and dropped.
+    state: Any = ()
+    try:
+        factory = getattr(value, "default_factory", None)
+        own = {k: v for k, v in (getattr(value, "__dict__", None) or {}).items()
+               if not k.startswith("__")}
+        if factory is not None:
+            state += (("default_factory", getattr(factory, "__qualname__", repr(factory))),)
+        if own:
+            state += tuple(sorted((k, _stable_key_repr(v, 45)) for k, v in own.items()))
+    except Exception:  # noqa: BLE001 - a key part that cannot be read is left out
+        state = ()
+    tag = f"{t.__module__}.{t.__qualname__}"
+    return ("__cash_subtype__", tag, canon) if not state else (
+        "__cash_subtype__", tag, canon, state)
 
 
 class CyclicValueError(TypeError):
@@ -1902,6 +1920,20 @@ class Cash:
         Opaque callables such as ``functools.partial`` lack both ``__qualname__``
         and ``__name__``; fall back to ``repr`` so keying them never crashes.
         """
+        if isinstance(func, functools.partial):
+            # `repr(partial)` holds the wrapped function's ADDRESS, so every
+            # process took a fresh namespace and none of them ever hit (found
+            # attacking the decorator before round 26). Name it after what it
+            # wraps, plus what it binds -- two partials of one function stay
+            # two namespaces, and each is the same in every process.
+            inner = Cash._get_func_key(func.func)
+            try:
+                bound = hashlib.sha256(
+                    repr((func.args, sorted(func.keywords.items()))).encode("utf-8"),
+                ).hexdigest()[:12]
+            except Exception:  # noqa: BLE001 - an unreprable argument keys on the function
+                bound = "?"
+            return f"{inner}[partial:{bound}]"
         module = getattr(func, '__module__', None) or '__unknown__'
         if module in MAIN_MODULE_NAMES:
             module = resolve_main_module(func)
@@ -2844,6 +2876,15 @@ class Cash:
         the same loaded-vs-disk check helpers get.
         """
         key = id(func)
+        # A partial has no code of its own, and the fallbacks below then keyed
+        # on a repr carrying the wrapped function's ADDRESS -- a different pin
+        # in every process, so a cached partial never hit across processes.
+        # What it wraps is the code that runs; what it binds is already in the
+        # namespace name (`_get_func_key`).
+        depth = 0
+        while isinstance(func, functools.partial) and depth < 8:
+            func = func.func
+            depth += 1
         pin = self._own_pins.get(key)
         if pin is not None:
             if self._own_pins_unverified and key in self._own_pins_unverified:
@@ -5939,6 +5980,18 @@ class Cash:
             n for scope in scopes for n in (scope.co_names or ())
             if n in g and n not in Cash._MACHINERY_DUNDERS and n not in written
         }
+        # A name spelled as a string reads the same global: `globals()["K"]`
+        # is a LOAD_CONST, so `co_names` never had it and editing K served the
+        # old answer -- 20 where an uncached run gives 500 (found attacking the
+        # decorator before round 26). The code channel already resolves string
+        # constants this way (`_referenced_user_code`); this is its data twin.
+        # A string that merely happens to match a global costs a fold, never a
+        # stale value.
+        candidates |= {
+            c for scope in scopes for c in (scope.co_consts or ())
+            if isinstance(c, str) and c.isidentifier() and c in g
+            and c not in Cash._MACHINERY_DUNDERS and c not in written
+        }
         # Also exclude globals the body mutates IN PLACE (``g['k'] += 1``,
         # ``g.append(...)``) - a STORE_GLOBAL-free accumulator that would
         # otherwise drift every call and cause a permanent miss.
@@ -6935,6 +6988,14 @@ class Cash:
                     for cname, chash in self._instance_class_source_parts(
                             item, own_pkg=own_pkg):
                         parts.append((f"{name}#cls:{cname}", chash))
+                elif isinstance(item, type) and self._is_user_class(item, own_pkg):
+                    # The CLASS itself, not an instance of it: `TABLE = {"fast":
+                    # impl.Fast}` pickles by reference, so editing `Fast.run`
+                    # moved nothing while the same dict holding a FUNCTION was
+                    # followed (found attacking the decorator before round 26).
+                    surface = self._code_surface_hash(item)
+                    if surface is not None:
+                        parts.append((f"{name}#cls:{item.__qualname__}", surface))
         parts.extend(self._module_attr_parts(
             func, func_name, g, learned=learned_mutating, watch=watch))
         self._pending_capture_watch.update(watch)
@@ -7453,6 +7514,19 @@ class Cash:
             return cached
         import dis
         pairs: set[tuple[str, str]] = set()
+        # `vars(conf)["K"]` / `getattr(conf, "K")`: the attribute is a string
+        # constant rather than a LOAD_ATTR, so the pair below never formed and
+        # the constant was not keyed on. Every module read in this scope is
+        # paired with every identifier-shaped constant in it; a pair that does
+        # not exist is dropped at fold time by the getattr below.
+        g = getattr(func, "__globals__", None) or {}
+        for scope in Cash._iter_code_scopes(code):
+            modules = [n for n in (scope.co_names or ())
+                       if isinstance(g.get(n), types.ModuleType)]
+            if modules:
+                for const in (scope.co_consts or ()):
+                    if isinstance(const, str) and const.isidentifier():
+                        pairs.update((m, const) for m in modules)
         for scope in Cash._iter_code_scopes(code):
             instrs = list(dis.get_instructions(scope))
             for prev, nxt in zip(instrs, instrs[1:]):

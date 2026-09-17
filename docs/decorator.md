@@ -493,7 +493,7 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @271b1e55, cash/core.py:Cash._fold_dependency_read_globals @fbbbd0b2 -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @60850329, cash/core.py:Cash._fold_dependency_read_globals @fbbbd0b2 -->
 Only globals that are **read** participate — and that includes globals read
 on someone else's behalf: by a **helper**, so a helper returning a module-level
 `CONFIG` invalidates its caller when that config changes, and by another
