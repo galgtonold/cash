@@ -213,6 +213,21 @@ class ReexecutionPlanner:
         self._classifier = classifier
         self.debug = debug
 
+    @staticmethod
+    def _drop_scheduled_from_restored(simulation_trace, stmts_to_run_indices, restored):
+        """A statement scheduled to run is not also reported as restored.
+
+        Several passes promote a statement the backward scan restored to a
+        re-run and leave its restore entry behind; the badge then listed it
+        twice, ``^CACHED: models = {}`` above ``^CACHED: models = {}`` (round
+        25, r25s5 and r25s1). Done once here, by code as the per-pass filters
+        do, so no pass can leave one behind.
+        """
+        scheduled = {simulation_trace[i][0] for i in stmts_to_run_indices}
+        if not scheduled:
+            return restored
+        return [info for info in restored if info.get('code') not in scheduled]
+
     def _build_reexecution_plan(
         self,
         simulation_trace: list,
@@ -304,6 +319,9 @@ class ReexecutionPlanner:
             if len(stmts_to_run_indices) == before:
                 break
 
+        restored_statements_info = self._drop_scheduled_from_restored(
+            simulation_trace, stmts_to_run_indices, restored_statements_info,
+        )
         skipped_metrics = self._virtual_lineage._collect_skipped_statement_metrics(
             simulation_trace, stmts_to_run_indices, restored_statements_info,
             virtual_modules, stmt_lookup_times,
@@ -313,6 +331,9 @@ class ReexecutionPlanner:
         stmts_to_run_indices = self._schedule_loop_var_contexts(stmts_to_run_indices, simulation_trace)
         stmts_to_run_indices = self._virtual_lineage._filter_accumulator_reinits(stmts_to_run_indices, simulation_trace, vars_mutated_by_loops)
         stmts_to_run_indices = self._dedup_sorted_indices(stmts_to_run_indices)
+        restored_statements_info = self._drop_scheduled_from_restored(
+            simulation_trace, stmts_to_run_indices, restored_statements_info,
+        )
 
         statements_to_reexecute: list[str] = []
         for idx in stmts_to_run_indices:
