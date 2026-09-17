@@ -205,6 +205,37 @@ _LEAF_ITEMS = (StatementRow, ControlGroupSingle)
 _INDENT = "  "
 
 
+#: Past this many passes a loop-body statement is summarised on one line.
+_LOOP_ROWS_MAX = 5
+
+
+def _loop_statement_summary(stmt: LoopStatement, pad: str, *, is_upstream: bool) -> list[str]:
+    """One line for every pass of *stmt*, and its sub-calls across all of them.
+
+    A row per pass put 126+ lines on the badge for 63 machines, each not-cached
+    row repeating the same reason (round 25, r25s3). The counts and the
+    distinct reasons are what a reader looks for; a short loop keeps its rows.
+    """
+    its = stmt.iterations
+    restored = [it for it in its if it.status is BadgeStatus.RESTORED]
+    ran = [it for it in its if it.status is not BadgeStatus.RESTORED]
+    code = (stmt.base_code or (its[0].code if its else "")).splitlines()
+    code = (code[0] if code else "")[:theme.HEADER_MAX_LEN]
+    parts = []
+    if restored:
+        parts.append(f"{len(restored)} cached (saved {sum(it.saved_time_s for it in restored):.2f}s)")
+    if ran:
+        parts.append(f"{len(ran)} ran ({sum(it.time_s for it in ran):.2f}s)")
+    reasons = list(dict.fromkeys(
+        shorten_skipped_reason(it.skipped_reason) for it in ran if it.skipped_reason))
+    lead = "^" if is_upstream else ""
+    line = f"{pad}  {lead}LOOP x{len(its)}: {code}  - {', '.join(parts)}"
+    if reasons:
+        line += " - not cached: " + "; ".join(reasons[:2])
+    return [line, *_sub_unit_lines(StatementRow(status=BadgeStatus.COMPUTED, code=code, time_s=0.0,
+                                                sub_units=stmt.sub_units), pad)]
+
+
 def _loop_body(item: ForLoopGroup) -> tuple:
     """Body of *item* in source order.
 
@@ -233,6 +264,9 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
         out: list[str] = []
         for sub in _loop_body(item):
             if isinstance(sub, LoopStatement):
+                if len(sub.iterations) > _LOOP_ROWS_MAX:
+                    out.extend(_loop_statement_summary(sub, pad, is_upstream=is_upstream))
+                    continue
                 for it in sub.iterations:
                     out.extend(_iteration_lines(it, pad, is_upstream=is_upstream))
             else:
