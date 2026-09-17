@@ -164,9 +164,9 @@ The returned object satisfies the iterator protocol — `iter(x) is x`, `__next_
 ## Chunk eviction
 
 <!-- claim: cash/core.py:_ChunkedCachedIterator.__next__ @e3fe60b4 -->
-`_ChunkedCachedIterator` is robust to mid-iteration chunk loss. If `backend.get(chunk_key)` returns `(None, None)` — e.g. an L1-only backend evicted that chunk under memory pressure, or `cleanup()` ran between iterations — `__next__` raises `StopIteration` instead of propagating an error. Iteration terminates at the last contiguous run of available data.
+`_ChunkedCachedIterator` handles mid-iteration chunk loss. If `backend.get(chunk_key)` returns `(None, None)` — e.g. an L1-only backend evicted that chunk under memory pressure, another process cleared the cache, or `cleanup()` ran between iterations — the run is finished by **recomputing** from the function and skipping the items already yielded. Where cash has nothing to recompute from (a hit inside the async wrapper), the loss is raised.
 
-The next call to the decorated function will see a miss on the manifest key (manifests live in the same backend tier as chunks, so they're evicted together in typical configurations) and recompute. Test reference: `test_chunked_iterator_missing_chunk_terminates_safely` in `tests/test_core/test_iterator_caching.py`.
+What it will not do is stop there. Ending the iteration quietly hands the caller a PREFIX of the answer — 100 items of 1000, with no error and no warning, so a sum or a count over the stream is wrong rather than slow (measured while attacking the decorator before round 26). Test reference: `test_chunked_iterator_missing_chunk_finishes_from_the_function` in `tests/test_core/test_iterator_caching.py`, and `tests/test_core/test_a_cached_iterator_is_never_served_short.py` for the end-to-end shapes.
 
 <!-- claim: cash/core.py:Cash._chunks_are_intact @769a0a1e, cash/core.py:Cash._compute_with_lock @b47c9e4c -->
 That miss is `Cash._chunks_are_intact`, which `get_metadata`-probes each chunk the manifest claims and treats a manifest with a hole as absent. **Both read paths run it** — `_try_get_cached` on the default path, and the double-checked re-read inside `Cash._compute_with_lock` when `use_locking=True` — so an incomplete manifest recomputes either way.
