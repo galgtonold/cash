@@ -20,6 +20,7 @@ import os
 import pickle
 import sys
 import textwrap
+import concurrent.futures
 import threading
 import time
 import types
@@ -1811,11 +1812,20 @@ class Cash:
         # func_name -> {parameter: seeding call} for seeding calls fed by a
         # parameter; checked per call by `_warn_if_seed_is_none`.
         self._seed_params: dict[str, dict[str, tuple]] = {}
-        # In-process async single-flight registry: cache_key -> (event_loop,
-        # asyncio.Event). When use_locking is set, concurrent awaits of the
-        # same key coalesce - one coroutine computes, the rest wait on the
-        # event and then read the stored result.
-        self._async_inflight: dict[str, tuple[Any, Any]] = {}
+        # In-process async single-flight registry: cache_key ->
+        # concurrent.futures.Future. When use_locking is set, concurrent awaits
+        # of the same key coalesce - one coroutine computes, the rest wait and
+        # then read the stored result.
+        #
+        # A plain future rather than an asyncio.Event, because an Event belongs
+        # to the loop that made it: with one slot per key, a leader in a second
+        # loop replaced the first loop's event and its followers -- unable to
+        # await another loop's event -- each computed for themselves (4 loops x
+        # 4 awaits ran the body 16 times). `asyncio.wrap_future` attaches the
+        # wait to whichever loop is asking, so every await in the process
+        # coalesces, which is what the docs promise.
+        self._async_inflight: dict[str, Any] = {}
+        self._async_inflight_lock = threading.Lock()
         self.debug = debug  # Debug mode flag
         self.use_locking = use_locking
         self.verbose = bool(verbose) or bool(getattr(self.config, "verbose", False))
@@ -4859,10 +4869,21 @@ class Cash:
                 except RuntimeError:
                     running_loop = None
                 if running_loop is not None:
-                    existing = self._async_inflight.get(cache_key)
-                    if existing is not None and existing[0] is running_loop:
-                        # Follower: wait for the leader, then read the stored value.
-                        await existing[1].wait()
+                    with self._async_inflight_lock:
+                        existing = self._async_inflight.get(cache_key)
+                        if existing is None:
+                            # Leader: publish the future the followers wait on.
+                            single_flight_event = concurrent.futures.Future()
+                            self._async_inflight[cache_key] = single_flight_event
+                    if existing is not None:
+                        # Follower, in this loop or another: wait for the
+                        # leader, then read the stored value. The wait is
+                        # wrapped per follower, so cancelling one leaves the
+                        # leader's computation running for the rest.
+                        try:
+                            await asyncio.shield(asyncio.wrap_future(existing))
+                        except Exception:  # noqa: BLE001 - the leader's failure is its own
+                            pass
                         raw_metadata, cached_data = self.backend.get(cache_key)
                         if raw_metadata is not None:
                             metadata = CacheMetadata.from_dict(raw_metadata)
@@ -4874,10 +4895,6 @@ class Cash:
                                 return self._wrap_iterator_hit(cache_key, metadata, hit)
                         # Leader stored nothing (cache_if rejected / errored):
                         # fall through and compute ourselves.
-                    else:
-                        # Leader: register an event the followers wait on.
-                        single_flight_event = asyncio.Event()
-                        self._async_inflight[cache_key] = (running_loop, single_flight_event)
 
             async def _compute_and_store() -> Any:
                 from cash.notebook.file_tracker import FileAccessTracker
@@ -4982,8 +4999,10 @@ class Cash:
                     return await _compute_and_store()
                 finally:
                     # Signal followers (success or failure) and free the slot.
-                    self._async_inflight.pop(cache_key, None)
-                    single_flight_event.set()
+                    with self._async_inflight_lock:
+                        self._async_inflight.pop(cache_key, None)
+                    if not single_flight_event.done():
+                        single_flight_event.set_result(None)
             return await _compute_and_store()
 
         return wrapper
