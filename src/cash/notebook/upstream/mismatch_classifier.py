@@ -377,6 +377,22 @@ class MismatchClassifier:
             notebook_cells, broken_vars,
         )
 
+    def _is_saved_figure(self, var_name: str) -> bool:
+        """Whether *var_name* holds a live figure whose last change was a bare
+        ``var_name.savefig(...)``."""
+        try:
+            from cash.notebook.cacheability_decision import receiver_is_identity_coupled
+            if not receiver_is_identity_coupled(self.shell.user_ns.get(var_name)):
+                return False
+            body = ast.parse((self.executed_cell_codes.get(var_name) or '').strip()).body
+        except (SyntaxError, ValueError, TypeError, AttributeError):
+            return False
+        if len(body) != 1 or not isinstance(body[0], ast.Expr) or not isinstance(body[0].value, ast.Call):
+            return False
+        func = body[0].value.func
+        return (isinstance(func, ast.Attribute) and func.attr == 'savefig'
+                and isinstance(func.value, ast.Name) and func.value.id == var_name)
+
     def _handle_mismatch_prereqs(
         self,
         var_name: str,
@@ -425,6 +441,19 @@ class MismatchClassifier:
                     "virtual %s for a stable warm-re-run cache hit.",
                     var_name, actual_lineage[:8], final_virtual_hash[:8],
                 )
+            self._restores.record_lineage_reset(var_name=var_name, lineage_hash=final_virtual_hash)
+            return True
+
+        # A figure this cell saved (``fig.savefig(...)``) is ahead of its
+        # simulated lineage for the same reason: the save counts as a change so
+        # an edit to the plotted data still redraws and resaves (40f6263), and
+        # the simulation stops before the cell doing it. Taken as a downstream
+        # change, the figure was rebuilt every time the cell ran again (round
+        # 25, r25s1). Saving draws nothing, so the live figure is current. A
+        # draw (``ax.plot``) still rebuilds: re-running it would add artists.
+        if (required_inputs and var_name in required_inputs
+                and not upstream_has_modifications
+                and self._is_saved_figure(var_name)):
             self._restores.record_lineage_reset(var_name=var_name, lineage_hash=final_virtual_hash)
             return True
 

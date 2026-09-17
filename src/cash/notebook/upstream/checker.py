@@ -1556,6 +1556,9 @@ class UpstreamChecker:
         # variable's lineage if the code that produced the current runtime
         # lineage (from executed_cell_codes) is among these statements.
         cumulative_stmt_codes = set()
+        #: ``{var: (old, new)}`` synced so far; later entries' recorded inputs
+        #: follow (below).
+        moved: dict[str, tuple[str, str]] = {}
         for idx in range(self.simulator.simulation_cache_size()):
             entry = self.simulator.simulation_cache_entry(idx)
             if entry is None:
@@ -1565,6 +1568,16 @@ class UpstreamChecker:
                 # trace_entry format: (stmt_code, outputs, inputs, input_hashes, produced_lineages, files_stale)
                 if len(trace_entry) >= 1:
                     cumulative_stmt_codes.add(trace_entry[0])  # stmt_code
+                # A statement below a synced one read the value it now names.
+                # Left behind, a loop there compared its recorded inputs with
+                # the old lineage and read as reading changed data on every run
+                # after a repair: ``results = {}`` and everything built on it
+                # re-ran each time (round 25, r25s1).
+                input_hashes = trace_entry[3] if len(trace_entry) >= 4 else None
+                if moved and isinstance(input_hashes, dict):
+                    for var_name, (old, new) in moved.items():
+                        if input_hashes.get(var_name) == old:
+                            input_hashes[var_name] = new
 
             cached_vl = entry.virtual_lineage
             for var_name in list(cached_vl.keys()):
@@ -1574,6 +1587,8 @@ class UpstreamChecker:
                     continue
                 # Safe to sync: the runtime lineage was produced by code within
                 # cells 0..idx, so this is a valid forward-propagation correction.
+                if cached_vl[var_name] != self.variable_lineage[var_name]:
+                    moved[var_name] = (cached_vl[var_name], self.variable_lineage[var_name])
                 cached_vl[var_name] = self.variable_lineage[var_name]
                 updated = True
 
