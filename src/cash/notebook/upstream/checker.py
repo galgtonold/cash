@@ -1417,6 +1417,7 @@ class UpstreamChecker:
                     restored_info=restored_info,
                     control_structure_callback=control_structure_callback,
                     annotations=self._statement_directives(notebook_cells),
+                    notebook_cells=notebook_cells,
                 )
             self._label_rng_rerun_metrics(executed_metrics, rng_rerun)
             total_execution_time = self._sum_execution_times(executed_metrics)
@@ -1959,6 +1960,7 @@ class UpstreamChecker:
         restored_info: list[ProcessResult] | None = None,
         control_structure_callback: Callable[..., Any] | None = None,
         annotations: dict[str, Any] | None = None,
+        notebook_cells: list[str] | None = None,
     ) -> list[ProcessResult]:
         """Re-execute a list of statements and return their metrics.
 
@@ -2020,10 +2022,20 @@ class UpstreamChecker:
                         # The processor reports statement failures via the
                         # 'error' field instead of raising - surface those
                         # through the same loud path below.
-                        if result.get('error'):
+                        # With its type: ``str(KeyError('f1'))`` is just ``'f1'``,
+                        # and nothing below could tell a NameError from it --
+                        # every round-25 repair failure took this path and got
+                        # "fix the upstream cell" for a cell with nothing wrong.
+                        error = result.get('error')
+                        if error:
+                            text = (f"{type(error).__name__}: {error}"
+                                    if isinstance(error, BaseException) else str(error))
                             raise UpstreamStateError(
                                 self._format_upstream_failure(
-                                    stmt_code, str(result['error'])
+                                    stmt_code, text,
+                                    planning_gap=self._planning_gap_for(
+                                        error, statements[:stmt_idx],
+                                        stmt_code=stmt_code, notebook_cells=notebook_cells),
                                 )
                             )
             except UpstreamStateError:
@@ -2038,7 +2050,9 @@ class UpstreamChecker:
                 raise UpstreamStateError(
                     self._format_upstream_failure(
                         stmt_code, f"{type(e).__name__}: {e}",
-                        planning_gap=self._planning_gap_for(e, statements[:stmt_idx]),
+                        planning_gap=self._planning_gap_for(
+                            e, statements[:stmt_idx],
+                            stmt_code=stmt_code, notebook_cells=notebook_cells),
                     )
                 ) from e
 
@@ -2052,49 +2066,142 @@ class UpstreamChecker:
 
         return executed_metrics
 
-    def _planning_gap_for(self, exc: Exception, already_scheduled: list[str]) -> str | None:
-        """Name the producer cash failed to schedule, when there is one.
+    def _planning_gap_for(
+        self, exc: object, already_scheduled: list[str], *,
+        stmt_code: str | None = None, notebook_cells: list[str] | None = None,
+    ) -> str | None:
+        """Say so when the failure is a gap in cash's repair, not the user's code.
 
-        A ``NameError`` during upstream re-execution has two very different
-        causes, and the user cannot tell them apart from the message:
+        A statement cash re-runs as a repair can fail for two very different
+        reasons, which the user cannot tell apart from the error alone:
 
-        * the cell genuinely has not run and nothing defines the name -- their
-          problem, and the advice to run that cell is right;
-        * a statement in the notebook DOES define it, cash scheduled the
-          statement that reads it, and did not schedule the one that writes it
-          -- cash's problem, and no amount of running cells is the fix.
+        * the code really fails -- a top-to-bottom run would fail too, and
+          "fix the upstream cell" is right;
+        * cash scheduled the statement that READS something without the one
+          that WRITES it, or ran it against incomplete state -- cash's problem,
+          and there is nothing in the cell to fix.
 
-        A round-14 report is the second kind: reconstruction ran
-        ``ax.plot(sub[...])`` without ``sub = mm[...]`` four statements earlier
-        in the same cell. It took ten failed reproduction attempts (five theirs,
-        five mine) to not pin it down, which is exactly why this exists --
-        the next occurrence should carry its own diagnosis rather than needing
-        the conditions guessed at again.
+        Round 14: ``ax.plot(sub[...])`` without ``sub = mm[...]`` four statements
+        earlier. Round 25, four projects: ``name 'in_cents' is not defined`` with
+        ``in_cents = ...`` above it in the same cell; ``KeyError: 'f1'`` right
+        below ``results["f1"] = ...``; ``KeyError: 'logreg'`` for a dict whose
+        filling loop was not re-run. Each tester went looking for a bug in a
+        correct cell.
 
-        Returns ``None`` unless the evidence is unambiguous: a name that is
-        missing, that some known statement assigns, and that was not among the
-        statements already re-executed in this plan.
+        Evidence, strongest first: a statement above the failing one, not
+        re-run first, that writes what is missing -- the name, or the key or
+        attribute on a variable the failing statement reads; else this exact
+        statement ran without error before. ``None`` when neither holds.
         """
-        missing = re.search(r"name '([^']+)' is not defined", str(exc))
-        if missing is None:
-            return None
-        name = missing.group(1)
         try:
-            producers = [
-                code for code, outputs in self._known_producers()
-                if name in outputs and code not in already_scheduled
-            ]
+            missing = self._what_is_missing(exc)
+            if missing is None:
+                return None
+            kind, name = missing
+            producer = self._unscheduled_producer(
+                kind, name, stmt_code, already_scheduled, notebook_cells)
+            if producer is not None:
+                code, cell_no = producer
+                first = code.split("\n")[0][:60]
+                where = f" (cell {cell_no})" if cell_no else ""
+                run_it = f"run cell {cell_no}" if cell_no else "run the cell holding it"
+                return (
+                    f"NOTE: {name!r} is set by {first!r}{where}, which cash did not "
+                    f"re-run first. That is a gap in cash's re-execution plan, not "
+                    f"something wrong with your code - to continue, {run_it} yourself "
+                    f"and then this cell again (or Restart & Run All), and please report it"
+                )
+            ran_before = {c for c in (self.executed_cell_codes or {}).values()
+                          if isinstance(c, str)}
+            if stmt_code and stmt_code in ran_before:
+                return (
+                    "NOTE: this exact statement ran without error before, so cash most "
+                    "likely rebuilt it against incomplete state - your code is probably "
+                    "fine unless a file it reads changed or a line it needs was removed. "
+                    "To continue, run the cells "
+                    "above it yourself (or Restart & Run All), and please report it"
+                )
         except Exception:  # noqa: BLE001 - a diagnostic must never mask the error
             return None
-        if not producers:
+        return None
+
+    @staticmethod
+    def _what_is_missing(exc: object) -> tuple[str, str] | None:
+        """``('name', x)``, ``('key', k)`` or ``('attr', a)``: what the three
+        errors a statement run against incomplete state raises are missing."""
+        text = str(exc)
+        if isinstance(exc, NameError) or "is not defined" in text:
+            m = re.search(r"name '([^']+)' is not defined", text)
+            return ("name", m.group(1)) if m else None
+        if isinstance(exc, KeyError) and exc.args and isinstance(exc.args[0], (str, int)):
+            return ("key", str(exc.args[0]))
+        if isinstance(exc, AttributeError):
+            m = re.search(r"has no attribute '([^']+)'", text)
+            return ("attr", m.group(1)) if m else None
+        return None
+
+    def _unscheduled_producer(
+        self, kind: str, name: str, stmt_code: str | None,
+        already_scheduled: list[str], notebook_cells: list[str] | None,
+    ) -> tuple[str, int | None] | None:
+        """The last statement above *stmt_code*, not re-run first, writing *name*."""
+        scheduled = set(already_scheduled)
+        reads: set[str] = set()
+        if stmt_code:
+            try:
+                reads = {n.id for n in ast.walk(ast.parse(stmt_code))
+                         if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+            except SyntaxError:
+                reads = set()
+        if notebook_cells and stmt_code:
+            found: tuple[str, int | None] | None = None
+            for cell_idx, cell in enumerate(notebook_cells):
+                try:
+                    tree = ast.parse(CodeAnalyzer.strip_magics(cell.replace('\r\n', '\n')))
+                except (SyntaxError, ValueError):
+                    continue
+                for node in tree.body:
+                    code = ast.unparse(node)
+                    if code == stmt_code:
+                        return found
+                    if code not in scheduled and self._writes(node, kind, name, reads):
+                        found = (code, cell_idx + 1)
             return None
-        first = producers[0].split("\n")[0][:60]
-        return (
-            f"NOTE: '{name}' is assigned by {first!r}, which cash did not "
-            f"schedule alongside the statement that reads it. That is a gap in "
-            f"cash's re-execution plan, not something wrong with your cell - "
-            f"please report it"
-        )
+        if kind == "name":
+            for code, outputs in self._known_producers():
+                if name in outputs and code not in scheduled:
+                    return code, None
+        return None
+
+    @staticmethod
+    def _writes(node: ast.AST, kind: str, name: str, reads: set[str]) -> bool:
+        """Whether *node* writes the missing name, or the missing key or
+        attribute on a variable the failing statement reads."""
+        for sub in ast.walk(node):
+            if kind == "name":
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    if sub.name == name:
+                        return True
+                elif isinstance(sub, (ast.Import, ast.ImportFrom)):
+                    if any((a.asname or a.name.split(".")[0]) == name for a in sub.names):
+                        return True
+                elif isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store) and sub.id == name:
+                    return True
+                continue
+            if not (isinstance(sub, (ast.Subscript, ast.Attribute)) and isinstance(sub.ctx, ast.Store)):
+                continue
+            if not (isinstance(sub.value, ast.Name) and sub.value.id in reads):
+                continue
+            if isinstance(sub, ast.Attribute):
+                if sub.attr == name:
+                    return True
+            elif isinstance(sub.slice, ast.Constant):
+                # ``df["week"] = ...`` is also what ``df.week`` reads.
+                if str(sub.slice.value) == name:
+                    return True
+            elif kind == "key":
+                return True   # ``results[name] = ...`` in the loop that fills it
+        return False
 
     def _known_producers(self) -> list[tuple[str, set[str]]]:
         """``(statement code, names it assigns)`` for statements cash has seen.
@@ -2132,7 +2239,11 @@ class UpstreamChecker:
         # read through and found nothing wrong with.
         advice = "fix the upstream cell and re-run"
         missing = re.search(r"NameError: name '([^']+)' is not defined", error_text)
-        if missing:
+        if planning_gap:
+            # The note says what to do; "fix the upstream cell" beside it would
+            # send the user to a cell with nothing wrong in it.
+            advice = ""
+        elif missing:
             advice = (
                 f"run the cell that defines '{missing.group(1)}' - it has not "
                 f"run in this kernel yet, so there may be nothing to fix"
@@ -2141,7 +2252,7 @@ class UpstreamChecker:
         msg = (
             f"Upstream statement {stmt_short!r} failed during auto-"
             f"re-execution: {error_text}. Cash stopped instead of running "
-            f"this cell against stale upstream state - {advice}."
+            f"this cell against stale upstream state" + (f" - {advice}." if advice else ".")
         )
         if planning_gap:
             msg = f"{msg} {planning_gap}."
