@@ -64,6 +64,22 @@ class TestCLIInfo:
         assert "Backend" in captured.out
         assert "Cache dir" in captured.out
 
+    def test_info_shows_what_this_projects_cache_holds(self, tmp_path, capsys, monkeypatch):
+        """Round 25: `cash info` named the cache dir but not how big it is --
+        the number a user asks for when deciding whether to clear it."""
+        from cash.config import get_config
+        cache_dir = tmp_path / ".cash"
+        cache_dir.mkdir()
+        for i in range(3):
+            (cache_dir / f"e{i}{ENTRY_SUFFIX}").write_bytes(b"x" * 2048)
+        config = get_config()
+        monkeypatch.setattr(config, "cache_dir", str(cache_dir))
+        monkeypatch.setattr("cash.config.get_config", lambda **_: config)
+        cmd_info(SimpleNamespace())
+        out = capsys.readouterr().out
+        line = next(l for l in out.splitlines() if l.strip().startswith("Holds:"))
+        assert "3 entries" in line and "6.0 KiB" in line, out
+
 
 class TestCLIInspect:
     """Test inspect command."""

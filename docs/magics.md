@@ -217,9 +217,10 @@ Set the badge display mode for subsequent cached cells. See
 ```
 
 ### `%cash_stats`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @1959689d -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @abe3f951 -->
 
-Show session-wide cache statistics: counts, hit rate, compute time, and the
+Show cache statistics for this kernel session (a restart resets them; what the
+cache on disk holds is `cash info`'s): counts, hit rate, compute time, and the
 savings broken out as **gross saved**, **cash overhead**, and **net saved**,
 plus tracked variables. The headline net is `verified saved − overhead` — the
 subset of savings *this* session re-measured itself, not the full gross, so a

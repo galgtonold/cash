@@ -104,6 +104,17 @@ def cmd_info(args: argparse.Namespace) -> None:
     print(f"Cash v{get_version()}")
     print(f"  Backend:    {config.backend}")
     print(f"  Cache dir:  {config.cache_dir}")
+    # What it holds, next to where it is: the number a user asks for when
+    # deciding whether to clear it (round 25 had to `du` the folder).
+    entries = size = 0
+    try:
+        for f in Path(config.cache_dir).iterdir():
+            if f.name.endswith(ENTRY_SUFFIX):
+                entries += 1
+                size += f.stat().st_size
+        print(f"  Holds:      {entries} entries, {_format_bytes(size)}")
+    except OSError:
+        print("  Holds:      nothing yet (no cache written here)")
     if config.disable:
         print(f"  Disabled:   yes -- every cached function runs uncached "
               f"({origins.get('disable', 'disable = true')})")

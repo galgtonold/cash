@@ -161,6 +161,8 @@ Print the effective merged configuration.
 - `Backend` — the configured backend type (e.g. `file`, `memory`, `tiered`).
 - `Cache dir` — the on-disk cache directory the file backend will use. When
   something other than the default set it, `Settings` says what.
+- `Holds` — how many entries that directory holds and their size on disk
+  (`nothing yet` before anything was written there).
 - `Disabled` — present only when `disable` is on, with where it was set:
   every cached function is running uncached.
 - `Max size` — the caps the two persistent tiers actually resolve to, not the
@@ -194,6 +196,7 @@ cash info
 # Cash v<!-- docnum:version -->0.10.0<!-- /docnum -->
 #   Backend:    tiered
 #   Cache dir:  /home/me/project/.cash
+#   Holds:      412 entries, 1.3 GiB
 #   Max size:   auto -- disk 16.4 GiB, RAM 4.0 GiB
 #   Persist:    cost model (0.1s compute floor, 20% savings required)
 #   Config files:
@@ -450,7 +453,7 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 ---
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @e8be873d -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @d7f9d538 -->
 ## Exit codes
 
 | Code | When |

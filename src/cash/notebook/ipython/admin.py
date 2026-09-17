@@ -398,6 +398,9 @@ class CashAdminMagicsMixin:
             return
 
         print("Cash Session Statistics")
+        # Round 25: these reset on a kernel restart and were read as the
+        # project's totals. Name the scope up front.
+        print("  (since this kernel started; a restart resets them)")
         print("-" * 40)
         print(f"  Cells executed:      {stats['cells_executed']}")
         print(f"  Statements computed: {stats['statements_computed']}")
@@ -468,8 +471,8 @@ class CashAdminMagicsMixin:
         # existed. Sending a user who is looking at a multi-hundred-MB .cash
         # to a UsageError is worse than saying nothing, and inspecting the
         # backend is exactly what they came here to do.
-        print("  Cache size / entries are not shown here to keep this command")
-        print("  cheap; run `cash info` (or `cash clear`) in a terminal.")
+        print("  The cache on disk outlives this kernel; its size and entries")
+        print("  are one `cash info` away in a terminal (`cash clear` empties it).")
 
     # ------------------------------------------------------------------
     # Export / import / diff

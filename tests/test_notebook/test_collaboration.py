@@ -126,3 +126,13 @@ class TestCashImport:
         captured = capsys.readouterr()
         # Should complete without error
         assert "Imported" in captured.out or "skipped" in captured.out
+
+
+def test_stats_say_they_cover_this_kernel_only(cash_magics, capsys):
+    """Round 25: the totals reset on a kernel restart and a tester read them as
+    the project's. Say the scope, and where the on-disk numbers are."""
+    cash_magics.cash("", "x = 42")
+    cash_magics.cash_stats("")
+    out = capsys.readouterr().out
+    assert "since this kernel started" in out, out
+    assert "cash info" in out and "entries" in out, out

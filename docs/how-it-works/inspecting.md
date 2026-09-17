@@ -290,7 +290,7 @@ overhead but the gross figure would, it prints a range ("at least … at best �
 instead of picking the flattering end; and when even the gross reading is a
 loss, it says so plainly.
 
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @1959689d -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @abe3f951 -->
 `%cash_stats` deliberately does not walk the backend — on a disk cache with
 thousands of entries that is an O(N) scan that opens every metadata file, and
 paying it every time you want a hit rate is not a trade worth making. For size
@@ -301,10 +301,10 @@ and entry counts it points you at `cash info` in a terminal.
 Anything that requires touching the cache directory itself lives in the CLI, not
 in a magic. These five subcommands are the whole surface:
 
-<!-- claim: cash/__main__.py:main @6c4baf93, cash/__main__.py:cmd_info @e8be873d, cash/__main__.py:_inspect_cache_dir @24d5dddf -->
+<!-- claim: cash/__main__.py:main @6c4baf93, cash/__main__.py:cmd_info @d7f9d538, cash/__main__.py:_inspect_cache_dir @24d5dddf -->
 ```bash
 cash version            # installed version
-cash info               # resolved config + where it came from
+cash info               # resolved config, where it came from, what the cache holds
 cash inspect [path]     # total size + a per-function table, sorted by size
 cash clear [path]       # delete a cache directory (see below)
 cash autoload on|off    # load cash in every new kernel via an IPython startup hook
