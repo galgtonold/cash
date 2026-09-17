@@ -54,7 +54,7 @@ def test_the_paragraph_is_not_repeated_per_statement():
 def test_each_guarded_row_still_says_it_was_not_cached_and_why():
     """Quieter must not mean silent - the row keeps its verdict and reason."""
     out = _render(3)
-    rows = [ln for ln in out.splitlines() if 'df_' in ln]
+    rows = [ln for ln in out.splitlines() if 'df_' in ln and 'stopped caching' not in ln]
 
     assert len(rows) == 3
     for row in rows:
@@ -91,13 +91,14 @@ def test_no_summary_when_the_guard_did_not_fire():
 
 def test_volume_is_bounded_as_statements_grow():
     """The whole point: N guarded statements must not cost N paragraphs."""
-    one = _render(1)
+    three = _render(3)
     seven = _render(7)
 
     # Before the fix a 7-statement cell cost ~2300 chars / ~380 words.
-    assert len(seven) < 800, f"still {len(seven)} chars for 7 statements"
-    # Each extra statement costs a short line, not a paragraph.
-    growth = (len(seven) - len(one)) / 6
+    assert len(seven) < 900, f"still {len(seven)} chars for 7 statements"
+    # Each extra statement costs a short line, not a paragraph. From three on:
+    # the summary names at most three statements, a fixed cost.
+    growth = (len(seven) - len(three)) / 4
     assert growth < 70, f"each guarded statement adds {growth:.0f} chars"
 
 
@@ -136,3 +137,20 @@ def test_html_keeps_the_full_explanation_in_its_drawer():
     html = render_html(build_interactive_badge(_guarded_metrics(2)))
 
     assert _PARAGRAPH_MARKER in html
+
+
+def test_the_summary_names_which_statements():
+    """Round 25's r25s1: "1 statement stopped caching (unstable key ...)" with
+    no statement named, and none of the rows marked where the tester looked --
+    one of their model fits, or something trivial? The summary names them."""
+    out = _render(1)
+    summary = out[out.index('stopped caching') - 30:]
+    assert 'df_0 = transform(df_0)' in summary, out
+
+
+def test_the_summary_names_a_few_and_counts_the_rest():
+    out = _render(7)
+    summary = out[out.index('stopped caching') - 30:]
+    assert 'df_0 = transform(df_0)' in summary and 'df_2 = transform(df_2)' in summary
+    assert 'df_3 = transform(df_3)' not in summary
+    assert 'and 4 more' in summary, out

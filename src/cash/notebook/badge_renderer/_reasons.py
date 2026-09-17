@@ -56,7 +56,11 @@ def shorten_skipped_reason(reason: str | None) -> str | None:
     return reason
 
 
-def guard_summary_line(count: int) -> str | None:
+#: Statements named in the summary; the rest are counted.
+_GUARD_NAMED = 3
+
+
+def guard_summary_line(count: int, codes: list[str] | None = None) -> str | None:
     """The once-per-cell explanation, or None if the guard didn't fire.
 
     Carries the two facts a user needs and the badge cannot show per row: that
@@ -66,9 +70,16 @@ def guard_summary_line(count: int) -> str | None:
     if count <= 0:
         return None
     s = "statement" if count == 1 else "statements"
+    # Which ones: "1 statement stopped caching" left a tester unable to tell a
+    # model fit from something trivial (round 25, r25s1).
+    named = ""
+    if codes:
+        shown = [f"`{(c.splitlines() or [''])[0][:40]}`" for c in codes[:_GUARD_NAMED]]
+        more = len(codes) - len(shown)
+        named = ": " + ", ".join(shown) + (f" and {more} more" if more > 0 else "")
     return (
-        f"  {count} {s} stopped caching (unstable key: the cache key changed "
-        f"every run, so storing\n"
+        f"  {count} {s} stopped caching{named}\n"
+        f"  (unstable key: the cache key changed every run, so storing\n"
         f"  the value could never pay back). They still run normally; cash "
         f"re-probes periodically\n"
         f"  and resumes caching if the key settles."

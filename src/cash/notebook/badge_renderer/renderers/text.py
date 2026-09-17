@@ -303,14 +303,14 @@ def _iter_rows(item: SectionItem):
 
 def _guard_summary_lines(badge: InteractiveBadge) -> list[str]:
     """The guard's explanation, once per cell rather than once per statement."""
-    count = sum(
-        1
+    codes = [
+        row.code or ""
         for section in badge.sections
         for item in section.items
         for row in _iter_rows(item)
         if is_guard_reason(row.skipped_reason)
-    )
-    line = guard_summary_line(count)
+    ]
+    line = guard_summary_line(len(codes), codes)
     return [line] if line else []
 
 
