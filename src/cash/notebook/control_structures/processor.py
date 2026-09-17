@@ -569,7 +569,9 @@ class ControlStructureProcessor:
             )
             return self._finalize_single_unit(node, code, metrics)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code executed as a unit
-            logger.error("[CONTROL] Error executing control structure as single unit: %s", e, exc_info=True)
+            # Handed back to the cell, which raises it: logged at ERROR it printed
+            # the traceback a second time, through cash (round 25, r25s2/r25s3).
+            logger.debug("[CONTROL] Error executing control structure as single unit: %s", e, exc_info=True)
             return ControlStructureResult(
                 success=False,
                 metrics=[],
@@ -614,7 +616,9 @@ class ControlStructureProcessor:
             )
             return self._finalize_single_unit(node, code, metrics)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code executed as a unit
-            logger.error("[CONTROL] Error executing awaited control structure as single unit: %s", e, exc_info=True)
+            # Handed back to the cell, which raises it: logged at ERROR it printed
+            # the traceback a second time, through cash (round 25, r25s2/r25s3).
+            logger.debug("[CONTROL] Error executing awaited control structure as single unit: %s", e, exc_info=True)
             return ControlStructureResult(
                 success=False,
                 metrics=[],

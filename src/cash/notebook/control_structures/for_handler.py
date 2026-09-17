@@ -381,7 +381,9 @@ class ForLoopHandler:
             )
 
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user for-loop body code
-            logger.error("[CONTROL] Error in for loop: %s", e, exc_info=True)
+            # Handed back to the cell, which raises it: logged at ERROR it printed
+            # the traceback a second time, through cash (round 25, r25s2/r25s3).
+            logger.debug("[CONTROL] Error in for loop: %s", e, exc_info=True)
             return ControlStructureResult(
                 success=False,
                 metrics=all_metrics,
