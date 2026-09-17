@@ -557,6 +557,7 @@ class StatementProcessor:
         # one statement share a counter), plus the set of statements already
         # warned about so a 1000-iteration loop warns once, not 1000 times.
         self._persist_bytes_by_stmt: dict[str, int] = {}
+        self._persist_last_size_by_stmt: dict[str, int] = {}
         self._warned_persist_amplification: set[str] = set()
         # Source hashes of entropy-reseed statements already warned about, so the
         # "seed(None) does not make everything below it fresh" note fires once.
@@ -4177,6 +4178,7 @@ class StatementProcessor:
         self,
         code: str,
         prediction: dict[str, Any] | None,
+        annotated: bool = False,
     ) -> tuple[bool, str | None]:
         """Return ``(skip, reason)`` for the loop-persist guard.
 
@@ -4212,7 +4214,7 @@ class StatementProcessor:
         if (cumulative > _PERSIST_AMPLIFICATION_FLOOR_BYTES
                 and cumulative > _PERSIST_AMPLIFICATION_LIMIT * size):
             self._warned_persist_amplification.add(stmt_id)
-            self._warn_persist_amplification(stmt_id, cumulative, size)
+            self._warn_persist_amplification(stmt_id, cumulative, size, annotated=annotated)
             return True, AMPLIFICATION_SKIP_REASON
         return False, None
 
@@ -4245,12 +4247,19 @@ class StatementProcessor:
             return
         if not any(d != 'RAM' for d in destinations):
             return
+        # Growth only: a loop that REBINDS a same-sized value each pass stores a
+        # different result every time, and nothing in it grows. Summing those
+        # warned about a sweep's per-window dict (round 25, r25s3).
+        last = self._persist_last_size_by_stmt.get(stmt_id)
+        self._persist_last_size_by_stmt[stmt_id] = size
+        if last is not None and size <= last:
+            return
         self._persist_bytes_by_stmt[stmt_id] = (
             self._persist_bytes_by_stmt.get(stmt_id, 0) + size
         )
 
     def _warn_persist_amplification(
-        self, stmt_id: str, cumulative: int, size: int
+        self, stmt_id: str, cumulative: int, size: int, annotated: bool = False,
     ) -> None:
         """Warn once that a looped persist is snapshotting a growing object.
 
@@ -4273,8 +4282,13 @@ class StatementProcessor:
             f"that is currently only {human_bytes(size)} -- caching a growing "
             f"object every iteration costs the SUM of every intermediate size, "
             f"not the final one. Further iterations are not being stored.",
-            "move `# @cash:persist` off the loop and onto a statement that "
-            "produces the finished object, so it is stored once.",
+            # The annotation advice only for a statement that carries it: r25s3
+            # was told to move a `# @cash:persist` they never wrote.
+            ("move `# @cash:persist` off the loop and onto a statement that "
+             "produces the finished object, so it is stored once." if annotated else
+             "build the finished object in one statement -- a comprehension, "
+             "or a function the loop's work moves into -- so it is stored once; "
+             "calls inside the loop are still cached."),
         )
 
     def _store_in_cache(
@@ -4386,7 +4400,7 @@ class StatementProcessor:
         # because it is a disk-safety guard, not a cost heuristic.
         if not should_skip:
             amplified, amplified_reason = self._check_persist_amplification(
-                code, prediction
+                code, prediction, annotated=force_persist,
             )
             if amplified:
                 should_skip = True
