@@ -16,12 +16,19 @@ from __future__ import annotations
 
 import hashlib
 import linecache
+import re
 
 # Every cash-compiled unit's filename starts with this. Frame filters match the
 # PREFIX rather than the old exact ``<cash>`` literal, so they keep recognising
 # cash frames now that each name carries a per-statement digest — and still
 # recognise a bare ``<cash>`` from any older cached code object.
 CASH_FILENAME_PREFIX = "<cash"
+
+
+#: ``call_interception.HELPER_NAME``, spelled here: that module imports this one's
+#: neighbours, and a cycle would cost more than a constant.
+_HELPER = "__cash_call__"
+_USER_CALL = re.compile(r"__cash_call__\((.+?), \d+\)\(")
 
 
 def register_cell_source(code: str) -> str:
@@ -35,7 +42,14 @@ def register_cell_source(code: str) -> str:
     # linecache entry: (size, mtime, lines, fullname). ``mtime=None`` marks it a
     # synthetic in-memory file so ``linecache.checkcache()`` never evicts it by
     # comparing against a real stat() — there is no file on disk to compare to.
-    linecache.cache[name] = (len(code), None, code.splitlines(True), name)
+    #
+    # The lines are for DISPLAY -- a traceback, a warning -- and a statement
+    # whose calls go through the cache reads as ``__cash_call__(fit, 0)(g)``
+    # there. A pandas warning quoted that as the user's line (round 25,
+    # r25s5); shown as the user wrote it. What runs is ``code``, compiled by
+    # the caller.
+    shown = _USER_CALL.sub(r"\1(", code) if _HELPER in code else code
+    linecache.cache[name] = (len(shown), None, shown.splitlines(True), name)
     return name
 
 
