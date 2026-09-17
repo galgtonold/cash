@@ -453,7 +453,7 @@ import of cash's file tracker. `multiprocessing.Pool` and joblib's workers are
 not wrapped: files read only there are not seen, so name them with
 `file_depends_on=`.
 
-<!-- claim: cash/core.py:Cash._credit_remembered_reads @a2e433e7, cash/notebook/file_tracker.py:_credit_read_to_stack @7be631ab -->
+<!-- claim: cash/core.py:Cash._credit_remembered_reads @a2e433e7, cash/notebook/file_tracker.py:_credit_read_to_stack @a47279d7 -->
 A read your code **memoises** counts for every call that uses it. With
 `parse = functools.lru_cache()(parse_csv)` — or a module-level dict of parsed
 files — only the first cached function to call `parse(path)` actually opens
@@ -463,7 +463,7 @@ them without it reading, adds what it read then — just `path`, when the memo i
 keyed by a path this call was given. The second consumer used to record
 no file at all and kept its result after the file changed.
 
-<!-- claim: cash/notebook/file_tracker.py:_note_untracked_read @c99048a2, cash/notebook/file_tracker.py:install_read_watch @16286f03 -->
+<!-- claim: cash/notebook/file_tracker.py:_note_untracked_read @4251648f, cash/notebook/file_tracker.py:install_read_watch @16286f03 -->
 That holds wherever the memo was filled: in a cached call, or before any ran —
 `main()` printing its settings through the memo at start-up — because cash
 watches your reads from the moment a function is decorated. And cash remembers
@@ -493,7 +493,7 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @d65d16fd, cash/core.py:Cash._fold_dependency_read_globals @fbbbd0b2 -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @271b1e55, cash/core.py:Cash._fold_dependency_read_globals @fbbbd0b2 -->
 Only globals that are **read** participate — and that includes globals read
 on someone else's behalf: by a **helper**, so a helper returning a module-level
 `CONFIG` invalidates its caller when that config changes, and by another

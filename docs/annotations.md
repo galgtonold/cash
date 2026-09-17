@@ -322,16 +322,19 @@ element, which no key can see, so it is not intercepted. The same holds for a
 lambda's parameters, and for an argument computed from the element
 (`make_features(cleaned[mid], W)`): it too is hashed in full.
 
-<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @d3d55381, cash/notebook/call_unit.py:_GUARD_AFTER_CALLS == 50, cash/notebook/call_unit.py:_OVERHEAD_FACTOR == 3.0 -->
+<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @4364adb6, cash/notebook/call_unit.py:_GUARD_AFTER_CALLS == 50, cash/notebook/call_unit.py:_OVERHEAD_FACTOR == 3.0 -->
 A comprehension makes its call once per element, and caching each one has a
 cost of its own — a key, a lookup, a store. So past 50 calls in one run of the
 statement, cash times a few of them uncached; when caching a call costs more
 than three times what the call does — `[read_doc(p) for p in paths]` over
-thousands of small files — the rest of that run's calls run uncached, the same
-rule by which a long `for` loop is run as one unit. A call that does real work,
-like fitting a model per element, is never re-run to be timed.
+thousands of small files — or when just building its key and looking it up
+costs three quarters of the call, so a hit could save next to nothing, the rest
+of that run's calls run uncached, the same rule by which a long `for` loop is
+run as one unit. The badge's `sub-call` line counts those calls too and says
+how many ran plain. A call that does real work, like fitting a model per
+element, is never re-run to be timed.
 
-<!-- claim: cash/notebook/call_unit.py:_keys_by_content @b1716a9c, cash/notebook/call_unit.py:call_cache_key @cca59dd6, cash/notebook/call_unit.py:_CONTENT_KEY_MAX_BYTES == 67108864, cash/notebook/call_unit.py:_NAME_CONTENT_MAX_BYTES == 1048576 -->
+<!-- claim: cash/notebook/call_unit.py:_keys_by_content @b1716a9c, cash/notebook/call_unit.py:call_cache_key @4a98c572, cash/notebook/call_unit.py:_CONTENT_KEY_MAX_BYTES == 67108864, cash/notebook/call_unit.py:_NAME_CONTENT_MAX_BYTES == 1048576 -->
 **The key holds what the call receives.** When everything a call reads is plain
 data — numbers, strings, dates, numpy arrays, pandas frames, and lists or dicts
 of those — its key is the function it calls and the values it is handed. An
@@ -353,7 +356,11 @@ in `fit_series(g, PARAMS, cutoff)` with `cutoff = df["date"].max() - pd.Timedelt
 fixing one group's rows re-fits that group only, although `cutoff` is
 recomputed from the frame. A frame passed by name that is over 1 MiB counts by
 where it came from instead, since hashing it on every call would cost more
-than it saves.
+than it saves. Unpacked arguments count the same way: `fit_series(g, **TUNED.get(dept, {}))`
+is keyed on every value and keyword name it receives. And a library function
+the call uses (`sklearn.preprocessing.normalize`) counts as code, like a
+library class, so its internals never push the call back to "where its
+argument came from".
 
 A frame's value includes its index. Dropping rows and then renumbering
 (`reset_index(drop=True)`) shifts the index of every row after the dropped

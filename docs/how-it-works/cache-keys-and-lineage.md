@@ -78,7 +78,7 @@ flowchart TD
 ```
 
 ??? warning "Keys survive a restart, not a move to another machine"
-    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @91700a2b -->
+    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @c901abf7 -->
     Keys carry no wall-clock value *of their own*, so re-running the same notebook in a
     fresh kernel recomputes the same key and hits. But a statement that reads a file folds
     that file's **mtime and size** into its lineage (`compute_file_hash_component` in
@@ -230,7 +230,7 @@ Content beats the lineage attribute, and that ordering is the fix for a real bug
 `compute_hash` itself ends at `sha256(str(id(obj)))` for an object that cannot be pickled. That does not corrupt anything — the statement executes normally and the result is stored — but the key is then tied to a memory address, so the entry is effectively per-session and will not restore after a kernel restart.
 
 ??? note "Under the hood"
-    <!-- claim: cash/notebook/statement/lineage.py:StatementLineageBuilder.capture_and_track_variables @3dd3b6cd, cash/notebook/lineage_formula.py:output_lineage @988eddb7, cash/notebook/lineage_formula.py:module_source_component @5672689a -->
+    <!-- claim: cash/notebook/statement/lineage.py:StatementLineageBuilder.capture_and_track_variables @914377b7, cash/notebook/lineage_formula.py:output_lineage @988eddb7, cash/notebook/lineage_formula.py:module_source_component @5672689a -->
     All statement keys are built by `compute_cache_key()` in
     `cash.notebook.cache_key`, and every output lineage by the functions in
     `cash.notebook.lineage_formula` — both shared by runtime execution

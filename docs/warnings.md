@@ -334,28 +334,30 @@ on one of those results pays full compute, every time.
 
 ## CACHE-LOOP-GROWTH {#cache-loop-growth}
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_persist_amplification @bf8e0721 -->
-**What happened.** A statement marked `# @cash:persist` sits inside a loop, and
-the value it stores grows on each pass — a list being appended to, a frame
-being concatenated. Cash wrote a fresh copy of the whole thing every iteration,
-noticed the copies now add up to many times the value's real size, and stopped
-storing further iterations. The message names both numbers: what has been
-written so far, and how big the value currently is.
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_persist_amplification @1b29499e -->
+**What happened.** A statement inside a loop stores a value that grows on each
+pass — a list being appended to, a frame being concatenated. Cash wrote a fresh
+copy of the whole thing on every pass that grew it, noticed the copies now add up
+to many times the value's real size, and stopped storing further iterations. The
+message names both numbers: what has been written so far, and how big the value
+currently is. A loop that rebinds a value of the same size each pass (a sweep
+building one result per setting) is not growth and does not trigger it.
 
 **Why it matters.** Caching a growing object every iteration costs the *sum* of
 every intermediate size, not the final one. A 100 MB result assembled over a
 hundred passes writes gigabytes to get one useful entry.
 
-**What to do.** Move `# @cash:persist` off the loop body and onto a statement
-that produces the finished object, so it is stored once. The loop itself does
-not need the annotation.
+**What to do.** Build the finished object in one statement — a comprehension, or
+a function the loop's work moves into — so it is stored once. If the statement
+carries `# @cash:persist`, move the annotation off the loop body and onto that
+statement. Calls inside the loop (`scores[mid] = fit(...)`) are still cached per
+call either way.
 
 **When it is safe to ignore.** It is not urgent — Cash has already stopped
-writing, so the disk churn is over for this run — but leaving it is not free
-either. The annotation is now inert, so nothing in that loop is being cached at
-all, and running from a clean cache will pay the same write storm again from
-the start. Treat it as something to fix before the next run rather than
-something to fix right now.
+writing, so the disk churn is over for this run — and the calls inside the loop
+keep their own entries. But the loop's statements are no longer stored past this
+point, so a new kernel re-runs them from where the storing stopped. Treat it as
+something to fix before the next run rather than something to fix right now.
 
 ## CACHE-NET-LOSS {#cache-net-loss}
 
@@ -737,7 +739,7 @@ file and line number. That line can be in a helper several calls below the
 cached function (`through LEDGER.record(result) in docmind.llm.complete`); the
 write itself may be deeper still, in a method of the object that line calls.
 
-<!-- claim: cash/core.py:Cash._learn_mutating_captures @12b6edac -->
+<!-- claim: cash/core.py:Cash._learn_mutating_captures @9b57fef6 -->
 **Why it matters.** Two things follow, and neither is visible at the call site.
 A cache hit runs no body, so the write stops happening: a counter stops
 counting, an accumulator stops accumulating, and code that reads the variable
@@ -1362,7 +1364,7 @@ whole function's caching, not just the calls that rely on the default.
 
 ## KEY-UNHASHABLE-GLOBAL {#key-unhashable-global}
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @d65d16fd -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @271b1e55 -->
 **What happened.** The function reads a module-level variable — its own
 module's, or a helper's, in which case the message shows a dotted name — and
 Cash could not fingerprint that variable's value. Cash normally folds the

@@ -132,7 +132,7 @@ The patch set is a curated list. Reads that go through anything else slip past t
 
 ### Reads that are ignored on purpose
 
-<!-- claim: cash/notebook/file_tracker.py:incidental_read @9ffa4b1a -->
+<!-- claim: cash/notebook/file_tracker.py:incidental_read @0de16821 -->
 Some reads happen while your code runs but are not your data, and cash leaves them out: files of the **Python installation itself** (the standard library), **package metadata** lookups (`importlib.metadata`, `importlib.resources`, `pkg_resources` — the import system listing every `sys.path` folder, your working directory included, and reading `entry_points.txt` files), anything a library reads **while it is being imported** (matplotlib's style sheets and font cache), and files an installed library reads **from its own package folder** (matplotlib's fonts on first draw, scikit-learn's HTML template). They only happen the first time, so recording them gave the same statement a different key on its second run, and a new file anywhere next to a notebook invalidated everything after an `import`.
 
 A library reading a file **for you** is still tracked — `PIL.Image.open(p)`, `torch.load(p)` and `pd.read_csv(p)` read a path outside that library. So is your own module reading its configuration at import, and so is an installed tool reading data from its own package folder when the cached function belongs to that tool.
