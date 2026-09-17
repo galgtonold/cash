@@ -1014,6 +1014,15 @@ class FileDependencyRegistry:
         self.register('numpy', 'genfromtxt', self._create_path_arg_handler)
         self.register('numpy', 'fromfile', self._create_path_arg_handler)
 
+        # sqlite3 opens the database in C, so nothing reaches a patched
+        # reader: a cached `select sum(x)` returned 1 where an uncached run
+        # returned 101 after an INSERT, and `pd.read_sql_query` over the same
+        # connection did too (found attacking the decorator before round 26).
+        # The connection's path is the dependency; a URI or ":memory:" has no
+        # file behind it and `_track_path` drops what it cannot resolve.
+        self.register('sqlite3', 'connect', self._create_path_arg_handler)
+        self.register('sqlite3.dbapi2', 'connect', self._create_path_arg_handler)
+
         # Joblib
         self.register('joblib', 'load', self._create_path_arg_handler)
 
@@ -1086,6 +1095,17 @@ class FileDependencyRegistry:
                 _tracker = _active_tracker.get()
                 if _tracker is not None:
                     _tracker._track_path(file)
+                    try:
+                        return original_func(file, *args, **kwargs)
+                    except FileNotFoundError:
+                        # A file that was not there is an input too, and the
+                        # docs say so -- but only the `os.path.exists` spelling
+                        # recorded it. `try: open(p) except FileNotFoundError:`
+                        # kept serving its default after the file appeared
+                        # (found attacking the decorator before round 26).
+                        if isinstance(file, (str, bytes, os.PathLike)):
+                            _tracker._track_absent(file)
+                        raise
                 elif isinstance(file, (str, bytes, os.PathLike)):
                     _note_untracked_read(file)
             elif any(ch in mode for ch in ('w', 'a', 'x')):

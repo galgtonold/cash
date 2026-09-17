@@ -377,10 +377,17 @@ def test_chunked_iterator_send_throw_raise():
         it.throw(ValueError())
 
 
-def test_chunked_iterator_missing_chunk_terminates_safely():
-    """If a chunk read returns (None, None) — e.g. chunk was evicted from
-    the backend — the iterator must terminate via StopIteration, not raise."""
+def test_chunked_iterator_missing_chunk_finishes_from_the_function():
+    """A chunk lost mid-read (evicted, cleared by another process) is
+    recomputed from the function, continuing where the replay stopped.
+
+    It used to end the iteration instead, which handed the caller a silent
+    PREFIX -- 100 of 1000 items, and a sum over it simply wrong (found
+    attacking the decorator before round 26). With nothing to recompute from,
+    the loss raises; it is never passed off as the whole answer.
+    """
     from cash.core import _ChunkedCachedIterator
+    from cash.exceptions import CacheBackendError
 
     backend = _FakeBackend({
         "K:chunk_0": [1, 2],
@@ -392,10 +399,13 @@ def test_chunked_iterator_missing_chunk_terminates_safely():
         def __init__(self, backend):
             self.backend = backend
 
-    it = _ChunkedCachedIterator(_FakeCash(backend), "K", n_chunks=3)
-    values = list(it)
-    # Chunk_0 yields [1, 2]; chunk_1 missing → iteration stops there.
-    assert values == [1, 2]
+    it = _ChunkedCachedIterator(_FakeCash(backend), "K", n_chunks=3,
+                                recompute=lambda: iter([1, 2, 3, 4, 5, 6]))
+    assert list(it) == [1, 2, 3, 4, 5, 6]
+
+    blind = _ChunkedCachedIterator(_FakeCash(backend), "K", n_chunks=3)
+    with pytest.raises(CacheBackendError, match="after 2 items"):
+        list(blind)
 
 
 def test_chunk_max_items_kwarg_accepted(tmp_path):

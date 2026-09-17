@@ -53,6 +53,7 @@ from .diagnostics import (
 )
 from .exceptions import (
     SOURCE_RETRIEVAL_ERRORS,
+    CacheBackendError,
     CacheExpiredError,
     CashCacheIneffectiveWarning,
     CashCacheStoreFailedWarning,
@@ -742,22 +743,29 @@ class _ChunkedCachedIterator:
             Chunk keys are derived as ``f"{cache_key}:chunk_{i}"``.
         n_chunks: Total chunk count, taken from the manifest at construction.
 
-    The iterator is robust to chunk loss: if ``backend.get`` returns
-    ``(None, None)`` for any chunk (e.g. RAM-only eviction), iteration
-    terminates cleanly via ``StopIteration``. The next call to the
-    decorated function will see a cache miss and recompute.
+    A chunk can go while the caller is still reading: another process clears
+    or rewrites the entry, or the RAM tier evicts it. ``_chunks_are_intact``
+    is checked at lookup, which is before that -- so a lost chunk used to end
+    the iteration, and the caller got a silent PREFIX (100 of 1000 items,
+    found attacking the decorator before round 26). The rest is recomputed
+    from *recompute* instead, skipping what was already yielded; with no way
+    to recompute, the loss is raised. A truncated answer is worse than a slow
+    one.
     """
 
-    __slots__ = ("_cash", "_cache_key", "_n_chunks",
-                 "_chunk_index", "_current_chunk_iter", "_closed")
+    __slots__ = ("_cash", "_cache_key", "_n_chunks", "_chunk_index",
+                 "_current_chunk_iter", "_closed", "_recompute", "_yielded")
 
-    def __init__(self, cash: Any, cache_key: str, n_chunks: int):
+    def __init__(self, cash: Any, cache_key: str, n_chunks: int,
+                 recompute: Callable[[], Any] | None = None):
         self._cash = cash
         self._cache_key = cache_key
         self._n_chunks = n_chunks
         self._chunk_index = 0
         self._current_chunk_iter = None
         self._closed = False
+        self._recompute = recompute
+        self._yielded = 0
 
     def __iter__(self):
         return self
@@ -768,20 +776,31 @@ class _ChunkedCachedIterator:
         while True:
             if self._current_chunk_iter is not None:
                 try:
-                    return next(self._current_chunk_iter)
+                    item = next(self._current_chunk_iter)
                 except StopIteration:
                     self._current_chunk_iter = None
                     # Fall through to load the next chunk.
+                else:
+                    self._yielded += 1
+                    return item
             if self._chunk_index >= self._n_chunks:
                 raise StopIteration
             chunk_key = f"{self._cache_key}:chunk_{self._chunk_index}"
             _, chunk = self._cash.backend.get(chunk_key)
             self._chunk_index += 1
             if chunk is None:
-                # Chunk lost (eviction, partial cleanup). Safe termination -
-                # the next call to the decorated function will see a cache
-                # miss on the manifest and recompute from scratch.
-                raise StopIteration
+                # The chunk went while the caller was reading (see the class
+                # docstring). Finish the run from the function itself.
+                if self._recompute is None:
+                    raise CacheBackendError(
+                        f"a chunk of the cached result for {self._cache_key} is gone "
+                        f"after {self._yielded} items; the rest cannot be read")
+                fresh = iter(self._recompute())
+                for _ in range(self._yielded):
+                    next(fresh, None)
+                self._current_chunk_iter = fresh
+                self._n_chunks = 0          # everything else comes from `fresh`
+                continue
             self._current_chunk_iter = iter(chunk)
 
     def close(self):
@@ -3584,6 +3603,7 @@ class Cash:
             # auto_file_deps), both available here.
             self._attach_lineage(cached_data, cache_key, metadata.auto_file_deps, ttl=ttl,
                                  func_name=func_name)
+            self._replay_rng_state(metadata)
             self._last_key[func_name] = cache_key
             self._log_decorator_call(
                 func_name, cache_hit=True,
@@ -4330,11 +4350,65 @@ class Cash:
             return True
         return True
 
+    def _rng_replay_parts(self, drew: bool, pre_state: dict | None) -> dict:
+        """What a later hit needs to leave the RNG where this call left it.
+
+        A hit never runs the body, so the stream it advanced stays where it was
+        and the CALLER's next draw returns what the function drew: with
+        ``np.random.seed(0)``, the draw after a hit WAS the cached value (found
+        attacking the decorator before round 26). The notebook path replays the
+        recorded state; this is the same for the decorator.
+
+        Both ends are recorded. Replaying the post-state is only right when the
+        stream is where it was when the body ran, so the pre-state is what a hit
+        checks first -- a program that drew somewhere else in between is left
+        alone rather than rewound.
+        """
+        if not drew or pre_state is None:
+            return {}
+        try:
+            from cash.notebook.randomness import capture_rng_state
+            return {"rng_pre": pre_state, "rng_post": capture_rng_state()}
+        except Exception:  # noqa: BLE001 - never break a call over this
+            return {}
+
+    @staticmethod
+    def _replay_rng_state(metadata: Any) -> None:
+        """Put the global RNG where the computed call left it (see
+        :meth:`_rng_replay_parts`), when it is where that call started."""
+        replay = getattr(metadata, "rng_replay", None) or {}
+        post, pre = replay.get("rng_post"), replay.get("rng_pre")
+        if not post or not pre:
+            return
+        try:
+            from cash.notebook.randomness import (
+                capture_rng_state,
+                restore_rng_state,
+                rng_modules_changed,
+            )
+            # Only the streams the body advanced, and only while each is where
+            # that body found it. Every other module is left alone: a process
+            # seeds `random` from the OS at import, so comparing all of them
+            # would refuse every replay.
+            advanced = rng_modules_changed(pre, post)
+            if not advanced:
+                return
+            live = capture_rng_state()
+            if any(m not in live for m in advanced):
+                return
+            if rng_modules_changed({m: pre[m] for m in advanced},
+                                   {m: live[m] for m in advanced}):
+                return
+            restore_rng_state({m: post[m] for m in advanced})
+        except Exception:  # noqa: BLE001 - a replay must never break a hit
+            logger.debug("[CORE] could not replay the RNG state of a hit", exc_info=True)
+
     def _wrap_iterator_hit(
         self,
         cache_key: str,
         metadata: CacheMetadata | None,
         hit: Any,
+        recompute: Callable[[], Any] | None = None,
     ) -> Any:
         """Wrap a cache-hit value in the right iterator class.
 
@@ -4351,7 +4425,7 @@ class Cash:
         """
         if metadata and metadata.iterator_storage == 'chunked':
             n_chunks = metadata.n_chunks or 0
-            return _ChunkedCachedIterator(self, cache_key, n_chunks)
+            return _ChunkedCachedIterator(self, cache_key, n_chunks, recompute)
         return hit
 
     def _make_wrapper(
@@ -4405,7 +4479,9 @@ class Cash:
                     body_seconds=getattr(metadata, "body_seconds", None),
                     was_hit=True,
                 )
-                return self._wrap_iterator_hit(cache_key, metadata, hit)
+                return self._wrap_iterator_hit(
+                    cache_key, metadata, hit,
+                    recompute=lambda: func(*args, **kwargs))
 
             def _compute_and_store() -> Any:
                 # Wrap the function call in FileAccessTracker so any
@@ -4502,6 +4578,8 @@ class Cash:
                         current_state_hash, args_hash, execution_time,
                         auto_file_deps=auto_file_deps,
                         body_seconds=body_seconds, saves_seconds=saves_seconds,
+                        rng_replay=self._rng_replay_parts(
+                            bool(self._rng_drawing_funcs.get(func_name)), rng_pre),
                     )
                 # Everything that was not the body: the key and lookup before
                 # it, the checks and the store after it.
@@ -4707,6 +4785,8 @@ class Cash:
                         current_state_hash, args_hash, execution_time,
                         auto_file_deps=auto_file_deps,
                         body_seconds=body_seconds, saves_seconds=saves_seconds,
+                        rng_replay=self._rng_replay_parts(
+                            bool(self._rng_drawing_funcs.get(func_name)), rng_pre),
                     )
                 # Everything that was not the body: the key and lookup before
                 # it, the checks and the store after it.
@@ -9853,6 +9933,7 @@ class Cash:
         auto_file_deps: dict[str, dict[str, float]] | None = None,
         body_seconds: float | None = None,
         saves_seconds: float | None = None,
+        rng_replay: dict[str, Any] | None = None,
     ) -> None:
         try:
             serializer = get_serializer(result)
@@ -9896,12 +9977,19 @@ class Cash:
                 # Each entry: path -> {'mtime': float, 'size': int}.
                 # Validated on subsequent get() via _auto_file_deps_fresh.
                 auto_file_deps=auto_file_deps or None,
+                rng_replay=rng_replay or None,
             )
 
             # Kept, not a temporary: TieredBackend writes back where the value
             # landed, and "RAM only" is the answer to the next process's miss.
             meta_dict = meta.to_dict()
             self.backend.set(cache_key, result, meta_dict, serializer=serializer)
+            # A tiered backend catches each tier's failure so one bad tier
+            # cannot break a call; it reports them here instead, and a result
+            # nothing could store is a STORE-FAILED like any other.
+            store_errors = meta_dict.get("store_errors")
+            if store_errors and not [t for t in (meta_dict.get("storage") or []) if t != "RAM"]:
+                raise CacheBackendError("; ".join(str(e) for e in store_errors))
             not_persisted = self._not_persisted_reason(meta_dict, execution_time)
             self._remember_outcome(cache_key, {
                 "stored_at": time.time(),
@@ -9912,7 +10000,8 @@ class Cash:
                 self._record_stored_key(func_name, cache_key, ttl)
             else:
                 self._remember_ram_only(func_name, cache_key, not_persisted)
-        except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
+        except (OSError, TypeError, pickle.PicklingError, RuntimeError,
+                CacheBackendError) as e:
             self._note_not_stored(cache_key, "the backend refused the write")
             backend_name = type(self.backend).__name__
             self._warn_once(

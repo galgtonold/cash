@@ -117,7 +117,7 @@ What is **not** supported:
 
 ## Replay semantics
 
-<!-- claim: cash/core.py:Cash._wrap_iterator_hit @82a2a1ae, cash/core.py:_StreamingCachedIterator @435e32b0 broad="the claim is about the whole replay wrapper", cash/core.py:_ChunkedCachedIterator @d808794a broad="the claim is about the whole replay wrapper" -->
+<!-- claim: cash/core.py:Cash._wrap_iterator_hit @d937a056, cash/core.py:_StreamingCachedIterator @435e32b0 broad="the claim is about the whole replay wrapper", cash/core.py:_ChunkedCachedIterator @a8386fff broad="the claim is about the whole replay wrapper" -->
 On a cache hit, the dispatch at `Cash._wrap_iterator_hit` reads `metadata['iterator_storage']` and returns a **fresh** `_ChunkedCachedIterator(cash, cache_key, n_chunks)` — a lazy iterator that fetches one chunk at a time. That is *every* iterator hit, single-chunk included: a one-chunk result is still stored as a manifest plus one chunk entry, so it replays through the same path.
 
 `_StreamingCachedIterator` is the other half, and it belongs to the **first** call rather than to a hit. It wraps `_stream_and_store`, so a miss hands you the producer's own items at the producer's own pace while the chunks fill behind you — there is nothing to read back out of the backend, because the result does not exist yet:
@@ -163,7 +163,7 @@ The returned object satisfies the iterator protocol — `iter(x) is x`, `__next_
 
 ## Chunk eviction
 
-<!-- claim: cash/core.py:_ChunkedCachedIterator.__next__ @01f2db53 -->
+<!-- claim: cash/core.py:_ChunkedCachedIterator.__next__ @e3fe60b4 -->
 `_ChunkedCachedIterator` is robust to mid-iteration chunk loss. If `backend.get(chunk_key)` returns `(None, None)` — e.g. an L1-only backend evicted that chunk under memory pressure, or `cleanup()` ran between iterations — `__next__` raises `StopIteration` instead of propagating an error. Iteration terminates at the last contiguous run of available data.
 
 The next call to the decorated function will see a miss on the manifest key (manifests live in the same backend tier as chunks, so they're evicted together in typical configurations) and recompute. Test reference: `test_chunked_iterator_missing_chunk_terminates_safely` in `tests/test_core/test_iterator_caching.py`.

@@ -414,7 +414,7 @@ used to count.
 
 ### File reads are tracked automatically
 
-<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21, cash/notebook/file_tracker.py:FileDependencyRegistry @54791dad broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
+<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21, cash/notebook/file_tracker.py:FileDependencyRegistry @d5f933df broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
 You usually don't need to declare files at all: cash intercepts file reads
 *inside* a cached function — `pd.read_csv`, `np.load`, `open()`, `joblib.load`,
 … — and folds each file's fingerprint into the entry, so changing the file on
@@ -1127,10 +1127,17 @@ for line in read_lines("huge.log"):
 # Second run: chunks are read lazily from disk; RAM bounded by chunk size.
 ```
 
-<!-- claim: cash/core.py:_ChunkedCachedIterator @d808794a broad="the claim is about the replay iterator's whole supported protocol" -->
+<!-- claim: cash/core.py:_ChunkedCachedIterator @a8386fff broad="the claim is about the replay iterator's whole supported protocol" -->
 The cached iterator supports `iter()`, `__next__`, `close()`. Generator
 methods `.send()` and `.throw()` are not supported — call them and you
 get an `AttributeError` reminding you the iterator is a replay.
+
+A chunk can go while you are still reading it — another process clears the
+cache, or the RAM tier evicts it. The rest of the run is then recomputed from
+the function, continuing where the replay stopped; where cash cannot recompute
+(an async hit), the loss raises. What it never does is stop early: that would
+hand you a silent prefix, and a sum over half a stream is wrong rather than
+slow.
 
 ---
 

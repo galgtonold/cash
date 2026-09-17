@@ -337,6 +337,13 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 stored_destinations.append(_label)
             except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
                 logger.warning("[TIERED] Failed to write to backend %s: %s", type(backend).__name__, e)
+                # And on the entry's metadata, which is how the caller hears
+                # about it: a failure here used to be this log line alone, so
+                # an unpicklable result reported STORE-FAILED on a FileBackend
+                # and nothing at all on the default tiered one -- no warning,
+                # and an empty cache_info()['warnings'] (found attacking the
+                # decorator before round 26).
+                self._store_errors.append(f"{type(backend).__name__}: {type(e).__name__}: {e}")
         return stored_destinations, size_refused, refused_size, refusing_caps
 
     def persist_from_memory(self, key: str, rebuild_seconds: float) -> bool:
@@ -386,6 +393,8 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
 
         # Keep a reference to the original dict so we can propagate storage info back
         original_metadata = metadata
+        #: What a tier refused to write this call, for the caller to report.
+        self._store_errors: list[str] = []
         metadata = dict(metadata) if metadata is not None else {}
         stored_destinations = []
         # A tier's `default_ttl` belongs to the entry, not to that tier: stamped
@@ -472,6 +481,8 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         # Propagate storage info back to the caller's original metadata dict
         if original_metadata is not None:
             original_metadata['storage'] = stored_destinations
+            if self._store_errors:
+                original_metadata['store_errors'] = list(self._store_errors)
             # And why it went no further, so "why did the next process miss?"
             # has an answer: the compute floor / cost model, or a size cap.
             if len(self.backends) > 1 and not any(d != "RAM" for d in stored_destinations):

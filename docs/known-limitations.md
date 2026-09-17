@@ -33,6 +33,15 @@ Cash warns the first time this happens:
 
 The cost floor decides whether a value is worth *persisting*. It does not decide whether you see the same number twice.
 
+<!-- claim: cash/core.py:Cash._rng_replay_parts @33ebe200, cash/core.py:Cash._replay_rng_state @e100c898 -->
+**What the caller draws next is not affected.** A hit does not run the body, so
+the stream it advanced would stay where it was and the caller's own next draw
+would repeat what the function drew — with `np.random.seed(0)`, exactly the
+cached value. Both paths put the stream where the computed call left it: the
+notebook by rewinding, `@cash.cache` by replaying the state it recorded, and
+only while the stream is where that call found it, so a program that drew
+somewhere else in between is left alone.
+
 **What to do**
 
 | Goal | Do this |
@@ -282,7 +291,7 @@ A thread that mutates data after the cell that created it has finished is outsid
 ### Reads through a loader cash cannot see
 
 <!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21 -->
-Cash records a file dependency by intercepting the *read*: `pd.read_*`, `np.load`, `joblib.load`, `polars`, plain `open()`, and friends. A read that goes through none of those — a C extension that opens the file itself, a third-party client, a `subprocess` — is invisible.
+Cash records a file dependency by intercepting the *read*: `pd.read_*`, `np.load`, `joblib.load`, `polars`, `sqlite3.connect`, plain `open()`, and friends — including a read that finds the file MISSING, whichever way it is spelled (`os.path.exists`, or `open()` raising `FileNotFoundError`). A read that goes through none of them — a C extension that opens the file itself, a third-party client, a `subprocess` — is invisible. Two known gaps of that kind: `os.open`/`os.read` (the descriptor-level API, below `open()`), and a SQLite database in **WAL** mode, where a commit lands in the sidecar `-wal` file and the database file cash records may not move.
 
 The consequence is easy to mis-guess, so it is worth stating plainly: cash **does not** refuse to cache such a statement. It caches it exactly like any other, with *no file recorded*. Change the file on disk afterwards and nothing invalidates; you get the old value back with a `CACHED` badge and no warning.
 
