@@ -14,6 +14,7 @@ from ...exceptions import AmbiguousCellError, CashUpstreamSyntaxWarning, Upstrea
 from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
+from ..cache_status import CacheStatus
 from ..annotations import extract_annotations_for_statements, parse_annotation_line
 from ..staleness import StalenessTracker
 from ..randomness import (
@@ -1505,6 +1506,94 @@ class UpstreamChecker:
                 )
             return False
         return True
+
+    def plan_cell_run(
+        self, nodes: list, raw_cell: str, occurrence_counts: dict[str, int],
+    ) -> dict[int, dict] | None:
+        """Which of a run of assignments in the cell being run need not run.
+
+        Round 25 (r25s2): a cell rebuilding ``sales`` through a dozen steps
+        writes only the last version to disk (``_written_later_in_cell``), and
+        after a restart Run All re-ran every step to get back to it. Here the
+        run is simulated the way the upstream repair simulates a cell above,
+        and the same backward scan finds the latest versions it can restore;
+        what they cover need not run.
+
+        Returns ``{index in nodes: metric}`` for each statement that need not
+        run -- restored, or skipped because what it built is current or
+        overwritten -- or ``None`` to run them all. Every statement not in the
+        result runs as it would have, in order, after the restores.
+        """
+        try:
+            vl = self.simulator._virtual_lineage
+            planner = self.simulator._planner
+            classifier = self.simulator._classifier
+            virtual_lineage = dict(self.variable_lineage)
+            virtual_modules: set[str] = set()
+            trace: list = []
+            lookup_times: dict[str, float] = {}
+            counts = dict(occurrence_counts)
+            for node in nodes:
+                before = len(trace)
+                vl._simulate_one_node(
+                    0, node, counts, virtual_lineage, virtual_modules, trace,
+                    set(), set(), lookup_times, set(), {}, raw_cell=raw_cell,
+                )
+                if len(trace) != before + 1:
+                    return None
+            if any(entry[5] for entry in trace):
+                return None          # a file it reads changed: run it
+            final: dict[str, str] = {}
+            for entry in trace:
+                final.update(entry[4])
+            if set(final) != set().union(*(entry[1] for entry in trace)):
+                return None
+            broken = {name for name, lineage in final.items()
+                      if name not in self.shell.user_ns
+                      or self.variable_lineage.get(name) != lineage}
+            restored_by_index: dict[int, dict] = {}
+            run: list[int] = []
+            if broken:
+                run, restored, _ = classifier._backward_scan_pass(
+                    trace, broken, set(), virtual_lineage, virtual_modules, set(),
+                    False, False, {entry[0] for entry in trace}, lookup_times,
+                )
+                while True:
+                    size = len(run)
+                    # Stricter than the repair's own pass: a statement that runs
+                    # reads the version its run made before it, so that version's
+                    # producer runs too. The live value may be a LATER version the
+                    # scan restored -- ``is_big = sales['a'] > ...`` ran on the
+                    # final ``sales`` otherwise.
+                    run = sorted(set(run) | {
+                        p for i in run for v in (trace[i][2] or ())
+                        if (p := planner._latest_producer(trace, v, before=i)) is not None})
+                    run = planner._complete_later_producers(run, trace)
+                    if len(run) == size:
+                        break
+                for info in restored:
+                    position = info.get('position')
+                    if isinstance(position, int):
+                        info['is_upstream'] = False
+                        restored_by_index[position] = info
+            run_set = set(run)
+            planned: dict[int, dict] = {}
+            for i, entry in enumerate(trace):
+                if i in run_set:
+                    continue
+                planned[i] = restored_by_index.get(i) or {
+                    'code': entry[0],
+                    'status': CacheStatus.SKIPPED,
+                    'is_upstream': False,
+                    'saved_time': 0.0,
+                    'total_time': 0.0,
+                }
+            if broken and not restored_by_index:
+                return None          # nothing on disk to jump to: run as usual
+            return planned
+        except Exception:  # noqa: BLE001 - a plan that cannot be made is the ordinary run
+            logger.debug("[UPSTREAM] cell run plan failed", exc_info=True)
+            return None
 
     def _sync_simulation_cache_lineages(self, rerecorded: set[str]) -> None:
         """Sync simulation cache virtual lineages with actual runtime lineages.

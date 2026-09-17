@@ -72,19 +72,31 @@ The `100 ms` floor is hardcoded in `factory.py`; the savings fraction is `min_ca
 > single-tier persistent backend (`Cash(backend=FileBackend(...))` or
 > `SQLiteBackend`), which writes every entry regardless of compute time.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.end_cell_persistence @b8c9a025, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @9fe37a85 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.end_cell_persistence @aadd4798, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @9fe37a85 -->
 In a notebook, "cheaper to re-run" is judged once more at the end of each cell.
 A statement is often fast only because its inputs are there: `latest =
 sales['week'].max()` takes milliseconds, but after a restart `sales` is gone too,
-and so is everything it was built from. So for each value the cell leaves that a
-cell below it reads, Cash adds up what rebuilding it after a restart would take —
+and so is everything it was built from. So for each value the cell leaves, Cash
+adds up what rebuilding it after a restart would take —
 the statement, and every statement behind it whose result is not on disk — and
 writes the value to disk when restoring it beats that, by the same
 restore-vs-recompute rule. Only the value as the cell leaves it is written, not
-each intermediate version, and not values no later cell reads. The same holds
-while the cell runs: a statement whose every output a later statement of the
-cell writes again (`sales = sales.merge(...)` three times over) keeps its result
-in RAM, and `# @cash:persist` still writes it.
+each intermediate version. That includes a value too cheap to cache on its own
+(`is_refund = sales['qty'] < 0`) over inputs that are costly to rebuild. The same
+holds while the cell runs: a statement whose every output a later statement of
+the cell writes again (`sales = sales.merge(...)` three times over) keeps its
+result in RAM, and `# @cash:persist` still writes it.
+
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.plan_cell_run @e58a2338, cash/notebook/ipython/cell_executor.py:_writes_only_into_its_own_objects @64ba3f58 -->
+Running that cell again after a restart does not rebuild the versions in
+between. Cash simulates the cell's run of assignments the way it simulates a
+cell above, restores the last versions it has on disk, and runs only what they
+do not cover, in order: a statement that must run reads the version its place
+in the cell gives it, never a later one a restore put back. Running the cell
+again in the same kernel with nothing changed skips those steps. A run jumps
+only when every write into an object (`sales['t'] = ...`, `x += 1`) lands in an
+object the run itself made: `y = x; y[0] += 5` changes `x`, and
+`v = arr[1:]; v += 1` changes `arr`, so those run statement by statement.
 
 ### Worked examples
 

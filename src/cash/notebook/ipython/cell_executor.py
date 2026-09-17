@@ -767,6 +767,128 @@ def _written_later_in_cell(body: list[ast.stmt]) -> list[frozenset[str]]:
         acc |= outputs[i]
     return later
 
+def _jumpable_runs(body: list[ast.stmt], raw_cell: str, touches_rng) -> dict[int, int]:
+    """``{start: end}`` of the runs of plain assignments a restore can jump in.
+
+    A run is consecutive top-level assignments that rebuild a name more than
+    once (``sales = ...``, ``sales["t"] = ...``, ...), with no ``# @cash:``
+    directive, no random draw, and no statement reading a name the run writes
+    before the run has written it -- so where the run starts from is what the
+    cell had before it, and every version inside it is the run's own. See
+    ``UpstreamChecker.plan_cell_run``.
+    """
+    def plain(node) -> bool:
+        if isinstance(node, ast.AnnAssign) and node.value is None:
+            return False
+        if not isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            return False
+        if any(isinstance(n, (ast.Await, ast.Yield, ast.YieldFrom, ast.NamedExpr)) for n in ast.walk(node)):
+            return False
+        if "@cash:" in raw_cell and get_statement_annotations(raw_cell, node).has_directives():
+            return False
+        return not touches_rng(ast.unparse(node))
+
+    runs: dict[int, int] = {}
+    i, n = 0, len(body)
+    while i < n:
+        if not plain(body[i]):
+            i += 1
+            continue
+        j = i
+        while j < n and plain(body[j]):
+            j += 1
+        reads_writes = []
+        for node in body[i:j]:
+            try:
+                inputs, outputs = CodeAnalyzer.analyze_code_block(ast.unparse(node))
+            except Exception:  # noqa: BLE001 - an unanalysable statement ends the run
+                reads_writes = []
+                break
+            reads_writes.append((set(inputs), set(outputs)))
+        if len(reads_writes) >= 2:
+            written = [w for _, w in reads_writes]
+            everything = set().union(*written)
+            rebuilt = any(sum(1 for w in written if name in w) > 1 for name in everything)
+            so_far: set[str] = set()
+            ordered = True
+            for reads, writes in reads_writes:
+                if reads & (everything - so_far):
+                    ordered = False
+                    break
+                so_far |= writes
+            if rebuilt and ordered and _writes_only_into_its_own_objects(body[i:j]):
+                runs[i] = j
+        i = j
+    return runs
+
+
+#: Methods whose result may be the object they are called on, or share its data.
+_VIEW_METHODS = frozenset({
+    "view", "reshape", "ravel", "squeeze", "transpose", "swapaxes", "pipe",
+    "asarray", "asanyarray", "ascontiguousarray", "__getitem__", "get",
+})
+
+
+def _makes_a_new_object(value: ast.expr) -> bool:
+    """Whether *value* evaluates to an object no other name holds.
+
+    Conservative: a name, an attribute, a slice (``arr[1:]`` is a view of
+    ``arr``) or a column (``df['a']``) may be shared, as may a call known to
+    return its receiver or a view. A mask or a list of columns selects a copy;
+    arithmetic, literals and other calls make a new object.
+    """
+    if isinstance(value, ast.Call):
+        func = value.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+        return name not in _VIEW_METHODS
+    if isinstance(value, (ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp, ast.List, ast.Dict,
+                          ast.Set, ast.ListComp, ast.DictComp, ast.SetComp, ast.JoinedStr)):
+        return True
+    if isinstance(value, ast.Subscript):
+        if isinstance(value.value, (ast.Tuple, ast.List)) and isinstance(value.slice, ast.Constant):
+            items = value.value.elts
+            index = value.slice.value
+            return isinstance(index, int) and -len(items) <= index < len(items) \
+                and _makes_a_new_object(items[index])
+        return isinstance(value.slice, (ast.Compare, ast.BoolOp, ast.UnaryOp, ast.List))
+    return False
+
+
+def _writes_only_into_its_own_objects(nodes: list[ast.stmt]) -> bool:
+    """Whether every in-place write of the run lands in an object the run made.
+
+    ``y = x; y[0] += 5`` changes ``x``, and ``v = arr[1:]; v += 1`` changes
+    ``arr``: skipping or restoring those statements loses the change to the
+    object outside the run. So a name the run writes into -- ``name[...] =``,
+    ``name.attr =``, ``name += ...`` -- must have been bound in the run, before
+    the write, by an expression that makes a new object.
+    """
+    fresh: set[str] = set()
+    for node in nodes:
+        targets = [node.target] if isinstance(node, (ast.AugAssign, ast.AnnAssign)) else list(node.targets)
+        for target in targets:
+            if isinstance(node, ast.AugAssign) and isinstance(target, ast.Name):
+                if target.id not in fresh:
+                    return False
+                continue
+            base = target
+            while isinstance(base, (ast.Subscript, ast.Attribute)):
+                base = base.value
+            if base is not target:
+                if not isinstance(base, ast.Name) or base.id not in fresh:
+                    return False
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            names = {t.id for t in targets if isinstance(t, ast.Name)}
+            if len(targets) == 1 and names and _makes_a_new_object(node.value):
+                fresh |= names
+            else:
+                # A rebinding by anything else (``a = b = x``, ``y, z = pair``)
+                # may share; a write into ``name[...]`` keeps the name's object.
+                fresh -= {n.id for t in targets if not isinstance(t, (ast.Subscript, ast.Attribute))
+                          for n in ast.walk(t) if isinstance(n, ast.Name)}
+    return True
+
+
 class CellExecutor:
     """Run a single notebook cell through the cached-execution pipeline.
 
@@ -1793,8 +1915,20 @@ class CellExecutor:
         total_steps_unified = upstream_step_count + len(tree.body)
         stmt_occurrence_counts: dict[str, int] = {}
         written_later = _written_later_in_cell(tree.body)
+        checker = getattr(self, '_upstream_checker', None)
+        try:
+            jump_runs = (_jumpable_runs(tree.body, raw_cell, checker._cell_touches_rng)
+                         if checker is not None else {})
+        except Exception:  # noqa: BLE001 - no jump is the ordinary run
+            jump_runs = {}
+        #: Statements a restore of a later version made unnecessary.
+        planned: dict[int, ProcessResult] = {}
 
         for i, node in enumerate(tree.body):
+            if i in jump_runs:
+                plan = checker.plan_cell_run(
+                    tree.body[i:jump_runs[i]], raw_cell, dict(stmt_occurrence_counts))
+                planned = {i + k: m for k, m in (plan or {}).items()}
             try:
                 stmt_code = ast.unparse(node)
             except (ValueError, TypeError):
@@ -1815,6 +1949,9 @@ class CellExecutor:
 
             occ = stmt_occurrence_counts.get(stmt_code, 0)
             stmt_occurrence_counts[stmt_code] = occ + 1
+            if i in planned:
+                all_metrics.append(planned.pop(i))
+                continue
             annotation = get_statement_annotations(raw_cell, node)
             is_last = (i == len(tree.body) - 1)
             unified_step = upstream_step_count + i + 1
@@ -1934,8 +2071,20 @@ class CellExecutor:
         total_steps_unified = upstream_step_count + len(tree.body)
         stmt_occurrence_counts: dict[str, int] = {}
         written_later = _written_later_in_cell(tree.body)
+        checker = getattr(self, '_upstream_checker', None)
+        try:
+            jump_runs = (_jumpable_runs(tree.body, raw_cell, checker._cell_touches_rng)
+                         if checker is not None else {})
+        except Exception:  # noqa: BLE001 - no jump is the ordinary run
+            jump_runs = {}
+        #: Statements a restore of a later version made unnecessary.
+        planned: dict[int, ProcessResult] = {}
 
         for i, node in enumerate(tree.body):
+            if i in jump_runs:
+                plan = checker.plan_cell_run(
+                    tree.body[i:jump_runs[i]], raw_cell, dict(stmt_occurrence_counts))
+                planned = {i + k: m for k, m in (plan or {}).items()}
             try:
                 stmt_code = ast.unparse(node)
             except (ValueError, TypeError):
@@ -1951,6 +2100,9 @@ class CellExecutor:
 
             occ = stmt_occurrence_counts.get(stmt_code, 0)
             stmt_occurrence_counts[stmt_code] = occ + 1
+            if i in planned:
+                all_metrics.append(planned.pop(i))
+                continue
             annotation = get_statement_annotations(raw_cell, node)
             is_last = (i == len(tree.body) - 1)
             unified_step = upstream_step_count + i + 1

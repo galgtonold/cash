@@ -2159,6 +2159,29 @@ class StatementProcessor:
             outer.update(ancestry)
             outer_names.update(changed)
 
+    #: Unsaved compute behind a cheap statement's inputs past which its final
+    #: value gets an entry anyway (see :meth:`_final_over_costly_inputs`).
+    _COSTLY_INPUTS_S = 0.1
+
+    def _final_over_costly_inputs(self, inputs, outputs) -> bool:
+        """Whether a statement too cheap to cache leaves a final value over
+        inputs that would be costly to rebuild.
+
+        ``is_refund = sales["qty"] < 0`` takes a millisecond, over a ``sales``
+        that took seconds and is not on disk. With no entry, the end-of-cell
+        pass had nothing to persist, and after a restart the cell rebuilt
+        ``sales`` to get ``is_refund`` back (round 25, r25s2). An intermediate
+        -- a name the cell writes again -- still gets none.
+        """
+        try:
+            later = getattr(self, 'written_later_in_cell', frozenset())
+            if not outputs or set(outputs) & set(later):
+                return False
+            cost = sum(sum(self._unsaved_ancestry.get(name, {}).values()) for name in inputs)
+            return cost >= self._COSTLY_INPUTS_S
+        except Exception:  # noqa: BLE001 - the floor is the safe answer
+            return False
+
     def end_cell_persistence(self) -> None:
         """Write to disk what this cell left that would be costly to rebuild.
 
@@ -2170,19 +2193,23 @@ class StatementProcessor:
         judged by what rebuilding it would cost -- the entries not on disk it
         came through -- by the same cost-model rule. The final value only: the
         ten versions ``sales`` goes through in one cell are not worth ten copies.
-        And only a value a cell below reads (``read_by_later_cells``): what a
-        restart needs from here, not the cell's intermediates.
+
+        Every final value, not only one a cell below reads: running this cell
+        again after a restart restores its last versions rather than rebuilding
+        them (``UpstreamChecker.plan_cell_run``), and ``is_refund`` beside the
+        final ``sales`` is one of them (round 25, r25s2). Still only in a
+        notebook, where a restart re-runs cells by their source.
         """
         backend = getattr(self.cash_instance, 'backend', None) if self.cash_instance else None
         persist = getattr(backend, 'persist_from_memory', None)
         last, self._cell_last_key = self._cell_last_key, {}
         later = self._tracking_state.read_by_later_cells
         self._tracking_state.read_by_later_cells = None
-        if persist is None or not later:
+        if persist is None or later is None:
             return
         costs: dict[str, float] = {}
         for name, key in last.items():
-            if name not in later or name not in self.shell.user_ns:
+            if name not in self.shell.user_ns:
                 continue
             if self._tracking_state.variable_sources.get(name) != key:
                 continue
@@ -4394,7 +4421,7 @@ class StatementProcessor:
             # legitimately clear the floor, so nothing may assume this branch is
             # taken for a given statement (see the floor-exit test, which pins
             # the threshold rather than trusting the machine to be fast).
-            if execution_time < min_exec_time:
+            if execution_time < min_exec_time and not self._final_over_costly_inputs(inputs, outputs):
                 if self.debug:
                     logger.debug(
                         "[SIZE_AWARE] Compute took only %.1fms, below "
