@@ -1416,6 +1416,7 @@ class UpstreamChecker:
                     progress_callback=progress_callback,
                     restored_info=restored_info,
                     control_structure_callback=control_structure_callback,
+                    annotations=self._statement_directives(notebook_cells),
                 )
             self._label_rng_rerun_metrics(executed_metrics, rng_rerun)
             total_execution_time = self._sum_execution_times(executed_metrics)
@@ -1920,6 +1921,35 @@ class UpstreamChecker:
         except (AttributeError, IndexError, TypeError):  # pragma: no cover - defensive
             return
 
+    @staticmethod
+    def _statement_directives(notebook_cells: list[str] | None) -> dict[str, Any]:
+        """``{statement code: its # @cash: directives}`` across the notebook.
+
+        A statement re-run as an upstream repair ran with no annotation: r25s4
+        put ``# @cash:no-cache-calls`` on a comprehension, and its calls were
+        cached whenever a cell below repaired it (round 25). The repair has the
+        statement's code, keyed as the simulator keys it; the directive is read
+        from its cell as a direct run reads it. Only statements that carry one.
+        """
+        from ..annotations import get_statement_annotations
+        found: dict[str, Any] = {}
+        for cell in notebook_cells or ():
+            if "@cash:" not in cell:
+                continue
+            try:
+                clean = CodeAnalyzer.strip_magics(cell.replace('\r\n', '\n'))
+                tree = ast.parse(clean)
+            except (SyntaxError, ValueError):
+                continue
+            for node in tree.body:
+                try:
+                    annotation = get_statement_annotations(clean, node)
+                    if annotation.has_directives():
+                        found.setdefault(ast.unparse(node), annotation)
+                except Exception:  # noqa: BLE001 - a directive lookup never breaks a repair
+                    continue
+        return found
+
     def _reexecute_statements(
         self,
         statements: list[str],
@@ -1927,9 +1957,14 @@ class UpstreamChecker:
         global_ttl: int | None,
         progress_callback: Callable[..., None] | None = None,
         restored_info: list[ProcessResult] | None = None,
-        control_structure_callback: Callable[..., Any] | None = None
+        control_structure_callback: Callable[..., Any] | None = None,
+        annotations: dict[str, Any] | None = None,
     ) -> list[ProcessResult]:
-        """Re-execute a list of statements and return their metrics."""
+        """Re-execute a list of statements and return their metrics.
+
+        *annotations* maps a statement's code to the ``# @cash:`` directives
+        written on it in its cell (see :meth:`_statement_directives`).
+        """
         executed_metrics = []
         total_upstream_steps = len(statements)
 
@@ -1953,7 +1988,11 @@ class UpstreamChecker:
                 if ctrl_node is not None and control_structure_callback is not None:
                     if self.debug:
                         logger.debug("[UPSTREAM] Delegating control structure to per-iteration processor")
-                    ctrl_result = control_structure_callback(ctrl_node, ttl=global_ttl, silent=True)
+                    ctrl_annotation = (annotations or {}).get(stmt_code)
+                    ctrl_result = (control_structure_callback(ctrl_node, ttl=global_ttl, silent=True,
+                                                              inherited_annotation=ctrl_annotation)
+                                   if ctrl_annotation is not None else
+                                   control_structure_callback(ctrl_node, ttl=global_ttl, silent=True))
                     for m in ctrl_result.metrics:
                         if m:
                             m['is_upstream'] = True
@@ -1968,7 +2007,11 @@ class UpstreamChecker:
                     # its fills) put that line into an unrelated cell's output
                     # (round 21, replay acceptance corpus). A failure still
                     # surfaces: the processor reports it in ``result['error']``.
-                    result = process_callback(stmt_code, global_ttl, silent=True)
+                    stmt_annotation = (annotations or {}).get(stmt_code)
+                    result = (process_callback(stmt_code, global_ttl, silent=True,
+                                               annotation=stmt_annotation)
+                              if stmt_annotation is not None else
+                              process_callback(stmt_code, global_ttl, silent=True))
                     if self.debug:
                         logger.debug("[UPSTREAM] Callback result for '%s...': %s", stmt_code[:20], result)
                     if result:
