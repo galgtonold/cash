@@ -762,6 +762,16 @@ def _plain_or_code(value, seen: set[int], budget: list[int]) -> bool:
         if (getattr(value, '_is_file_tracker_patch', False)
                 or getattr(value, '_cash_cached', False)):
             return True          # cash's own: keyed or tracked by cash itself
+        from cash.notebook.file_tracker import _is_user_file
+        filename = getattr(value.__code__, "co_filename", "") or ""
+        # A cell's code has a `<cash-...>` / `<ipython-...>` name: the user's.
+        if filename and not filename.startswith("<") and not _is_user_file(filename):
+            # A library's function is code, as its classes are. Its module
+            # state is no more in a lineage key than in a content key, and
+            # walking it refused: sklearn's `normalize` is a validating
+            # wrapper whose globals hold non-plain state, so `fit_vectors`
+            # re-fitted on byte-identical text (round 25, r25s4).
+            return True
         return _callee_state_is_plain(value, seen, budget)
     if isinstance(value, (_ModuleType, type, _types.BuiltinFunctionType)):
         return True
