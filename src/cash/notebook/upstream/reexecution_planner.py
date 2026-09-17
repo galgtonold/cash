@@ -180,6 +180,18 @@ def _fills_carrier(entry, sibling_names: set[str]) -> bool:
                 or _passes_carrier_to_a_call(code, sibling_names))
 
 
+def _is_definition(code: str) -> bool:
+    """Is *code* a single top-level ``def`` / ``async def`` / ``class``?"""
+    stripped = code.lstrip()
+    if not stripped.startswith(("def ", "async def ", "class ", "@")):
+        return False
+    try:
+        body = ast.parse(textwrap.dedent(code)).body
+    except (SyntaxError, ValueError):
+        return False
+    return len(body) == 1 and isinstance(body[0], (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+
+
 class ReexecutionPlanner:
     """Phase 3 of NotebookSimulator: build the re-execution plan.
 
@@ -428,6 +440,13 @@ class ReexecutionPlanner:
             changed = False
             for i in list(scheduled):
                 entry = simulation_trace[i]
+                if _is_definition(entry[0]):
+                    # A def or class reads its body's globals when called, at
+                    # whatever version they then are: defining it consumes
+                    # none. Taken as a consumer, `def plot_region` re-ran the
+                    # whole back-test cell the summary cell had just rebuilt
+                    # (round 25, r25s5).
+                    continue
                 inputs, input_hashes = entry[2], (entry[3] or {})
                 for v in inputs:
                     if v not in shadowed:
