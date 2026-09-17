@@ -33,7 +33,7 @@ No decorator argument, no manual registration. Cash sees the `read_csv` call, re
 
 ## What's automatically tracked
 
-<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._initialize_defaults @cdaca84c, cash/notebook/file_tracker.py:_find_patch_targets @720455ed -->
+<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._initialize_defaults @210155eb, cash/notebook/file_tracker.py:_find_patch_targets @720455ed -->
 The default handler set is registered in `FileDependencyRegistry._initialize_defaults`:
 
 | Module | Functions |

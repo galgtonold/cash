@@ -83,7 +83,8 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         return "disk"
 
     def _cost_model_promote(
-        self, type_name: str, size_bytes: int, execution_time: float, backend_kind: str
+        self, type_name: str, size_bytes: int, execution_time: float, backend_kind: str,
+        *, floor: bool = True,
     ) -> bool:
         """Serialization-aware promotion decision (the same rule Gate A uses):
         promote only when recomputing costs more than the predicted restore.
@@ -95,7 +96,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         bigger objects are correctly *more* likely to persist when their
         recompute cost is high.
         """
-        if execution_time < self._min_persist_compute_s:
+        if floor and execution_time < self._min_persist_compute_s:
             return False
         # Lazy import: only notebook-cached values carry the cost-model family,
         # and by then cash.notebook is already loaded. Keeps this module (and a
@@ -441,18 +442,26 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             deferred = bool(metadata.pop('defer_persist', False)) and not force_persist
             if original_metadata is not None:
                 original_metadata.pop('defer_persist', None)
+            decorated = bool(metadata.get('decorator_entry'))
             if force_persist:
                 past_compute_floor = True
             elif deferred:
                 # A version the same cell replaces: the end-of-cell pass
                 # persists the final one (``persist_from_memory``).
                 past_compute_floor = False
-            elif family is not None:
+            elif family is not None or decorated:
+                # A decorated function has no compute FLOOR: decorating it is
+                # the decision to cache it, however quick it is, and the floor
+                # meant a script run twice recomputed everything (found
+                # attacking the decorator before round 26). The cost model
+                # still decides -- a cheap call whose result is slow to restore
+                # stays in RAM, and `explain()` says so.
                 past_compute_floor = self._cost_model_promote(
                     metadata.get('cost_model_type_name', ''),
                     metadata.get('cost_model_size_bytes', size),
                     exec_time,
                     self._promotion_backend_kind(),
+                    floor=not decorated,
                 )
             else:
                 past_compute_floor = self.promotion_policy(exec_time, size)

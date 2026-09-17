@@ -216,7 +216,7 @@ cash info
   that is not a setting, or a value cash could not use, is left out of the
   list and reported as a warning.
 
-<!-- claim: cash/__main__.py:cmd_inspect @e3a7eb28, cash/__main__.py:_inspect_cache_dir @24d5dddf, cash/__main__.py:_inspect_notebook @06ba3efe -->
+<!-- claim: cash/__main__.py:cmd_inspect @f584cf61, cash/__main__.py:_inspect_cache_dir @c4025bfc, cash/__main__.py:_inspect_notebook @06ba3efe -->
 ### `cash inspect [path] [--function NAME]` { #cash-inspect-path }
 
 Summarise a cache directory, or report on a notebook and its sibling `.cash`
@@ -458,7 +458,7 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 ---
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @d7f9d538 -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @be5e19d3 -->
 ## Exit codes
 
 | Code | When |

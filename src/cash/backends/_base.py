@@ -721,6 +721,10 @@ class CacheMetadata:
     # Deserialization instruction; round-tripped so get() can rebuild the value.
     serializer_cls: type | None = None
     # Notebook-annotation flags consumed by TieredBackend / lineage.
+    #: Written by ``@cash.cache``: this entry was asked for by a decorator, so
+    #: the compute floor does not gate it (``TieredBackend.set``).
+    decorator_entry: bool | None = None
+
     #: Where the global RNG stood before and after the call that computed this
     #: entry, so a hit can leave it where the body did (``Cash._rng_replay_parts``).
     rng_replay: dict[str, Any] | None = None

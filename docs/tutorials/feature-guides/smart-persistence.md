@@ -54,7 +54,7 @@ def policy(execution_time: float, size_bytes: int) -> bool:
     return execution_time - est_restore > min_savings * execution_time
 ```
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._cost_model_promote @1376cc8e, cash/notebook/cost_model.py:estimated_restore_time @19d51f03 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._cost_model_promote @791aeb94, cash/notebook/cost_model.py:estimated_restore_time @19d51f03 -->
 Two things gate the promotion:
 
 1. **Hard floor at 100 ms.** Anything that ran faster than `0.1 s` never reaches disk — the I/O alone would cost more than recomputing.
@@ -144,7 +144,7 @@ so the two paths differ here.)
 
 ## Inspecting where a value actually landed
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @8096d08e, cash/backends/tiered_backend.py:TieredBackend.get @d9642778 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @71328632, cash/backends/tiered_backend.py:TieredBackend.get @d9642778 -->
 The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']`. This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (set in `TieredBackend.get`).
 
 When it went no further than RAM, `metadata['persist_skipped']` says why: `"compute"` (the compute floor or the cost model), `"size"` (a tier's size cap), or `"replaced_in_cell"` (a later statement of the same cell writes that name again, so the version the cell leaves is the one written).

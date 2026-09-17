@@ -6,7 +6,7 @@ on-disk layer, with a promotion policy that decides what's worth writing down.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend @7dcada8a, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend, cash/backends/cascading_backend.py:CascadingBackend broad="tier ordering and read-repair are properties of the class as a whole" -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend @ce30cedb, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend, cash/backends/cascading_backend.py:CascadingBackend broad="tier ordering and read-repair are properties of the class as a whole" -->
 The default `TieredBackend` stacks two layers, fastest first:
 
 | Tier | Backend | Speed | Survives restart? |
@@ -177,7 +177,7 @@ backend precisely so existence and size can be established without touching the
 payload. `resolve()` is idempotent: the loader runs at most once.
 
 ??? question "How does cache metadata stay typed without locking the backends in?"
-    <!-- claim: cash/backends/_base.py:CacheMetadata @c3ef9338, cash/notebook/statement/_metadata.py:StatementCacheMetadata @0aa25f06 broad="the frozen-dataclass-in, dict-on-the-wire contract is a property of both classes" -->
+    <!-- claim: cash/backends/_base.py:CacheMetadata @22ccec71, cash/notebook/statement/_metadata.py:StatementCacheMetadata @0aa25f06 broad="the frozen-dataclass-in, dict-on-the-wire contract is a property of both classes" -->
     Each entry carries metadata — execution time, size, ttl, type. Inside the
     cash layer that metadata is a **frozen dataclass** (`CacheMetadata` for the
     decorator layer, `StatementCacheMetadata` for the notebook layer), so call

@@ -10088,6 +10088,13 @@ class Cash:
                 # Validated on subsequent get() via _auto_file_deps_fresh.
                 auto_file_deps=auto_file_deps or None,
                 rng_replay=rng_replay or None,
+                # Decorating a function IS the decision to cache it, however
+                # quick it is. The compute floor belongs to the notebook, where
+                # cash caches every statement by itself; here it meant a script
+                # run twice recomputed everything, which reads as "cash does
+                # not cache" (found attacking the decorator before round 26).
+                # Size caps and the tiers' own refusals still apply.
+                decorator_entry=True,
             )
 
             # Kept, not a temporary: TieredBackend writes back where the value

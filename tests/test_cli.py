@@ -101,8 +101,14 @@ class TestCLIInspect:
         assert "Entries:" in captured.out
 
     def test_inspect_nonexistent(self, capsys, tmp_path, monkeypatch):
-        """Inspect nonexistent path should fail gracefully."""
+        """Inspect with no path and no cache should fail gracefully.
+
+        The cache directory is pinned: without it the command resolves whatever
+        cache the environment happens to offer (the repo's own, a sibling
+        test's), so the test passed or failed by run order.
+        """
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("CASH_CACHE_DIR", str(tmp_path / "no-such-cache"))
         from types import SimpleNamespace
         with pytest.raises(SystemExit):
             cmd_inspect(SimpleNamespace(path=None))
@@ -463,3 +469,76 @@ class TestCLIAutoloadOff:
 
         cmd_autoload(_autoload_off(force=True))
         assert not (fake_ipython_dir / HOOK_FILENAME).exists()
+
+
+class TestInspectNamesWhatItWasGiven:
+    """``cash inspect <path>`` reports THAT path, or says it is not there.
+
+    Found while attacking the decorator before round 26: a path that does not
+    exist fell through to the configured cache, so `cash inspect ./nope` (or a
+    mistyped notebook name) printed a full, plausible report about an unrelated
+    cache and exited 0. `cash clear` already refuses the same input.
+    """
+
+    def test_a_missing_path_is_not_silently_replaced(self, tmp_path, monkeypatch, capsys):
+        cache = tmp_path / ".cash"
+        cache.mkdir()
+        (cache / "CACHE_VERSION").write_text("2")
+        (cache / f"abc{ENTRY_SUFFIX}").write_bytes(pack_entry({"key": "k"}, b"v"))
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("CASH_CACHE_DIR", str(cache))
+        with pytest.raises(SystemExit) as exit_info:
+            cmd_inspect(SimpleNamespace(path="./nope", function=None, tool=None))
+        assert exit_info.value.code == 1
+        out = capsys.readouterr().out
+        assert "nope" in out, out
+        assert "Entries:" not in out, "it reported some other cache"
+
+    def test_an_existing_path_is_still_inspected(self, tmp_path, monkeypatch, capsys):
+        cache = tmp_path / "other"
+        cache.mkdir()
+        (cache / f"abc{ENTRY_SUFFIX}").write_bytes(pack_entry({"key": "k"}, b"v"))
+        monkeypatch.chdir(tmp_path)
+        cmd_inspect(SimpleNamespace(path=str(cache), function=None, tool=None))
+        assert "Entries:" in capsys.readouterr().out
+
+
+class TestTheCliSeesASqliteCache:
+    """A sqlite cache is a database file, not a directory of entries.
+
+    Found while attacking the decorator before round 26: `cash info` said
+    "nothing yet (no cache written here)" and `cash inspect` said "No cache
+    found" while a working sqlite cache sat in the directory, because both
+    count `*.entry` files.
+    """
+
+    @staticmethod
+    def _db(tmp_path):
+        import sqlite3
+        cache = tmp_path / ".cash"
+        cache.mkdir()
+        conn = sqlite3.connect(cache / "cache.db")
+        conn.execute("CREATE TABLE cache_entries (key TEXT PRIMARY KEY, data BLOB, "
+                     "metadata BLOB, created_at REAL, ttl REAL, access_count INTEGER)")
+        for i in range(3):
+            conn.execute("INSERT INTO cache_entries VALUES (?, ?, ?, ?, ?, ?)",
+                         (f"k{i}", b"x" * 1024, b"{}", 0.0, None, 0))
+        conn.commit()
+        conn.close()
+        return cache
+
+    def test_info_counts_the_databases_entries(self, tmp_path, monkeypatch, capsys):
+        cache = self._db(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("CASH_CACHE_DIR", str(cache))
+        cmd_info(SimpleNamespace())
+        line = next(l for l in capsys.readouterr().out.splitlines()
+                    if l.strip().startswith("Holds:"))
+        assert "3 entries" in line, line
+
+    def test_inspect_reports_the_database(self, tmp_path, monkeypatch, capsys):
+        cache = self._db(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cmd_inspect(SimpleNamespace(path=str(cache), function=None, tool=None))
+        out = capsys.readouterr().out
+        assert "Entries: 3" in out.replace("    ", " ").replace("  ", " "), out

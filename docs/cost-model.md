@@ -33,6 +33,13 @@ badge's "saved" is not inflated by cash's own bookkeeping.
 | **10 ms – 0.1 s** | Cached in **RAM** — instant this session | No |
 | **> 0.1 s** *(and worth it)* | Cached in **RAM and on disk** | Yes |
 
+The floors above are the **notebook's**, where cash caches every statement by
+itself and has to judge which are worth keeping. A `@cash.cache` function has
+no compute floor: decorating it is the decision to cache it, so it is written
+to disk whenever restoring beats recomputing — which is the "and worth it"
+column, and the only test that still applies. A quick call whose result is slow
+to read back therefore still stays in RAM, and `explain()` says so.
+
 The "and worth it" caveat on the last row is the one surprise: a result that took
 more than 0.1 s to compute but would be **slow to reload** (a large object whose
 predicted restore time approaches its compute time) is deliberately kept

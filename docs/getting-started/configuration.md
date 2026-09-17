@@ -161,7 +161,7 @@ cost model declined to write to disk.
 |---|---|---|---|
 | `smart_persistence` | `CASH_SMART_PERSISTENCE` | `true` | Use the cost-model promotion policy. If `false`, falls back to `_default_promotion_policy` (same rule, 1.0 s floor). |
 | `persist_all` | `CASH_PERSIST_ALL` | `false` | Cache **every** notebook statement, bypassing the cost-aware floors (same as `%cash_persist on`). Flippable at runtime via `cash.configure(persist_all=True)`. Notebook only: it does not change what a `@cash.cache` function stores, which the other fields in this table decide. |
-| `min_execution_time_to_cache_seconds` | `CASH_MIN_EXECUTION_TIME_TO_CACHE_SECONDS` | `0.01` | "Too cheap to cache at all" floor — statements faster than this never get a cache entry. |
+| `min_execution_time_to_cache_seconds` | `CASH_MIN_EXECUTION_TIME_TO_CACHE_SECONDS` | `0.01` | **Notebook only.** "Too cheap to cache at all" floor — statements faster than this never get a cache entry. A `@cash.cache` function is cached because you decorated it, so no compute floor applies to it. |
 | `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | Required savings fraction for promotion — used by both the notebook Gate A and the tier promotion policy. |
 | `min_cache_fixed_budget_seconds` | `CASH_MIN_CACHE_FIXED_BUDGET_SECONDS` | `0.05` | Notebook path: always allow caching when predicted restore is below this. |
 | `call_cost_floor_seconds` | `CASH_CALL_COST_FLOOR_SECONDS` | `0.003` | The same "too cheap" floor, one level down: an individual **call inside** a statement is only cached when it costs at least this. Lower than the statement floor because a call entry is cheaper to store than a statement's. |

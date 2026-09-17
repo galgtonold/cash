@@ -66,6 +66,29 @@ def _target_dir(args: argparse.Namespace) -> str:
     return tool_cache_dir(tool) if tool else resolved_cache_dir()
 
 
+#: A single-file backend's database, inside the cache directory.
+_SQLITE_DB_NAME = "cache.db"
+
+
+def _sqlite_cache(cache_dir: str) -> tuple[int, int] | None:
+    """``(entries, bytes)`` for a sqlite cache here, or ``None`` if there is none.
+
+    A sqlite cache is one database file, so the entry-file count every other
+    command uses reports "nothing here" while the cache works fine -- which is
+    how this was found, attacking the decorator before round 26.
+    """
+    path = cache_dir if os.path.isfile(cache_dir) else os.path.join(cache_dir, _SQLITE_DB_NAME)
+    if not os.path.isfile(path):
+        return None
+    try:
+        import sqlite3
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
+            rows = conn.execute("SELECT COUNT(*) FROM cache_entries").fetchone()
+        return int(rows[0]), os.path.getsize(path)
+    except Exception:  # noqa: BLE001 - not a cash database, or unreadable
+        return None
+
+
 def _per_user_tool_caches() -> list[tuple[str, str, int, int]]:
     """``(tool, path, entries, bytes)`` for every per-user tool cache."""
     try:
@@ -106,15 +129,20 @@ def cmd_info(args: argparse.Namespace) -> None:
     print(f"  Cache dir:  {config.cache_dir}")
     # What it holds, next to where it is: the number a user asks for when
     # deciding whether to clear it (round 25 had to `du` the folder).
-    entries = size = 0
-    try:
-        for f in Path(config.cache_dir).iterdir():
-            if f.name.endswith(ENTRY_SUFFIX):
-                entries += 1
-                size += f.stat().st_size
-        print(f"  Holds:      {entries} entries, {_format_bytes(size)}")
-    except OSError:
-        print("  Holds:      nothing yet (no cache written here)")
+    database = _sqlite_cache(config.cache_dir)
+    if database is not None:
+        print(f"  Holds:      {database[0]} entries, {_format_bytes(database[1])} "
+              f"(one sqlite database)")
+    else:
+        entries = size = 0
+        try:
+            for f in Path(config.cache_dir).iterdir():
+                if f.name.endswith(ENTRY_SUFFIX):
+                    entries += 1
+                    size += f.stat().st_size
+            print(f"  Holds:      {entries} entries, {_format_bytes(size)}")
+        except OSError:
+            print("  Holds:      nothing yet (no cache written here)")
     if config.disable:
         print(f"  Disabled:   yes -- every cached function runs uncached "
               f"({origins.get('disable', 'disable = true')})")
@@ -419,6 +447,15 @@ def cmd_inspect(args: argparse.Namespace) -> None:
         _inspect_notebook(target)
         return
 
+    if target and not os.path.isdir(target):
+        # Not silently replaced by the configured cache: a mistyped path (or a
+        # mistyped notebook name) printed a full, plausible report about an
+        # unrelated cache and exited 0, while `cash clear` refused the same
+        # input (found attacking the decorator before round 26).
+        print(f"Not found: {target}")
+        print("Pass a cache directory or a notebook, or leave it out to inspect "
+              "the cache `cash info` reports for here.")
+        sys.exit(1)
     cache_dir = target if (target and os.path.isdir(target)) else _target_dir(args)
     if not os.path.isdir(cache_dir):
         print(f"No cache found at {os.path.abspath(cache_dir)}.")
@@ -480,6 +517,15 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
     entries = _scan_entries(cache_path)
 
     print(f"Cache directory: {cache_path.resolve()}")
+
+    database = _sqlite_cache(cache_dir)
+    if database is not None and not entries:
+        # A sqlite cache is one file; the per-function table below reads entry
+        # files and would report an empty cache over a working one.
+        print(f"  Total size: {_format_bytes(database[1])}    Entries: {database[0]}"
+              f"    (one sqlite database: {_SQLITE_DB_NAME})")
+        print("\n  Per-function detail is not available for the sqlite backend.")
+        return
 
     if only_function is not None:
         resolved = _resolve_function(entries, only_function)

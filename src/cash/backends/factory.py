@@ -22,6 +22,7 @@ Three input shapes:
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 from ._base import CacheBackend
@@ -53,6 +54,33 @@ def build_backend_from_config(config: "CashConfig") -> CacheBackend:
 # system memory; an explicit ``max_cache_size`` pins the DISK tier only, and
 # the RAM tier keeps its own modest auto cap either way.
 # ---------------------------------------------------------------------------
+
+def _sqlite_db_path(cache_dir: str) -> str:
+    """The database file for a cache directory: ``<cache_dir>/cache.db``.
+
+    The cache DIRECTORY used to be passed as the database FILE, so a fresh
+    project got a SQLite database named ``.cash`` -- invisible to every CLI
+    command, which looks for entries inside a directory -- and a project that
+    already had a ``.cash/`` directory died with ``unable to open database
+    file`` (found attacking the decorator before round 26).
+
+    A database already at the old location keeps being used: it is the user's
+    data, and ``makedirs`` on top of it would raise. The directory is created
+    here because SQLite will not make it.
+    """
+    if os.path.isfile(cache_dir):
+        logger.warning(
+            "[SQLITE] using the database at %s, where an older cash wrote it; "
+            "move it to %s for `cash info` and `cash inspect` to see it",
+            cache_dir, os.path.join(cache_dir + ".d", "cache.db"),
+        )
+        return cache_dir
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+    except OSError:
+        logger.debug("[SQLITE] could not create %s", cache_dir)
+    return os.path.join(cache_dir, "cache.db")
+
 
 def _resolve_disk_cap(config: "CashConfig") -> int | None:
     """Byte cap for a disk tier's LRU.
@@ -109,7 +137,7 @@ def _build_single_backend(backend_type: str, config: "CashConfig") -> CacheBacke
         )
     if backend_type == "sqlite":
         return SQLiteBackend(
-            db_path=config.cache_dir,  # reuse cache_dir as path for simple mode
+            db_path=_sqlite_db_path(config.cache_dir),
             max_size_bytes=_resolve_disk_cap(config),
         )
     if backend_type == "redis":
@@ -266,7 +294,7 @@ def _build_tier(tier: "TierConfig", config: "CashConfig") -> CacheBackend:
         )
     if t == "sqlite":
         return SQLiteBackend(
-            db_path=tier.db_path or tier.cache_dir or config.cache_dir,
+            db_path=tier.db_path or _sqlite_db_path(tier.cache_dir or config.cache_dir),
             max_size_bytes=tier.max_size_bytes if tier.max_size_bytes is not None else _resolve_disk_cap(config),
             default_ttl=tier.default_ttl,
         )
