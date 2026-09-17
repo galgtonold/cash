@@ -1675,6 +1675,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             return
         measured = self._session.measured_decorator_compute
         for call in decorator_calls:
+            if call.get('ran_plain'):
+                continue        # run without the cache: neither a hit nor a measured miss
             key = call.get('cache_key')
             if call.get('cache_hit'):
                 saved = call.get('time_saved', 0.0) or 0.0

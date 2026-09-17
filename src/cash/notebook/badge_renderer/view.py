@@ -308,6 +308,8 @@ class SubUnitGroup:
     condensed: bool
     key_prefix: str
     miss_reason: str | None = None
+    #: Calls the many-cheap-calls guard ran without the cache.
+    ran_plain: int = 0
 
 
 # Matches DecoratorCallGroup's condense threshold (``_CONDENSE_THRESHOLD`` in
@@ -361,6 +363,7 @@ def build_sub_unit_groups(events: Any) -> list[SubUnitGroup]:
             condensed=len(calls) > _CONDENSE_ABOVE,
             key_prefix=str(evs[0].get("cache_key") or "")[:13],
             miss_reason=next((e.get("miss_reason") for e in evs if e.get("miss_reason")), None),
+            ran_plain=sum(1 for e in evs if e.get("ran_plain")),
         ))
     return groups
 

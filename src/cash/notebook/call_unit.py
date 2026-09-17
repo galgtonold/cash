@@ -19,6 +19,7 @@ other.
 """
 
 import ast
+import contextlib
 import copy as _copy
 import dataclasses
 import datetime as _dt
@@ -33,6 +34,7 @@ import pathlib as _pathlib
 import sys
 import time as _time
 import types as _types
+import warnings
 from collections.abc import Callable, Mapping
 from types import ModuleType as _ModuleType
 from typing import Any
@@ -820,6 +822,65 @@ def _nbytes(value) -> int:
     return 0
 
 
+#: Where warnings re-emitted for a cash frame are de-duplicated, per file.
+_WARNING_REGISTRIES: dict[str, dict] = {}
+_CASH_DIR = _pathlib.Path(__file__).resolve().parents[1]
+
+
+def _in_cash(filename: str) -> bool:
+    try:
+        return _pathlib.Path(filename).resolve().is_relative_to(_CASH_DIR)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+@contextlib.contextmanager
+def _warnings_at_the_caller():
+    """Re-emit warnings raised inside an intercepted call, at the user's line.
+
+    ``warnings.warn(..., stacklevel=2)`` names the frame that called the
+    function -- which, under interception, is cash's wrapper. A pandas warning
+    quoted ``result = fn(*args, **kwargs)`` from ``call_unit.py`` where the
+    user's own line belonged (round 25, r25s5). Recorded, then re-emitted with
+    a cash frame replaced by the first user frame above it, de-duplicated per
+    location as the default filter would. A filter that turns warnings into
+    errors is left to act as it would: recording would swallow the exception.
+    """
+    if any(action == "error" and category is Warning and message is None and module is None
+           for action, message, category, module, _lineno in warnings.filters):
+        yield
+        return
+    catcher = warnings.catch_warnings(record=True)
+    caught = catcher.__enter__()
+    warnings.simplefilter("always")
+    try:
+        yield
+    finally:
+        catcher.__exit__(None, None, None)
+        for w in caught:
+            filename, lineno = w.filename, w.lineno
+            if _in_cash(filename):
+                frame = sys._getframe(1)
+                while frame is not None and (_in_cash(frame.f_code.co_filename)
+                                             or frame.f_code.co_filename == contextlib.__file__):
+                    frame = frame.f_back
+                if frame is not None:
+                    # The line is read from linecache, where cash registered
+                    # the statement; passing the frame's globals asks for a
+                    # module loader a cell does not have.
+                    filename, lineno = frame.f_code.co_filename, frame.f_lineno
+            try:
+                warnings.warn_explicit(
+                    w.message, w.category, filename, lineno,
+                    registry=_WARNING_REGISTRIES.setdefault(filename, {}), source=w.source)
+            except Exception:  # noqa: BLE001 - relaying a warning never breaks the call
+                logger.debug("call unit: could not relay a warning", exc_info=True)
+                try:
+                    warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
+                except Exception:  # noqa: BLE001
+                    pass
+
+
 def _global_names_reached(fn, seen: set[int] | None = None, depth: int = 0) -> set[str]:
     """Global names *fn* loads, and those of the functions it reaches, bounded."""
     seen = set() if seen is None else seen
@@ -1010,17 +1071,40 @@ class CallUnit:
         the statement's calls to this site run plain. Running plain is always
         correct; it is only uncached.
         """
+        names: list[str] = []
+
+        def _log_plain(elapsed: float) -> None:
+            # Logged as run plain: left out, the badge's count of a site's
+            # calls came up short by every call the guard ran without the
+            # cache -- 5220/5225 for a folder of 5,225 files (round 25, r25s4).
+            if not names:
+                names.append(self._func_name(fn))
+            self._record(names[0], site, None, cache_hit=False, elapsed=elapsed, ran_plain=True)
+
         @functools.wraps(fn)
         def _entry(*args, **kwargs):
+            __tracebackhide__ = True  # noqa: F841 - see _guarded
+            with _warnings_at_the_caller():
+                return _guarded(*args, **kwargs)
+
+        def _guarded(*args, **kwargs):
+            # IPython leaves a frame with this set out of the traceback it
+            # prints: a user's KeyError showed three of cash's wrapper frames
+            # between their cell and their function (round 25, r25s3).
+            __tracebackhide__ = True  # noqa: F841
             run = self._site_runs.get(site)
             if run is None:
                 run = self._site_runs[site] = _SiteRun()
             if run.plain:
-                return fn(*args, **kwargs)
+                started = _time.perf_counter()
+                result = fn(*args, **kwargs)
+                _log_plain(_time.perf_counter() - started)
+                return result
             if run.probing:
                 started = _time.perf_counter()
                 result = fn(*args, **kwargs)
                 run.plain_s += _time.perf_counter() - started
+                _log_plain(_time.perf_counter() - started)
                 run.plain_n += 1
                 if run.plain_n >= _PLAIN_SAMPLES:
                     run.probing = False
@@ -1059,6 +1143,7 @@ class CallUnit:
         func_name = self._func_name(fn)
 
         def _invoke(*args, **kwargs):
+            __tracebackhide__ = True  # noqa: F841 - see _entry_for
             # CAS-260: globals this callee writes. Resolved per call rather
             # than once per `wrap`, because the underlying source analysis is
             # memoised (`callee_mutated_globals`) while the "is it bound, is it
@@ -1216,6 +1301,7 @@ class CallUnit:
         something to write back onto the live stream -- otherwise that
         output is simply gone, since the callee does not run at all on a hit.
         """
+        __tracebackhide__ = True  # noqa: F841 - see _entry_for
         old_stdout, old_stderr = sys.stdout, sys.stderr
         tee_out = _ForwardingTee(old_stdout)
         tee_err = _ForwardingTee(old_stderr)
@@ -1892,7 +1978,8 @@ class CallUnit:
         except Exception:  # noqa: BLE001
             return f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', '?')}"
 
-    def _record(self, func_name, site: CallSite, key, *, cache_hit, elapsed, time_saved=0.0) -> None:
+    def _record(self, func_name, site: CallSite, key, *, cache_hit, elapsed, time_saved=0.0,
+                ran_plain=False) -> None:
         """Emit the SAME event shape ``drain_decorator_calls`` returns.
 
         Keeping the contract identical is what lets the badge, the ``@cache``
@@ -1915,6 +2002,8 @@ class CallUnit:
             "call_source": site.source,
             "occurrence_index": site.occurrence_index,
             "intercepted": True,
+            # Run without the cache by the many-cheap-calls guard.
+            "ran_plain": ran_plain,
         })
 
     def drain(self) -> list[dict]:

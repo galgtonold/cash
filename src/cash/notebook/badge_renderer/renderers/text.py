@@ -47,6 +47,8 @@ from ..view import (
 
 
 def _header_line(h: BadgeHeader) -> str:
+    if h.status is BadgeStatus.ERROR:
+        return (f"ERROR ({h.total_exec_s:.2f}s)" if h.total_exec_s else "ERROR") + _uncacheable_suffix(h)
     if h.computed_count == 0 and h.restored_count > 0:
         return f"CACHED (saved {h.total_saved_s:.2f}s)"
     if h.computed_count == 0 and h.skipped_count > 0:
@@ -125,19 +127,27 @@ def _row_line(row: StatementRow, *, is_upstream: bool) -> str:
     if row.status is BadgeStatus.SKIPPED:
         return f"  {tag}: {code}"
     if row.status is BadgeStatus.COMPUTED:
-        if row.uncacheable_reasons:
-            reasons = ", ".join(row.uncacheable_reasons)
-            return f"  {tag}: {code}  ({row.time_s:.2f}s) - {reasons}"
-        if row.skipped_reason:
-            # Shortened, not dropped: the row still says it wasn't cached and
-            # why. The guard's full paragraph is emitted once per cell by
-            # ``_guard_summary_lines`` instead of once per statement.
-            return (f"  {tag}: {code}  ({row.time_s:.2f}s) - "
-                    f"{shorten_skipped_reason(row.skipped_reason)}")
-        if row.storage_tiers:
-            return f"  {tag}: {code}  ({row.time_s:.2f}s) -> {'+'.join(row.storage_tiers)}"
-        return f"  {tag}: {code}  ({row.time_s:.2f}s)"
+        return _row_line_computed(row, tag, code)
     return f"  {tag}: {code}  ({row.time_s:.2f}s)"
+
+
+def _row_line_computed(row: StatementRow, tag: str, code: str) -> str:
+    # The statement ran, but what it exists for may have come from the cache:
+    # "EXECUTED (0.03s)" read like a suspiciously fast re-fit, with only the
+    # footer saying otherwise (round 25, r25s1).
+    saved = sum(c.time_s for g in (row.sub_units or ()) for c in g.calls
+                if c.status is BadgeStatus.RESTORED)
+    timing = f"({row.time_s:.2f}s, saved {saved:.2f}s by cached calls)" if saved else f"({row.time_s:.2f}s)"
+    if row.uncacheable_reasons:
+        return f"  {tag}: {code}  {timing} - {', '.join(row.uncacheable_reasons)}"
+    if row.skipped_reason:
+        # Shortened, not dropped: the row still says it wasn't cached and
+        # why. The guard's full paragraph is emitted once per cell by
+        # ``_guard_summary_lines`` instead of once per statement.
+        return f"  {tag}: {code}  {timing} - {shorten_skipped_reason(row.skipped_reason)}"
+    if row.storage_tiers:
+        return f"  {tag}: {code}  {timing} -> {'+'.join(row.storage_tiers)}"
+    return f"  {tag}: {code}  {timing}"
 
 
 def _iteration_pseudo_row(it: IterationRow) -> StatementRow:
@@ -181,6 +191,7 @@ def _sub_unit_lines(row: StatementRow, pad: str) -> list[str]:
     return [
         f"{pad}    sub-call {g.call_source}: "
         f"{sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)}/{len(g.calls)} hit"
+        + (f", {g.ran_plain} run plain (too cheap to cache)" if getattr(g, "ran_plain", 0) else "")
         for g in row.sub_units
     ]
 

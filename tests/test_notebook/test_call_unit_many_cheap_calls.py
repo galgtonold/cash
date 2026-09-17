@@ -99,3 +99,52 @@ def test_calls_a_hit_could_not_beat_stop_being_cached(call_unit_harness, slow_lo
     assert [wrapped(i) for i in range(N)] == [i * 2 for i in range(N)]
 
     assert len(slow_lookup) == cu._GUARD_AFTER_CALLS, "calls no hit could beat kept being looked up"
+
+
+def test_every_call_is_counted_including_the_plain_ones(call_unit_harness, slow_lookup):
+    """Round 25 (r25s4): the badge read ``sub-call read_doc(p): 5220/5225`` for
+    5,225 files, ``296/301``, ``495/500``: every count five short. The calls
+    the guard ran plain -- its samples and the rest of the run -- were never
+    logged, so they vanished from the denominator. They are logged now, and
+    marked as run plain."""
+    unit = call_unit_harness(lineage={"work": "w"}, user_ns={})
+    wrapped = unit.wrap(lambda v: v * 2, SITE)
+    for i in range(N):
+        wrapped(i)
+
+    events = unit.drain()
+    assert len(events) == N, f"{len(events)} of {N} calls logged"
+    plain = [e for e in events if e.get("ran_plain")]
+    assert len(plain) == N - cu._GUARD_AFTER_CALLS
+    assert all(not e["cache_hit"] for e in plain)
+
+
+def test_the_sub_call_line_says_how_many_ran_plain():
+    from cash.notebook.badge_renderer.renderers.text import render_text
+    from cash.notebook.badge_renderer.view_builder import build_interactive_badge
+    event = {"func_name": "m.work", "call_source": "work(v)", "occurrence_index": 0, "intercepted": True,
+             "cache_key": None, "execution_time": 0.001, "time_saved": 0.0}
+    calls = ([dict(event, cache_hit=True) for _ in range(3)]
+             + [dict(event, cache_hit=False, ran_plain=True) for _ in range(5)])
+    out = render_text(build_interactive_badge([
+        {"status": "COMPUTED", "code": "out = [work(v) for v in xs]", "execution_time": 0.1,
+         "decorator_calls": calls}]))
+    assert "sub-call work(v): 3/8 hit" in out, out
+    assert "5 run plain" in out, out
+
+
+def test_a_row_whose_calls_were_served_says_what_they_saved():
+    """Round 25 (r25s1): ``EXECUTED: results[name] = evaluate(...)  (0.03s)``
+    for a model fit served from the cache -- the word EXECUTED and 0.03 s, and
+    only the footer's "3/4 cached" said otherwise. The statement did run; the
+    row says what its cached calls saved."""
+    from cash.notebook.badge_renderer.renderers.text import render_text
+    from cash.notebook.badge_renderer.view_builder import build_interactive_badge
+    hit = {"func_name": "m.evaluate", "call_source": "evaluate(name)", "occurrence_index": 0,
+           "intercepted": True, "cache_key": "call:ab", "cache_hit": True,
+           "execution_time": 0.0, "time_saved": 3.02}
+    out = render_text(build_interactive_badge([
+        {"status": "COMPUTED", "code": "results[name] = evaluate(name)", "execution_time": 0.03,
+         "decorator_calls": [hit]}]))
+    row = next(line for line in out.splitlines() if "results[name]" in line)
+    assert "saved 3.02s" in row, out
