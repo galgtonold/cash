@@ -1014,6 +1014,20 @@ class FileDependencyRegistry:
         self.register('numpy', 'genfromtxt', self._create_path_arg_handler)
         self.register('numpy', 'fromfile', self._create_path_arg_handler)
 
+        # pyarrow.dataset reads in C++ like the rest of pyarrow; `read_table`
+        # was registered and `dataset()` was not, so one entry point of an
+        # otherwise-covered library went stale (found attacking the decorator
+        # before round 26).
+        self.register('pyarrow.dataset', 'dataset', self._create_path_arg_handler)
+
+        # linecache reads through `tokenize._builtin_open`, a reference taken
+        # at import time, so the patched `open` never sees it. Source files are
+        # left out: linecache is what `inspect.getsource` (and every traceback)
+        # reads with, and recording those made a module's own source a data
+        # dependency of the functions in it.
+        self.register('linecache', 'getline', self._create_source_reader_handler)
+        self.register('linecache', 'getlines', self._create_source_reader_handler)
+
         # sqlite3 opens the database in C, so nothing reaches a patched
         # reader: a cached `select sum(x)` returned 1 where an uncached run
         # returned 101 after an INSERT, and `pd.read_sql_query` over the same
@@ -1187,6 +1201,24 @@ class FileDependencyRegistry:
                     _tracker._track_absent(path)
             return result
         return tracked_exists
+
+    @staticmethod
+    def _create_source_reader_handler(original_func, track_callback):
+        """Track a data file read through a SOURCE reader (``linecache``).
+
+        Python files are skipped: this is the machinery `inspect.getsource` and
+        every traceback read with, so recording those makes a module's own
+        source a data dependency of the functions defined in it.
+        """
+        def tracked_source_reader(filename, *args, **kwargs):
+            if isinstance(filename, (str, bytes, os.PathLike)):
+                text = os.fsdecode(filename) if isinstance(filename, bytes) else str(filename)
+                if not text.endswith((".py", ".pyc", ".pyw", ".pyi", ".pyx")):
+                    _tracker = _active_tracker.get()
+                    if _tracker is not None:
+                        _tracker._track_path(filename)
+            return original_func(filename, *args, **kwargs)
+        return tracked_source_reader
 
     @staticmethod
     def _create_glob_dir_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):

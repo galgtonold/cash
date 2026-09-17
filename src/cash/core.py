@@ -8089,10 +8089,46 @@ class Cash:
                     id(obj.index), tuple(obj.index.names))
         return (id(mgr), blocks, id(obj.index), tuple(obj.index.names), obj.name)
 
+    @staticmethod
+    def _frame_borrows_its_data(obj: Any) -> bool:
+        """Whether *obj*'s blocks sit on memory something else may write.
+
+        Copy-on-write is what makes the block identities an exact change
+        signal, and it only governs writes through PANDAS. ``pd.DataFrame(arr,
+        copy=False)`` keeps the caller's ndarray, and ``arr[0, 0] = 100`` goes
+        straight past pandas: same blocks, changed data. The memo answered 10.0
+        where the frame really summed to 109.0 (found attacking the decorator
+        before round 26). Such a frame is re-hashed on every call.
+        """
+        try:
+            for block in obj._mgr.blocks:
+                values = block.values
+                base = getattr(values, "base", None)
+                if base is not None or not getattr(getattr(values, "flags", None), "owndata", True):
+                    return True
+                # A 1-D block IS the caller's array (`pd.Series(arr,
+                # copy=False)`), with no base and owning its data -- only the
+                # extra reference the caller still holds tells them apart. A
+                # count above the baseline can only make cash re-hash a frame
+                # it could have memoised: slower, never wrong.
+                if sys.getrefcount(values) > Cash._BLOCK_REFCOUNT_BASELINE:
+                    return True
+        except Exception:  # noqa: BLE001 - a pandas internals change: keep the memo
+            return False
+        return False
+
+    #: References a block's array has when only its block (and this call's own
+    #: temporary) hold it. Anything above means something outside can write to
+    #: it; see ``_frame_borrows_its_data``.
+    _BLOCK_REFCOUNT_BASELINE = 3
+
     def _frame_memo_lookup(self, obj: Any) -> str | None:
         """The content hash recorded for *obj*, if *obj* has not changed since."""
         entry = self._frame_memo.get(id(obj))
         if entry is None:
+            return None
+        if self._frame_borrows_its_data(obj):
+            self._frame_memo.pop(id(obj), None)
             return None
         wref, _held, signature, content_hash = entry
         try:
