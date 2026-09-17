@@ -12,6 +12,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from cash.exceptions import CacheBackendError
+
 from ._base import CacheBackend, MetadataDict, gdsf_value
 from .serialization import Serializer
 from .. import _plain_data
@@ -90,7 +92,7 @@ class InMemoryBackend(CacheBackend):
     _IMMUTABLE_SCALARS = (int, float, str, bool, bytes, complex, type(None))
 
     @staticmethod
-    def _safe_deep_copy(value: Any, key: str = "<unknown>") -> Any:
+    def _safe_deep_copy(value: Any, key: str = "<unknown>", *, required: bool = False) -> Any:
         """Copy *value* so the caller cannot reach the stored entry.
 
         A RAM-tier hit must hand back something independent, or a caller that
@@ -133,7 +135,18 @@ class InMemoryBackend(CacheBackend):
                 InMemoryBackend._premade_copies(value, memo)
                 return copy.deepcopy(value, memo)
             return copy.deepcopy(value)
-        except (TypeError, pickle.PicklingError, RecursionError, AttributeError):
+        except (TypeError, pickle.PicklingError, RecursionError, AttributeError) as exc:
+            if required:
+                # Storing it would hand every caller the SAME object: a caller
+                # mutating a hit changes what later calls get, and two threads
+                # get one object to mutate at once (found attacking the
+                # decorator before round 26). Isolation is what makes a cached
+                # value safe to hand out, so a value that cannot be isolated is
+                # not stored -- and it is unpicklable too, so no disk tier
+                # could hold it either.
+                raise CacheBackendError(
+                    f"the result could not be copied ({type(exc).__name__}: {exc}), "
+                    f"so caching it would hand every caller the same object") from exc
             logger.debug("Could not deep-copy value for key %r, returning reference", key)
             return value
 
@@ -238,7 +251,13 @@ class InMemoryBackend(CacheBackend):
             stored = list(map(dict, value))
         elif plain is None:
             immutable = False
-            stored = self._safe_deep_copy(value, key)
+            # Only for a decorator entry, where the stored value IS what the
+            # next call hands back. A notebook statement's payload is the
+            # variables a cell left behind, and one unisolatable variable among
+            # them (an open handle in scope) must not stop the statement being
+            # cached -- the notebook re-executes what it cannot restore.
+            stored = self._safe_deep_copy(
+                value, key, required=bool((metadata or {}).get('decorator_entry')))
         else:
             _size, immutable, levels = plain
             stored = _plain_data.copy_plain(value, immutable, levels)[1]

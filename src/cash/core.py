@@ -10094,7 +10094,14 @@ class Cash:
                 # run twice recomputed everything, which reads as "cash does
                 # not cache" (found attacking the decorator before round 26).
                 # Size caps and the tiers' own refusals still apply.
-                decorator_entry=True,
+                #
+                # The flag also says the stored value IS what the next call
+                # hands back, so the RAM tier refuses one it cannot copy rather
+                # than sharing it. Not for a `frozen=True` function: declaring
+                # a result frozen says it is not modified, and handing the same
+                # object back is what that promises for a result no pickle can
+                # copy at all.
+                decorator_entry=func_name not in self._frozen_funcs,
             )
 
             # Kept, not a temporary: TieredBackend writes back where the value

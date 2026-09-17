@@ -420,6 +420,10 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 "Failed to write key '%s' to tier 0 (%s): %s",
                 key, type(self.backends[0]).__name__, e,
             )
+            # And on the entry's metadata, so the caller hears it: the RAM tier
+            # refuses a value it cannot copy, and nothing else would say why the
+            # call recomputes every time.
+            self._store_errors.append(f"{type(self.backends[0]).__name__}: {type(e).__name__}: {e}")
 
         # Check promotion for subsequent tiers. The promotion decision is
         # made per-tier so a single set() can land in some tiers and skip

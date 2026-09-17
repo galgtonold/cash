@@ -1357,7 +1357,12 @@ cached consumers cost seconds per call to hash, and nothing with `frozen=True`.
 For a result it cannot mark (a `set`, an object with `__slots__`),
 [`KEY-FROZEN-NO-EFFECT`](warnings.md#key-frozen-no-effect) says so rather than
 leaving `frozen=True` silently inert. A numpy array result comes back
-**read-only**, so a write raises instead of going stale. Other objects are
+**read-only**, so a write raises instead of going stale. A frozen result is
+also the one kind cash hands back as the SAME object when it cannot copy it --
+that is what "works for an object that cannot be pickled" means. Without
+`frozen=`, a result cash cannot copy is not cached at all (`STORE-FAILED` says
+so): storing it would hand every caller one object, and a caller mutating a hit
+would change what later calls get. Other objects are
 **audited**: what the object is shaped like — a length, a frame's shape and
 dtypes, the lengths of a few elements — is compared on **every** use, which
 costs nothing to read and moves for the changes a caller makes

@@ -468,7 +468,7 @@ meant a 500 MB cap cached nothing at all for a 263 MB working set. It is the
 whole cap now, measured on the serialized bytes, so a value that fits is stored
 and eviction does the rest.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2f16cf81, cash/backends/memory_backend.py:InMemoryBackend.set @c5c2fd71 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2f16cf81, cash/backends/memory_backend.py:InMemoryBackend.set @38e95cc4 -->
 **Why it matters.** Usually you get no caching at all, not RAM-only caching.
 The RAM tier has its own byte cap, scaled to the machine and independent of
 `max_cache_size`, which caps only disk — and it is the *smaller* of the two.
@@ -1885,7 +1885,7 @@ not affected: the reloaded code is keyed afresh.
 result to the cache failed. The message names the backend and the exception.
 Nothing was stored.
 
-<!-- claim: cash/core.py:Cash._store_in_cache @4a9ae8f3 -->
+<!-- claim: cash/core.py:Cash._store_in_cache @adccf459 -->
 **Why it matters.** The result you received is correct — the failure is on the
 storage side only, and Cash deliberately reports it rather than raising it into
 your code. If this happens once, it costs one recompute. If it happens on every
