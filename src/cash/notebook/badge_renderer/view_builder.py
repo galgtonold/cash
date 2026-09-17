@@ -1166,8 +1166,12 @@ def build_interactive_badge(
         )
         cell_overhead = max(0.0, cell_total_time - cell_compute)
         header_saved = max(0.0, total_saved - cell_overhead)
+    # A statement that raised makes the cell's header say so: "EXECUTED" above
+    # an ERROR row read like the cell had run (round 25, r25s2).
+    errored = any(str(m.get("status")) == str(CacheStatus.ERROR) for m in metrics)
     header = BadgeHeader(
-        status=_header_status(status, restored, computed, skipped_count),
+        status=(BadgeStatus.ERROR if errored and status not in ("RUNNING", "BYPASSED")
+                else _header_status(status, restored, computed, skipped_count)),
         restored_count=restored,
         computed_count=computed,
         skipped_count=skipped_count,
