@@ -268,6 +268,48 @@ class CyclicValueError(TypeError):
     """A value whose object graph loops back on itself and holds a set."""
 
 
+def _WRITABLE_TYPES() -> tuple:
+    """Types a caller can write INTO, for the shared-result warning."""
+    types: list[type] = [dict, list, set, bytearray]
+    for module, names in (("numpy", ("ndarray",)), ("pandas", ("DataFrame", "Series"))):
+        found = sys.modules.get(module)
+        for name in names:
+            attr = getattr(found, name, None)
+            if isinstance(attr, type):
+                types.append(attr)
+    return tuple(types)
+
+
+def _is_mutable(value) -> bool:
+    """Whether a caller can write through *value*, so a copy would differ.
+
+    Only what can actually be written into: a container, an array or a frame,
+    or an object whose attributes can be rebound (it has a ``__dict__``). A
+    `date`, a `Path`, a `Decimal`, a string or a number cannot be changed
+    through the name at all, so handing back a copy of one is the same value --
+    warning about those made `return sum(rows), as_of` a finding.
+    """
+    if isinstance(value, _WRITABLE_TYPES()):
+        return True
+    return getattr(type(value), "__dictoffset__", 0) != 0 and hasattr(value, "__dict__")
+
+
+def _shares_memory(result, value) -> bool:
+    """Whether *result* and *value* may sit on the same buffer, cheaply.
+
+    ``may_share_memory`` is a bounds check, not the exact analysis, so it costs
+    nothing and errs toward saying yes -- which for a warning is the right
+    direction.
+    """
+    try:
+        import numpy as _np
+    except ImportError:
+        return False
+    if not isinstance(result, _np.ndarray) or not isinstance(value, _np.ndarray):
+        return False
+    return bool(_np.may_share_memory(result, value))
+
+
 def _stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None) -> Any:
     """Rewrite *value* into a form whose pickled bytes are independent of
     set/dict iteration order (which depends on PYTHONHASHSEED for str/bytes
@@ -4077,6 +4119,95 @@ class Cash:
         while len(self._store_outcomes) > _STORE_OUTCOMES_MAX:
             self._store_outcomes.popitem(last=False)
 
+    #: How deep into a returned container an argument is looked for.
+    _SHARED_RESULT_DEPTH = 2
+
+    def _warn_shared_result(self, func, func_name: str, result, args, kwargs) -> None:
+        """Say so when the result shares state with something the caller holds.
+
+        A hit hands back a value rebuilt from the stored bytes, so what the
+        computing run shares, a later run does not: ``return base[lo:hi]``
+        stops sharing memory with ``base``, ``return Wrapper(rows)`` stops
+        holding the caller's list, and ``return CONFIG`` stops carrying the
+        caller's writes back to the module (found attacking the decorator
+        before round 26 -- correct on the computing run, silently different on
+        every later one).
+
+        Cash cannot tell whether the caller relies on that sharing, so this
+        names what will differ rather than refusing to cache; ``assume_safe``
+        waives it. Detection is cheap and evidence-only: memory shared with an
+        ndarray argument (a bounds check), the result BEING or holding an
+        argument (identity), or the result being one of the function's module
+        globals (identity).
+        """
+        if self._purity_modes.get(func_name, "warn") == "silent":
+            return
+        try:
+            shared = self._shared_with(result, args, kwargs, func)
+        except Exception:  # noqa: BLE001 - a diagnostic must never break a call
+            return
+        if shared is None:
+            return
+        what, name = shared
+        self._warn_once(
+            CashImpurityWarning,
+            func_name,
+            "shared-result",
+            f"@cash.cache on {func_name}: the result {what} '{name}', which the "
+            f"caller still holds. A cache HIT hands back a value rebuilt from "
+            f"the stored bytes, so from the next run on they are separate "
+            f"objects: writes through one will not be seen in the other.",
+            code="CACHE-RESULT-SHARED",
+            fix=("return something of its own (`.copy()`, `dict(...)`, "
+                 "`list(...)`) if the caller reads it independently; pass "
+                 "assume_safe=True once you have checked that nothing relies "
+                 "on the sharing."),
+        )
+
+    def _shared_with(self, result, args, kwargs, func) -> tuple[str, str] | None:
+        """``(what, name)`` for the first sharing found in *result*, or None."""
+        import inspect as _inspect
+        try:
+            names = list(_inspect.signature(func).parameters)
+        except (TypeError, ValueError):
+            names = []
+        supplied = [(names[i] if i < len(names) else f"arg{i}", value)
+                    for i, value in enumerate(args)]
+        supplied += list(kwargs.items())
+
+        def contains(value, target, depth):
+            if value is target:
+                return True
+            if depth <= 0:
+                return False
+            kind = type(value)
+            if kind is dict:
+                return any(contains(v, target, depth - 1) for v in value.values())
+            if kind in (list, tuple, set, frozenset):
+                return any(contains(v, target, depth - 1) for v in value)
+            state = getattr(value, "__dict__", None)
+            if isinstance(state, dict):
+                return any(contains(v, target, depth - 1) for v in state.values())
+            return False
+
+        for name, value in supplied:
+            if not _is_mutable(value):
+                # Nothing can be written through it, so nothing can differ.
+                continue
+            if value is result:
+                return "is the argument", name
+            if contains(result, value, self._SHARED_RESULT_DEPTH) and _is_mutable(value):
+                return "holds the argument", name
+            shared = _shares_memory(result, value)
+            if shared:
+                return "shares memory with the argument", name
+        globals_ = getattr(func, "__globals__", None)
+        if isinstance(globals_, dict):
+            for name, value in list(globals_.items()):
+                if value is result and _is_mutable(value):
+                    return "is the module global", name
+        return None
+
     def _store_refusal(
         self, func: Callable, func_name: str, res: Any, rng_new: bool,
         cache_if: Callable[[Any], bool] | None, tracker: Any,
@@ -4603,6 +4734,7 @@ class Cash:
                 # Non-iterator return: existing single-blob path.
                 execution_time = _perf_counter() - call_start
 
+                self._warn_shared_result(func, func_name, res, args, kwargs)
                 refusal = self._store_refusal(
                     func, func_name, res, rng_new, cache_if, tracker, capture_watch,
                     observer=observer)
@@ -4811,6 +4943,7 @@ class Cash:
                 # Non-iterator return: single-blob path (unchanged).
                 execution_time = _perf_counter() - call_start
 
+                self._warn_shared_result(func, func_name, res, args, kwargs)
                 refusal = self._store_refusal(
                     func, func_name, res, rng_new, cache_if, tracker, capture_watch,
                     observer=observer)

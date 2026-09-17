@@ -230,6 +230,7 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
                                # was read, so the result was not stored
     "STORE-CHUNK-FAILED",      # a chunked write failed partway; the entry is
                                # incomplete on retrieval
+    "CACHE-RESULT-SHARED",     # the result shares state with the caller's own object
     "STORE-FAILED",            # the backend refused the write
     "STORE-INPUT-CHANGED",     # a file the call read changed before it
                                # returned, so the result was not stored

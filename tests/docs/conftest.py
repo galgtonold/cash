@@ -520,7 +520,10 @@ def mock_pipeline(monkeypatch, tmp_path):
 
     @stub_cash.cache
     def train(features):
-        return {"model": "stub", "features": features}
+        # A copy, not the argument itself: a stub handing its own argument back
+        # is an aliasing shape (CACHE-RESULT-SHARED), which the page is not
+        # about and a real `train` would not do.
+        return {"model": "stub", "features": dict(features)}
 
     fake_pipeline.train = train
     monkeypatch.setitem(sys.modules, "pipeline", fake_pipeline)

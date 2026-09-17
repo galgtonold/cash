@@ -451,6 +451,59 @@ roomier volume.
 
 **When it is safe to ignore.** Never — this one always costs you time.
 
+## CACHE-RESULT-SHARED {#cache-result-shared}
+
+<!-- claim: cash/core.py:Cash._warn_shared_result @1195475e, cash/core.py:Cash._shared_with @99ca6a6f -->
+**What happened.** The result shares state with an object the caller still
+holds: it *is* an argument, holds one inside it, sits on the same memory as an
+ndarray argument, or is one of the function's module globals. On the run that
+computes it, writes through one are seen in the other, because they are one
+object. A cache **hit** hands back a value rebuilt from the stored bytes, so
+from the next run on they are two:
+
+<!-- test:skip reason="illustrative: shows what differs between a compute and a hit" -->
+```python
+@cash.cache
+def window(base, lo, hi):
+    return base[lo:hi]          # a view of the caller's array
+
+view = window(base, 2, 5)
+view[0] = 999                   # first run: base[2] becomes 999
+                                # from a hit:  base is untouched
+```
+
+The same shape three ways: `return rows` (the caller's list), `return
+Wrapper(rows)` (holding it), `return CONFIG` (the module's own dict, so a
+caller writing into the result stops updating the module).
+
+**What to do.** If the caller reads the result independently, return something
+of its own — `.copy()`, `dict(...)`, `list(...)` — and the warning goes away
+along with the difference. If the sharing is the point (a handle, a registry,
+an array you mean to write through), the function is doing something a cache
+cannot preserve; leave it undecorated, or split the shared part out of the
+cached one.
+
+**Waiving it.** `@cash.cache(assume_safe=True)` silences it once you have
+checked that nothing relies on the sharing. That flag also waives the purity
+findings for the function, including ones added later, so it is the coarse
+option: prefer returning an independent value.
+
+**Why it matters.** The first run of a program and every run after it behave
+differently, with nothing in the output to say so. A caller that writes through
+the result — filling a preallocated array, updating a config it asked for —
+silently stops having any effect once the entry exists, and the bug appears on
+the *second* run, on another machine, or in CI.
+
+**Why a warning and not a refusal.** Cash cannot tell whether the caller
+depends on the sharing, and refusing to cache would take the speed away from
+everyone who does not. The one case it does refuse is a result it cannot copy
+at all — see [STORE-FAILED](#store-failed).
+
+**When it is safe to ignore.** When the caller only reads the result, which is
+the common case: a copy reads exactly like the original. The warning is about
+writes through a shared object, so a read-only caller loses nothing — pass
+`assume_safe=True` to say so once.
+
 ## CACHE-VALUE-TOO-BIG {#cache-value-too-big}
 
 <!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @80a5a388, cash/backends/file_backend.py:FileBackend._promotion_size_cap @cc93a731 -->

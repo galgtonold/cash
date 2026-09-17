@@ -178,7 +178,11 @@ class _StubDF:
         return self
 
     def apply(self, *a, **kw):
-        return self
+        # A NEW stub, as a real `apply` returns a new frame. Returning `self`
+        # made the doc's `return data.apply(...)` hand back the caller's own
+        # object, which is a genuine aliasing finding (CACHE-RESULT-SHARED)
+        # about the stub rather than about the page.
+        return _StubDF(dict(self._data), self._n)
 
     def describe(self):
         return "stub describe"
@@ -521,7 +525,10 @@ _DOC_NAMESPACES: dict[str, dict] = {
     },
     "migration_guide": {
         **_COMMON_NONTUT,
-        "complex_transform": lambda x: x,
+        # Not the identity: a transform handing its argument straight back
+        # makes the result the caller's own object (CACHE-RESULT-SHARED), which
+        # is a property of the stub, not of the page.
+        "complex_transform": lambda x: x * 2,
         "expensive_computation": lambda: 1,
         # Picklable DataFrame-shaped stub so cash can build an arg hash. An
         # unpicklable SimpleNamespace(apply=lambda) here would raise a spurious
