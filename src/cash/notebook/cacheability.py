@@ -1197,7 +1197,8 @@ class _SideEffectVisitor(ast.NodeVisitor):
 
         if func_name:
             key = (module_name or '', func_name)
-            if key in _IO_SIDE_EFFECT_FUNCTIONS:
+            named = key in _IO_SIDE_EFFECT_FUNCTIONS
+            if named:
                 kind = _IO_SIDE_EFFECT_FUNCTIONS[key]
                 if func_name == 'open' and not module_name:
                     if _is_open_write_mode(node):
@@ -1224,7 +1225,11 @@ class _SideEffectVisitor(ast.NodeVisitor):
                     line=getattr(node, 'lineno', 0),
                 ))
 
-            if isinstance(node.func, ast.Attribute):
+            # Not when the name lookup above already recorded it:
+            # ``pd.Series(d).to_csv(...)`` has no module name, so ``('', 'to_csv')``
+            # matched there too and the badge said "Side effect: to_csv()
+            # (file_write), Side effect: to_csv() (file_write)" (round 25, r25s1).
+            if isinstance(node.func, ast.Attribute) and not named:
                 method = node.func.attr
                 if method in _WRITE_METHODS and not _writes_to_console(node):
                     base = _get_base_name(node.func.value)

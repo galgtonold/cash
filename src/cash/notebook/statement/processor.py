@@ -511,6 +511,16 @@ def _version_slot(source_hash: str, outputs: set[str]) -> str:
     version one of them reads in this process is never pruned for the other."""
     return hashlib.sha256(f"{source_hash}|{','.join(sorted(outputs))}".encode()).hexdigest()[:32]
 
+def _is_only_definitions(code: str) -> bool:
+    """Whether *code* is nothing but ``def``/``class`` statements."""
+    try:
+        body = ast.parse(code).body
+    except (SyntaxError, ValueError):
+        return False
+    return bool(body) and all(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in body)
+
+
 class StatementProcessor:
     """
     Processes and caches individual Python statements.
@@ -4419,6 +4429,12 @@ class StatementProcessor:
                     f"{', '.join(_unrestorable)} are unrestorable by value; "
                     f"statement re-executes (lineage persists)"
                 )
+                if _is_only_definitions(code):
+                    # Nothing to report for a ``def``: it always re-runs at no
+                    # cost. The reason is for ``f = make_fn()``. A def reading
+                    # file-loaded data got here past the too-cheap floor and
+                    # its badge row said NOT CACHED (round 25, r25s1).
+                    skip_reason = None
         # Perpetual-miss guard. Placed LAST so it can override the
         # exemptions above: ``has_file_dependencies`` waives the whole size-aware
         # cost model, and that waiver is precisely how it shipped — a fit

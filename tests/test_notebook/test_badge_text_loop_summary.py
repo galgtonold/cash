@@ -47,3 +47,50 @@ def test_a_long_loop_is_one_line_per_statement():
 def test_a_short_loop_keeps_its_rows():
     lines = _item_lines(_loop(2, 2), is_upstream=False)
     assert sum(1 for line in lines if CODE in line) == 4, "\n".join(lines)
+
+
+def test_upstream_steps_not_re_run_are_one_line():
+    """Round 25 (r25s1): 18 ``^SKIPPED: import os, sys`` style rows in a report
+    cell's text badge, one per step the repair did not need. The HTML badge
+    folds them into a count; so does the text badge."""
+    from cash.notebook.badge_renderer.renderers.text import render_text
+    from cash.notebook.badge_renderer.view_builder import build_interactive_badge
+    from cash.notebook.statement.processor import CacheStatus
+    metrics = [{"code": f"step{i} = {i}", "status": str(CacheStatus.SKIPPED),
+                "is_upstream": True, "saved_time": 0.1} for i in range(16)]
+    metrics.append({"code": "x = 1", "status": str(CacheStatus.COMPUTED), "total_time": 0.01})
+    text = render_text(build_interactive_badge(metrics))
+    assert "SKIPPED:" not in text, text
+    assert "^16 upstream steps not re-run" in text, text
+
+
+def _chart_cell(slow_s=0.01):
+    from cash.notebook.statement.processor import CacheStatus
+    steps = ["fig, ax = plt.subplots()", "ax.plot(xs, ys)", "ax.axhline(0)", "ax.legend()",
+             "ax.set_title('t')", "fig.savefig('a.png')", "plt.close(fig)"]
+    metrics = [{"code": code, "status": str(CacheStatus.COMPUTED), "total_time": 0.004,
+                "uncacheable_reasons": ["In-place mutation on: ax (receiver lineage bumped; "
+                                        "statement re-executes)"]} for code in steps]
+    metrics.insert(3, {"code": "big = fit(ax)", "status": str(CacheStatus.COMPUTED),
+                       "total_time": slow_s, "uncacheable_reasons": ["In-place mutation on: ax"]})
+    return metrics
+
+
+def test_quick_steps_that_are_never_cached_fold_into_one_line():
+    """Round 25 (r25s1, r25s2): 10 of 12 badge lines of a chart cell were
+    ``In-place mutation on: ax (...)`` for steps that re-run in milliseconds."""
+    from cash.notebook.badge_renderer.renderers.text import render_text
+    from cash.notebook.badge_renderer.view_builder import build_interactive_badge
+    text = render_text(build_interactive_badge(_chart_cell(slow_s=2.5)))
+    lines = text.splitlines()
+    assert len(lines) <= 5, text
+    assert "re-ran 3 quick steps" in text and "re-ran 4 quick steps" in text, text
+    assert "ax.axhline" in text and "fig.savefig" in text, text
+    assert "big = fit(ax)" in text and "In-place mutation on: ax" in text, "a slow one keeps its row"
+
+
+def test_two_quick_steps_keep_their_rows():
+    from cash.notebook.badge_renderer.renderers.text import render_text
+    from cash.notebook.badge_renderer.view_builder import build_interactive_badge
+    text = render_text(build_interactive_badge(_chart_cell()[:2]))
+    assert "quick steps" not in text and "ax.plot(xs, ys)" in text, text

@@ -186,13 +186,17 @@ def _sub_unit_lines(row: StatementRow, pad: str) -> list[str]:
     Mirrors the cell-level ``[intercepted]`` line's job at
     statement granularity: grouped by ``(call_source, occurrence_index)``,
     not by callee -- see ``SubUnitGroup`` for why. Nothing when the
-    statement made no intercepted calls.
+    statement made no intercepted calls, and none for a site where cash did
+    nothing: every call missed and none was stored -- too cheap to cache.
+    ``sub-call roc_auc_score(...): 0/1 hit`` on every run of a report cell
+    said only that (round 25, r25s1).
     """
     return [
         f"{pad}    sub-call {g.call_source}: "
         f"{sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)}/{len(g.calls)} hit"
         + (f", {g.ran_plain} run plain (too cheap to cache)" if getattr(g, "ran_plain", 0) else "")
         for g in row.sub_units
+        if not (g.unstored and g.unstored == len(g.calls) and not g.miss_reason)
     ]
 
 
@@ -285,13 +289,61 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
     if isinstance(item, ControlGroupSingle):
         return [pad + _row_line(item.row, is_upstream=is_upstream), *_sub_unit_lines(item.row, pad)]
     if isinstance(item, SkippedBucket):
-        out = []
-        for sub in item.items:
-            out.extend(_item_lines(sub, is_upstream=is_upstream, indent=indent))
-        return out
+        # One line, as the HTML badge folds it: each of these is a step the
+        # repair did not need, and a row apiece put 18 ``^SKIPPED: import os``
+        # style rows into a report cell's badge (round 25, r25s1).
+        n = len(item.items)
+        if not n:
+            return []
+        lead = "^" if is_upstream else ""
+        return [f"{pad}  {lead}{n} upstream step{'s' if n != 1 else ''} not re-run "
+                f"(what they built is already current)"]
     if isinstance(item, OverheadBreakdown | DecoratorCallGroup):
         return []  # rendered separately
     return []
+
+
+#: A statement that cannot be cached and ran in less than this is folded with
+#: its neighbours; a slower one keeps its row and its reason.
+_FOLD_BELOW_S = 0.1
+#: Fewer consecutive cheap not-cached rows than this keep their rows.
+_FOLD_MIN_ROWS = 3
+
+
+def _foldable(item: SectionItem) -> bool:
+    return (isinstance(item, StatementRow) and item.status is BadgeStatus.COMPUTED
+            and bool(item.uncacheable_reasons or item.skipped_reason)
+            and not is_guard_reason(item.skipped_reason)
+            and not item.sub_units and item.time_s < _FOLD_BELOW_S)
+
+
+def _items_lines(items, *, is_upstream: bool) -> list[str]:
+    """Lines for a section's items, folding runs of cheap not-cached rows.
+
+    ``ax.axhline(...)``, ``ax.legend()``, ``fig.savefig(...)``, ``to_csv(...)``:
+    a row apiece, each with its reason, put 10 of 12 lines of a chart cell's
+    badge on steps that re-run in milliseconds and must (round 25, r25s1 and
+    r25s2). They cost nothing to re-run; one line names them.
+    """
+    out: list[str] = []
+    items = list(items)
+    i = 0
+    while i < len(items):
+        j = i
+        while j < len(items) and _foldable(items[j]):
+            j += 1
+        if j - i >= _FOLD_MIN_ROWS:
+            run = items[i:j]
+            names = [(r.code or "").splitlines()[0].split("(")[0].strip()[:40] for r in run]
+            shown = ", ".join(names[:6]) + (", ..." if len(names) > 6 else "")
+            lead = "^" if is_upstream else ""
+            out.append(f"  {lead}re-ran {len(run)} quick steps that are never cached "
+                       f"({sum(r.time_s for r in run):.2f}s): {shown}")
+            i = j
+            continue
+        out.extend(_item_lines(items[i], is_upstream=is_upstream))
+        i += 1
+    return out
 
 
 def _decorator_lines(sections: tuple[Section, ...]) -> list[str]:
@@ -368,9 +420,7 @@ def render_text(badge: InteractiveBadge) -> str:
         None,
     )
     if upstream_section is not None:
-        up_lines: list[str] = []
-        for item in upstream_section.items:
-            up_lines.extend(_item_lines(item, is_upstream=True))
+        up_lines = _items_lines(upstream_section.items, is_upstream=True)
         if up_lines:
             lines.append("  Upstream:")
             lines.extend(f"  {line}" for line in up_lines)
@@ -380,8 +430,7 @@ def render_text(badge: InteractiveBadge) -> str:
         None,
     )
     if current_section is not None:
-        for item in current_section.items:
-            lines.extend(_item_lines(item, is_upstream=False))
+        lines.extend(_items_lines(current_section.items, is_upstream=False))
 
     lines.extend(_decorator_lines(badge.sections))
     lines.extend(_guard_summary_lines(badge))

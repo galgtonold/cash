@@ -180,7 +180,7 @@ Replaying them from cache would skip the action (a file never gets written, a
 request never gets sent). Cash's side-effect analysis flags these statements as
 **uncacheable** so they always run:
 
-<!-- claim: cash/notebook/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @7c59797e, cash/notebook/cacheability.py:_SideEffectVisitor @a2c89342 broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
+<!-- claim: cash/notebook/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @7c59797e, cash/notebook/cacheability.py:_SideEffectVisitor @2ad41114 broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
 | Pattern | Examples | Why it's unsafe to replay |
 |---------|----------|---------------------------|
 | File writes | `open('f', 'w')`, `df.to_csv()`, `df.to_parquet()`, `Path(p).write_text()` | The file wouldn't be written on a cache hit |

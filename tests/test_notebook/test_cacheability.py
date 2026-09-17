@@ -1985,3 +1985,17 @@ class TestAliasSkipReason:
         # output set, so it must not depend on how outputs were computed.
         analysis = analyze_statement("b = a", None)
         assert any('Alias assignment' in r for r in analysis.skip_reasons(set()))
+
+
+@pytest.mark.parametrize("code", [
+    "pd.Series(d).to_csv('a.csv')",
+    "scored.sort_values('x').to_csv('a.csv')",
+    "metrics.to_csv('a.csv')",
+])
+def test_a_file_write_is_reported_once(code):
+    """Round 25 (r25s1): ``Side effect: to_csv() (file_write), Side effect:
+    to_csv() (file_write)`` -- a write on a call's result matched both the
+    name lookup and the write-method check."""
+    from cash.notebook.cacheability import analyze_statement
+    reasons = analyze_statement(code, ast.parse(code)).skip_reasons(set())
+    assert sum(r.count("to_csv()") for r in reasons) == 1, reasons

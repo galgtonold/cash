@@ -1257,6 +1257,7 @@ class CallUnit:
             with call_tracker:
                 result, stdout_text, stderr_text = self._call_capturing_output(fn, args, kwargs)
             elapsed = _time.perf_counter() - started
+            stored = False
 
             if rng_modules_changed(rng_before, capture_rng_state()):
                 # RNG is a consumed linear resource -- what matters is stream
@@ -1297,7 +1298,8 @@ class CallUnit:
                         stderr=stderr_text,
                         callee_globals=captured,
                     )
-            self._record(func_name, site, key, cache_hit=False, elapsed=elapsed)
+                    stored = True
+            self._record(func_name, site, key, cache_hit=False, elapsed=elapsed, stored=stored)
             self._last_compute = elapsed
             return result
 
@@ -1995,7 +1997,7 @@ class CallUnit:
             return f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', '?')}"
 
     def _record(self, func_name, site: CallSite, key, *, cache_hit, elapsed, time_saved=0.0,
-                ran_plain=False) -> None:
+                ran_plain=False, stored=True) -> None:
         """Emit the SAME event shape ``drain_decorator_calls`` returns.
 
         Keeping the contract identical is what lets the badge, the ``@cache``
@@ -2020,6 +2022,9 @@ class CallUnit:
             "intercepted": True,
             # Run without the cache by the many-cheap-calls guard.
             "ran_plain": ran_plain,
+            # A miss whose result went to the cache. False for a call below
+            # the cost floor or refused: the badge has nothing to say about it.
+            "stored": bool(stored),
         })
 
     def drain(self) -> list[dict]:

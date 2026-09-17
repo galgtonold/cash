@@ -429,3 +429,23 @@ def test_real_for_loop_renders_sub_calls_nested_under_the_loop(magics_fixture):
         assert "results[" in prev, (
             f"line before a sub-call line is not the owning iteration's row:\n{prev!r}"
         )
+
+
+def _one_site(*events):
+    return [{"status": "COMPUTED", "code": "m = score(y, p)", "total_time": 0.1,
+             "evaluated_vars": ["m"], "decorator_calls": list(events), "is_upstream": False}]
+
+
+def test_a_call_cash_did_nothing_with_has_no_sub_call_line():
+    """Round 25 (r25s1): ``sub-call roc_auc_score(...): 0/1 hit`` on every run of
+    a report cell -- a call below the cost floor, never stored, so never a hit."""
+    text = render_text(build_interactive_badge(_one_site(_event("score(y, p)", 0, False, stored=False))))
+    assert "sub-call" not in text, text
+
+
+def test_a_stored_miss_a_hit_and_a_legacy_event_keep_their_line():
+    for event in (_event("score(y, p)", 0, False, stored=True),
+                  _event("score(y, p)", 0, True),
+                  _event("score(y, p)", 0, False)):
+        text = render_text(build_interactive_badge(_one_site(event)))
+        assert "sub-call score(y, p)" in text, (event, text)
