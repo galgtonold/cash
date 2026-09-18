@@ -34,11 +34,21 @@ badge's "saved" is not inflated by cash's own bookkeeping.
 | **> 0.1 s** *(and worth it)* | Cached in **RAM and on disk** | Yes |
 
 The floors above are the **notebook's**, where cash caches every statement by
-itself and has to judge which are worth keeping. A `@cash.cache` function has
-no compute floor: decorating it is the decision to cache it, so it is written
-to disk whenever restoring beats recomputing — which is the "and worth it"
-column, and the only test that still applies. A quick call whose result is slow
-to read back therefore still stays in RAM, and `explain()` says so.
+itself and has to judge which are worth keeping. **None of it applies to a
+`@cash.cache` function.** Decorating one is the decision to cache it, so its
+result is written to disk however quick the call was and however slow the value
+is to read back. Nothing on this page overrides that — not the floors, not the
+savings margin, not the cost model. The only thing that can still stop it is a
+per-tier [size cap](how-it-works/storage.md): a value too large for any disk
+tier has nowhere to go, and says so.
+
+That is narrower than it was. The cost model used to get a vote on decorated
+entries too, and it decided them on a fitted intercept that priced a small read
+at 10.4 ms where it measures about 1.3 ms — so nothing under roughly 13 ms of
+compute was ever written, however often it was called, and a script run twice
+recomputed everything. A wrong refusal there is silent and permanent: you
+decorated the function and got nothing across processes, with no way to see why.
+The decision belongs to whoever wrote the decorator.
 
 The "and worth it" caveat on the last row is the one surprise: a result that took
 more than 0.1 s to compute but would be **slow to reload** (a large object whose

@@ -222,6 +222,7 @@ within the process still hit.
 **What to do.** Point cash somewhere writable, or grant this account write
 permission on the path it named:
 
+<!-- test:skip reason="repoints the cache at a fixed absolute path; running it would send every later fence on this page to a directory that outlives the test" -->
 ```python
 cash.configure(cache_dir="/var/tmp/cash")   # or CASH_CACHE_DIR=... in the env
 ```

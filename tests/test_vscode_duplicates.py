@@ -114,7 +114,15 @@ class TestVSCodeDuplicates(unittest.TestCase):
     @patch(PATCH_TARGETS['upstream_cells_ids'])
     @patch(PATCH_TARGETS['upstream_cells'])
     def test_duplicate_cells_quoting(self, mock_upstream_cells, mock_upstream_ids):
-        """Test that duplicate error message uses triple quotes."""
+        """The re-raise cash builds has to be valid Python, whatever the message.
+
+        It used to interpolate the message into a triple-quoted literal, and
+        this asserted exactly that. Python quotes names in its own messages, so
+        a message ending in a quote closed the literal early and the cell died
+        with `SyntaxError: unterminated string literal` from code cash wrote.
+        It is built with repr() now, so what is pinned here is the property that
+        mattered all along: the generated code compiles and carries the message.
+        """
         self.shell.user_ns = {'__vsc_ipynb_file__': '/path/to/notebook.ipynb'}
         cell_content = "print('duplicate')"
         cells = ["import os", cell_content, cell_content]
@@ -125,8 +133,9 @@ class TestVSCodeDuplicates(unittest.TestCase):
         
         args, _ = self.magics._original_run_cell.call_args
         executed_code = args[0]
-        self.assertIn("raise AmbiguousCellError('''", executed_code)
-        self.assertIn("''')", executed_code)
+        self.assertIn("raise AmbiguousCellError(", executed_code)
+        compile(executed_code, "<cash-generated>", "exec")
+        self.assertIn("appears 2 times", executed_code)
 
 if __name__ == '__main__':
     unittest.main()

@@ -2179,7 +2179,16 @@ class UpstreamChecker:
                             )
             except UpstreamStateError:
                 raise
-            except (RuntimeError, NameError, KeyError, TypeError, ValueError) as e:
+            except Exception as e:  # noqa: BLE001 - see below
+                # ANY exception, not a list of the ones user code was expected
+                # to raise. The statement being re-run is the user's, so what it
+                # raises is the user's failure to hear about. The list used to
+                # be (RuntimeError, NameError, KeyError, TypeError, ValueError),
+                # and an ImportError went straight past it into the executor's
+                # catch-all for cash's own bugs: a notebook whose cell wrote an
+                # .xlsx without openpyxl installed told the user "cash hit an
+                # internal error ... Nothing in your code caused this ... Please
+                # report it" on the FOLLOWING cell (round-26 rehearsal).
                 # Swallowing here served the downstream cell a STALE value
                 # while the upstream producer was silently broken -
                 # the worst failure mode for a caching layer. Fail the user's

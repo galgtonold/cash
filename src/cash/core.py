@@ -4298,10 +4298,13 @@ class Cash:
             return None
         if skipped == "size":
             return "too big for the persistent tier's size cap"
-        from cash.backends.factory import _SMART_PERSIST_COMPUTE_FLOOR_S as floor
-        if execution_time < floor:
-            return f"under the {floor:g}s persistence floor"
-        return "the cost model judged restoring it no cheaper than recomputing it"
+        # There used to be two more answers here, "under the 0.1s persistence
+        # floor" and "the cost model judged restoring it no cheaper than
+        # recomputing it". Neither can happen to a decorated result any more:
+        # `@cash.cache` persists what it is given, and only a size cap stops it
+        # (see `TieredBackend.set`). Reporting a floor that no longer applies
+        # would send the reader looking for a setting to change.
+        return None
 
     @staticmethod
     def _snapshot_tracked_deps(tracker: Any,

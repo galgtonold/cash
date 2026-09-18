@@ -76,7 +76,10 @@ def test_cash_debug_prints_each_decision_in_a_plain_script(tmp_path):
     assert "MISS" in lines[0] and "no entry yet" in lines[0]
     assert "HIT" in lines[1]
     assert "MISS" in lines[2] and "new arguments" in lines[2]
-    assert "kept in RAM only" in lines[0], "the floor went unexplained"
+    # No floor to explain any more: a decorated result is written whatever it
+    # cost, so the line must not send the reader looking for a setting.
+    assert "persistence floor" not in out.stderr, out.stderr
+    assert "kept in RAM only" not in out.stderr, out.stderr
 
 
 def test_cash_debug_uses_the_applications_logging_when_there_is_some(tmp_path):
@@ -175,7 +178,11 @@ def test_a_ttl_expiry_is_a_ttl_expiry(c):
     assert short.cache_info()["miss_reasons"]["ttl expired"] == 1
 
 
-def test_the_summary_says_what_stayed_in_ram(c):
+def test_the_summary_does_not_report_a_cheap_result_as_ram_only(c):
+    """This asserted the opposite while a compute floor kept quick results out
+    of disk. Both of these are written now -- decorating a function is the
+    decision to cache it -- so neither may be described as RAM-only, and no
+    floor may be named: there is no setting behind that sentence any more."""
     @c.cache(assume_safe=True)
     def fast(n):
         return n
@@ -187,19 +194,23 @@ def test_the_summary_says_what_stayed_in_ram(c):
 
     fast(1)
     slow(1)
-    blocks = _summary_blocks(c.run_summary())
+    summary = c.run_summary()
+    blocks = _summary_blocks(summary)
     fast_notes = next(v for k, v in blocks.items() if k.endswith(".fast"))
     slow_notes = next(v for k, v in blocks.items() if k.endswith(".slow"))
-    assert "kept in RAM only" in fast_notes and "persistence floor" in fast_notes
-    assert "RAM only" not in slow_notes, "a persisted result was reported as RAM-only"
+    assert "RAM only" not in fast_notes, fast_notes
+    assert "RAM only" not in slow_notes, slow_notes
+    assert "persistence floor" not in summary, summary
 
 
-def test_cash_s_own_work_does_not_push_a_trivial_function_past_the_floor(c, monkeypatch):
-    """The floor is judged on the body's time. It was the call's wall-clock
-    time, cash's own key work included -- which the next process pays again
-    whether the entry exists or not -- so on a busy Windows runner a function
-    that returns at once was persisted, and this summary test failed. Here
-    the key work is made slow on purpose."""
+def test_cash_s_own_work_does_not_decide_where_a_result_lands(c, monkeypatch):
+    """Storing a decorated result depends on nothing that can be timed.
+
+    This used to guard a subtle bug: the compute floor was judged on the call's
+    wall-clock time with cash's own key work included, so on a busy runner a
+    function that returns at once got persisted and a quiet one did not. The
+    floor is gone, which retires the bug -- and the test now pins the property
+    that made it impossible: slow cash-side work, fast body, still stored."""
     real = type(c)._serialize_args
 
     def slow_key(self, *args, **kwargs):
@@ -214,7 +225,7 @@ def test_cash_s_own_work_does_not_push_a_trivial_function_past_the_floor(c, monk
 
     fast(1)
     notes = next(v for k, v in _summary_blocks(c.run_summary()).items() if k.endswith(".fast"))
-    assert "kept in RAM only" in notes and "persistence floor" in notes, notes
+    assert "RAM only" not in notes, notes
 
 
 def _summary_blocks(text: str) -> dict[str, str]:
@@ -294,16 +305,19 @@ def _calls(tmp_path, body, *args):
     return [line for line in p.stderr.splitlines() if "cash.calls:" in line]
 
 
-def test_a_result_the_last_run_kept_in_ram_says_so_next_run(tmp_path):
-    """The stored-key record held persisted keys only, so the next run's miss
-    for the same call read "new arguments: not seen in the last run", run
-    after run."""
+def test_a_quick_call_in_the_last_run_is_a_hit_in_this_one(tmp_path):
+    """There is nothing left for the next run to explain.
+
+    This used to assert that the third run was told the previous one "kept it in
+    RAM only" -- the best available answer while a quick call never reached
+    disk, and a question that only arose because it did not. A quick call is
+    written now, so the third run simply hits."""
     _calls(tmp_path, _MODE_JOB, "slow")
     _calls(tmp_path, _MODE_JOB, "fast")
     third = _calls(tmp_path, _MODE_JOB, "fast")
     assert len(third) == 1
-    assert "kept it in RAM only" in third[0], third[0]
-    assert "new arguments" not in third[0]
+    assert "HIT" in third[0], third[0]
+    assert "RAM only" not in third[0], third[0]
 
 
 def test_after_a_code_edit_every_call_of_a_loop_says_the_code_changed(tmp_path):
@@ -329,13 +343,16 @@ def test_after_a_code_edit_every_call_of_a_loop_says_the_code_changed(tmp_path):
     assert all("code or state changed" in line for line in lines), "\n".join(lines)
 
 
-def test_the_per_call_line_gives_the_body_s_time_beside_the_floor(tmp_path):
-    """The floor is judged on the body; the line showed the whole call's time,
-    so "ran 0.20s ... under the 0.1s persistence floor" read as a
-    contradiction."""
+def test_the_per_call_line_gives_the_body_s_own_time(tmp_path):
+    """The line reports the body, not the call.
+
+    It showed the whole call's wall-clock time next to the floor it was judged
+    against, so "ran 0.20s ... under the 0.1s persistence floor" read as a
+    contradiction. The floor is gone; the body's own time is still what the
+    line reports, because that is the number a reader can act on."""
     lines = _calls(tmp_path, _MODE_JOB, "fast")
-    assert "under the 0.1s persistence floor" in lines[0]
     assert "(ran 0.00s" in lines[0], lines[0]
+    assert "persistence floor" not in lines[0], lines[0]
 
 
 _LOG_AFTER_IMPORT = textwrap.dedent("""

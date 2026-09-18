@@ -453,19 +453,30 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 # A version the same cell replaces: the end-of-cell pass
                 # persists the final one (``persist_from_memory``).
                 past_compute_floor = False
-            elif family is not None or decorated:
-                # A decorated function has no compute FLOOR: decorating it is
-                # the decision to cache it, however quick it is, and the floor
-                # meant a script run twice recomputed everything (found
-                # attacking the decorator before round 26). The cost model
-                # still decides -- a cheap call whose result is slow to restore
-                # stays in RAM, and `explain()` says so.
+            elif decorated:
+                # A decorated result is persisted, full stop. No compute floor
+                # and no cost model: `@cash.cache` is the caller having already
+                # decided, and cash's job is to honour that rather than re-take
+                # the decision per call.
+                #
+                # Both gates were wrong here in their own way. The floor (0.1 s)
+                # meant a script run twice recomputed everything, which is how
+                # two of six agents attacking the decorator before round 26
+                # reported "no bugs found" -- nothing had ever reached disk. The
+                # cost model then inherited the whole decision, and it rests on
+                # a fitted intercept measured at 10.4 ms against a real small
+                # read of ~1.3 ms, so nothing under about 13 ms of body was
+                # stored however often it was called.
+                #
+                # What still applies is the per-tier size caps below: a value
+                # too large for any disk tier has nowhere to go, and says so.
+                past_compute_floor = True
+            elif family is not None:
                 past_compute_floor = self._cost_model_promote(
                     metadata.get('cost_model_type_name', ''),
                     metadata.get('cost_model_size_bytes', size),
                     exec_time,
                     self._promotion_backend_kind(),
-                    floor=not decorated,
                 )
             else:
                 past_compute_floor = self.promotion_policy(exec_time, size)

@@ -174,8 +174,8 @@ cash: 4 of 6 calls restored, 41.2s saved
 ```
 
 Under each row: why its calls missed, and anything that was computed but not
-kept — a `cache_if` that said no, or a result so quick to compute that it was
-held in memory only ([why](cost-model.md)), so the *next* run will miss it
+kept — a `cache_if` that said no, a store the backend refused, or a value too
+large for any disk tier ([why](cost-model.md)), so the *next* run will miss it
 too. The run that causes that is the one that can tell you.
 
 The `cache:` line is the directory this run actually used. Check it first when
@@ -1433,30 +1433,20 @@ recomputes them all. Measured on a 214 MB log in round-20 testing: with the rows
 passed into cached consumers, a warm run was 1.3–3.6× *slower* than no cache;
 keyed by path, it was 18× faster.
 
-### Writing one function's results to disk however cheap
+### Cheap results are written too
 
-<!-- claim: cash/backends/file_backend.py:FileBackend @cc9d335d broad="a bare FileBackend has no promotion policy: the claim is about the class as a whole" -->
-A result that took milliseconds is kept in memory only
-([why](cost-model.md)) — and a cheap aggregate over rows another call already
-parsed looks exactly like that, though a new process must parse the file again
-to recompute it. There is no per-function switch; give such functions an
-instance of their own on a plain `FileBackend`, which writes everything it is
-given:
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @31cbbcf8 -->
+A decorated result goes to disk whatever it cost to produce. A millisecond
+aggregate over rows another call already parsed is written like anything else,
+because a new process would have to parse that file again to recompute it, and
+you said to cache the function.
 
-<!-- test:skip reason="illustrative: aggregate_revenue and _orders come from the example above" -->
-```python
-import cash
-from cash.backends.file_backend import FileBackend
-
-aggregates = cash.Cash(backend=FileBackend(cache_dir=".cash_agg"))
-
-@aggregates.cache
-def revenue_by_country(orders_path):
-    return aggregate_revenue(_orders(orders_path))
-```
-
-`cash inspect .cash_agg` and `cash clear .cash_agg` reach that cache like any
-other.
+This used to need a workaround -- a second `Cash` instance on a plain
+`FileBackend` -- because a compute floor and then the cost model decided which
+decorated results were worth keeping, and both refused anything quick. Neither
+applies now. What still applies is the per-tier
+[size caps](how-it-works/storage.md): a value too large for any disk tier stays
+in memory for the session and warns that it did.
 
 ---
 

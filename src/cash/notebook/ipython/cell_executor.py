@@ -1537,9 +1537,15 @@ class CellExecutor:
             # synthesised raise carries only the message, never a chain back
             # into cash's internals.
             cls = type(caught)
+            # repr(), not a triple-quoted literal. Python quotes names in its
+            # own messages -- "No such file or directory: 'side.txt'" -- and a
+            # message ending in a quote closed the literal early, so the user's
+            # cell died with `SyntaxError: unterminated string literal` from
+            # code cash wrote, with the real failure nowhere in sight. repr()
+            # also handles the newlines this message routinely carries.
             error_code = (
                 f"from {cls.__module__} import {cls.__name__}; "
-                f"raise {cls.__name__}('''{str(caught)}''') from None"
+                f"raise {cls.__name__}({str(caught)!r}) from None"
             )
             self._magics._cancel_progress_badge()
             self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
@@ -1549,7 +1555,11 @@ class CellExecutor:
         # watching the kernel log -- so the sole trace was an empty badge, which
         # itself then read as "EXECUTED 0.00s". A user hitting this saw a cell
         # produce nothing and had no way to learn why. Warn where they are.
-        logger.error("Cash auto-caching failed: %s. Falling back to normal execution.", caught)
+        # With the traceback: this message asks the user to report the failure,
+        # and "ModuleNotFoundError: No module named 'openpyxl'" on its own says
+        # nothing about where in cash it came from.
+        logger.error("Cash auto-caching failed: %s. Falling back to normal execution.",
+                     caught, exc_info=caught)
         try:
             warn_diagnostic(
                 CashCacheIneffectiveWarning,
