@@ -34,7 +34,14 @@ coefficients measured offline, which predicts how long it will actually take to
 read this value back and deserialize it. [Cost model](../cost-model.md) covers
 the fit itself and every knob; what follows is only the promotion decision.
 
-Two gates, in order:
+**This is the notebook's decision, not the decorator's.** Cash caches every
+statement of a notebook by itself, so it has to judge which are worth keeping. A
+`@cash.cache` function was singled out by hand: its result is written whatever it
+cost to produce and whatever it costs to read back, and neither gate below is
+consulted. The only thing that can still stop that write is one of the per-tier size caps
+described below.
+
+For a notebook statement, two gates, in order:
 
 <!-- claim: cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
 1. **A compute floor.** Anything under **0.1 s** never leaves RAM — disk I/O
@@ -48,8 +55,8 @@ Two gates, in order:
    isn't paying for itself.
 
 The cost model uses the value's *real type* when the entry carries one
-(`DataFrame`, `ndarray`, `dict`, …); when it doesn't — a decorator entry, an
-injected policy, an untyped entry — it falls back to a `_GENERIC` family, which
+(`DataFrame`, `ndarray`, `dict`, …); when it doesn't — an injected policy, an
+untyped entry — it falls back to a `_GENERIC` family, which
 is the slowest family measured for that backend. Being conservative in the
 fallback means an unrecognised type is under-promoted rather than promoted onto
 a treadmill.

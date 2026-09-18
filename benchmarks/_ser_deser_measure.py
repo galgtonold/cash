@@ -96,12 +96,12 @@ def measure_one(
 
     actual_size = estimate_in_memory_size(obj)
     backend = _build_backend(backend_kind, cache_root)
-    # A RAM restore is in-session by definition, so it is read here, through a
-    # second backend built once: its first read pays the lazy directory scan,
-    # which the warmup repeat absorbs. A DISK restore is read from a fresh
-    # process instead, and no second backend is built -- one live backend over
-    # the same directory is enough to put a millisecond-scale read off by 5x.
-    reader = _build_backend(backend_kind, cache_root) if backend_kind != "disk" else None
+    # A RAM restore is read back through the SAME backend that holds it. An
+    # in-memory tier has no later session to model -- it is gone with the
+    # process -- and a second InMemoryBackend is simply an empty one, so reading
+    # through it measured a miss and reported a 100 MB frame restoring in 0.00 ms.
+    # A DISK restore is read from a fresh process instead (see the docstring).
+    reader = backend if backend_kind != "disk" else None
 
     ser_samples: list[float] = []
     deser_samples: list[float] = []
@@ -142,7 +142,7 @@ def measure_one(
             error=str(e),
         )
 
-    for b in (backend, reader):
+    for b in ({id(backend): backend, id(reader): reader}.values()):
         if b is None:
             continue                  # disk cells never build a second backend
         try:

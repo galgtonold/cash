@@ -236,11 +236,16 @@ class TestSizeAwareCaching:
         assert size > 0
 
     def test_should_skip_large_object_basic(self):
-        """A large object whose predicted restore time exceeds both the
-        fixed budget and the ratio budget must be skipped. The fitted
-        ndarray_dense disk-deserialize model predicts > 160 ms for a 100 MB
-        ndarray, well above the 80 ms ratio budget at execution_time=0.1
-        and above the 50 ms fixed budget."""
+        """A large object whose predicted restore exceeds both budgets is skipped.
+
+        The numbers here moved when the cost model was refitted before round 26.
+        This used to use a 100 MB ndarray with a 0.1 s compute, on the strength
+        of a model that predicted over 160 ms to restore it; a fresh-process read
+        of that array measures ~79 ms, so persisting it genuinely pays and the
+        old assertion was pinning a mispricing. A 400 MB array keeps the case the
+        test is about -- restore predicted well past the 80 ms ratio budget and
+        the 50 ms fixed one -- on numbers the matrix supports.
+        """
         import numpy as np
         sp = self._make_processor()
         mock_config = MagicMock()
@@ -250,10 +255,10 @@ class TestSizeAwareCaching:
         mock_config.min_execution_time_to_cache_seconds = 0.0
         sp.cash_instance.config = mock_config
 
-        large_var = np.zeros(12_500_000, dtype=np.float64)  # 100 MB
+        large_var = np.zeros(50_000_000, dtype=np.float64)  # 400 MB
         result, reason, _ = sp._should_skip_large_object_caching(
             {'big_var': large_var},
-            execution_time=0.1,  # ratio budget = 80 ms; restore prediction > 160 ms
+            execution_time=0.1,  # ratio budget = 80 ms; restore predicted ~265 ms
         )
         assert result is True
         assert reason is not None

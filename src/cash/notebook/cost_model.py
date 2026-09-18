@@ -28,124 +28,115 @@ _TYPE_TO_FAMILY: dict[str, str] = {
 }
 
 # (family, backend_kind, operation) -> (a, b)
-# Fitted from `benchmarks/fit_cost_model.py benchmarks/results/ser_deser_matrix.csv`.
-# _GENERIC entries are copies of the slowest measured family per (backend, op).
+# Fitted from `benchmarks/fit_cost_model.py benchmarks/results/ser_deser_matrix.frozen.csv
+# --objective relative`. Both the matrix and the objective changed before round
+# 26, and the numbers moved enough to be worth explaining.
 #
-# KNOWN: the disk-deserialize intercepts OVERESTIMATE small payloads by 7-25x.
-# Checked against the frozen matrix these were fitted from -- its own small
-# rows, not a separate experiment:
+# WHAT THE OLD MATRIX MEASURED. Three faults, none of them in the fit:
 #
-#     284 B sparse            measured 0.49 ms   fitted 10.75 ms   21.8x
-#     942 B dict_shallow      measured 0.49 ms   fitted 10.39 ms   21.1x
-#    1000 B bytes             measured 0.48 ms   fitted  9.50 ms   19.8x
-#    1092 B dataframe_numeric measured 0.54 ms   fitted  8.11 ms   15.1x
+#   * `set(k)` was followed straight by `get(k)`. A file backend hands the disk
+#     write to a background worker, and a `get` of that key WAITS for it, so
+#     every "deserialize" number carried part of a write -- erratically, in
+#     whatever amount the worker happened to have finished. The matrix showed it
+#     plainly: list_flat read 11.8 KB in 0.47 ms and 115 KB in 14.94 ms.
+#   * the read went through the backend object that had just written the file.
+#     That costs ~4 ms per open on Windows against ~0.1 ms through another
+#     backend, and ~1.5 ms from a new process.
+#   * each cell leaked a backend, and a backend is about eight threads. By a
+#     dozen of them the same 0.66 ms read measured 4.70 ms, and worse the deeper
+#     into the run it got.
 #
-# The cause is the fit objective, not the data: one line per family is fitted
-# by ordinary least squares across 284 B to 111 MiB, and OLS minimises ABSOLUTE
-# error, so the 100 MiB points dominate and the intercept absorbs their
-# residual. A relative-error (or log-space) fit would price the small end
-# correctly. Fixing it needs a refit plus re-validation, not an edit here --
-# these numbers are generated, and hand-tuning them would desync them from the
-# matrix they claim to come from.
+# WHAT THIS ONE MEASURES. A disk read is timed in a fresh process, reading an
+# entry no process has read before, with the heavy imports already done. That is
+# the regime a promotion decision is about: a persistent tier exists to serve a
+# LATER SESSION, because within a session the RAM tier answers first. RAM rows
+# stay in-process for the same reason. Backends are shut down per cell.
 #
-# Currently harmless, which is why it is documented rather than fixed:
-# `_SMART_PERSIST_COMPUTE_FLOOR_S` (100 ms) gates every decision below the
-# range where the error lives, and of 504 promotion decisions above that floor
-# only 2 (0.4%) flip if the intercept is corrected to the measured ~0.5 ms --
-# both "promote a 100 MB write to save 250 ms", i.e. the wrong direction.
+# WHY RELATIVE. OLS minimises error in SECONDS, so across 284 B to 111 MiB the
+# 100 MiB points set the intercept and the small end is priced by their
+# residual. `--objective relative` weights each point by 1/y^2, minimising error
+# as a RATIO, which is what a decision comparing two magnitudes needs.
 #
-# It stops being harmless if that floor is ever lowered. Refit first.
+# WHAT IT IS WORTH, scored as decisions rather than residuals, over 42 cells x 9
+# body times (`benchmarks/_fit_decision_check.py`):
+#
+#     shipped before   37 of 378 wrong (9.8%)   37 kept out, 0 let in
+#     these constants   0 of 378 wrong (0.0%)
+#
+# "Kept out" means persisting would have paid and cash refused -- the user loses
+# a hit they should have had. Every one of the old constants' mistakes was that
+# one: a 100 MB frame or array from a body of 100 ms, refused disk although
+# restoring it measures 70 ms.
+#
+# These numbers are GENERATED. Re-measure and refit rather than editing them, or
+# they desync from the matrix they claim to come from. They describe one machine
+# (NVMe, Windows), where opening a small entry from a fresh process costs ~5-6 ms
+# and dominates every read below about a megabyte.
 _COEFFS: dict[tuple[str, str, str], tuple[float, float]] = {
-    # ===== Measured families =====
-    ("bytes", "disk", "deserialize"): (9.503194e-03, 4.242689e-10),  # R2=0.876
-    ("bytes", "disk", "serialize"): (1.011709e-03, 6.050071e-10),  # R2=0.997
-    ("bytes", "ram", "deserialize"): (2.117042e-06, -4.520247e-15),  # R2=0.052 — too fast to model
-    ("bytes", "ram", "serialize"): (6.865110e-06, -1.341592e-14),  # R2=0.048 — too fast to model
-    ("dataframe_numeric", "disk", "deserialize"): (8.107757e-03, 1.576640e-09),  # R2=0.995
-    ("dataframe_numeric", "disk", "serialize"): (3.303260e-04, 6.463715e-10),  # R2=0.998
-    ("dataframe_numeric", "ram", "deserialize"): (8.628838e-06, 1.604019e-10),  # R2=1.000
-    ("dataframe_numeric", "ram", "serialize"): (2.146195e-04, 1.533608e-10),  # R2=0.999
-    ("dict_shallow", "disk", "deserialize"): (1.038392e-02, 1.976465e-09),  # R2=0.989
-    ("dict_shallow", "disk", "serialize"): (2.508677e-04, 1.077603e-09),  # R2=0.998
-    ("dict_shallow", "ram", "deserialize"): (-1.326852e-03, 1.697479e-09),  # R2=0.999
-    ("dict_shallow", "ram", "serialize"): (-3.217562e-03, 9.200596e-09),  # R2=1.000
-    ("list_flat", "disk", "deserialize"): (8.612852e-03, 1.395863e-09),  # R2=0.989
-    ("list_flat", "disk", "serialize"): (9.692593e-04, 5.769994e-10),  # R2=1.000
-    ("list_flat", "ram", "deserialize"): (-3.290309e-04, 1.713300e-09),  # R2=1.000
-    ("list_flat", "ram", "serialize"): (-9.765199e-04, 1.315996e-08),  # R2=1.000
-    ("ndarray_dense", "disk", "deserialize"): (9.604519e-03, 1.547854e-09),  # R2=0.995
-    ("ndarray_dense", "disk", "serialize"): (6.789494e-04, 6.642331e-10),  # R2=0.997
-    ("ndarray_dense", "ram", "deserialize"): (2.794288e-05, 1.557365e-10),  # R2=1.000
-    ("ndarray_dense", "ram", "serialize"): (-3.322399e-05, 1.372613e-10),  # R2=1.000
-    ("series_numeric", "disk", "deserialize"): (1.278298e-02, 1.537032e-09),  # R2=0.986
-    ("series_numeric", "disk", "serialize"): (1.362212e-03, 5.740690e-10),  # R2=0.996
-    ("series_numeric", "ram", "deserialize"): (1.132358e-04, 1.651489e-10),  # R2=1.000
-    ("series_numeric", "ram", "serialize"): (-4.913191e-06, 1.440106e-10),  # R2=1.000
-    ("sparse", "disk", "deserialize"): (1.075261e-02, 1.659304e-09),  # R2=0.516 — sparse high-variance
-    ("sparse", "disk", "serialize"): (1.758385e-03, 4.341337e-10),  # R2=0.871
-    ("sparse", "ram", "deserialize"): (1.040403e-05, 1.678533e-10),  # R2=1.000
-    ("sparse", "ram", "serialize"): (-1.553164e-05, 1.329718e-10),  # R2=0.996
-
-    # ===== _GENERIC fallback (slowest observed per backend, op) =====
-    # ram serialize: list_flat is slowest (13.16ns/byte at 100MB → 1.32s)
-    ("_GENERIC", "ram", "serialize"): (-9.765199e-04, 1.315996e-08),
-    # ram deserialize: list_flat is slowest (1.71ns/byte at 100MB → 0.17s)
-    ("_GENERIC", "ram", "deserialize"): (-3.290309e-04, 1.713300e-09),
-    # disk serialize: dict_shallow is slowest at large sizes
-    ("_GENERIC", "disk", "serialize"): (2.508677e-04, 1.077603e-09),
-    # disk deserialize: dict_shallow is slowest at large sizes
-    ("_GENERIC", "disk", "deserialize"): (1.038392e-02, 1.976465e-09),
-
-    # ===== Redis (LAN) =====
-    # Estimated, NOT benchmarked. Modelled as:
-    #   a = (disk_a × 0.1) + 500us network round-trip
-    #   b = max(disk_b, 20 ns/B)      ≈ 50 MB/s sustained
-    # The 0.1× factor removes the disk I/O dominating disk's a; what's
-    # left is the pure pickle work that's still required when serialising
-    # to a network buffer.
-    ("bytes",             "redis", "serialize"):   (6.011709e-04, 2.000000e-08),
-    ("bytes",             "redis", "deserialize"): (1.450319e-03, 2.000000e-08),
-    ("dataframe_numeric", "redis", "serialize"):   (5.330326e-04, 2.000000e-08),
-    ("dataframe_numeric", "redis", "deserialize"): (1.310776e-03, 2.000000e-08),
-    ("dict_shallow",      "redis", "serialize"):   (5.250868e-04, 2.000000e-08),
-    ("dict_shallow",      "redis", "deserialize"): (1.538392e-03, 2.000000e-08),
-    ("list_flat",         "redis", "serialize"):   (5.969259e-04, 2.000000e-08),
-    ("list_flat",         "redis", "deserialize"): (1.361285e-03, 2.000000e-08),
-    ("ndarray_dense",     "redis", "serialize"):   (5.678949e-04, 2.000000e-08),
-    ("ndarray_dense",     "redis", "deserialize"): (1.460452e-03, 2.000000e-08),
-    ("series_numeric",    "redis", "serialize"):   (6.362212e-04, 2.000000e-08),
-    ("series_numeric",    "redis", "deserialize"): (1.778298e-03, 2.000000e-08),
-    ("sparse",            "redis", "serialize"):   (6.758385e-04, 2.000000e-08),
-    ("sparse",            "redis", "deserialize"): (1.575261e-03, 2.000000e-08),
-    # Generic fallback: copy the slowest disk family with the network
-    # transform applied — series_numeric deserialize is the worst case.
-    ("_GENERIC",          "redis", "serialize"):   (6.758385e-04, 2.000000e-08),
-    ("_GENERIC",          "redis", "deserialize"): (1.778298e-03, 2.000000e-08),
-
-    # ===== S3 (same-region) =====
-    # Estimated, NOT benchmarked. Modelled as:
-    #   a = (disk_a × 0.2) + 80ms request setup (DNS/TLS/auth)
-    #   b = max(disk_b, 50 ns/B)      ≈ 20 MB/s single-stream
-    # Cross-region / public-internet S3 is 5–10× slower; users with
-    # those topologies should override the relevant backend's
-    # ``bandwidth_estimate``. The 80ms latency floor dominates objects
-    # under ~2 MB.
-    ("bytes",             "s3", "serialize"):   (8.020234e-02, 5.000000e-08),
-    ("bytes",             "s3", "deserialize"): (8.190064e-02, 5.000000e-08),
-    ("dataframe_numeric", "s3", "serialize"):   (8.006607e-02, 5.000000e-08),
-    ("dataframe_numeric", "s3", "deserialize"): (8.162155e-02, 5.000000e-08),
-    ("dict_shallow",      "s3", "serialize"):   (8.005017e-02, 5.000000e-08),
-    ("dict_shallow",      "s3", "deserialize"): (8.207678e-02, 5.000000e-08),
-    ("list_flat",         "s3", "serialize"):   (8.019385e-02, 5.000000e-08),
-    ("list_flat",         "s3", "deserialize"): (8.172257e-02, 5.000000e-08),
-    ("ndarray_dense",     "s3", "serialize"):   (8.013579e-02, 5.000000e-08),
-    ("ndarray_dense",     "s3", "deserialize"): (8.192090e-02, 5.000000e-08),
-    ("series_numeric",    "s3", "serialize"):   (8.027244e-02, 5.000000e-08),
-    ("series_numeric",    "s3", "deserialize"): (8.255660e-02, 5.000000e-08),
-    ("sparse",            "s3", "serialize"):   (8.035168e-02, 5.000000e-08),
-    ("sparse",            "s3", "deserialize"): (8.215052e-02, 5.000000e-08),
-    ("_GENERIC",          "s3", "serialize"):   (8.035168e-02, 5.000000e-08),
-    ("_GENERIC",          "s3", "deserialize"): (8.255660e-02, 5.000000e-08),
+    ("_GENERIC", "disk", "deserialize"): (5.478340e-03, 1.583327e-09),  # derived, not measured
+    ("_GENERIC", "disk", "serialize"): (4.820535e-04, 1.497407e-09),  # derived, not measured
+    ("_GENERIC", "ram", "deserialize"): (5.840887e-06, 2.720998e-09),  # derived, not measured
+    ("_GENERIC", "ram", "serialize"): (1.877952e-05, 1.783824e-08),  # derived, not measured
+    ("_GENERIC", "redis", "deserialize"): (1.158999e-03, 2.000000e-08),  # derived, not measured
+    ("_GENERIC", "redis", "serialize"): (5.793690e-04, 2.000000e-08),  # derived, not measured
+    ("_GENERIC", "s3", "deserialize"): (8.131800e-02, 5.000000e-08),  # derived, not measured
+    ("_GENERIC", "s3", "serialize"): (8.015874e-02, 5.000000e-08),  # derived, not measured
+    ("bytes", "disk", "deserialize"): (6.589985e-03, 6.508211e-10),  # R2=1.000 n=6 worst=1.1x
+    ("bytes", "disk", "serialize"): (6.787004e-04, 1.192182e-09),  # R2=0.827 n=6 worst=1.6x
+    ("bytes", "ram", "deserialize"): (5.299982e-06, 0.000000e+00),  # R2=-0.364 n=6 worst=1.1x
+    ("bytes", "ram", "serialize"): (1.615001e-05, 0.000000e+00),  # R2=-0.028 n=6 worst=1.1x
+    ("bytes", "redis", "deserialize"): (1.158999e-03, 2.000000e-08),  # derived, not measured
+    ("bytes", "redis", "serialize"): (5.678700e-04, 2.000000e-08),  # derived, not measured
+    ("bytes", "s3", "deserialize"): (8.131800e-02, 5.000000e-08),  # derived, not measured
+    ("bytes", "s3", "serialize"): (8.013574e-02, 5.000000e-08),  # derived, not measured
+    ("dataframe_numeric", "disk", "deserialize"): (6.059236e-03, 6.580528e-10),  # R2=0.999 n=6 worst=1.1x
+    ("dataframe_numeric", "disk", "serialize"): (4.820535e-04, 1.497407e-09),  # R2=0.962 n=6 worst=1.7x
+    ("dataframe_numeric", "ram", "deserialize"): (1.446263e-05, 2.214465e-10),  # R2=0.998 n=6 worst=1.7x
+    ("dataframe_numeric", "ram", "serialize"): (3.578494e-05, 1.316268e-10),  # R2=0.903 n=6 worst=1.6x
+    ("dataframe_numeric", "redis", "deserialize"): (1.105924e-03, 2.000000e-08),  # derived, not measured
+    ("dataframe_numeric", "redis", "serialize"): (5.482053e-04, 2.000000e-08),  # derived, not measured
+    ("dataframe_numeric", "s3", "deserialize"): (8.121185e-02, 5.000000e-08),  # derived, not measured
+    ("dataframe_numeric", "s3", "serialize"): (8.009641e-02, 5.000000e-08),  # derived, not measured
+    ("dict_shallow", "disk", "deserialize"): (5.478340e-03, 1.583327e-09),  # R2=0.961 n=6 worst=1.2x
+    ("dict_shallow", "disk", "serialize"): (6.634816e-04, 1.424603e-09),  # R2=0.824 n=6 worst=1.6x
+    ("dict_shallow", "ram", "deserialize"): (5.840887e-06, 2.720998e-09),  # R2=0.851 n=6 worst=1.5x
+    ("dict_shallow", "ram", "serialize"): (1.877952e-05, 1.783824e-08),  # R2=0.957 n=6 worst=1.2x
+    ("dict_shallow", "redis", "deserialize"): (1.047834e-03, 2.000000e-08),  # derived, not measured
+    ("dict_shallow", "redis", "serialize"): (5.663482e-04, 2.000000e-08),  # derived, not measured
+    ("dict_shallow", "s3", "deserialize"): (8.109567e-02, 5.000000e-08),  # derived, not measured
+    ("dict_shallow", "s3", "serialize"): (8.013270e-02, 5.000000e-08),  # derived, not measured
+    ("list_flat", "disk", "deserialize"): (5.718911e-03, 8.986306e-10),  # R2=1.000 n=6 worst=1.1x
+    ("list_flat", "disk", "serialize"): (6.875598e-04, 1.094875e-09),  # R2=0.966 n=6 worst=1.2x
+    ("list_flat", "ram", "deserialize"): (9.606476e-06, 9.279072e-10),  # R2=0.748 n=6 worst=1.8x
+    ("list_flat", "ram", "serialize"): (2.903120e-05, 3.402422e-09),  # R2=0.978 n=6 worst=1.2x
+    ("list_flat", "redis", "deserialize"): (1.071891e-03, 2.000000e-08),  # derived, not measured
+    ("list_flat", "redis", "serialize"): (5.687560e-04, 2.000000e-08),  # derived, not measured
+    ("list_flat", "s3", "deserialize"): (8.114378e-02, 5.000000e-08),  # derived, not measured
+    ("list_flat", "s3", "serialize"): (8.013751e-02, 5.000000e-08),  # derived, not measured
+    ("ndarray_dense", "disk", "deserialize"): (5.665687e-03, 6.934721e-10),  # R2=0.995 n=6 worst=1.1x
+    ("ndarray_dense", "disk", "serialize"): (7.091170e-04, 1.411240e-09),  # R2=0.978 n=6 worst=1.2x
+    ("ndarray_dense", "ram", "deserialize"): (8.302696e-06, 2.172459e-10),  # R2=0.995 n=6 worst=1.8x
+    ("ndarray_dense", "ram", "serialize"): (1.809576e-05, 5.370905e-11),  # R2=0.391 n=6 worst=3.3x
+    ("ndarray_dense", "redis", "deserialize"): (1.066569e-03, 2.000000e-08),  # derived, not measured
+    ("ndarray_dense", "redis", "serialize"): (5.709117e-04, 2.000000e-08),  # derived, not measured
+    ("ndarray_dense", "s3", "deserialize"): (8.113314e-02, 5.000000e-08),  # derived, not measured
+    ("ndarray_dense", "s3", "serialize"): (8.014182e-02, 5.000000e-08),  # derived, not measured
+    ("series_numeric", "disk", "deserialize"): (6.257127e-03, 6.480138e-10),  # R2=1.000 n=6 worst=1.1x
+    ("series_numeric", "disk", "serialize"): (7.537178e-04, 1.398579e-09),  # R2=0.982 n=6 worst=1.1x
+    ("series_numeric", "ram", "deserialize"): (2.595869e-05, 2.257319e-10),  # R2=0.999 n=6 worst=1.5x
+    ("series_numeric", "ram", "serialize"): (5.158808e-05, 9.495364e-11),  # R2=0.694 n=6 worst=2.2x
+    ("series_numeric", "redis", "deserialize"): (1.125713e-03, 2.000000e-08),  # derived, not measured
+    ("series_numeric", "redis", "serialize"): (5.753718e-04, 2.000000e-08),  # derived, not measured
+    ("series_numeric", "s3", "deserialize"): (8.125143e-02, 5.000000e-08),  # derived, not measured
+    ("series_numeric", "s3", "serialize"): (8.015074e-02, 5.000000e-08),  # derived, not measured
+    ("sparse", "disk", "deserialize"): (5.649893e-03, 9.034943e-10),  # R2=0.996 n=6 worst=1.1x
+    ("sparse", "disk", "serialize"): (7.936895e-04, 1.432005e-09),  # R2=1.000 n=6 worst=1.0x
+    ("sparse", "ram", "deserialize"): (1.890150e-05, 2.047055e-10),  # R2=0.960 n=6 worst=1.3x
+    ("sparse", "ram", "serialize"): (3.213248e-05, 8.440021e-11),  # R2=0.562 n=6 worst=2.5x
+    ("sparse", "redis", "deserialize"): (1.064989e-03, 2.000000e-08),  # derived, not measured
+    ("sparse", "redis", "serialize"): (5.793690e-04, 2.000000e-08),  # derived, not measured
+    ("sparse", "s3", "deserialize"): (8.112998e-02, 5.000000e-08),  # derived, not measured
+    ("sparse", "s3", "serialize"): (8.015874e-02, 5.000000e-08),  # derived, not measured
 }
 
 _KNOWN_BACKENDS = frozenset({"ram", "disk", "redis", "s3"})

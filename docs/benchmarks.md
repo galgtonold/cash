@@ -41,18 +41,26 @@ a session someone else ran.
 
 | Result size | DataFrame (RAM) | DataFrame (disk) | ndarray (disk) | raw bytes (disk) |
 |---|---|---|---|---|
-| 1 KB | 0.01 ms | 0.5 ms | 1.4 ms | 0.5 ms |
-| 1 MB | 0.18 ms | 11 ms | 14 ms | 21 ms |
-| 10 MB | 1.6 ms | 22 ms | 26 ms | 13 ms |
-| 100 MB | 16 ms | 166 ms | 164 ms | 52 ms |
+| 1 KB | 0.01 ms | 5.8 ms | 6.1 ms | 6.9 ms |
+| 1 MB | 0.23 ms | 6.7 ms | 5.9 ms | 7.9 ms |
+| 10 MB | 2.2 ms | 13 ms | 12 ms | 13 ms |
+| 100 MB | 21 ms | 70 ms | 79 ms | 72 ms |
 
-Two things to read off it:
+A disk restore is timed the way a later session performs one: in a fresh
+process, reading an entry no process has read before. That is what a persisted
+value is FOR -- within a session the RAM tier answers first -- and it is a
+different number from re-reading a file you just wrote, which is several times
+faster and flattered every earlier version of this table.
 
-- **Restore cost is roughly linear in size, and modest in absolute terms.** A
-  100 MB DataFrame comes back from disk in about a sixth of a second.
-- **The RAM tier is one to two orders of magnitude cheaper than disk.** Which
-  tier a value lands in is the [cost model's](cost-model.md) decision, not one
-  you have to make.
+Three things to read off it:
+
+- **Below about a megabyte, a disk restore costs what it costs to open the
+  file.** Roughly 6 ms here, whatever the payload; the size barely registers.
+- **Above that it is linear and still modest.** A 100 MB DataFrame comes back
+  in about 70 ms.
+- **The RAM tier is one to two orders of magnitude cheaper.** Which tier a
+  value lands in is the [cost model's](cost-model.md) decision for a notebook
+  statement; a `@cash.cache` result is written to disk either way.
 
 ## Working out your own number
 
@@ -67,7 +75,7 @@ Three workloads, same arithmetic:
 | Your work | Result size | Restore | Reclaimed per re-run |
 |---|---|---|---|
 | A 0.5 s groupby | 10 MB | 22 ms | 0.48 s — real, but you won't feel it |
-| A 4-minute feature build | 100 MB | 166 ms | ~4 minutes, every iteration |
+| A 4-minute feature build | 100 MB | 70 ms | ~4 minutes, every iteration |
 | A 30-minute metric pass over a 1 GB input | ~1 GB | ~1.7 s | ~30 minutes (≈1000×) |
 
 That last row is where this kind of caching earns its keep, and it is worth
@@ -99,7 +107,9 @@ your result size. Those are the terms to think in:
   something you will notice.
 - On a notebook of large results, the write dominates, and it is the same
   serialisation cost as the restore-cost table above — read it in reverse. A
-  100 MB DataFrame costs about a sixth of a second to write, once.
+  100 MB DataFrame costs about 180 ms to write, once -- more than the 70 ms it
+  costs to read back, which is the usual shape: you pay the write on the run
+  that computes the value and the read on every run after it.
 
 Quoting a single "first run is N× slower" number would be the same mistake as
 quoting a speedup: the ratio is set by how cheap your compute is, not by how

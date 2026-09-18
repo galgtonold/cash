@@ -27,7 +27,7 @@ import cash
 
 That's it. The next time you re-run the notebook, every statement that hasn't changed is **restored from cache** instead of recomputed. Outside notebooks, the same engine wraps any function as `@cash.cache`.
 
-**The number that matters:** a 100 MB DataFrame comes back from disk in **166 ms**. Whatever it cost you to compute, that is what every re-run hands back. Cash publishes what a restore costs rather than a speedup multiplier — [here's why](https://cash-lib.readthedocs.io/en/latest/benchmarks/).
+**The number that matters:** a 100 MB DataFrame comes back from disk in **70 ms**. Whatever it cost you to compute, that is what every re-run hands back. Cash publishes what a restore costs rather than a speedup multiplier — [here's why](https://cash-lib.readthedocs.io/en/latest/benchmarks/).
 
 📺 **Watch the 90-second demo** — Cash caching a real notebook, end to end:
 
@@ -168,7 +168,7 @@ Full walkthrough in [the decorator guide](https://cash-lib.readthedocs.io/en/lat
 
 **Beta.** The public API is stabilizing, but this is a `0.x` release — the cache format may still change between minor versions, so run `%cash_repair --full` after upgrading (see [versioning & compatibility](https://cash-lib.readthedocs.io/en/latest/versioning/)). The [known limitations](https://cash-lib.readthedocs.io/en/latest/known-limitations/) are documented honestly.
 
-A cache is only worth as much as your trust in it, so [**how cash is tested**](https://cash-lib.readthedocs.io/en/latest/how-it-works/testing/) is written down: <!-- docnum:tests_total -->~10,350<!-- /docnum --> tests across <!-- docnum:platforms -->15<!-- /docnum --> platform combinations, documentation whose code is executed and whose prose is pinned to the source that decides it, and a section on what all of that still fails to catch.
+A cache is only worth as much as your trust in it, so [**how cash is tested**](https://cash-lib.readthedocs.io/en/latest/how-it-works/testing/) is written down: <!-- docnum:tests_total -->~10,400<!-- /docnum --> tests across <!-- docnum:platforms -->15<!-- /docnum --> platform combinations, documentation whose code is executed and whose prose is pinned to the source that decides it, and a section on what all of that still fails to catch.
 
 Bug reports welcome: the badge has a "Report a bug" button, `%cash_feedback` prints how, or open an [issue](https://github.com/galgtonold/cash/issues).
 
