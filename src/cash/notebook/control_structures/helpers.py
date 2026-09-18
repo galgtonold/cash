@@ -403,6 +403,38 @@ def update_mutated_variable_lineages(
     hash is never sound as a key discriminator" — and states that
     ``variable_lineage`` wants PROVENANCE. *iterable_lineage* was already
     provenance; this extends the same treatment to the body's other reads.
+
+    Component 5 closes the same hole from the other side, and round 26 walked
+    into it. :func:`collect_body_input_lineages` deliberately EXCLUDES the
+    mutated variables, reasoning that a body almost always reads what it
+    mutates and folding that back in would "re-add the sampled hash by another
+    route". That holds only when the receiver's lineage came from THIS path.
+    Usually it did not: it came from whatever built the receiver, and that is
+    provenance worth having.
+
+    The month-end close in round 26 is the case. A cell built ``status_all``
+    one way on Monday and a different way on Tuesday (a matching fix; 50,000 of
+    300,000 rows changed), and in both versions ran the same loop over it::
+
+        for col, src in (("total_eur", "total"), ("outstanding_eur", "outstanding")):
+            status_all[col] = (status_all[src] * 1.2).round(2)
+
+    Traced, the two runs entered the loop with correctly different lineages and
+    left it with the same one::
+
+        Monday   b2510fa9 -> ... -> f1448c04 -> a538f1d3
+        Tuesday  b3444595 -> ... -> ab41d7fd -> a538f1d3
+
+    The loop source matched, the sampled value hash COLLIDED across two frames
+    differing in 50,000 rows, and the receiver's own history was excluded by
+    design -- so nothing was left to tell them apart. The next statement,
+    ``aged = aged_debt(status_all, CLOSE_DATE)``, read Monday's entry and
+    exported an aged-debt table EUR 2.94M short under a green CACHED badge.
+
+    Re-running an unchanged mutation does not churn on this account: measured,
+    a consumer of a twice-re-run mutating loop stays CACHED (``saved 3.00s``)
+    both times, because the statement restore puts the receiver's pre-loop
+    lineage back before the loop mints the next one.
     """
     for var_name in mutated_vars:
         if var_name not in shell.user_ns:
@@ -418,7 +450,13 @@ def update_mutated_variable_lineages(
             loop_code_hash = hashlib.sha256(loop_code.encode()).hexdigest()
             value_hash = statement_processor.compute_hash(val)
 
+            # Component 5: what this variable was before the loop touched it.
+            # The only component left that discriminates when the loop's source
+            # matches and the sampled value hash collides -- see the docstring.
+            prior_lineage = statement_processor.variable_lineage.get(var_name)
             lineage_components = [loop_code_hash, value_hash]
+            if prior_lineage:
+                lineage_components.append(f'prev={prior_lineage}')
             if iterable_lineage:
                 lineage_components.append(iterable_lineage)
             for name, lin in sorted((input_lineages or {}).items()):
