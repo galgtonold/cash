@@ -1202,21 +1202,43 @@ class FileDependencyRegistry:
             return result
         return tracked_exists
 
+    #: Suffixes of files that hold code, not data (see `_create_source_reader_handler`).
+    _SOURCE_SUFFIXES = (".py", ".pyc", ".pyw", ".pyi", ".pyx")
+
     @staticmethod
     def _create_source_reader_handler(original_func, track_callback):
         """Track a data file read through a SOURCE reader (``linecache``).
 
-        Python files are skipped: this is the machinery `inspect.getsource` and
-        every traceback read with, so recording those makes a module's own
-        source a data dependency of the functions defined in it.
+        Two things are skipped, both because this is the machinery
+        `inspect.getsource` and every traceback read with:
+
+        * Python files -- recording those makes a module's own source a data
+          dependency of the functions defined in it.
+        * Names that are not files at all. Compiled-from-memory code carries a
+          pseudo-filename in angle brackets -- ``<string>``, ``<stdin>``,
+          ``<ipython-input-3>``, and cash's own ``<cash-0beec9249e1e>`` for
+          every notebook statement it executes. Recording those gave each
+          statement a dependency on a file that cannot exist, which told the
+          planner that a statement in an edited cell was still satisfied: the
+          cell kept the previous run's live generator and printed an average
+          over five values instead of two.
+
+        So a name is tracked only if it is a real file on disk, which is the
+        only thing linecache can usefully have read.
         """
         def tracked_source_reader(filename, *args, **kwargs):
             if isinstance(filename, (str, bytes, os.PathLike)):
                 text = os.fsdecode(filename) if isinstance(filename, bytes) else str(filename)
-                if not text.endswith((".py", ".pyc", ".pyw", ".pyi", ".pyx")):
+                if (not text.startswith("<")
+                        and not text.endswith(FileDependencyRegistry._SOURCE_SUFFIXES)):
                     _tracker = _active_tracker.get()
                     if _tracker is not None:
-                        _tracker._track_path(filename)
+                        try:
+                            real = os.path.isfile(text)
+                        except (OSError, ValueError):
+                            real = False
+                        if real:
+                            _tracker._track_path(filename)
             return original_func(filename, *args, **kwargs)
         return tracked_source_reader
 
