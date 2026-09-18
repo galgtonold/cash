@@ -132,6 +132,9 @@ def test_metadata_read_cost_is_flat_in_payload_size(tmp_path, counted):
     Identical metadata on both, deliberately: the claim is that the read cost
     tracks the METADATA and ignores the payload, so letting the two entries
     differ in metadata as well would compare the wrong thing.
+
+    The payload's checksum does live in the metadata, which is why it is stored
+    at a fixed width: same bytes read whatever the payload hashes to.
     """
     reads, _writes = counted
     meta = {"key": "k", "size": 0, "created_at": 0.0, "last_access": 1.0}

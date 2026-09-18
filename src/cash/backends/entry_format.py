@@ -45,11 +45,27 @@ The slack has to cover only what metadata gains after it is first written:
 ``get`` adds. 64 bytes is several times that, and
 :func:`update_metadata_in_place` reports failure rather than corrupting
 anything if metadata ever outgrows it.
+
+Why the payload is checksummed
+------------------------------
+Truncation was already caught -- a short file cannot satisfy its own header --
+but damage that leaves the pickle structurally valid was not, and a flipped
+byte inside a stored value came back as data (found attacking the decorator
+before round 26: a cached string returned with one character changed, no
+warning). A recompute is always available and never wrong, so an entry that
+does not match its checksum is treated exactly like a truncated one: absent.
+
+crc32 is what makes that affordable. It runs at 14 GB/s here -- 4.6ms for 64MB,
+against the 23.7ms sha256 takes over the same bytes -- so it costs a fraction
+of writing or reading the payload it covers. It detects damage, not forgery:
+nothing here defends against someone who can write the cache directory, and
+nothing needs to.
 """
 from __future__ import annotations
 
 import pickle
 import struct
+import zlib
 from typing import Any
 
 __all__ = [
@@ -58,6 +74,7 @@ __all__ = [
     "HEADER_SIZE",
     "META_SLACK",
     "ENTRY_SUFFIX",
+    "CHECKSUM_FIELD",
     "CorruptEntry",
     "pack_entry",
     "packed_size",
@@ -73,6 +90,21 @@ HEADER_SIZE = HEADER.size          # 12
 META_SLACK = 64
 ENTRY_SUFFIX = ".entry"
 
+#: Metadata key holding the crc32 of the payload. Stamped by `pack_entry` and
+#: removed again by every read, so it never reaches a backend or a caller --
+#: entries written before it existed simply do not have it and are read as
+#: they always were.
+#:
+#: It is held as four bytes rather than an int so that its WIDTH does not
+#: depend on its value: a metadata region whose size varied with the payload's
+#: checksum would make `packed_size` a guess and the cost of a metadata read
+#: depend on the payload after all.
+CHECKSUM_FIELD = "_payload_crc32"
+
+
+def _checksum(payload: bytes) -> bytes:
+    return zlib.crc32(payload).to_bytes(4, "big")
+
 
 class CorruptEntry(ValueError):
     """The bytes at this path are not a readable cache entry.
@@ -85,7 +117,7 @@ class CorruptEntry(ValueError):
 
 def pack_entry(metadata: dict[str, Any], payload: bytes) -> bytes:
     """Serialize one entry. *payload* is stored verbatim -- compress before."""
-    meta_bytes = pickle.dumps(metadata)
+    meta_bytes = pickle.dumps({**metadata, CHECKSUM_FIELD: _checksum(payload)})
     cap = len(meta_bytes) + META_SLACK
     return b"".join((
         HEADER.pack(MAGIC, len(meta_bytes), cap),
@@ -102,7 +134,8 @@ def packed_size(metadata: dict[str, Any], payload_len: int) -> int:
     Costs one extra ``pickle.dumps`` of the metadata, which measured 0.8us
     against the ~21us the ``stat`` it replaces takes.
     """
-    return HEADER_SIZE + len(pickle.dumps(metadata)) + META_SLACK + payload_len
+    stamped = {**metadata, CHECKSUM_FIELD: bytes(4)}
+    return HEADER_SIZE + len(pickle.dumps(stamped)) + META_SLACK + payload_len
 
 
 def unpack_entry(blob: bytes, *, with_payload: bool) -> tuple[dict[str, Any], bytes | None]:
@@ -129,9 +162,12 @@ def unpack_entry(blob: bytes, *, with_payload: bool) -> tuple[dict[str, Any], by
         raise CorruptEntry(
             f"have {len(blob)} bytes, metadata needs {end}")
     metadata = pickle.loads(blob[HEADER_SIZE:end])
+    expected = metadata.pop(CHECKSUM_FIELD, None)
     if not with_payload:
         return metadata, None
-    return metadata, blob[HEADER_SIZE + meta_cap:]
+    payload = blob[HEADER_SIZE + meta_cap:]
+    _verify(payload, expected, "entry")
+    return metadata, payload
 
 
 def metadata_span(blob: bytes) -> int:
@@ -166,10 +202,28 @@ def read_entry(path: str, *, with_payload: bool) -> tuple[dict[str, Any], bytes 
         if len(meta_bytes) < meta_len:
             raise CorruptEntry(f"{path}: metadata truncated")
         metadata = pickle.loads(meta_bytes)
+        expected = metadata.pop(CHECKSUM_FIELD, None)
         if not with_payload:
             return metadata, None
         fh.seek(HEADER_SIZE + meta_cap)
-        return metadata, fh.read()
+        payload = fh.read()
+    _verify(payload, expected, path)
+    return metadata, payload
+
+
+def _verify(payload: bytes, expected: bytes | None, where: str) -> None:
+    """Raise :class:`CorruptEntry` if *payload* is not the bytes that were stored.
+
+    *expected* is ``None`` for an entry written before entries were
+    checksummed; those are read as they always were.
+    """
+    if expected is None:
+        return
+    found = _checksum(payload)
+    if found != expected:
+        raise CorruptEntry(
+            f"{where}: payload checksum {found.hex()} != stored {expected.hex()} "
+            f"({len(payload)} bytes) -- the value will be recomputed")
 
 
 def update_metadata_in_place(path: str, metadata: dict[str, Any]) -> bool:
@@ -181,13 +235,26 @@ def update_metadata_in_place(path: str, metadata: dict[str, Any]) -> bool:
     and the failure mode is identical: the metadata no longer unpickles, the
     entry reads as absent, and the value is recomputed.
     """
-    meta_bytes = pickle.dumps(metadata)
     with open(path, "r+b") as fh:
         head = fh.read(HEADER_SIZE)
         if len(head) < HEADER_SIZE:
             return False
-        magic, _meta_len, cap = HEADER.unpack(head)
-        if magic != MAGIC or len(meta_bytes) > cap:
+        magic, meta_len, cap = HEADER.unpack(head)
+        if magic != MAGIC:
+            return False
+        # The payload is not being rewritten, so its checksum has to survive --
+        # and the caller never saw it, because every read strips it. Reading it
+        # back off the entry costs one unpickle of ~280 bytes, measured at
+        # 0.6us against the ~150us the write itself takes.
+        if CHECKSUM_FIELD not in metadata:
+            try:
+                previous = pickle.loads(fh.read(meta_len))
+            except Exception:  # noqa: BLE001 - unreadable metadata: leave it alone
+                return False
+            if CHECKSUM_FIELD in previous:
+                metadata = {**metadata, CHECKSUM_FIELD: previous[CHECKSUM_FIELD]}
+        meta_bytes = pickle.dumps(metadata)
+        if len(meta_bytes) > cap:
             return False
         fh.seek(0)
         fh.write(HEADER.pack(MAGIC, len(meta_bytes), cap) + meta_bytes)
