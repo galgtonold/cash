@@ -144,10 +144,10 @@ so the two paths differ here.)
 
 ## Inspecting where a value actually landed
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @2f5d7af1, cash/backends/tiered_backend.py:TieredBackend.get @d9642778 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @31cbbcf8, cash/backends/tiered_backend.py:TieredBackend.get @d9642778 -->
 The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']`. This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (set in `TieredBackend.get`).
 
-When it went no further than RAM, `metadata['persist_skipped']` says why: `"compute"` (the compute floor or the cost model), `"size"` (a tier's size cap), or `"replaced_in_cell"` (a later statement of the same cell writes that name again, so the version the cell leaves is the one written).
+When it went no further than RAM, `metadata['persist_skipped']` says why: `"size"` (a tier's size cap), `"compute"` (the notebook's compute floor or its cost model), or `"replaced_in_cell"` (a later statement of the same cell writes that name again, so the version the cell leaves is the one written). Only the first can happen to a `@cash.cache` result: decorating a function is the decision to cache it, so neither the floor nor the cost model is consulted on that path.
 
 For debugging, turn on debug output — `CASH_DEBUG=1`, or:
 
@@ -156,7 +156,7 @@ import cash
 cash.configure(debug=True)
 ```
 
-Each decorated call then logs a line to stderr, and a result held back from disk says so and why: `kept in RAM only -- under the 0.1s persistence floor -- so another process will recompute it`. `CASH_SUMMARY=1` counts the same thing per function at exit. The TieredBackend also logs `[STORAGE] Stored in: RAM` for skipped-disk entries and `[STORAGE] Stored in: RAM, FileBackend` for promoted ones (logged at the end of `TieredBackend.set`). For per-call introspection use `f.explain(*args, **kwargs)` — it tells you whether the next call would hit and which tier the entry currently lives in:
+Each decorated call then logs a line to stderr, and a result held back from disk says so and why: `kept in RAM only -- too big for the persistent tier's size cap -- so another process will recompute it`. A size cap is the only reason left on this path. `CASH_SUMMARY=1` counts the same thing per function at exit. The TieredBackend also logs `[STORAGE] Stored in: RAM` for skipped-disk entries and `[STORAGE] Stored in: RAM, FileBackend` for promoted ones (logged at the end of `TieredBackend.set`). For per-call introspection use `f.explain(*args, **kwargs)` — it tells you whether the next call would hit and which tier the entry currently lives in:
 
 ```python
 @cash.cache
