@@ -4513,6 +4513,7 @@ class StatementProcessor:
                 skipped_reason=skip_reason,
                 metadata_only=True,
                 output_lineages=self._lineage.build_output_lineages(self._tracking_state, outputs),
+            input_lineages=self._lineage.build_input_lineages(self._tracking_state, inputs),
                 **cost_fields,
             )
             try:
@@ -4535,6 +4536,7 @@ class StatementProcessor:
                 file_dependencies, accessed_remote, inherited_snapshots),
             force_persist=force_persist,
             output_lineages=self._lineage.build_output_lineages(self._tracking_state, outputs),
+            input_lineages=self._lineage.build_input_lineages(self._tracking_state, inputs),
             ttl=ttl,
             version_slot=_version_slot(source_hash, outputs),
             **cost_fields,

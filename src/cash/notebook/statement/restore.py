@@ -249,6 +249,16 @@ class StatementRestorer:
             if var_name in output_lineages:
                 tracking_state.lineage.record(var_name, output_lineages[var_name], value=value)
 
+            # What this value was built from, carried on the entry. Without it a
+            # restored value has no provenance, and the classifier's check for
+            # "built on an input that has been rebuilt since" compares an empty
+            # dict and passes -- which is how a model table restored before an
+            # upstream fix survived the repair that rebuilt its own inputs and
+            # was exported (round 26, r26s4). Entries written before the field
+            # existed carry None and keep the old behaviour.
+            if metadata.input_lineages:
+                tracking_state.executed_input_lineages[var_name] = dict(metadata.input_lineages)
+
             stored_code, stored_hash = _get_statement_code_and_hash(metadata)
             if stored_hash:
                 if var_name not in tracking_state.executed_cell_hashes:

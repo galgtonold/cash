@@ -197,6 +197,22 @@ class StatementLineageBuilder:
         """Collect ``{var: lineage_hash}`` for all outputs that have a lineage."""
         return {v: tracking_state.variable_lineage[v] for v in outputs if v in tracking_state.variable_lineage}
 
+    def build_input_lineages(self, tracking_state: 'TrackingState', inputs: set[str]) -> dict[str, str]:
+        """Collect ``{var: lineage_hash}`` for the inputs this statement read.
+
+        Stored on the entry so a RESTORED value can answer "has one of my
+        inputs been rebuilt since?". Only an executed value could answer that
+        before -- the classifier reads provenance from
+        ``executed_input_lineages``, which execution alone writes -- so the
+        guard against building on an older input passed vacuously for every
+        restored value, which after a restart is most of them.
+
+        Read from ``variable_lineage`` at save time, which is what the
+        comparison reads at check time: an input's lineage is not changed by the
+        statement that consumes it, so this is what the value was built on.
+        """
+        return {v: tracking_state.variable_lineage[v] for v in inputs if v in tracking_state.variable_lineage}
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
