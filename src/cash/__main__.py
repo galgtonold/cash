@@ -89,6 +89,25 @@ def _sqlite_cache(cache_dir: str) -> tuple[int, int] | None:
         return None
 
 
+def _entry_totals(cache_dir: str) -> tuple[int, int] | None:
+    """``(entries, bytes)`` for the entry files here, or ``None`` if unreadable.
+
+    The same set ``FileBackend._scan_size_bytes`` totals -- top-level
+    ``*.entry`` and nothing else -- because this number is now used to size
+    the cap as well as to report what the cache holds, and the two have to
+    count the same bytes to be comparable.
+    """
+    entries = size = 0
+    try:
+        for f in Path(cache_dir).iterdir():
+            if f.name.endswith(ENTRY_SUFFIX):
+                entries += 1
+                size += f.stat().st_size
+    except OSError:
+        return None
+    return entries, size
+
+
 def _per_user_tool_caches() -> list[tuple[str, str, int, int]]:
     """``(tool, path, entries, bytes)`` for every per-user tool cache."""
     try:
@@ -130,19 +149,14 @@ def cmd_info(args: argparse.Namespace) -> None:
     # What it holds, next to where it is: the number a user asks for when
     # deciding whether to clear it (round 25 had to `du` the folder).
     database = _sqlite_cache(config.cache_dir)
+    held = database if database is not None else _entry_totals(config.cache_dir)
     if database is not None:
         print(f"  Holds:      {database[0]} entries, {_format_bytes(database[1])} "
               f"(one sqlite database)")
+    elif held is None:
+        print("  Holds:      nothing yet (no cache written here)")
     else:
-        entries = size = 0
-        try:
-            for f in Path(config.cache_dir).iterdir():
-                if f.name.endswith(ENTRY_SUFFIX):
-                    entries += 1
-                    size += f.stat().st_size
-            print(f"  Holds:      {entries} entries, {_format_bytes(size)}")
-        except OSError:
-            print("  Holds:      nothing yet (no cache written here)")
+        print(f"  Holds:      {held[0]} entries, {_format_bytes(held[1])}")
     if config.disable:
         print(f"  Disabled:   yes -- every cached function runs uncached "
               f"({origins.get('disable', 'disable = true')})")
@@ -152,12 +166,21 @@ def cmd_info(args: argparse.Namespace) -> None:
     # nowhere else -- a tester spent a round reading a growing RSS as a leak
     # when it was a 4 GiB cap doing exactly what it says.
     from cash.backends.adaptive_caps import (
+        adaptive_disk_cap_for,
         human_bytes,
-        resolve_disk_cap,
         resolve_ram_cap,
     )
     if config.max_cache_size is None:
-        disk = human_bytes(resolve_disk_cap(config.cache_dir))
+        # Sized the way the BACKEND sizes it: from free space plus what the
+        # cache already holds. `resolve_disk_cap` uses free space alone, and
+        # free space excludes the cache's own bytes -- so this printed a
+        # number lower than the one being enforced by a quarter of whatever
+        # the cache held. r26s4 read `Holds: 21.19 GiB` directly above
+        # `Max size: 12.0 GiB` and reported a cap blown by 77%; the cap in
+        # force was 17.3 GiB and nothing was over it. A cap a user is shown
+        # has to be the cap the cache is keeping to.
+        own = held[1] if held is not None else 0
+        disk = human_bytes(adaptive_disk_cap_for(config.cache_dir, own))
         print(f"  Max size:   auto -- disk {disk}, RAM {human_bytes(resolve_ram_cap())}")
     else:
         print(f"  Max size:   {format_size(config.max_cache_size)} "

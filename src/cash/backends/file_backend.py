@@ -286,6 +286,11 @@ class FileBackend(CacheBackend):
         # the user. Only then may it be re-derived once the cache's own size
         # is known -- an explicit cap is the user's number and stays put.
         self._adaptive_cap = adaptive_cap
+        # When the adaptive cap was last sized from the volume. A notebook
+        # kernel outlives the free-space reading it opened with (r26s4 ran two
+        # days), so the cap is re-derived as the volume moves -- throttled,
+        # because it is re-derived on the write path. 0.0 means "never".
+        self._cap_derived_at = 0.0
         self._default_ttl = default_ttl
         self._current_size_bytes = 0
         # Evict-after-write detection: a monotonic write counter and
@@ -629,24 +634,52 @@ class FileBackend(CacheBackend):
             self._current_size_bytes = scanned
             self._size_scanned = True
 
-        # An adaptive cap is re-derived HERE, and only here, because this is
-        # the first moment cash knows its own footprint -- and its own
-        # footprint is exactly what the original figure was missing.
-        #
-        # `resolve_disk_cap` sizes from FREE space, which excludes whatever the
-        # cache has already written, so the cap shrank as the cache filled and
-        # the cache was then over a cap its own contents had caused. See
-        # `adaptive_disk_cap_for` for the two-cycle that produces.
-        #
-        # Free at this point costs one `disk_usage` call (15us) and the walk
-        # that supplies `_current_size_bytes` has just happened anyway, so the
-        # correction is free. It deliberately does NOT run at open time: that
-        # is the walk this release moved off the caller's first cell.
-        if self._adaptive_cap:
-            from .adaptive_caps import adaptive_disk_cap_for
-            self._max_size_bytes = adaptive_disk_cap_for(
-                self.cache_dir, self._current_size_bytes,
-            )
+        # The footprint is now known, which is what the cap the caller was
+        # constructed with was missing. Size it.
+        self._refresh_adaptive_cap(force=True)
+
+    #: Seconds between re-readings of the volume's free space for the adaptive
+    #: cap. `shutil.disk_usage` is ~15us on a local disk but a network or
+    #: cloud-synced cache directory is a different order, and this sits on the
+    #: write path -- so a long session pays this once a minute, not once a
+    #: write.
+    _CAP_REFRESH_INTERVAL = 60.0
+
+    def _refresh_adaptive_cap(self, force: bool = False) -> None:
+        """Re-size an adaptive cap from the volume as it is NOW.
+
+        The cap used to be derived once, on the first write of the process,
+        and never again. That is wrong for the process cash mostly runs in: a
+        notebook kernel. Round 26's r26s4 opened a kernel when the machine had
+        ~118 GB free -- a 29.5 GiB cap -- and was still enforcing that number
+        two days later with 48 GB free, holding 21.19 GiB. Nothing was over
+        ITS cap, so nothing evicted; the restart the next morning re-derived
+        17.3 GiB and dropped 4.75 GiB in one go. Tracking the volume spreads
+        that over the session instead of saving it up for a restart.
+
+        `adaptive_disk_cap_for` sizes from free space PLUS the cache's own
+        bytes, because free space excludes what the cache has already written
+        -- without that the cap shrinks as the cache fills, and the cache is
+        over a cap its own contents caused. That part is unchanged; only how
+        often the volume is consulted is new.
+
+        Costs one `disk_usage` call, throttled to `_CAP_REFRESH_INTERVAL`:
+        `_current_size_bytes` is maintained incrementally after the initial
+        scan, so no directory walk is involved. *force* is for the first
+        derivation, which must not be skipped by the throttle.
+
+        An explicit `max_cache_size` is the user's number and is never touched.
+        """
+        if not self._adaptive_cap:
+            return
+        now = time.monotonic()
+        if not force and now - self._cap_derived_at < self._CAP_REFRESH_INTERVAL:
+            return
+        from .adaptive_caps import adaptive_disk_cap_for
+        self._cap_derived_at = now
+        self._max_size_bytes = adaptive_disk_cap_for(
+            self.cache_dir, self._current_size_bytes,
+        )
 
     def _ignore_in_git(self) -> None:
         """Keep a cache directory cash just created out of version control.
@@ -1554,6 +1587,9 @@ class FileBackend(CacheBackend):
         # pay the directory walk that produces it. Latched, so a write-heavy
         # session pays one walk, not one per write.
         self._ensure_size_scanned()
+        # ...and re-sized from the volume as it is now, not as it was when
+        # this process opened. Throttled; see `_refresh_adaptive_cap`.
+        self._refresh_adaptive_cap()
 
         if self._current_size_bytes <= self._max_size_bytes:
             return
