@@ -505,6 +505,47 @@ the common case: a copy reads exactly like the original. The warning is about
 writes through a shared object, so a read-only caller loses nothing — pass
 `assume_safe=True` to say so once.
 
+## CACHE-NOT-WORTH-BYTES {#cache-not-worth-bytes}
+
+<!-- claim: cash/backends/value_policy.py:worth_its_bytes, cash/backends/tiered_backend.py:TieredBackend._warn_not_worth_its_bytes -->
+**What happened.** A value was large enough to matter and cheap enough to
+rebuild that caching it costs more disk than it saves time, so it was not
+persisted. The message names both numbers and the rate between them: cash
+spends at most **128 MiB of cache per second of compute saved**.
+
+A cache trades bytes for seconds, and every other gate asks only whether
+restoring beats recomputing -- never what the answer costs. Round 26's five
+testers held 58 GiB of cache between them for input data of 61-360 MB. One
+kept seven 1.3 GB copies of a feature frame that rebuilds in 5.0 seconds:
+263 MiB of disk per second saved. Another kept 72 loop-iteration entries of
+48 MiB whose recorded compute time was 0.00 s.
+
+**Why it matters.** Nothing else will reclaim it. Version pruning applies a
+related rate to superseded copies, but it only ever compares
+entries of one statement that differ by their inputs -- a `@cash.cache` call,
+a loop iteration (each one is its own version slot, because its source carries
+an iteration discriminator) and a spare copy kept for undo are all invisible
+to it. Only the byte cap was left, and the byte cap is a quarter of the
+volume, so on a roomy disk it does not fire until the cache is enormous.
+
+**What to do.** Usually nothing: if you had not noticed the recompute, the
+trade is the one you want. To cache it anyway, say so explicitly --
+`@cash:persist` on the statement or `@cash.cache` on the function. Both are
+treated as a decision you have already taken and are never re-judged here, the
+same way they skip the compute floor and the cost model. For a value this
+large, caching something smaller -- the aggregate, the sample, the columns you
+actually use -- is usually the better answer than caching all of it.
+
+**When it is safe to ignore.** Whenever the recompute is one you had not
+noticed. The rule only fires on values over 8 MiB, and it gives up about 1% of
+the compute across the caches it was measured on while reclaiming 76% of the
+bytes -- so the usual case is that you lose a second or two of rebuild and
+keep the disk. Ignore it outright if you have set `max_cache_size` yourself and
+are happy with a cache that size; the rate is a default, not a limit you asked
+for. Do not ignore it if the value is one you restart into often and the
+message names a recompute time you can feel -- mark that one `@cash:persist`
+rather than leaving it to chance.
+
 ## CACHE-VALUE-TOO-BIG {#cache-value-too-big}
 
 <!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @80a5a388, cash/backends/file_backend.py:FileBackend._promotion_size_cap @cc93a731 -->

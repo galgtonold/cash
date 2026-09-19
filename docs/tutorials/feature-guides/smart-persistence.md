@@ -10,7 +10,7 @@ The decision applies to **multi-tier backends only**. A single-tier `FileBackend
 
 ## The decision in one sentence
 
-If the promotion policy returns `False` for a given call, the result lands in RAM only — the next disk tier (and every tier after) is skipped. Promote when recomputing the value would cost more than restoring it: `execution_time - est_restore_time > min_cache_savings_pct × execution_time`, where `est_restore_time` is the fitted cost model's end-to-end serialize-write / read-deserialize prediction.
+If the promotion policy returns `False` for a given call, the result lands in RAM only — the next disk tier (and every tier after) is skipped. Promote when recomputing the value would cost more than restoring it, and the bytes it would occupy are worth that saving: `execution_time - est_restore_time > min_cache_savings_pct × execution_time`, where `est_restore_time` is the fitted cost model's end-to-end serialize-write / read-deserialize prediction.
 
 ## Quick start
 
@@ -63,6 +63,25 @@ Two things gate the promotion:
 This 2-argument closure carries no *type*, so it assumes the slowest (`_GENERIC`) family as a conservative floor. When the entry does know its type — every notebook-cached value records its `cost_model_family` on the metadata — `TieredBackend.set` recomputes the same decision with the *real* family, so the two persistence gates (this one and the statement processor's Gate A) agree instead of contradicting each other.
 
 The `100 ms` floor is hardcoded in `factory.py`; the savings fraction is `min_cache_savings_pct` (default `0.20`).
+
+<!-- claim: cash/backends/value_policy.py:worth_its_bytes, cash/backends/value_policy.py:WORTH_CEILING_BYTES_PER_SECOND == 134217728, cash/backends/value_policy.py:WORTH_FLOOR_BYTES == 8388608 -->
+3. **What the answer costs.** Both gates above ask whether restoring beats
+   recomputing; neither asks what the cache pays for that. So a third gate
+   caps the *rate*: cash spends at most **128 MiB of cache per second of compute
+   saved**, and refuses anything over 8 MiB that exceeds it
+   ([`CACHE-NOT-WORTH-BYTES`](../../warnings.md#cache-not-worth-bytes) says so
+   once per session). Version pruning rations superseded copies at half that
+   rate: a spare copy kept for undo is speculative, while a live entry is the
+   one that will actually be restored.
+
+   It exists because the first two gates, on their own, filled round 26's five
+   caches with 58 GiB for 61–360 MB of input data — 1.3 GB frames that rebuild
+   in 5 seconds, 48 MiB loop iterations with 0.00 s of recorded compute.
+   Measured over all 3120 of those entries, the rate refuses 76% of the bytes
+   and gives up 1% of the compute.
+
+   `@cash.cache` and `@cash:persist` skip it, like the other two gates: an
+   explicit decision is not re-judged.
 
 > **Restart implication.** The corollary of the 100 ms floor is that a *fast but
 > important* computation on the default `TieredBackend` stays RAM-only and does

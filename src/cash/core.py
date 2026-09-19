@@ -4298,6 +4298,12 @@ class Cash:
             return None
         if skipped == "size":
             return "too big for the persistent tier's size cap"
+        if skipped == "bytes":
+            # Reachable here only for a frozen function, which is the one
+            # decorator case `TieredBackend.set` does not exempt (it passes
+            # `decorator_entry=False`). See CACHE-NOT-WORTH-BYTES.
+            return ("more cache per second saved than cash will spend -- "
+                    "large, and cheap to recompute")
         # There used to be two more answers here, "under the 0.1s persistence
         # floor" and "the cost model judged restoring it no cheaper than
         # recomputing it". Neither can happen to a decorated result any more:

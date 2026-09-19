@@ -46,7 +46,11 @@ INDEX_FILENAME = "_versions.log"
 #: Superseded bytes one second of compute pays for. A 1.4 s build of a 700 MB
 #: frame affords 90 MB -- the newest superseded version, which always stays,
 #: and nothing more. A one-minute fit affords 3.8 GB.
-BYTES_PER_COMPUTE_SECOND = 64 * 1024 * 1024
+#:
+#: Defined in `value_policy`, which applies the same rate to every entry as it
+#: is written. One number: a value the writer would refuse is not one this
+#: would then keep a spare copy of.
+from .value_policy import BYTES_PER_COMPUTE_SECOND  # noqa: E402
 
 #: However cheap they are to hold, no more superseded versions than this.
 MAX_SUPERSEDED = 16

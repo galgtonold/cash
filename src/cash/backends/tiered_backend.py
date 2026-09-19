@@ -73,6 +73,8 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         self._min_persist_savings_pct = min_persist_savings_pct
         # Once-per-session dedup for the oversize-refusal warning.
         self._warned_oversize = False
+        #: Same, for the bytes-per-compute-second ceiling (`value_policy`).
+        self._warned_not_worth = False
 
     def _promotion_backend_kind(self) -> str:
         """Cost-model backend kind of the first tier past RAM (the primary
@@ -193,6 +195,74 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             f"one entry), or cache something smaller -- the aggregate, the "
             f"sample, or the columns you actually use. The size named here is "
             f"the serialized one, the same number `cash inspect` reports.",
+        )
+
+    def _drop_persisted_call_refs(self, refs) -> None:
+        """Take the persisted call results that a refused statement held.
+
+        A cached call's result is stored once, in a ``call:`` entry, and the
+        statement that produced it holds a ``CallRef``. Those entries are never
+        judged on their own -- refusing one leaves the statement pointing at
+        something that is not there -- so the decision belongs to the
+        statement, and when the statement is refused for its bytes the call
+        results go with it. Without this the refusal reclaims nothing: r26s5's
+        seven 1.3 GB frames are ``call:`` entries, and its statements' own
+        entries are a few KB each.
+
+        Only the PERSISTENT tiers. The RAM copy is what makes the rest of this
+        session fast and is not what the cache is spending disk on.
+
+        Best effort, and a wrong guess is cheap: if another statement also
+        refers to one of these, that statement becomes a miss and recomputes.
+        It never restores something else.
+        """
+        for ref in refs or ():
+            for backend in self.backends[1:]:
+                try:
+                    backend.delete(ref)
+                except Exception:  # noqa: BLE001 - reclaiming disk never fails a write
+                    logger.debug("Could not drop call ref %r", ref, exc_info=True)
+
+    def _warn_not_worth_its_bytes(
+        self, key: str, size_bytes: int, compute_seconds: float,
+    ) -> None:
+        """Warn once/session that a value cost more disk than it saves compute.
+
+        Round 26's loudest unanimous finding was not that the cache was large
+        but that nothing said so while they worked: "I checked free disk out of
+        habit", "my project folder felt large", "nothing surfaces it while you
+        work. Not the badge, not a warning, not `%cash_stats`". Two of five
+        would have set `max_cache_size` on day one had anything told them.
+
+        So the refusal says what it refused and what it would have cost, in the
+        units the decision was made in. Deduped to once per session, like the
+        oversize warning -- a sweep hits this on every iteration, and 72 copies
+        of one message is the same silence by a different route.
+        """
+        if self._warned_not_worth:
+            return
+        self._warned_not_worth = True
+        from cash.diagnostics import warn_diagnostic
+        from cash.exceptions import CashCacheIneffectiveWarning
+        from .adaptive_caps import human_bytes
+        from .value_policy import WORTH_CEILING_BYTES_PER_SECOND
+        rate = size_bytes / max(compute_seconds, 1e-9) / (1024 ** 2)
+        warn_diagnostic(
+            CashCacheIneffectiveWarning,
+            "CACHE-NOT-WORTH-BYTES",
+            f"cached value {key!r} is {human_bytes(size_bytes)} serialized but "
+            f"only takes {compute_seconds:.2f}s to recompute -- "
+            f"{rate:,.0f} MiB of cache per second saved, against the "
+            f"{human_bytes(WORTH_CEILING_BYTES_PER_SECOND)} per second cash is "
+            f"willing to spend. It was not persisted, so it is recomputed "
+            f"rather than restored.",
+            "nothing, if the recompute is cheap enough that you had not "
+            "noticed it -- that is the trade being made. To cache it anyway, "
+            "say so explicitly: `@cash:persist` on the statement, or "
+            "`@cash.cache` on the function, both of which cash honours without "
+            "re-taking the decision. Caching something smaller -- the "
+            "aggregate, the sample, the columns you use -- is usually the "
+            "better answer for a value this large.",
         )
 
     def peek_metadata(self, key: str) -> MetadataDict | None:
@@ -375,6 +445,23 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 stored_metadata.get('cost_model_type_name', ''), size, rebuild_seconds,
                 self._promotion_backend_kind()):
             return False
+        # The bytes-per-compute-second ceiling applies here too, and this is
+        # where it matters most: a notebook statement sets `defer_persist`, so
+        # it never reaches the promotion block in `set` -- this end-of-cell
+        # pass is how notebook values get to disk, and notebook values are what
+        # filled round 26's caches. Weighed like `set` does it, with the call
+        # results the entry refers to, and against *rebuild_seconds*: what a
+        # restore actually saves here is the whole upstream chain, not the one
+        # statement's own time.
+        if not stored_metadata.get('force_persist'):
+            from .value_policy import worth_its_bytes
+            weight = ((stored_metadata.get('size') or size)
+                      + int(stored_metadata.get('call_ref_bytes') or 0))
+            if not worth_its_bytes(weight, rebuild_seconds):
+                self._warn_not_worth_its_bytes(key, weight, rebuild_seconds)
+                self._drop_persisted_call_refs(stored_metadata.get('call_refs'))
+                stored_metadata['persist_skipped'] = 'bytes'
+                return False
         metadata = {k: v for k, v in stored_metadata.items()
                     if k not in ('persist_skipped', 'source', 'storage', 'defer_persist')}
         metadata['rebuild_time'] = rebuild_seconds
@@ -485,6 +572,46 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             # (the notebook path sets no plain 'size' key).
             cap_size = size or metadata.get('cost_model_size_bytes', 0)
 
+            # ...and worth the bytes it would occupy. Every gate above asks
+            # whether restoring beats recomputing; none of them asks what the
+            # answer COSTS. Round 26's five caches held 58 GiB for 61-360 MB of
+            # input data, and the three mechanisms behind that (see
+            # `value_policy`) are each a population version pruning cannot
+            # ration: r26s5's 1.3 GB frames at 5.0 s of compute, r26s4's 48 MiB
+            # loop iterations at 0.00 s, r26s3's spare copies. One rate, applied
+            # here, covers all three.
+            #
+            # `force_persist` and `decorator_entry` are exempt for the same
+            # reason they are exempt from the compute floor: the caller has
+            # already decided, and re-taking that decision per call is what
+            # `@cash.cache` exists to stop.
+            # A statement entry is weighed with the call results it REFERS to,
+            # not just its own bytes. A cached call's result is stored once, in
+            # a `call:` entry, and the statement that produced it holds a
+            # `CallRef` -- so the statement's own entry is a few KB while the
+            # thing it restores is hundreds of MB. r26s5's seven 1.3 GB frames
+            # are `call:` entries, and the 72 statements referencing them
+            # declare 14,293 MiB of `call_ref_bytes` between them.
+            #
+            # A `call:` entry is therefore never judged on its own: refusing it
+            # leaves the statement that points at it restoring a reference to
+            # something that is not there, so the statement "hits" and then
+            # rebuilds anyway -- a cache entry that costs disk and saves
+            # nothing. `test_superseded_versions_are_pruned` caught exactly
+            # that. The decision belongs to the statement, which is the thing
+            # whose compute is actually being saved.
+            weight = cap_size + int(metadata.get('call_ref_bytes') or 0)
+            is_call_entry = str(key).startswith('call:')
+            bytes_refused = False
+            if (past_compute_floor and not (force_persist or decorated)
+                    and not is_call_entry):
+                from .value_policy import worth_its_bytes
+                if not worth_its_bytes(weight, exec_time):
+                    past_compute_floor = False
+                    bytes_refused = True
+                    self._warn_not_worth_its_bytes(key, weight, exec_time)
+                    self._drop_persisted_call_refs(metadata.get('call_refs'))
+
             stored, size_refused, refused_size, refusing_caps = (
                 self._write_persistent_tiers(key, value, metadata, serializer, cap_size)
                 if past_compute_floor else ([], False, cap_size, []))
@@ -510,7 +637,9 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             # And why it went no further, so "why did the next process miss?"
             # has an answer: the compute floor / cost model, or a size cap.
             if len(self.backends) > 1 and not any(d != "RAM" for d in stored_destinations):
-                if size_refused:
+                if bytes_refused:
+                    original_metadata['persist_skipped'] = 'bytes'
+                elif size_refused:
                     original_metadata['persist_skipped'] = 'size'
                 elif deferred:
                     original_metadata['persist_skipped'] = 'replaced_in_cell'

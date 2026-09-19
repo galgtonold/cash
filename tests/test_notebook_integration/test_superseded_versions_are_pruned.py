@@ -28,7 +28,7 @@ SETUP = (
     "    os.close(fd)\n"
     "def build(n):\n"
     "    _ran('build')\n"
-    "    time.sleep(0.15)\n"
+    "    time.sleep(0.4)\n"
     "    return np.full(5_000_000, float(n))\n"
     "def fit(n):\n"
     "    _ran('fit')\n"
@@ -39,7 +39,14 @@ CELLS = [
     "import cash\n%cash_on",
     SETUP,
     "N = 1",
-    "X = build(N)",          # big for its cost: 40 MB in 0.15 s
+    # Big for its cost, but not SO big that cash declines to cache it at all:
+    # 40 MB in 0.4 s is ~95 MiB per compute-second, under the 128 MiB/s
+    # `value_policy` ceiling and over the 64 MiB/s `versions` budget. That gap
+    # is exactly the band this file is about -- a value worth storing whose
+    # SPARE copies are not. It used to be 0.15 s, i.e. 254 MiB/s, which the
+    # write-time ceiling now refuses outright: nothing reaches disk, so there
+    # is no superseded version to prune and nothing here measured anything.
+    "X = build(N)",
     "score = fit(N)",        # small for its cost: a few bytes in 0.3 s
     "print('X', X[0], 'score', score)",
 ]

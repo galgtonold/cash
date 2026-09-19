@@ -17,8 +17,17 @@ SETUP = (
     "import time\n"
     "import numpy as np\n"
     "def slow(x):\n"
-    # Past the 0.1 s persistence floor: the guard counts disk writes only.
-    "    time.sleep(0.15)\n"
+    # Past the 0.1 s persistence floor AND under the bytes-per-compute-second
+    # ceiling: the guard counts disk writes only, and `value_policy` refuses a
+    # value over 8 MiB that holds more than 128 MiB of cache per second of
+    # compute. The accumulator reaches 96 MB by its last pass, so at 0.15 s it
+    # crossed that at the third iteration and stopped reaching disk: the
+    # amplification this file is about never accumulated and
+    # CACHE-LOOP-GROWTH never fired. The pathology was prevented rather than
+    # reported -- right for a user, useless for a test of the report. 1.0 s
+    # keeps every pass on the right side of the ceiling (96 MB needs 0.75 s),
+    # so the warning is reachable and this file measures it again.
+    "    time.sleep(1.0)\n"
     "    return x"
 )
 
