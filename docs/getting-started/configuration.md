@@ -141,8 +141,12 @@ came from.
 
 Both tiers are bounded by default, and neither number is one you set:
 
-* **Disk** — a quarter of the free space on the cache volume, clamped to
-  [8 GiB, 100 GiB] and never above 80% of what is actually free.
+* **Disk** — a quarter of the *room* on the cache volume, clamped to
+  [8 GiB, 100 GiB] and never above 80% of that room. "Room" is the free space
+  **plus what this cache already holds**: sizing from free space alone makes the
+  cap fall as the cache fills, so the cache ends up over a cap its own contents
+  caused. The cap therefore describes the volume, not how full the cache happens
+  to be, and an empty cache gets the same answer either way.
 * **RAM** — a fifth of the memory this process may use, clamped to
   [512 MiB, 4 GiB]. "May use" means the host's total, or a **cgroup limit**
   when one binds the process, whichever is smaller — so a 2 GiB container on a

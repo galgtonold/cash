@@ -41,7 +41,7 @@ cost to produce and whatever it costs to read back, and neither gate below is
 consulted. The only thing that can still stop that write is one of the per-tier size caps
 described below.
 
-For a notebook statement, two gates, in order:
+For a notebook statement, three gates, in order:
 
 <!-- claim: cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
 1. **A compute floor.** Anything under **0.1 s** never leaves RAM — disk I/O
@@ -53,6 +53,13 @@ For a notebook statement, two gates, in order:
    with `min_cache_savings_pct` defaulting to 0.20. Twenty percent isn't a
    rounding error's worth of headroom; it's the margin below which the write
    isn't paying for itself.
+<!-- claim: cash/backends/value_policy.py:worth_its_bytes, cash/backends/value_policy.py:WORTH_CEILING_BYTES_PER_SECOND == 134217728, cash/backends/value_policy.py:WORTH_FLOOR_BYTES == 8388608 -->
+3. **A rate ceiling.** Both gates above ask whether restoring beats recomputing;
+   neither asks what the answer costs in disk. So cash spends at most **128 MiB
+   of cache per second of compute saved**, and refuses anything over 8 MiB that
+   exceeds that rate
+   ([`CACHE-NOT-WORTH-BYTES`](../warnings.md#cache-not-worth-bytes) says so once
+   per session).
 
 The cost model uses the value's *real type* when the entry carries one
 (`DataFrame`, `ndarray`, `dict`, …); when it doesn't — an injected policy, an

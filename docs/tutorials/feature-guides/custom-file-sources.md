@@ -374,7 +374,7 @@ Stored paths are absolute and use forward slashes regardless of OS (`cash.utils.
 
 NFS, SMB, and similar network mounts often have coarse mtime resolution (1-second granularity) and the timestamp source is the *server*, not the client, so two writes within the same second can produce identical mtimes. **Auto-tracking is immune to this** — it reads content, not timestamps, so a same-second in-place edit that preserves size is still caught.
 
-Two things on network mounts do still deserve care:
+Three things on network mounts do still deserve care:
 
 - **`file_depends_on=` remains mtime-based**, so the coarse-resolution problem applies to it in full. On a network mount, prefer auto-tracking for critical files, or write a `DataSource` subclass whose `state_token()` returns a content hash.
 - **Directory dependencies are mtime-based too.** A directory has no content to hash, so the [directory tracking](#directory-enumeration-tracks-the-directory) added for `glob` / `listdir` / `scandir` falls back to the mtime path. It relies on the filesystem bumping a directory's mtime when an entry is added or removed — true on local filesystems, not guaranteed on every network mount. If a new file appearing in a globbed directory must invalidate on such a mount, list the files explicitly via `file_depends_on=`.

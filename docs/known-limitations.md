@@ -284,6 +284,12 @@ cell 2, restart, and `Run All` reprints `r=8` where a plain kernel raises
 readers expect anyway. If you must keep the order, re-run the defining cell (or
 `Run All`) after editing it rather than the call site alone.
 
+Note the line this stops at. A name inside a function *body* is looked up when
+the function is called, so the notebook above still runs from the top and cash
+allows it, at the cost described here. A cell that reads a later cell's binding
+at **module level** does not run from the top at all, and cash refuses it
+outright — see [`ForwardReferenceError`](#forwardreferenceerror).
+
 ### Background threads
 
 A thread that mutates data after the cell that created it has finished is outside cash's view entirely. Re-running an earlier cell can observe the mutated state instead of the state at that point in the notebook.
@@ -400,6 +406,22 @@ Raised when two cells have **byte-identical content** *and* cash cannot resolve 
 In JupyterLab and VS Code with IPython ≥ 8.3, cell IDs normally resolve and this does not occur. It shows up in environments that do not supply them.
 
 **What to do:** make the cells distinguishable (a comment is enough), or save the notebook so IDs resolve.
+
+### `ForwardReferenceError`
+
+> this cell reads `x` (cell 3), which nothing above it binds. It works right now only because that cell has already run and the name is still in memory — a run from the top, or tomorrow's kernel, raises `NameError` here.
+
+<!-- claim: cash/exceptions.py:ForwardReferenceError, cash/notebook/upstream/checker.py:UpstreamChecker._refuse_forward_references -->
+Raised when a cell reads, **at module level**, a name that only a *later* cell binds. The notebook runs today because that later cell has already been executed and the value is still in the namespace; a clean in-order run raises `NameError` at that line. Cash fails rather than warns, because the alternative is caching against a namespace the notebook cannot rebuild in order — every key derived from that state would rest on an ordering the notebook does not have.
+
+It is deliberately narrow, so that ordinary notebooks keep working:
+
+* a name bound **anywhere above** is fine, however often a later cell rebinds it — that is just a variable reassigned further down;
+* the cell's own earlier bindings count as above, so `x = x + 1` is fine;
+* a name used **inside a `def`** is *not* a module-level read. `def a(n): return b(n) * 2` above `def b` is ordinary Python, because `b` is looked up when `a` is *called*. That shape has its own, quieter cost — see [A function that calls one defined in a later cell](#a-function-that-calls-one-defined-in-a-later-cell). What *is* a read at definition time, and so does raise, is a decorator, a default argument, or a base class;
+* if any cell fails to parse, the check is skipped rather than risk refusing a cell that works.
+
+**What to do:** move the binding above this cell, or move this cell below it — the error names both. There is no flag to suppress it: the `NameError` is coming either way, and this is the version that arrives with a cell number attached.
 
 ---
 

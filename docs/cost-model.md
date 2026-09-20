@@ -98,6 +98,12 @@ That string is stored on the cache metadata as `skipped_reason` and shown in the
 badge tooltip (HTML mode), inline after the timing (text mode), and in the debug
 log when [`%cash_debug on`](magics.md#cash_debug).
 
+A third refusal reads differently: a value that is large *and* cheap to rebuild
+is declined on **rate** rather than on restore time — "more cache per second
+saved than cash will spend". That one comes from
+[filter 3](#the-rate-ceiling) and also warns once per session as
+[`CACHE-NOT-WORTH-BYTES`](warnings.md#cache-not-worth-bytes).
+
 One case has **no** reason to show: a statement under the 10 ms floor writes no
 metadata at all, so there's nothing to read back. The cell just reruns each cold
 start with no badge annotation — that absence *is* the signal ("too cheap to
@@ -247,23 +253,33 @@ Everything below is the mechanism behind the decision — useful when you're
 diagnosing a surprising skip or modifying the persistence path. None of it is
 needed to *use* cash.
 
-### Two filters in series
+### Three filters in series
 
-There's no single yes/no switch. Two independent filters fire in order:
+There's no single yes/no switch. Three independent filters fire in order:
 
 ```mermaid
 flowchart TD
     F1["<b>Filter 1: cost-model gate</b><br/>Should we cache at all?<br/>Measured against the primary tier.<br/>Skip → no metadata, badge shows reason."]
     F2["<b>Filter 2: tier-promotion</b><br/>Should we ALSO promote to disk?<br/>Only relevant with TieredBackend.<br/>RAM tier is always written."]
+    F3["<b>Filter 3: rate ceiling</b><br/>Is the answer worth its bytes?<br/>At most 128 MiB of cache<br/>per second of compute saved."]
     F1 -- pass --> F2
+    F2 -- pass --> F3
 ```
 
 A value can pass filter 1 and fail filter 2 — the common case for a medium
 DataFrame from a sub-second cell: RAM-cached, not disk-promoted, so a restart
 misses. When the README says "TieredBackend is smart about what reaches disk," it
-means **filter 2**. Filter 1 is what emits the `skipped_reason` you see.
+means **filter 2**. Filter 1 and filter 3 both emit a `skipped_reason` you can
+read back; filter 2 does not — a value it declines is simply RAM-only.
 
 ### Filter 1: the cost-model gate
+
+!!! note "Also called Gate A"
+
+    The source, and [Smart Persistence](tutorials/feature-guides/smart-persistence.md),
+    call this filter **Gate A** — it lives in the statement processor. Filter 2 is
+    the **tier promotion policy**, and filter 3 the **rate ceiling**. Same three
+    decisions, two sets of names.
 
 For each output variable, the gate compares a **predicted restore time** to a
 budget derived from the statement's actual execution time:
@@ -302,6 +318,30 @@ entry that carries its real type still uses it.) To change the floor, supply you
 own `promotion_policy`. `force_persist`
 (from `# @cash:persist` or `persist_all=True`) bypasses this filter too; per-tier
 size caps still apply.
+
+### Filter 3: the rate ceiling { #the-rate-ceiling }
+
+<!-- claim: cash/backends/value_policy.py:worth_its_bytes, cash/backends/value_policy.py:WORTH_CEILING_BYTES_PER_SECOND == 134217728, cash/backends/value_policy.py:WORTH_FLOOR_BYTES == 8388608 -->
+Filters 1 and 2 both ask whether restoring beats recomputing. Neither asks what
+the answer *costs*. Filter 3 does: cash spends at most **128 MiB of cache per
+second of compute saved**, and refuses any value over **8 MiB** that exceeds
+that rate. A value under 8 MiB is never refused on rate alone.
+
+It exists because the first two filters, on their own, filled round 26's five
+test caches with 58 GiB for 61–360 MB of input data — 1.3 GB frames that rebuild
+in five seconds, 48 MiB loop iterations with 0.00 s of recorded compute.
+Measured over all 3120 of those entries, the rate refuses 76% of the bytes and
+gives up about 1% of the compute.
+
+The refusal emits [`CACHE-NOT-WORTH-BYTES`](warnings.md#cache-not-worth-bytes)
+once per session, and sets `persist_skipped = "bytes"` on the metadata — the
+`skipped_reason` you see is "more cache per second saved than cash will spend".
+Version pruning rations *superseded* copies at half this rate: a spare copy kept
+for undo is speculative, while a live entry is the one that will actually be
+restored.
+
+Like the other two filters, an explicit decision skips it: `# @cash:persist` and
+`@cash.cache` are not re-judged here.
 
 ### How the restore time is predicted
 
@@ -349,6 +389,7 @@ The `CashConfig` fields that drive all of the above are in the
     - Cost model + coefficients: [`src/cash/notebook/cost_model.py`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cost_model.py), refit offline by [`benchmarks/fit_cost_model.py`](https://github.com/galgtonold/cash/blob/main/benchmarks/fit_cost_model.py).
     - Filter 1 (the gate, skip-reason, cheap-floor): [`src/cash/notebook/statement/processor.py`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py).
     - Filter 2 (promotion policy + application): [`src/cash/backends/factory.py`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/factory.py), [`src/cash/backends/tiered_backend.py`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/tiered_backend.py).
+    - Filter 3 (the rate ceiling): [`src/cash/backends/value_policy.py`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/value_policy.py).
     - `# @cash:persist` parsing: [`src/cash/notebook/annotations.py`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py).
     - Config fields: [`src/cash/config.py`](https://github.com/galgtonold/cash/blob/main/src/cash/config.py).
 
