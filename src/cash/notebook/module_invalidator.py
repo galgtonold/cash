@@ -25,6 +25,7 @@ import hashlib
 import logging
 import os
 import sys
+from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -96,27 +97,80 @@ class ModuleInvalidator:
         old_module_lineages: dict[str, str] = {}
 
         for mod_name, file_path in changed_modules.items():
-            old_lineage = processor.variable_lineage.get(mod_name)
-            if old_lineage:
-                old_module_lineages[mod_name] = old_lineage
-
             new_lineage = self._compute_module_lineage_hash(mod_name, file_path, ft)
-            processor.variable_lineage[mod_name] = new_lineage
+
+            # Every name the notebook bound this module to, not just its own.
+            # A cache key is built from the names a statement mentions, so
+            # `parsed = tl.parse_headers(corpus)` asks for the lineage of
+            # `tl` -- and `import tickets_lib as tl` is what most notebooks
+            # write. Updating only `tickets_lib` left `tl` holding the
+            # pre-edit hash forever, so the statement's key never moved: the
+            # module was reloaded, the badge said so, and the cell returned
+            # the pre-edit answer anyway until the kernel was restarted
+            # (round 27, r27s2, 3/3 -- two exported deliverables computed
+            # from a value the user had just fixed).
+            #
+            # It also feeds the propagation step below, which matches
+            # downstream variables on the lineage they RECORDED for their
+            # inputs -- again the alias, never the module's real name.
+            #
+            # Why three minimal repros missed it, and why this suite did:
+            # they all wrote `import mylib`, where the two names coincide.
+            for name in self._names_bound_to(mod_name):
+                old_lineage = processor.variable_lineage.get(name)
+                if old_lineage:
+                    old_module_lineages[name] = old_lineage
+                processor.variable_lineage[name] = new_lineage
+                processor.executed_cell_codes.pop(name, None)
+                processor.executed_input_lineages.pop(name, None)
+                processor.current_session_hashes.pop(name, None)
+
+                if self._debug:
+                    old_short = (old_lineage or 'NONE')[:12]
+                    print(
+                        f"[MODULE_INVALIDATE] Updated lineage for '{name}': "
+                        f"{old_short}... -> {new_lineage[:12]}..."
+                    )
 
             processor.recently_reloaded_modules.add(mod_name)
 
-            processor.executed_cell_codes.pop(mod_name, None)
-            processor.executed_input_lineages.pop(mod_name, None)
-            processor.current_session_hashes.pop(mod_name, None)
-
-            if self._debug:
-                old_short = (old_lineage or 'NONE')[:12]
-                print(
-                    f"[MODULE_INVALIDATE] Updated lineage for '{mod_name}': "
-                    f"{old_short}... -> {new_lineage[:12]}..."
-                )
-
         return old_module_lineages
+
+    def _module_named(self, name: str) -> Any | None:
+        """The module *name* refers to, whether it is a real name or an alias."""
+        module = sys.modules.get(name)
+        if module is not None:
+            return module
+        user_ns = getattr(self._shell, 'user_ns', None)
+        candidate = user_ns.get(name) if isinstance(user_ns, dict) else None
+        return candidate if isinstance(candidate, ModuleType) else None
+
+    def _names_bound_to(self, mod_name: str) -> list[str]:
+        """The module's own name, plus every namespace alias for it.
+
+        Identity, not `__name__`: ``importlib.reload`` mutates the module in
+        place, so a name bound by ``import x as y`` still IS the object in
+        ``sys.modules`` after the reload. A name that merely happens to hold
+        a different module of the same name is not this module and is left
+        alone.
+
+        The module's own name comes first and is always included, even when
+        nothing in the namespace is bound to it -- an ``import`` inside a
+        function, or a module reached only through another module, still
+        needs its lineage updated.
+        """
+        names = [mod_name]
+        module = sys.modules.get(mod_name)
+        if module is None:
+            return names
+        user_ns = getattr(self._shell, 'user_ns', None)
+        if not isinstance(user_ns, dict):
+            return names
+        names.extend(
+            name for name, value in list(user_ns.items())
+            if value is module and name != mod_name and not name.startswith('_')
+        )
+        return names
 
     # ------------------------------------------------------------------
     # Step 2 — clear execution tracking for from-imports
@@ -305,8 +359,8 @@ class ModuleInvalidator:
     # Helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
     def _expand_changed_symbols(
+        self,
         old_module_lineages: dict[str, str],
         per_module_changed_symbols: dict[str, set[str] | None],
         ft: FunctionTracker,
@@ -315,12 +369,22 @@ class ModuleInvalidator:
 
         If ``dep`` changed and ``fun`` calls ``dep``, then ``fun`` is
         also effectively changed.
+
+        A key here may be an alias (``tl`` for ``tickets_lib``), because
+        that is how downstream variables recorded the dependency. Both the
+        symbol set and the module file are looked up under the module's REAL
+        name: keyed by the alias they come back empty, which is not wrong --
+        an empty set means "invalidate everything" -- but it throws away the
+        granularity that keeps unrelated variables alive.
         """
         expanded: dict[str, set[str] | None] = {}
         for mod_name_key in old_module_lineages:
+            mod = self._module_named(mod_name_key)
+            real_name = getattr(mod, '__name__', mod_name_key) if mod else mod_name_key
             raw_syms = per_module_changed_symbols.get(mod_name_key)
+            if raw_syms is None:
+                raw_syms = per_module_changed_symbols.get(real_name)
             if raw_syms is not None and len(raw_syms) > 0:
-                mod = sys.modules.get(mod_name_key)
                 mod_file = getattr(mod, '__file__', None) if mod else None
                 call_deps = (
                     ft.get_intra_module_call_deps(mod_file) if mod_file else {}

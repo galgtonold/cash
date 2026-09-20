@@ -93,10 +93,25 @@ def module_source_component(
         return ""
     if isinstance(value, types.ModuleType):
         mod_file = getattr(value, "__file__", None)
-        if not (mod_file and os.path.isfile(mod_file) and var_name in _tracked(function_tracker)):
+        # By the module's OWN name, not the name the cell bound it to.
+        # `_tracked_modules` holds real module names, so `import tickets_lib
+        # as tl` failed this test and returned "" -- the module's source
+        # stayed out of `tl`'s lineage, `tl` keyed identically before and
+        # after an edit to tickets_lib.py, and every statement built on it
+        # kept its cached value. Reloading worked, the badge said MODULE
+        # RELOADED, and the cell still returned the pre-edit answer until the
+        # kernel was restarted (round 27, r27s2, 3/3, with two exported
+        # deliverables computed from a number the user had just fixed).
+        #
+        # `var_name` is still accepted so a tracker that registered the bound
+        # name keeps working; for an unaliased import the two are equal, so
+        # no existing lineage moves.
+        names = {getattr(value, "__name__", var_name), var_name}
+        if not (mod_file and os.path.isfile(mod_file)
+                and names & _tracked(function_tracker)):
             return ""
         parents = getattr(function_tracker, "_dep_file_to_parents", None) or {}
-        dep_files = {dep for dep, owners in parents.items() if var_name in owners}
+        dep_files = {dep for dep, owners in parents.items() if names & set(owners)}
         digest = read_module_source_hash(mod_file, dep_files)
         return f":mod_src:{digest}" if digest else ""
 
