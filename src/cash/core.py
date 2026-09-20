@@ -4298,15 +4298,10 @@ class Cash:
             return None
         if skipped == "size":
             return "too big for the persistent tier's size cap"
-        if skipped == "bytes":
-            # Reachable here only for a frozen function, which is the one
-            # decorator case `TieredBackend.set` does not exempt (it passes
-            # `decorator_entry=False`). See CACHE-NOT-WORTH-BYTES.
-            return ("more cache per second saved than cash will spend -- "
-                    "large, and cheap to recompute")
-        # There used to be two more answers here, "under the 0.1s persistence
-        # floor" and "the cost model judged restoring it no cheaper than
-        # recomputing it". Neither can happen to a decorated result any more:
+        # There used to be three more answers here: "under the 0.1s
+        # persistence floor", "the cost model judged restoring it no cheaper
+        # than recomputing it", and the rate ceiling's "more cache per second
+        # saved than cash will spend". None can happen to a decorated result:
         # `@cash.cache` persists what it is given, and only a size cap stops it
         # (see `TieredBackend.set`). Reporting a floor that no longer applies
         # would send the reader looking for a setting to change.
@@ -10262,14 +10257,16 @@ class Cash:
                 # run twice recomputed everything, which reads as "cash does
                 # not cache" (found attacking the decorator before round 26).
                 # Size caps and the tiers' own refusals still apply.
-                #
-                # The flag also says the stored value IS what the next call
+                decorator_entry=True,
+                # A SEPARATE promise: the stored value is what the next call
                 # hands back, so the RAM tier refuses one it cannot copy rather
                 # than sharing it. Not for a `frozen=True` function: declaring
                 # a result frozen says it is not modified, and handing the same
                 # object back is what that promises for a result no pickle can
-                # copy at all.
-                decorator_entry=func_name not in self._frozen_funcs,
+                # copy at all. This used to ride on `decorator_entry`, which
+                # made `frozen=True` look undecorated to the rate ceiling and
+                # cost it disk persistence entirely.
+                copy_required=func_name not in self._frozen_funcs,
             )
 
             # Kept, not a temporary: TieredBackend writes back where the value

@@ -257,7 +257,7 @@ class InMemoryBackend(CacheBackend):
             # them (an open handle in scope) must not stop the statement being
             # cached -- the notebook re-executes what it cannot restore.
             stored = self._safe_deep_copy(
-                value, key, required=bool((metadata or {}).get('decorator_entry')))
+                value, key, required=bool((metadata or {}).get('copy_required')))
         else:
             _size, immutable, levels = plain
             stored = _plain_data.copy_plain(value, immutable, levels)[1]

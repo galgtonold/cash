@@ -722,8 +722,18 @@ class CacheMetadata:
     serializer_cls: type | None = None
     # Notebook-annotation flags consumed by TieredBackend / lineage.
     #: Written by ``@cash.cache``: this entry was asked for by a decorator, so
-    #: the compute floor does not gate it (``TieredBackend.set``).
+    #: the compute floor, the cost model and the rate ceiling do not gate it
+    #: (``TieredBackend.set``). Says nothing about how the value is stored.
     decorator_entry: bool | None = None
+
+    #: The stored value IS what the next call hands back, so the RAM tier must
+    #: really copy it and refuses one it cannot (``InMemoryBackend.set``). Set
+    #: by ``@cash.cache`` EXCEPT for a ``frozen=True`` function, which has
+    #: already promised the result is not modified -- handing the same object
+    #: back is what that promises. Split out of ``decorator_entry``: the two
+    #: rode on one flag, so ``frozen=True`` silently lost disk persistence
+    #: when the rate ceiling started reading it as "not a decorated entry".
+    copy_required: bool | None = None
 
     #: Where the global RNG stood before and after the call that computed this
     #: entry, so a hit can leave it where the body did (``Cash._rng_replay_parts``).

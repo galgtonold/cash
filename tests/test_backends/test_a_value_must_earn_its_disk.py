@@ -146,3 +146,47 @@ class TestThroughABackend:
         meta = self._set(b, "small", 64 * 1024, 0.0)
         b.shutdown()
         assert meta.get("persist_skipped") != "bytes", meta
+
+
+class TestTheDecoratorIsNotReJudged:
+    """Through the real decorator, because the exemption is wired in core.
+
+    `TestThroughABackend` sets `decorator_entry` by hand, so it cannot see
+    whether `Cash.cache` actually passes it. It does not for a `frozen=True`
+    function: that flag carries a SECOND meaning -- "the stored value is what
+    the next call hands back", which is what lets the RAM tier skip its
+    defensive copy -- and `frozen=True` opts out of it because declaring a
+    result frozen already promises exactly that. The rate ceiling then read the
+    same flag as "not a decorated entry" and refused the write.
+
+    Nothing about `frozen=` is a statement about persistence, so the two
+    functions below must land in the same place.
+    """
+
+    def _cash(self, tmp_path, frozen):
+        from cash import Cash, CashConfig
+
+        backend = TieredBackend([InMemoryBackend(),
+                                 FileBackend(str(tmp_path), flush_interval=0)])
+        cash_obj = Cash(backend=backend, config=CashConfig(cache_dir=str(tmp_path)),
+                        register_magic=False)
+
+        @cash_obj.cache(frozen=frozen)
+        def build(n):
+            return b"x" * n
+
+        return cash_obj, backend, build
+
+    @pytest.mark.parametrize("frozen", [False, True])
+    def test_a_decorated_result_reaches_disk_however_it_is_declared(
+            self, tmp_path, frozen):
+        """40 MiB for ~0 s is far over the ceiling -- and exempt either way."""
+        cash_obj, backend, build = self._cash(tmp_path, frozen)
+        build(40 * MIB)
+        backend.shutdown()
+
+        entries = list(tmp_path.rglob("*.entry"))
+        assert entries, (
+            "frozen=%s: a decorated result was not written to disk; the rate "
+            "ceiling re-judged a decision the caller already took" % frozen
+        )
