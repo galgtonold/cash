@@ -120,6 +120,52 @@ def _nocache_written_vars(cell_code: str) -> set[str]:
     return written
 
 
+def _bound_by(fn: 'ast.AST') -> set[str]:
+    """Names a function or lambda binds itself: parameters and local targets.
+
+    Only these can be subtracted safely. A name assigned in the body is bound
+    there and never comes from an enclosing cell, so counting it would refuse
+    on something no cell above could possibly provide.
+    """
+    bound: set[str] = set()
+    args = getattr(fn, 'args', None)
+    if args is not None:
+        for a in (*getattr(args, 'posonlyargs', []), *args.args,
+                  *args.kwonlyargs):
+            bound.add(a.arg)
+        for extra in (args.vararg, args.kwarg):
+            if extra is not None:
+                bound.add(extra.arg)
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bound.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+    return bound
+
+
+def _names_called_at_module_level(tree: 'ast.Module') -> set[str]:
+    """Bare names this cell CALLS while it runs, ignoring deferred bodies.
+
+    ``print(use_it())`` calls ``use_it``; a call written inside a function or
+    lambda body does not happen until that function is called, so those are
+    skipped for the same reason the reads are.
+    """
+    called: set[str] = set()
+
+    def walk(node: 'ast.AST') -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                  ast.ClassDef, ast.Lambda)):
+                continue
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
+                called.add(child.func.id)
+            walk(child)
+
+    walk(tree)
+    return called
+
+
 class UpstreamChecker:
     """
     Manages detection and re-execution of changed upstream statements.
@@ -1237,10 +1283,26 @@ class UpstreamChecker:
         """Names *cell_code* reads when it RUNS, ignoring deferred lookups.
 
         A name inside a function or class body is resolved when that function
-        is called, not when the cell executes, so it says nothing about
-        whether the cell can run in order. What does execute at definition
-        time -- decorators, default arguments, base classes -- is still
-        collected, because those really do read their names now.
+        is called, not when the cell executes -- but that is a premise, not
+        the condition. It only says the cell can run in order if the call
+        happens AFTER the binding. Two shapes call it inside this very cell
+        and so really do read the name now (round 27, r27s5, both silently
+        wrong before this):
+
+        * a lambda handed to a call -- ``s.map(lambda v: f(v))`` invokes it
+          inside that statement;
+        * a function defined and CALLED in the same cell --
+          ``def use_it(): return f(21)`` followed by ``use_it()``.
+
+        A helper that is merely defined here and called from a later cell is
+        still deferred, and must stay allowed: judging on the statement's
+        inputs, which include those names, refused
+        ``test_downward_function_dependency``'s notebook, which runs fine from
+        the top. So is a lambda that is stored rather than invoked
+        (``handlers = {'x': lambda: f()}``).
+
+        What executes at definition time -- decorators, default arguments,
+        base classes -- is collected as before.
 
         ``None`` when the cell cannot be parsed, which the caller treats as
         "do not refuse anything".
@@ -1251,34 +1313,60 @@ class UpstreamChecker:
             return None
 
         names: set[str] = set()
+        called_here = _names_called_at_module_level(tree)
 
-        def visit(node: ast.AST) -> None:
+        def visit(node: ast.AST, into: set[str]) -> None:
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    # Evaluated now; the body is not.
+                    # Evaluated now; the body is not -- unless this cell also
+                    # calls it, in which case the body runs before the cell is
+                    # over and its free names are read now.
                     for sub in (*child.decorator_list, *child.args.defaults,
                                 *(d for d in child.args.kw_defaults if d)):
-                        visit_expr(sub)
+                        visit_expr(sub, into)
+                    if child.name in called_here:
+                        _absorb_body(child, into)
                     continue
                 if isinstance(child, ast.ClassDef):
                     for sub in (*child.decorator_list, *child.bases):
-                        visit_expr(sub)
+                        visit_expr(sub, into)
                     continue
                 if isinstance(child, ast.Lambda):
+                    # Reached other than as a call argument (stored, bound to
+                    # a name): only its defaults run now.
                     for sub in (*child.args.defaults,
                                 *(d for d in child.args.kw_defaults if d)):
-                        visit_expr(sub)
+                        visit_expr(sub, into)
                     continue
+                if isinstance(child, ast.Call):
+                    # A lambda passed to a call is invoked by that call.
+                    for arg in (*child.args, *(k.value for k in child.keywords)):
+                        if isinstance(arg, ast.Lambda):
+                            _absorb_body(arg, into)
                 if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
-                    names.add(child.id)
-                visit(child)
+                    into.add(child.id)
+                visit(child, into)
 
-        def visit_expr(node: ast.AST) -> None:
+        def visit_expr(node: ast.AST, into: set[str]) -> None:
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-                names.add(node.id)
-            visit(node)
+                into.add(node.id)
+            visit(node, into)
 
-        visit(tree)
+        def _absorb_body(fn: ast.AST, into: set[str]) -> None:
+            """Free names of *fn*'s body, minus what *fn* itself binds.
+
+            Collected into a scratch set so the parameters can be removed:
+            ``lambda v: f(v)`` reads ``f`` from outside and binds ``v``
+            itself, and reporting ``v`` would make the guard refuse on a name
+            no cell can bind.
+            """
+            inner: set[str] = set()
+            body = fn.body if isinstance(fn.body, list) else [fn.body]
+            for stmt in body:
+                visit_expr(stmt, inner)
+            into |= inner - _bound_by(fn)
+
+        visit(tree, names)
         return names
 
     def _refuse_forward_references(
