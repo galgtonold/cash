@@ -29,12 +29,32 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import shutil
 import subprocess
 import sys
 import time
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SUITE = REPO / "tests" / "test_notebook_integration"
+
+
+def _clear_project_cache() -> None:
+    """Delete the repo's own ``.cash`` before each chunk.
+
+    Chunks run one after another into the SAME project cache, so by chunk 12
+    it holds eleven chunks' worth of entries -- including ``_miss_guard.json``,
+    whose stored verdicts exist precisely to change caching decisions based on
+    earlier runs. Measured on 2026-09-20: a 732 MB accumulated cache turned
+    chunk 15 from ``519 passed, 1 xfailed`` into ``39 failed, 480 passed`` on
+    UNCHANGED code, with a broad, unrelated-looking failure set that reads
+    exactly like a regression. Deleting it restored 519/0 exactly.
+
+    Per chunk rather than once per sweep: clearing only at the start still let
+    chunk 12 fail 9 in-sweep while passing 342/0 alone.
+    """
+    cache = REPO / ".cash"
+    if cache.exists():
+        shutil.rmtree(cache, ignore_errors=True)
 
 
 def main() -> int:
@@ -65,6 +85,7 @@ def main() -> int:
     started = time.perf_counter()
     for i, chunk in enumerate(chunks, 1):
         t0 = time.perf_counter()
+        _clear_project_cache()
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", *chunk, "-q",
              "-n", args.workers, "--dist", "worksteal",
