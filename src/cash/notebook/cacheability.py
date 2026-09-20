@@ -485,6 +485,22 @@ def statement_calls_user_writer(
     ``save_png(kind, path)`` -- whose ``fig.savefig`` sits in the helper's
     body -- is not a writer to it. The same call judged by
     :func:`user_callee_writing_files` is.
+
+    Both spellings of a call into user code are resolved: a bare
+    ``save_png(...)``, and ``helpers.save_png(...)`` through a module. The
+    second is how a function in the user's PROJECT is normally reached, and
+    it used to be skipped -- only ``ast.Name`` callees were offered to the
+    predicate, so r27s2's four project-module exports were all cached and a
+    deleted deliverable did not come back. The analysis was never the
+    problem; it was simply never asked.
+
+    Attribute chains are followed only through MODULES
+    (``helpers.io.save(...)``), never through an arbitrary object. Resolving
+    ``obj.method`` would mean ``getattr`` on a value, which runs a property's
+    body if the attribute happens to be one -- executing user code to decide
+    whether user code may be cached. A writer reached as a method on an
+    instance is therefore still not seen; that is a narrower gap, and closing
+    it needs a way to look up the attribute without evaluating it.
     """
     if not namespace or '(' not in code:
         return None
@@ -494,10 +510,29 @@ def statement_calls_user_writer(
         except SyntaxError:
             return None
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            found = user_callee_writing_files(namespace.get(node.func.id))
-            if found:
-                return found
+        if not isinstance(node, ast.Call):
+            continue
+        found = user_callee_writing_files(_resolve_callee(node.func, namespace))
+        if found:
+            return found
+    return None
+
+
+def _resolve_callee(func: 'ast.expr', namespace: 'Mapping[str, Any]') -> Any:
+    """The object a call's callee expression names, or None.
+
+    ``ast.Name`` resolves in *namespace*; ``ast.Attribute`` resolves its base
+    the same way and then reads the attribute, but ONLY when the base is a
+    module -- see :func:`statement_calls_user_writer` on why an arbitrary
+    object is not followed. Anything else (a subscript, a call, a literal)
+    yields None, because there is no name to look up without evaluating it.
+    """
+    if isinstance(func, ast.Name):
+        return namespace.get(func.id)
+    if isinstance(func, ast.Attribute):
+        base = _resolve_callee(func.value, namespace)
+        if isinstance(base, types.ModuleType):
+            return getattr(base, func.attr, None)
     return None
 
 
