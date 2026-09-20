@@ -20,6 +20,7 @@ from cash import (
     CacheBackendError, CacheSerializationError, CacheExpiredError,
     DependencyNotFoundError,
     AmbiguousCellError, UpstreamStateError, CacheKeyComputationError,
+    ForwardReferenceError,
     CashImpureFunctionError,
     # Warnings
     CashWarning,
@@ -45,6 +46,7 @@ Exception
     ├── CacheKeyComputationError       — cache key build failed (notebook)
     ├── CashImpureFunctionError        — @cash.cache(strict=True) saw issues
     ├── AmbiguousCellError             — notebook cell cannot be identified
+    ├── ForwardReferenceError          — a cell reads what a later cell binds
     ├── UpstreamStateError             — upstream cell state unrestorable
     └── DependencyNotFoundError        — optional backend extra missing
         (also ImportError so existing handlers still match)
@@ -65,6 +67,8 @@ A single `except cash.CashError` catches everything cash throws.
 ::: cash.AmbiguousCellError
 
 ::: cash.UpstreamStateError
+
+::: cash.ForwardReferenceError
 
 ::: cash.CacheKeyComputationError
 

@@ -59,6 +59,10 @@ def test_core_exports_stable():
         'CashError', 'CacheBackendError', 'CacheExpiredError',
         'CacheSerializationError', 'DependencyNotFoundError',
         'AmbiguousCellError', 'UpstreamStateError',
+        # public since the round-26 forward-reference fix: a cell that
+        # reads a name only a LATER cell binds now fails instead of
+        # caching against a namespace an in-order run cannot rebuild.
+        'ForwardReferenceError',
         'CacheKeyComputationError', 'CashImpureFunctionError',
         # Warnings
         'CashWarning', 'CashCacheIneffectiveWarning',

@@ -56,6 +56,7 @@ from IPython.display import display, publish_display_data
 from ...diagnostics import warn_diagnostic
 from ...exceptions import (
     AmbiguousCellError,
+    ForwardReferenceError,
     CashCacheIneffectiveWarning,
     UpstreamStateError,
 )
@@ -1398,7 +1399,7 @@ class CellExecutor:
             # and destroy the signal for the run after it.
             self._record_consumable_bases(inputs)
 
-        except (RuntimeError, SyntaxError, AmbiguousCellError):
+        except (RuntimeError, SyntaxError, AmbiguousCellError, ForwardReferenceError):
             raise
         except (KeyError, ValueError, TypeError, AttributeError, OSError) as e:
             logger.debug("[STATE] Error in state restoration logic: %s", e)
@@ -1510,7 +1511,8 @@ class CellExecutor:
           caller sees the real error.
         - SyntaxError (hook path): re-run the raw cell through IPython so the
           user sees the parse error attributed to their cell.
-        - RuntimeError / AmbiguousCellError / UpstreamStateError: synthesise a
+        - RuntimeError / AmbiguousCellError / UpstreamStateError /
+          ForwardReferenceError: synthesise a
           fresh raise inside the user's cell (the "fail the cell
           loudly" path) so IPython attributes the traceback to the cell.
         - anything else: log and fall back to normal execution.
@@ -1529,7 +1531,8 @@ class CellExecutor:
             self._magics._cancel_progress_badge()
             self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
             return _EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
-        if isinstance(caught, (RuntimeError, AmbiguousCellError, UpstreamStateError)):
+        if isinstance(caught, (RuntimeError, AmbiguousCellError, UpstreamStateError,
+                               ForwardReferenceError)):
             # Re-raise inside the user's cell so IPython renders the traceback
             # as if the cell itself raised.  Import the exception class
             # explicitly because the user's namespace may not have it.  The

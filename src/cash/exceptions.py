@@ -17,6 +17,7 @@ __all__ = [
     "CacheExpiredError",
     "DependencyNotFoundError",
     "AmbiguousCellError",
+    "ForwardReferenceError",
     "UpstreamStateError",
     "CacheKeyComputationError",
     "CashImpureFunctionError",
@@ -96,6 +97,14 @@ class AmbiguousCellError(CashError):
 
 class UpstreamStateError(CashError):
     """Raised when upstream cell state cannot be restored or simulated."""
+
+
+class ForwardReferenceError(CashError):
+    """Raised when a cell reads a name only a LATER cell binds.
+
+    The notebook cannot reproduce itself: it works in this kernel because the
+    later cell has already run, and a run from the top raises ``NameError``.
+    """
 
 class CacheKeyComputationError(CashError):
     """Raised when a cache key cannot be computed for a statement."""

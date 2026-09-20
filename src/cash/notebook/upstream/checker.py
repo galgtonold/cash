@@ -10,7 +10,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ...diagnostics import log_diagnostic, warn_diagnostic_explicit
-from ...exceptions import AmbiguousCellError, CashUpstreamSyntaxWarning, UpstreamStateError
+from ...exceptions import (AmbiguousCellError, CashUpstreamSyntaxWarning,
+                           ForwardReferenceError, UpstreamStateError)
 from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
@@ -1231,6 +1232,133 @@ class UpstreamChecker:
             if self.debug:
                 logger.debug("[UPSTREAM] evicted orphaned variable '%s'", var)
 
+    @staticmethod
+    def _module_level_reads(cell_code: str) -> set[str] | None:
+        """Names *cell_code* reads when it RUNS, ignoring deferred lookups.
+
+        A name inside a function or class body is resolved when that function
+        is called, not when the cell executes, so it says nothing about
+        whether the cell can run in order. What does execute at definition
+        time -- decorators, default arguments, base classes -- is still
+        collected, because those really do read their names now.
+
+        ``None`` when the cell cannot be parsed, which the caller treats as
+        "do not refuse anything".
+        """
+        try:
+            tree = ast.parse(CodeAnalyzer.strip_magics(cell_code.replace('\r\n', '\n')))
+        except (SyntaxError, ValueError):
+            return None
+
+        names: set[str] = set()
+
+        def visit(node: ast.AST) -> None:
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    # Evaluated now; the body is not.
+                    for sub in (*child.decorator_list, *child.args.defaults,
+                                *(d for d in child.args.kw_defaults if d)):
+                        visit_expr(sub)
+                    continue
+                if isinstance(child, ast.ClassDef):
+                    for sub in (*child.decorator_list, *child.bases):
+                        visit_expr(sub)
+                    continue
+                if isinstance(child, ast.Lambda):
+                    for sub in (*child.args.defaults,
+                                *(d for d in child.args.kw_defaults if d)):
+                        visit_expr(sub)
+                    continue
+                if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                    names.add(child.id)
+                visit(child)
+
+        def visit_expr(node: ast.AST) -> None:
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                names.add(node.id)
+            visit(node)
+
+        visit(tree)
+        return names
+
+    def _refuse_forward_references(
+        self, notebook_cells: list[str], cell_code: str,
+        current_cell_idx: int, required_inputs: set[str],
+    ) -> None:
+        """Raise when this cell reads a name only a LATER cell binds.
+
+        The sibling of ``_evict_orphaned_definitions``: that one catches a name
+        NO cell produces any more, this one a name only a cell BELOW produces.
+        Both describe a notebook that cannot reproduce itself, and both are
+        invisible while the value happens to be sitting in ``user_ns``.
+
+        Round 26, r26s5: a cell read a variable bound in a cell below it. Under
+        cash the notebook worked -- the later cell had been run at some point,
+        so the name was there -- and a clean in-order run died with
+        ``NameError``. Only the uncached oracle caught it; cash reported
+        success on a notebook that was already broken.
+
+        It fails rather than warns. A warning would leave cash caching against
+        a namespace its own in-order run could not produce, and everything
+        keyed on that state would be built on an ordering the notebook does not
+        have. ``NameError`` is what the user is going to get anyway; the only
+        question is whether they get it now, with the cell number, or on the
+        morning they restart.
+
+        Deliberately conservative, because a false positive here stops a cell
+        that works:
+
+        * the current cell's own bindings count as above (``x = x + 1``, or a
+          name bound by an earlier statement of the same cell);
+        * a name bound anywhere above is fine, whatever else rebinds it below
+          -- the common shape of a variable set early and reassigned later;
+        * if any cell fails to parse, the whole check is skipped rather than
+          risk refusing on a half-read notebook.
+        """
+        if not required_inputs or current_cell_idx is None:
+            return
+        # Only names this cell reads at MODULE level can break an in-order run.
+        # A name referenced inside a `def` is resolved when the function is
+        # CALLED, so `def a(n): return b(n) * 2` above `def b` is ordinary
+        # Python -- the call site further down runs after both. Judging on
+        # `required_inputs`, which includes those deferred free names, refused
+        # `test_downward_function_dependency`'s notebook, which runs fine.
+        reads = self._module_level_reads(cell_code)
+        if reads is None:
+            return
+        required_inputs = required_inputs & reads
+        if not required_inputs:
+            return
+        above: set[str] = set()
+        below: dict[str, int] = {}
+        for idx, cell in enumerate((*notebook_cells, cell_code)):
+            try:
+                _, outs = CodeAnalyzer.analyze_code_block(cell)
+            except (SyntaxError, ValueError):
+                return  # can't be sure what binds what — never refuse on a guess
+            if idx <= current_cell_idx or idx >= len(notebook_cells):
+                above |= outs        # the current cell's own bindings included
+            else:
+                for name in outs:
+                    below.setdefault(name, idx)
+
+        user_ns = self.shell.user_ns
+        forward = sorted(
+            (name, below[name]) for name in required_inputs
+            if name in below and name not in above and name in user_ns
+        )
+        if not forward:
+            return
+        names = ", ".join(f"`{n}` (cell {i + 1})" for n, i in forward)
+        raise ForwardReferenceError(
+            f"this cell reads {names}, which nothing above it binds. It works "
+            f"right now only because that cell has already run and the name is "
+            f"still in memory -- a run from the top, or tomorrow's kernel, "
+            f"raises NameError here. cash refuses rather than cache against a "
+            f"namespace your own notebook cannot rebuild in order. Move the "
+            f"binding above this cell, or move this cell below it."
+        )
+
     def _warn_broken_upstream_cells(
         self,
         notebook_cells: list[str],
@@ -1360,6 +1488,13 @@ class UpstreamChecker:
             # transitive consumers) so they re-run from the start and raise
             # NameError like a fresh kernel, instead of serving a stale value.
             self._evict_orphaned_definitions(notebook_cells, cell_code)
+
+            # ...and the other half: a name only a cell BELOW binds. Same
+            # invisible-while-it-works shape, so it is checked in the same
+            # place, but it raises -- see `_refuse_forward_references`.
+            self._refuse_forward_references(
+                notebook_cells, cell_code, current_cell_idx, required_inputs,
+            )
 
             if self.debug:
                 logger.debug("[UPSTREAM_DEBUG] Current cell found at index %s", current_cell_idx)

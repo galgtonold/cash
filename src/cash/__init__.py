@@ -39,6 +39,7 @@ from .exceptions import (
     CashUpstreamSyntaxWarning,
     CashWarning,
     DependencyNotFoundError,
+    ForwardReferenceError,
     UpstreamStateError,
 )
 from .notebook.purity import analyze_function_purity, is_pure, is_stateful, pure, stateful
@@ -463,6 +464,7 @@ __all__ = [
     "CacheSerializationError",
     "DependencyNotFoundError",
     "AmbiguousCellError",
+    "ForwardReferenceError",
     "UpstreamStateError",
     "CacheKeyComputationError",
     "CashImpureFunctionError",
