@@ -1755,24 +1755,49 @@ class VirtualLineage:
 
         all_outputs = outputs | extra_outputs
 
-        # The runtime ran this very structure with these very inputs: what it
-        # left behind is the answer, not a formula it never used (see
-        # TrackingState.control_outcomes).
+        # What the runtime left behind when it last ran this very structure
+        # (see TrackingState.control_outcomes): the files it read, and the
+        # lineages it produced.
         recorded = self._tracking_state.control_outcomes.get(
             hashlib.sha256(stmt_code.encode('utf-8')).hexdigest())
         if recorded is None:
             recorded = self._persisted_control_outcome(stmt_code, virtual_lineage)
-        if recorded is not None and recorded[0] == input_hashes:
-            if compute_file_hash_component(recorded[2]) == recorded[3]:
-                virtual_lineage.update(recorded[1])
-                all_outputs = all_outputs | set(recorded[1])
-            else:
-                # Same inputs, but a file behind its outputs changed: the one
-                # change the entry lineages cannot show. Say so, or the loop
-                # trust keeps the stale value.
+        if recorded is not None:
+            if compute_file_hash_component(recorded[2]) != recorded[3]:
+                # A file behind its outputs moved: the one change the entry
+                # lineages cannot show, because a `Path` does not change when
+                # the file it names does. Say so, or the loop trust keeps the
+                # stale value.
+                #
+                # Checked BEFORE the input-lineage comparison and regardless of
+                # how it comes out, because the two answer different questions.
+                # "Have the files this structure read changed?" is decided by
+                # the files alone; the entry lineages have nothing to say about
+                # it either way. Requiring a match first made the check
+                # unreachable for the commonest notebook there is: a name bound
+                # in the same cell as `%cash_on` has no runtime lineage (cash
+                # was not yet listening when that cell started), while the
+                # simulation reads that cell from the file and has one -- so
+                # `entry` lacked the key `input_hashes` carried, equality was
+                # false forever, and neither branch ran. That is r27s4's cell 0
+                # exactly, and the quickstart's:
+                #
+                #     import cash
+                #     %cash_on
+                #     DATA = Path(...)
+                #
+                # Marking the outputs stale can only cause a re-run, never a
+                # restore, so running it on a mismatch is the safe direction of
+                # the one it was already taking on a match.
                 files_stale = True
                 if vars_with_stale_files is not None:
                     vars_with_stale_files.update(all_outputs | set(recorded[1]))
+            elif recorded[0] == input_hashes:
+                # The runtime ran this very structure with these very inputs
+                # and the files it read are where it left them: what it left
+                # behind is the answer, not a formula it never used.
+                virtual_lineage.update(recorded[1])
+                all_outputs = all_outputs | set(recorded[1])
 
         if self.debug:
             cs_type = get_control_structure_type(node) if node else 'unknown'

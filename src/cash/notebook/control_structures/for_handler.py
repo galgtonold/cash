@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import helpers as _helpers
 from ..cache_status import CacheStatus
+from ..file_tracker import FileAccessTracker
 
 if TYPE_CHECKING:
     from ..statement import ProcessResult
@@ -218,9 +219,34 @@ class ForLoopHandler:
             logger.debug("[CONTROL] Processing FOR loop with targets: %s", target_names)
 
         try:
-            # Evaluate the iterator
+            # Evaluate the iterator, watching what it READS.
+            #
+            # A loop is decomposed per-iteration and every body statement is
+            # tracked, but this expression is not a statement -- so before
+            # round 27 the files it opened were recorded against nothing.
+            # `for line in DATA.read_text().splitlines():` put the only read
+            # of DATA here, the body never touched the file, and the dict the
+            # loop filled came out with no file dependency at all:
+            # `%cash_provenance ALIAS` reported `Code: ALIAS = {}`. Change the
+            # file, run a cell below, and the stale table was served with a
+            # clean badge (r27s4: nine wrong exports, no `Upstream:` block).
+            #
+            # The same rule as the body's reads, which `inherit_body_file_deps`
+            # has applied since round 23 -- the header was simply never part
+            # of it.
+            #
+            # `propagate_to_parent` is required, not tidiness. A manual
+            # `with FileAccessTracker(...)` is isolated by default, so a
+            # plain nested tracker would RECORD this read here and hide it
+            # from the statement-level tracker this loop runs inside --
+            # moving the bug rather than fixing it. Propagating registers
+            # the read with both, which is what the decorator does for a
+            # cached call nested inside another.
             iter_code = ast.unparse(node.iter)
-            iterable = eval(iter_code, self.shell.user_ns, self.shell.user_ns)
+            with FileAccessTracker(self.shell.user_ns,
+                                   propagate_to_parent=True) as _iter_tracker:
+                iterable = eval(iter_code, self.shell.user_ns, self.shell.user_ns)
+            _header_files = set(_iter_tracker.get_accessed_files())
 
             # Pre-compute the original for-loop header line so each body
             # metric can carry it (used by the badge renderer to show the
@@ -320,7 +346,10 @@ class ForLoopHandler:
             _body_names = {n.id for stmt in node.body for n in ast.walk(stmt)
                            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
                            } if _file_deps is not None else set()
-            _body_files: set[str] = set()
+            # Seeded with the header's reads: `inherit_body_file_deps` gives
+            # every variable the loop mutated the files the loop read, and the
+            # iterable is as much a read as the body is.
+            _body_files: set[str] = set(_header_files)
 
             for _idx, iteration_value in enumerate(iterable):
                 total_iterations += 1
