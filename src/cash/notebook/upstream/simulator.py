@@ -897,6 +897,14 @@ class NotebookSimulator:
             stmt_lookup_times, loop_target_vars,
         )
 
+        # Hand the simulation's view of every name to the runtime about to
+        # execute this cell. A control structure records the lineages of what
+        # it read, and for a name bound in the `%cash_on` cell the runtime has
+        # none to record -- see TrackingState.simulated_lineage. Taken here,
+        # after pass 1 and before the cell runs, so it describes the state the
+        # cell is about to start from.
+        self._tracking_state.simulated_lineage = dict(virtual_lineage)
+
         # Detect whether any upstream cell was actually modified since last simulation.
         # This is True only when we had a prior simulation cache AND a cached cell's hash
         # changed (actual code modification).  NOT true when cells are simply not cached

@@ -95,6 +95,7 @@ class TrackingState:
     | variable_lineage             | R (badge)       | W (after exec)    | R+W (reset/sync)  |
     | executed_file_deps           | —               | W (after exec)    | R (stale check)   |
     | executed_file_mtimes         | —               | W (after exec)    | —                 |
+    | simulated_lineage            | —               | R (ControlStruct) | W (after pass 1)  |
     | variable_hashes              | R (badge)       | W (after exec)    | —                 |
     | variable_sources             | R (badge)       | W (after exec)    | —                 |
     | current_session_hashes       | —               | W (after exec)    | —                 |
@@ -202,6 +203,24 @@ class TrackingState:
     # read: what a restart may need restored from this cell. None: not known
     # (no notebook to read), and nothing is persisted ahead of need.
     read_by_later_cells: frozenset[str] | None = None
+
+    # The SIMULATION's lineage for every name, as of just before the current
+    # cell ran. Written by NotebookSimulator at the end of pass 1; read by
+    # ControlStructureProcessor, which uses it for one thing only: a name a
+    # control structure read that the runtime has no lineage for at all.
+    #
+    # That happens whenever a name is bound in the same cell as `%cash_on` --
+    # cash was not listening when that cell started, so nothing recorded what
+    # `DATA = Path(...)` produced, while the simulation, which reads that cell
+    # out of the .ipynb, has a lineage for it like any other. Recording the
+    # runtime's silence made `control_outcomes`'s entry lineages disagree with
+    # the simulation's FOREVER, so such a loop's outcome was never trusted and
+    # it re-ran, with everything below it, after every restart.
+    #
+    # Filling the gap from here rather than inventing a value keeps the
+    # comparison honest: an edit to that cell moves the simulated lineage, so
+    # the recorded outcome stops matching, exactly as a tracked name behaves.
+    simulated_lineage: dict[str, str] = field(default_factory=dict)
 
     # Written by StatementProcessor after each execution.
     # Tracks the most recent content hash within the current session.

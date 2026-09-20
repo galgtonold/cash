@@ -69,6 +69,55 @@ def _status(metric: Any) -> Any:
     return CacheStatus(status) if isinstance(status, str) and status in CacheStatus.__members__ else status
 
 
+def _entry_lineages(
+    reads: set[str],
+    lineage: dict[str, str],
+    simulated: dict[str, str] | None,
+) -> dict[str, str]:
+    """What each name this structure reads was worth when it ran.
+
+    The runtime's own lineage wherever it has one, and the simulation's where
+    it does not. A name bound in the same cell as ``%cash_on`` is in the
+    second group forever: cash was not listening when that cell started, so
+    nothing recorded what ``DATA = Path(...)`` produced. The simulation reads
+    that cell out of the .ipynb and has a lineage for it like any other.
+
+    Recording the runtime's silence for such a name left this dict SHORT of a
+    key the simulation carries, so ``recorded[0] == input_hashes`` in
+    ``VirtualLineage._simulate_one_control_unit`` was false every time, the
+    loop's recorded outcome was never adopted, and the loop re-ran with
+    everything below it after every restart -- round 23's symptom, still live
+    for this one shape. Measured 2026-09-20 on the same eight-iteration loop:
+    0.94 s re-running the chain with ``DATA`` in the ``%cash_on`` cell against
+    0.07 s and ``5 upstream steps not re-run`` with it one cell lower.
+
+    Filling the gap from the simulation rather than inventing a value is what
+    keeps the comparison honest. Edit that cell and the simulated lineage
+    moves, so the recorded outcome stops matching -- the same way a tracked
+    name behaves, and the reason "just compare on the keys we happen to have"
+    was rejected: that would have trusted the outcome across such an edit.
+
+    The simulated lineage is a WEAKER witness than the runtime's own, which
+    folds in what the statement actually read. It is the same witness the
+    upstream check already trusts for every name it models -- and for these
+    names the alternative is not caution but the wrong answer: with nothing
+    recorded, a loop reading one kept its table when that cell was edited to
+    name a different file (`test_editing_the_cash_on_cell_still_invalidates
+    _the_loop`). Filling the gap is strictly better than leaving it.
+
+    *simulated* may be from an earlier cell if no upstream check ran for this
+    one. Harmless in the direction that matters: a name whose simulated
+    lineage has moved since produces a mismatch, which is what the code did
+    unconditionally before.
+    """
+    entry = {n: lineage[n] for n in reads if n in lineage}
+    if simulated:
+        for name in reads:
+            if name not in entry and name in simulated:
+                entry[name] = simulated[name]
+    return entry
+
+
 def _holds_rng_state(value: Any) -> bool:
     """A generator object: drawing from it inside a loop changes it in place."""
     if isinstance(value, random.Random):
@@ -328,7 +377,8 @@ class ControlStructureProcessor:
             reads, writes = CodeAnalyzer.analyze_code_block(code)
         except (SyntaxError, ValueError, TypeError):
             reads, writes = set(), set()
-        entry = {n: lineage[n] for n in reads if n in lineage}
+        entry = _entry_lineages(reads, lineage,
+                                getattr(state, 'simulated_lineage', None))
         before = dict(lineage)
         reads_before = dict(state.statement_file_reads)
         rng_before = _global_rng_fingerprint() if isinstance(node, ast.For) else None

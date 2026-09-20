@@ -1774,17 +1774,20 @@ class VirtualLineage:
                 # "Have the files this structure read changed?" is decided by
                 # the files alone; the entry lineages have nothing to say about
                 # it either way. Requiring a match first made the check
-                # unreachable for the commonest notebook there is: a name bound
-                # in the same cell as `%cash_on` has no runtime lineage (cash
-                # was not yet listening when that cell started), while the
-                # simulation reads that cell from the file and has one -- so
-                # `entry` lacked the key `input_hashes` carried, equality was
-                # false forever, and neither branch ran. That is r27s4's cell 0
-                # exactly, and the quickstart's:
+                # unreachable whenever a name the loop reads is bound in the
+                # same cell as `%cash_on`:
                 #
                 #     import cash
                 #     %cash_on
                 #     DATA = Path(...)
+                #
+                # Such a name has no runtime lineage (cash was not yet
+                # listening when that cell started) while the simulation, which
+                # reads that cell from the file, has one -- so `entry` lacked a
+                # key `input_hashes` carried, equality was false forever, and
+                # neither branch ran. That is r27s4's cell 0. (The gap itself
+                # is closed separately, in `_entry_lineages`; this check no
+                # longer depends on it either way.)
                 #
                 # Marking the outputs stale can only cause a re-run, never a
                 # restore, so running it on a mismatch is the safe direction of
