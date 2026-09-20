@@ -48,9 +48,12 @@ you cached something too cheap).
 
 Two things to know when reading a captured notebook:
 
-- **Read the labels, not your prints, to tell what ran.** A `CACHED` statement
-  replays the stdout and stderr it printed when it last ran, so a
-  `print("RUN load", file=sys.stderr)` marker shows up either way.
+- **Read the labels, not your prints, to tell what ran.** A hit replays the
+  stdout and stderr the code printed when it last ran -- a cached
+  `@cash.cache` call and a restored statement both do -- so a
+  `print("RUN load", file=sys.stderr)` marker shows up either way. What IS
+  suppressed is other cells' output while cash repairs upstream state for the
+  cell you ran, which is deliberate.
 - **If you only have the HTML badge's output**, its first few hundred
   characters are CSS. Don't parse it; switch to `%cash_badge print` and re-run.
 

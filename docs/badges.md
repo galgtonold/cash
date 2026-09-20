@@ -2,6 +2,34 @@
 
 Every cell Cash touches gets a badge above its output — a one-line summary plus an expandable detail panel. The badge is the answer to "what did cash do, and why?". This page walks through what the badge shows, then runs through the most common questions it gets used to answer.
 
+!!! warning "Read the badge, not your prints"
+
+    **A cache hit replays what the code printed last time.** Both a cached
+    `@cash.cache` call and a restored statement write their recorded stdout
+    and stderr back out, so a marker you added to see what ran —
+    `print("RUN load", file=sys.stderr)`, a counter, a timestamp — appears
+    on a hit exactly as it did on the run that produced it.
+
+    Three of five testers in one round nearly reported "it never caches"
+    because of this, and one built an entire alternative instrument to get
+    around it. The badge is the instrument: its status tells you what ran,
+    and your own prints cannot.
+
+    The one thing that really is suppressed is *other cells'* output while
+    Cash repairs upstream state for the cell you ran — deliberately, so
+    re-running one cell does not replay half the notebook.
+
+!!! tip "Driving Cash headlessly? Switch the badge to text"
+
+    The HTML badge opens with ~700 characters of CSS and costs about **9 kB
+    per cell**, so anything that is not a browser — an agent reading captured
+    output, `nbconvert`, a diff — sees CSS and no information. It also lands
+    in the `.ipynb`, which bloats notebooks you commit.
+
+    `%cash_badge print` gives the same information as one line per cell.
+    Prefer it for headless runs and for notebooks that go into version
+    control.
+
 ## 1. Anatomy
 
 This is a badge from a cell where the upstream `df` was restored, the intermediate `features` was restored, and the final `preds` was recomputed because a new `features` lineage invalidated its cache:
