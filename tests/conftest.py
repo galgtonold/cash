@@ -470,6 +470,28 @@ def pytest_configure(config):
     )
 
 
+def pytest_collection_modifyitems(config, items):
+    """Every test under ``tests/test_notebook_integration`` IS an integration
+    test, whether or not its file remembered to say so.
+
+    The marker was declared but applied by hand, so 249 of 911 files in that
+    directory carried it and the other 662 did not. `-m "not integration"`
+    therefore still spun up kernels for most of the suite -- it looks like it
+    selected a unit run, takes minutes, and brings the load-dependent notebook
+    flakes with it. CI never hit this because it excludes the directory by
+    path (`--ignore=tests/test_notebook_integration`); only a human or an
+    agent typing `-m` did.
+
+    Marking by location makes `-m "not integration"` mean what CI's --ignore
+    means. Files that already declare the marker are unaffected: applying it
+    twice is a no-op.
+    """
+    integration_dir = str(Path(__file__).parent / "test_notebook_integration")
+    for item in items:
+        if str(getattr(item, "fspath", "")).startswith(integration_dir):
+            item.add_marker(pytest.mark.integration)
+
+
 # --- Stall-watchdog progress hooks -----------------------------------------
 # Every hook below runs in BOTH the xdist master (where reports arrive from
 # workers) and each worker (where they arrive locally), so a stall is caught
