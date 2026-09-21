@@ -147,3 +147,14 @@ def test_after_a_restart_and_a_jump(nb_runner, tmp_path):
         "after a restart, the helper was edited and the last cell kept the "
         "pre-edit result:\n" + nb_runner.get_raw_output(4)
     )
+
+
+def test_the_text_badge_for_a_reload_is_ascii(nb_runner, tmp_path):
+    """r28s1: the module-reload row carried a U+1F504 glyph, and their cp1252
+    console client crashed reading the badge. `%cash_badge print` is for
+    exactly that reader, and the docs promise it plain ASCII."""
+    _out, raw = _play(nb_runner, tmp_path, "helperascii",
+                      "import helperascii", "helperascii.summary")
+    badge = raw[raw.find("[Cash]"):]
+    assert "reloaded" in badge.lower(), raw
+    assert badge.isascii(), [c for c in badge if not c.isascii()]

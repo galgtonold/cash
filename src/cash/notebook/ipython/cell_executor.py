@@ -1264,7 +1264,9 @@ class CellExecutor:
                 mod_names = ', '.join(sorted(changed_modules.keys()))
                 notification: ProcessResult = {
                     'status': 'MODULE_RELOADED',
-                    'code': f"🔄 Module{'s' if len(changed_modules) > 1 else ''} reloaded: {mod_names}",
+                    # No glyph: this text reaches `%cash_badge print`, whose readers are
+                    # often cp1252 consoles (r28s1's crashed). The label says it already.
+                    'code': f"Module{'s' if len(changed_modules) > 1 else ''} reloaded: {mod_names}",
                     'is_upstream': True,
                     'total_time': 0.0,
                     'execution_time': 0.0,
@@ -1600,7 +1602,7 @@ class CellExecutor:
                 print(f"[FUNCTION_CHANGE] Detected changed functions: {func_names}")
             return [{
                 'status': 'FUNCTION_CHANGED',
-                'code': f"🔄 Function{'s' if len(changed_funcs) > 1 else ''} changed: {func_names}",
+                'code': f"Function{'s' if len(changed_funcs) > 1 else ''} changed: {func_names}",
                 'is_upstream': True,
                 'execution_time': 0.0,
                 'total_time': 0.0,
