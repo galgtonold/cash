@@ -96,6 +96,7 @@ class TrackingState:
     | executed_file_deps           | —               | W (after exec)    | R (stale check)   |
     | executed_file_mtimes         | —               | W (after exec)    | —                 |
     | simulated_lineage            | —               | R (ControlStruct) | W (after pass 1)  |
+    | untracked_bindings           | —               | R/W (classifier)  | W (after pass 1)  |
     | variable_hashes              | R (badge)       | W (after exec)    | —                 |
     | variable_sources             | R (badge)       | W (after exec)    | —                 |
     | current_session_hashes       | —               | W (after exec)    | —                 |
@@ -221,6 +222,16 @@ class TrackingState:
     # comparison honest: an edit to that cell moves the simulated lineage, so
     # the recorded outcome stops matching, exactly as a tracked name behaves.
     simulated_lineage: dict[str, str] = field(default_factory=dict)
+
+    # Names that were bound, untracked, before `%cash_on` took effect by a
+    # statement that could have read something (`df = pd.read_parquet(...)`
+    # in the `%cash_on` cell), so the simulation's lineage was NOT adopted for
+    # them. Written once per `%cash_on` by NotebookSimulator; read and emptied
+    # by MismatchClassifier, which re-runs such a binding under tracking the
+    # first time a cell needs it. Only these: a lineage dropped LATER (the
+    # module invalidator after an edit) must stay dropped, or its readers are
+    # served the pre-edit value.
+    untracked_bindings: set[str] = field(default_factory=set)
 
     # Written by StatementProcessor after each execution.
     # Tracks the most recent content hash within the current session.
