@@ -31,10 +31,11 @@ from cash import (
 ```
 
 Every exception and warning Cash produces is reachable from the
-top-level `cash` module. `CashError` and `CashWarning` are the
+top-level `cash` module, except the internal warnings named at the top of
+this page. `CashError` and `CashWarning` are the
 inheritance roots — see the hierarchies below for filtering recipes.
 
-<!-- claim: cash/exceptions.py:__all__ @6574cfb2 broad="the page claims to be the COMPLETE hierarchy, which is a claim about the whole module's exports" -->
+<!-- claim: cash/exceptions.py:__all__ @4903975e broad="the page claims to be the COMPLETE hierarchy, which is a claim about the whole module's exports" -->
 ## Exception hierarchy
 
 ```text

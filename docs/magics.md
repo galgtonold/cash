@@ -129,7 +129,7 @@ trivial statements in normal use.
 ```
 
 ### `%cash_help`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_help @7290a5b1 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_help @b833674c -->
 
 Print a quick-reference card. With no argument the main card is shown; pass a
 topic name to drill into a sub-card.
@@ -144,7 +144,8 @@ topic name to drill into a sub-card.
 - `badge` / `badges` — Badge display modes and status icons.
 - `debug` / `debugging` — Debug logging and verification commands.
 - `collab` / `collaboration` / `sharing` — Export / import / diff commands.
-- `inspect` / `provenance` / `audit` — Status, stats, provenance, audit, log.
+- `inspect` / `provenance` / `audit` — Status, stats, provenance, audit, log,
+  and `!cash inspect` for every cache entry's size, time saved, and uses.
 
 **Example:**
 
@@ -217,7 +218,7 @@ Set the badge display mode for subsequent cached cells. See
 ```
 
 ### `%cash_stats`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @abe3f951 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @84f2d380 -->
 
 Show cache statistics for this kernel session (a restart resets them; what the
 cache on disk holds is `cash info`'s): counts, hit rate, compute time, and the
