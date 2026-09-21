@@ -322,7 +322,7 @@ element, which no key can see, so it is not intercepted. The same holds for a
 lambda's parameters, and for an argument computed from the element
 (`make_features(cleaned[mid], W)`): it too is hashed in full.
 
-<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @d4b7f70f, cash/notebook/call_unit.py:_GUARD_AFTER_CALLS == 50, cash/notebook/call_unit.py:_OVERHEAD_FACTOR == 3.0 -->
+<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @f3e978ec, cash/notebook/call_unit.py:_GUARD_AFTER_CALLS == 50, cash/notebook/call_unit.py:_OVERHEAD_FACTOR == 3.0 -->
 A comprehension makes its call once per element, and caching each one has a
 cost of its own — a key, a lookup, a store. So past 50 calls in one run of the
 statement, cash times a few of them uncached; when caching a call costs more
