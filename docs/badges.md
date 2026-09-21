@@ -212,6 +212,8 @@ See [Cost model and smart persistence](cost-model.md) for how this decision is m
 
 **Why:** The statement mutates an object that already existed — `out.append(...)`, `d[k] = v`, `df.sort_values(inplace=True)` — rather than producing a new value. There is no snapshot to restore that would reproduce the mutation, so Cash bumps the receiver's lineage (everything downstream stays correct) and re-executes the statement each run.
 
+That includes a function you pass the object to, when it changes the object in place and returns nothing. This is how scanpy works (`sc.pp.calculate_qc_metrics(adata, inplace=True)`, `sc.tl.leiden(adata)`), and so does a helper like `add_qc(df)`. Cash checks the objects a bare call like that is given before and after it runs, and if one changed, the statement is treated as an in-place mutation from then on. It re-runs every time, so the change is made every time. It does this for a bare call only: `res = f(df)`, where `f` also changes `df`, is not covered, so return the changed object instead.
+
 **Fix:** Assign the result instead of mutating in place — `out = [f(e) for e in items]` caches at any length where the append loop does not. See [A long `for`-append loop can stop caching](known-limitations.md#a-long-for-append-loop-can-stop-caching).
 
 ### Unstable key
