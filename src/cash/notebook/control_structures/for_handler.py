@@ -141,10 +141,26 @@ class ForLoopHandler:
     # iterator.  Method calls (``df['c'].unique()``, ``d.items()``) are assumed
     # to be pure accessors and stay on the fast path so re-iterable containers
     # (ndarray/Series/DataFrame/dict views) keep the current behaviour.
+    #
+    # The builtins that compute a BOUND are here too, not only the ones that
+    # produce the iterable. `for t in range(0, len(frame), STEP):` is about
+    # the commonest loop header there is, and without `len` on this list it
+    # was refused the fast path and decomposed per iteration: r27s3's 627
+    # iterations of four cheap numpy statements took 2.5 s where the same
+    # loop with a literal bound took 0.06 s, and a re-run with nothing changed
+    # took 4.5 s. The tester measured 16.9 s cached against 1.0 s uncached and
+    # called it BLOCKING.
+    #
+    # A name on this list is only trusted while it still IS the builtin -- see
+    # `_iter_header_safe_to_reevaluate`. And none of these can drain a
+    # one-shot iterator unseen any more, because every name the header reads
+    # is checked for being one; that check, not this list, is what stops
+    # `sorted(g)` re-draining `g`.
     _PURE_ITER_PRODUCERS = frozenset({
         'range', 'sorted', 'reversed', 'list', 'tuple', 'set', 'frozenset',
         'dict', 'enumerate', 'zip', 'map', 'filter', 'iter', 'bytes',
         'bytearray', 'str',
+        'len', 'min', 'max', 'abs', 'round', 'int', 'float',
     })
 
     def __init__(self, shell, statement_processor, debug: bool, dispatcher):
@@ -948,11 +964,37 @@ class ForLoopHandler:
         except Exception:  # noqa: BLE001 - defensive; non-iterables fail later anyway
             pass
 
-        # A bare-name call to anything other than a known side-effect-free
-        # iterable producer may consume/mutate state on re-evaluation.
+        user_ns = getattr(self.shell, 'user_ns', None) or {}
+        import builtins as _builtins
         for sub in ast.walk(iter_node):
+            # A one-shot iterator ANYWHERE in the header, not only as the
+            # header. The check above only sees the RESULT, and
+            # `sorted(g)` returns a list: the first evaluation drained `g`,
+            # the second got nothing, and the loop ran zero times. Measured
+            # on a 400-item generator: `for x in sorted(g)` and
+            # `for x in list(g)` both left OUT empty, first run, no cache
+            # involved, with a clean EXECUTED badge -- where plain Python
+            # gives 400. A dict lookup, so this costs nothing and runs no
+            # user code.
+            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
+                value = user_ns.get(sub.id)
+                if value is not None:
+                    try:
+                        if iter(value) is value:
+                            return False
+                    except Exception:  # noqa: BLE001 - not iterable: cannot be drained
+                        pass
+
+            # A bare-name call to anything other than a known side-effect-free
+            # builtin may consume/mutate state on re-evaluation.
             if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
-                if sub.func.id not in self._PURE_ITER_PRODUCERS:
+                name = sub.func.id
+                if name not in self._PURE_ITER_PRODUCERS:
+                    return False
+                # ...and only while the name still IS that builtin. A notebook
+                # that defines its own `len` or `sorted` gets no benefit of the
+                # doubt from sharing the name.
+                if name in user_ns and user_ns[name] is not getattr(_builtins, name, None):
                     return False
         return True
 
