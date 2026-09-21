@@ -21,13 +21,20 @@ line, and the one real failure it caught -- an oracle test comparing cash's
 answer against a no-cache run -- could not be inspected afterwards, which
 cost an hour of inference that one traceback would have settled.
 
+``--stress N`` also runs the alias / in-place mutation scenarios N times each
+(``test_zz_stress_alias_mutation.py``), in the last chunk alongside the rest of
+it, since the wrong answer they hunt showed only under load. A repeat that
+disagrees with its oracle keeps its decision trace and cell outputs under
+``<results>/stress``.
+
 Usage:
     python scripts/run_integration_sweep.py [--chunk 60] [-n 16]
-        [--results-dir DIR] [--only SUBSTRING]
+        [--results-dir DIR] [--only SUBSTRING] [--stress N]
 """
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import shutil
 import subprocess
@@ -68,6 +75,8 @@ def main() -> int:
     ap.add_argument("--only", default="",
                     help="only files whose name contains this substring")
     ap.add_argument("--timeout", type=int, default=3600)
+    ap.add_argument("--stress", type=int, default=0,
+                    help="repeat the alias/mutation scenarios N times each")
     args = ap.parse_args()
 
     files = sorted(p.as_posix() for p in SUITE.glob("test_*.py")
@@ -77,6 +86,10 @@ def main() -> int:
         return 1
 
     args.results_dir.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    if args.stress > 0:
+        env["CASH_STRESS_REPEAT"] = str(args.stress)
+        env["CASH_STRESS_KEEP"] = str((args.results_dir / "stress").resolve())
     chunks = [files[i:i + args.chunk] for i in range(0, len(files), args.chunk)]
     print(f"{len(files)} files in {len(chunks)} chunk(s) of <= {args.chunk}, "
           f"-n {args.workers}", flush=True)
@@ -90,7 +103,7 @@ def main() -> int:
             [sys.executable, "-m", "pytest", *chunk, "-q",
              "-n", args.workers, "--dist", "worksteal",
              "-p", "no:randomly", "-rf", "--tb=long"],
-            cwd=REPO, capture_output=True, text=True,
+            cwd=REPO, env=env, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=args.timeout,
         )
         elapsed = time.perf_counter() - t0
