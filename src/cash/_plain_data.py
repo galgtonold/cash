@@ -100,11 +100,13 @@ def _levels(value: Any):
     for _ in range(MAX_LEVELS):
         flat = list(chain.from_iterable(level))
         types = set(map(type, flat))
+        # Before the level is yielded: a caller sizes it, and a frame asked its
+        # size walks every string it holds (4.3 s of r28s5's 12 s statement).
+        if not all(t in leaves or t in SEQS for t in types):
+            raise _NotPlain
         yield flat, types
         if all(t in leaves for t in types):
             return
-        if not all(t in leaves or t in SEQS for t in types):
-            raise _NotPlain
         level = flat if all(t in SEQS for t in types) else [
             x for x in flat if type(x) in SEQS]
     raise _NotPlain                     # deeper than MAX_LEVELS, or a cycle
