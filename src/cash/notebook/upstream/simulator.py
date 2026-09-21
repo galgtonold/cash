@@ -172,6 +172,10 @@ class NotebookSimulator:
             module = sys.modules.get(mod_name)
             if module is None or mod_name in ft._tracked_modules:
                 continue
+            # cash itself is "local" in a development checkout, and `cash` is
+            # bound in every notebook: without this it watched its own source.
+            if mod_name == 'cash' or mod_name.startswith('cash.'):
+                continue
             try:
                 if is_local_module(module):
                     ft.track_module(mod_name)
