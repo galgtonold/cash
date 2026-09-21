@@ -191,3 +191,34 @@ def test_a_loop_that_calls_the_helper(nb_runner, tmp_path, import_line, prefix):
         "the helper was edited and the table the loop builds kept the "
         "pre-edit values:\n" + nb_runner.get_raw_output(4)
     )
+
+
+def test_a_loop_through_a_helper_that_cannot_be_narrowed(nb_runner, tmp_path):
+    """r28s5's repro exactly: the helper draws from a seeded generator, which
+    keeps it from being narrowed to its symbols, and a loop builds the dict a
+    later statement turns into the table. Both lose their lineage on the edit,
+    and re-running only the table's statement rebuilt it from the stale dict."""
+    def module(op):
+        return ("import random\n"
+                "def summary(rows, g):\n" + SLOW
+                + "    random.Random(0).random()\n"
+                + "    return " + op + "(rows) + g\n")
+    mod = tmp_path / "helperrng.py"
+    mod.write_text(module("sum"), encoding="utf-8")
+    nb_runner.create_notebook([
+        "import cash\n%cash_on\n%cash_badge print",
+        "import helperrng as hm\nROWS = [1, 2, 3, 4]",
+        "blocks = {}\nfor g in [0, 100]:\n    blocks[g] = hm.summary(ROWS, g)\n"
+        "tbl = sorted(blocks.values())",
+        "print('R', tbl)",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "R [10, 110]" in nb_runner.get_output(4), nb_runner.get_raw_output(4)
+
+    mod.write_text(module("max"), encoding="utf-8")
+    nb_runner.run_cell(4)
+    assert "R [4, 104]" in nb_runner.get_output(4), (
+        "the helper was edited and the table the loop builds kept the "
+        "pre-edit values:\n" + nb_runner.get_raw_output(4)
+    )

@@ -734,6 +734,7 @@ class MismatchClassifier:
         self._check_missing_required_inputs(
             required_inputs, virtual_lineage, virtual_modules, broken_vars,
         )
+        self._repair_upstream_rerun_bindings(required_inputs, simulation_trace, broken_vars)
 
     def _run_pass2_identify_broken_vars(
         self,
@@ -1147,6 +1148,69 @@ class MismatchClassifier:
             return False
         pending.discard(var_name)
         return True
+
+    def _repair_upstream_rerun_bindings(
+        self,
+        required_inputs: set[str] | None,
+        simulation_trace: list,
+        broken_vars: set[str],
+    ) -> None:
+        """Re-run every pending re-binding the current cell's inputs were built from.
+
+        ``_check_missing_required_inputs`` only sees the names the cell READS.
+        After a helper edit the invalidator drops the lineage of everything
+        built from the module, which can be a chain: a loop filling ``blocks``
+        with ``hm.summary(...)``, then ``tbl = pd.DataFrame(blocks.values())``.
+        Repairing only ``tbl`` re-ran its statement on the stale ``blocks``,
+        and the table came out pre-edit (r28s5's repro, its loop variants).
+        So walk the simulation trace upstream from the required inputs, and
+        repair every name in ``TrackingState.rerun_bindings`` on the way.
+        """
+        pending = self._tracking_state.rerun_bindings
+        if not pending or not required_inputs:
+            return
+        producers: dict[str, list[set[str]]] = {}
+        for entry in simulation_trace or ():
+            for out in entry[1] or ():
+                producers.setdefault(out, []).append(set(entry[2] or ()))
+        utility_vars = {'ip', 'cash_magics', 'get_ipython', '__builtins__', 'In', 'Out'}
+        seen: set[str] = set()
+        todo = list(required_inputs)
+        repaired: set[str] = set()
+        while todo:
+            name = todo.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            for inputs in producers.get(name, ()):
+                todo.extend(inputs - seen)
+            if name in pending and name in self.shell.user_ns                     and self._needs_lineage_repair(name, utility_vars):
+                logger.debug("[UPSTREAM] '%s' was built from a reloaded module; "
+                             "re-running its binding under tracking.", name)
+                repaired.add(name)
+        if not repaired:
+            return
+        # Everything between the cell's inputs and a repaired name was built
+        # from it and is stale too: `tbl = sorted(blocks.values())` kept its
+        # lineage, so re-running only `blocks` left `tbl` pre-edit.
+        memo: dict[str, bool] = {}
+
+        def built_from_repaired(name: str, path: frozenset = frozenset()) -> bool:
+            if name in memo:
+                return memo[name]
+            if name in repaired:
+                memo[name] = True
+                return True
+            if name in path:
+                return False
+            hit = any(built_from_repaired(inp, path | {name})
+                      for inputs in producers.get(name, ()) for inp in inputs)
+            memo[name] = hit
+            return hit
+
+        for name in seen:
+            if name in self.shell.user_ns and built_from_repaired(name):
+                broken_vars.add(name)
 
     def _check_missing_required_inputs(
         self,
