@@ -89,11 +89,16 @@ class TestUnchanged:
         ("zip(a, b)", {"a": [1], "b": [2]}),
     ])
     def test_re_iterable_headers_stay_on_the_fast_path(self, header, ns):
-        if header == "zip(a, b)":
-            # zip() returns a self-iterator: refused on its RESULT, as before.
-            assert not _safe(header, ns)
-        else:
-            assert _safe(header, ns)
+        # zip() returns a self-iterator, and was refused on that RESULT. But the
+        # header CALLS zip, so evaluating it again builds a fresh zip over the
+        # same two lists -- as `df.itertuples()` builds a fresh iterator, which
+        # the same rule kept r28s3's 631-iteration loop off the fast path for
+        # (round 28). What still refuses is a header over a STORED iterator:
+        # see test_zip_over_a_stored_iterator_is_still_refused.
+        assert _safe(header, ns)
+
+    def test_zip_over_a_stored_iterator_is_still_refused(self):
+        assert not _safe("zip(a, g)", {"a": [1, 2], "g": iter([3, 4])})
 
     def test_an_unknown_call_is_still_refused(self):
         assert not _safe("drain()", {"drain": lambda: [1, 2, 3]})

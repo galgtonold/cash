@@ -1063,6 +1063,9 @@ class StatementProcessor:
         # Pre-execution fingerprints of a bare call's arguments, by statement
         # source hash -- see _classify_method_mutations.
         self._arg_snapshots: dict[str, dict[str, str]] = {}
+        # Statement code (context markers stripped) whose calls are not worth
+        # routing through the call cache -- see _code_and_tree_for_execution.
+        self._calls_not_worth_wrapping: set[str] = set()
 
     def process_statement(self, code: str, ttl: int | None = None, silent: bool = False,
                           annotation: CacheAnnotation | None = None,
@@ -2178,6 +2181,15 @@ class StatementProcessor:
         -- a name the cell writes again -- still gets none.
         """
         try:
+            if self._call_unit_loop_vars:
+                # Inside a loop iteration nothing is final: the next iteration
+                # overwrites it, and the inputs' unsaved cost only grows as the
+                # loop runs, so EVERY iteration qualified. r28s3's 631-iteration
+                # loop wrote an entry per iteration for a ~0.1 ms statement --
+                # each a full snapshot of the 2.4 MB frame it changes, 1.5 GiB
+                # in all -- and a re-run copied every one back: 0.05 s plain,
+                # 11-23 s cached. What the loop leaves is judged when it ends.
+                return False
             later = getattr(self, 'written_later_in_cell', frozenset())
             if not outputs or set(outputs) & set(later):
                 return False
@@ -2419,6 +2431,30 @@ class StatementProcessor:
             logger.debug("%s Failed to drain call-unit log", _LOG_PROCESSOR)
             return []
 
+    @staticmethod
+    def _wrap_key(code: str) -> str:
+        """*code* without the per-iteration / branch context marker lines."""
+        if '# __iteration_context__:' not in code and '# control_context:' not in code:
+            return code
+        return "\n".join(line for line in code.split("\n")
+                         if not line.startswith(('# __iteration_context__:', '# control_context:')))
+
+    def _learn_call_wrapping(self, code: str, wall_time: float, calls: list) -> None:
+        """Record whether *code*'s calls are worth the call cache next time."""
+        try:
+            floor_of = getattr(self._call_cache, '_cost_floor_s', None)
+            floor = floor_of() if callable(floor_of) else 0.003
+            if not isinstance(floor, (int, float)):
+                floor = 0.003
+            hit = any(isinstance(ev, dict) and ev.get('cache_hit') for ev in calls or ())
+            key = self._wrap_key(code)
+            if wall_time < floor and not hit:
+                self._calls_not_worth_wrapping.add(key)
+            else:
+                self._calls_not_worth_wrapping.discard(key)
+        except Exception:  # noqa: BLE001 - wrapping stays on, which is always safe
+            pass
+
     def _code_and_tree_for_execution(
         self, code: str, tree: ast.Module | None, annotation: Any | None
     ) -> tuple[str, ast.Module | None]:
@@ -2458,6 +2494,15 @@ class StatementProcessor:
             return code, tree
         cash_instance = self._get_cash_instance()
         if cash_instance is None:
+            return code, tree
+        # A call cannot take longer than the statement it is in, and one under
+        # the call cost floor is never stored. So a statement that last ran
+        # under that floor with no call HIT inside it has nothing worth routing
+        # through the call cache, and rewriting it is pure overhead: a copy of
+        # its tree, an unparse and a gate per call, on every loop iteration --
+        # 1.7 of a 631-iteration loop's 9.5 s (round 28, r28s3). Learned in
+        # `_learn_call_wrapping`; a hit or a slow run clears it again.
+        if self._wrap_key(code) in self._calls_not_worth_wrapping:
             return code, tree
         try:
             # The object-level half of the gate (CAS-243 Task 4/5): a call that
@@ -2599,6 +2644,7 @@ class StatementProcessor:
         except (AttributeError, TypeError, RuntimeError):
             logger.debug("%s Failed to drain decorator call log", _LOG_PROCESSOR)
         decorator_calls.extend(self._drain_call_unit_events())
+        self._learn_call_wrapping(code, wall_time, decorator_calls)
 
         metrics['stdout'] = captured.stdout
         metrics['stderr'] = captured.stderr
@@ -2664,6 +2710,7 @@ class StatementProcessor:
         except (AttributeError, TypeError, RuntimeError):
             logger.debug("%s Failed to drain decorator call log", _LOG_PROCESSOR)
         decorator_calls.extend(self._drain_call_unit_events())
+        self._learn_call_wrapping(code, wall_time, decorator_calls)
 
         metrics['stdout'] = captured.stdout
         metrics['stderr'] = captured.stderr

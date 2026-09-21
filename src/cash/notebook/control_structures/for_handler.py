@@ -958,8 +958,19 @@ class ForLoopHandler:
         # One-shot self-iterators: re-iterating drains an exhausted source.
         # (Most lack ``__len__`` and never reach the single-unit heuristic, but
         # a custom self-iterator that defines ``__len__`` would — guard it.)
+        # A header that is itself a call to a pure producer, or to a method
+        # that builds a fresh iterator (`df.itertuples()`, `enumerate(rows)`),
+        # makes a NEW one-shot iterator each time it is evaluated, so its value
+        # being a self-iterator says nothing about the second evaluation. Only
+        # a header that merely names a stored iterator is exhausted by the
+        # first -- the walk below still refuses those, and any unknown call.
+        fresh = isinstance(iter_node, ast.Call) and (
+            (isinstance(iter_node.func, ast.Name)
+             and iter_node.func.id in self._PURE_ITER_PRODUCERS)
+            or (isinstance(iter_node.func, ast.Attribute)
+                and iter_node.func.attr in self._FRESH_ITERATOR_METHODS))
         try:
-            if iter(iterable) is iterable:
+            if not fresh and iter(iterable) is iterable:
                 return False
         except Exception:  # noqa: BLE001 - defensive; non-iterables fail later anyway
             pass
@@ -1051,9 +1062,8 @@ class ForLoopHandler:
         # (Nesting check intentionally removed — see docstring.)
 
         # Estimate iteration count
-        try:
-            n_iterations = len(iterable)
-        except TypeError:
+        n_iterations = self._estimated_iterations(node.iter, iterable)
+        if n_iterations is None:
             # Generators, iterators without __len__ — can't estimate
             return False
 
@@ -1082,6 +1092,61 @@ class ForLoopHandler:
             )
 
         return True
+
+    #: Methods that build a FRESH iterator over their object on every call.
+    #: A header calling one may be evaluated twice: the second call iterates
+    #: the same data again, where a stored iterator would be exhausted.
+    _FRESH_ITERATOR_METHODS = frozenset({
+        'itertuples', 'iterrows', 'items', 'iteritems', 'keys', 'values',
+    })
+
+    def _estimated_iterations(self, iter_node: ast.AST, iterable) -> int | None:
+        """How many times the loop will run, or ``None`` if it cannot be told.
+
+        ``len(iterable)`` alone missed ``df.itertuples()`` / ``iterrows()``,
+        whose value is an iterator with no length, so a long cheap loop over a
+        frame never ran as one unit: r28s3's 631-iteration loop spent ~9 s in
+        per-statement machinery around 0.07 s of work (round 28). The length is
+        read from what the header iterates instead -- the frame's rows, its
+        columns for ``items()``, through ``enumerate``/``zip``/``reversed``/
+        ``sorted``/``list``/``tuple``.
+        """
+        try:
+            return len(iterable)
+        except TypeError:
+            pass
+        user_ns = getattr(self.shell, 'user_ns', None) or {}
+
+        def length_of(node: ast.AST) -> int | None:
+            if isinstance(node, ast.Name):
+                value = user_ns.get(node.id)
+                try:
+                    return len(value) if value is not None else None
+                except TypeError:
+                    return None
+            if not isinstance(node, ast.Call):
+                return None
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr in self._FRESH_ITERATOR_METHODS:
+                base = length_of(func.value)
+                if base is None:
+                    return None
+                owner = user_ns.get(func.value.id) if isinstance(func.value, ast.Name) else None
+                if func.attr in ('items', 'iteritems') and hasattr(owner, 'columns'):
+                    return len(owner.columns)
+                return base
+            if isinstance(func, ast.Name) and node.args:
+                if func.id in ('enumerate', 'reversed', 'sorted', 'list', 'tuple'):
+                    return length_of(node.args[0])
+                if func.id == 'zip':
+                    lengths = [length_of(a) for a in node.args]
+                    return None if any(n is None for n in lengths) else min(lengths)
+            return None
+
+        try:
+            return length_of(iter_node)
+        except Exception:  # noqa: BLE001 - no estimate means per-iteration, the safe default
+            return None
 
     def _count_body_statements(self, body: list[ast.AST]) -> int:
         """Count the total number of executable statements in a loop body,
