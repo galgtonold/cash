@@ -49,6 +49,11 @@ class MismatchClassifier:
         # Buffered TrackingState mutations; orchestrator drains after the phase.
         self._restores = RestoreCollector()
 
+        # Lineage repairs scheduled so far: name -> how many. See
+        # ``_needs_lineage_repair``.
+        self._lineage_repairs: dict[str, int] = {}
+        self._lineage_repaired_values: set[tuple[str, int]] = set()
+
     def set_tracking_state(self, state: TrackingState) -> None:
         """Re-wire shared state refs (mirrors NotebookSimulator.set_tracking_state)."""
         self._tracking_state = state
@@ -1110,6 +1115,51 @@ class MismatchClassifier:
 
         return stmts_to_run_indices, restored_statements_info, total_restore_time
 
+    #: A name that is still without a lineage after this many repairs is left
+    #: alone for the session: whatever keeps it so is not something re-running
+    #: its binding fixes, and re-running it before every cell would be worse.
+    _MAX_LINEAGE_REPAIRS = 3
+
+    def _needs_lineage_repair(self, var_name: str, utility_vars: set[str]) -> bool:
+        """True when *var_name* is in memory but was bound where cash could not see.
+
+        A name bound in the ``%cash_on`` cell by a statement that could have
+        read something (``df = pd.read_parquet(...)``) has no runtime lineage.
+        ``NotebookSimulator._adopt_untracked_names`` gives one only to bindings
+        that provably read nothing, because adopting a lineage for a load
+        leaves nothing that knows it came from a file. Without one, every
+        statement reading the name was refused as "Input variable missing
+        lineage", run after run, until some other cell happened to trigger a
+        repair (round 27, r27s1).
+
+        Scheduling the binding to re-run is the repair: under tracking it gets
+        its lineage AND its file dependencies, and it is keyed like any other
+        statement, so after a restart the re-run is a restore. It is the same
+        thing Restart & Run All would do with that statement, which is why it
+        is safe where adopting a lineage is not. A lineage the module
+        invalidator dropped on purpose is repaired the same way, by re-running
+        the import, which is what the drop was asking for.
+
+        Bounded per value and per name (``_MAX_LINEAGE_REPAIRS``), so a name
+        that stays lineage-less for a reason a re-run does not fix costs a few
+        re-runs, not one per cell.
+        """
+        if var_name in self.variable_lineage:
+            return False
+        if var_name in utility_vars or var_name.startswith('_'):
+            return False
+        value = self.shell.user_ns.get(var_name)
+        from ..cacheability_decision import _is_lineage_exempt
+        if _is_lineage_exempt(var_name, value):
+            return False
+        key = (var_name, id(value))
+        count = self._lineage_repairs.get(var_name, 0)
+        if key in self._lineage_repaired_values or count >= self._MAX_LINEAGE_REPAIRS:
+            return False
+        self._lineage_repaired_values.add(key)
+        self._lineage_repairs[var_name] = count + 1
+        return True
+
     def _check_missing_required_inputs(
         self,
         required_inputs: set[str] | None,
@@ -1147,6 +1197,11 @@ class MismatchClassifier:
             # the name; one BELOW is never simulated), so an input that survives to
             # here yet is absent from memory must be reconstructed.
             if var_name in self.shell.user_ns:
+                if not self._needs_lineage_repair(var_name, utility_vars):
+                    continue
+                logger.debug("[UPSTREAM] Variable '%s' is in memory without a lineage; "
+                             "re-running its binding under tracking.", var_name)
+                broken_vars.add(var_name)
                 continue
 
             if var_name in utility_vars or var_name.startswith('_'):

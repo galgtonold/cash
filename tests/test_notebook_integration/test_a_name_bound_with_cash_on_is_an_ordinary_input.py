@@ -138,3 +138,54 @@ def test_a_value_read_in_the_cash_on_cell_still_follows_its_file(
         "the file RAW was read from changed and the cells below kept the "
         "old text:\n" + nb_runner.get_raw_output(3)
     )
+
+
+#: A LOAD in the %cash_on cell: its binding could have read a file, so its
+#: lineage is not adopted (above). Instead the first cell needing it re-runs
+#: the binding under tracking, once, which records the file too.
+LOAD_SETUP_EXTRA = "\nRAW = DATA.read_text()"
+SIZE = "SIZE = len(RAW) + " + WORK + " % 1"
+SHOW_SIZE = "print('R size=' + str(SIZE))"
+
+
+@LOAD_SENSITIVE
+def test_a_value_loaded_in_the_cash_on_cell_is_cached_below(nb_runner, tmp_path):
+    data = _data(tmp_path)
+    nb_runner.create_notebook([_setup(data, 3) + LOAD_SETUP_EXTRA, SIZE, SHOW_SIZE])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "R size=5" in nb_runner.get_output(3), nb_runner.get_raw_output(3)
+
+    nb_runner.run_cell(2)
+    again = nb_runner.get_raw_output(2)
+    assert shows_cached(again) and "missing lineage" not in again, (
+        "the statement reading RAW re-ran instead of restoring:\n" + again
+    )
+
+    nb_runner.restart()
+    nb_runner.run_cell(1)
+    nb_runner.run_cell(2)
+    after = nb_runner.get_raw_output(2)
+    assert shows_cached(after), (
+        "after a restart the statement reading RAW re-ran instead of "
+        "restoring:\n" + after
+    )
+    nb_runner.run_cell(3)
+    assert "R size=5" in nb_runner.get_output(3), nb_runner.get_raw_output(3)
+
+
+def test_a_value_loaded_in_the_cash_on_cell_follows_its_file_when_re_run_alone(
+        nb_runner, tmp_path):
+    """Only the reader's own cell is re-run -- no cell below to repair it."""
+    data = _data(tmp_path)
+    nb_runner.create_notebook([_setup(data, 3) + LOAD_SETUP_EXTRA, SIZE, SHOW_SIZE])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.run_cell(2)
+    data.write_text("abcdefgh", encoding="utf-8")
+    nb_runner.run_cell(2)
+    nb_runner.run_cell(3)
+    assert "R size=8" in nb_runner.get_output(3), (
+        "the file RAW was read from changed and SIZE kept the old text:\n"
+        + nb_runner.get_raw_output(2) + nb_runner.get_raw_output(3)
+    )

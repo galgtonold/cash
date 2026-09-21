@@ -41,9 +41,9 @@ That's the whole setup — no decorators, no config file. (`import cash` auto-re
 the magics, so `%load_ext cash` is not required.)
 
 Your imports, paths and constants can go in this cell too. Load data in the cells
-below it. Cash wasn't listening yet when this cell started, so it cannot see what a
-load in it reads, and the statements that use the result are
-[not cached](../badges.md#input-variable-missing-lineage).
+below it. Cash wasn't listening yet when this cell started, so a load in it has to
+be [re-run once under tracking](../badges.md#input-variable-missing-lineage) before
+its file is tracked, which means reading the file twice.
 
 !!! tip "Skip the boilerplate"
     Run `cash autoload on` once and every new IPython/Jupyter kernel starts with

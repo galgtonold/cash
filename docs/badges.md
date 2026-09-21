@@ -263,21 +263,27 @@ there is no lineage to put into the key. A key without it could not tell the
 old value from a new one, so Cash refuses to store rather than risk a wrong
 hit. The statement still runs normally.
 
-This happens when the name was bound somewhere Cash was not watching:
+This happens when the name was bound somewhere Cash was not watching and
+that isn't in the notebook: `%run`, `exec`, or an IPython startup file.
+Cash cannot re-run what it cannot see. To fix it, bind the name in a notebook
+cell below `%cash_on`.
 
-- by `%run`, `exec`, or an IPython startup file;
-- in the `%cash_on` cell, or a cell run before it, by a statement that
-  could have read something. That covers any function or method call that
-  isn't a plain constructor, such as `RAW = DATA.read_text()`,
-  `df = pd.read_parquet(...)` or `cfg = load_config()`. Cash did not see
-  what it read, so it cannot tell when the value goes stale.
+Names bound in the `%cash_on` cell itself are handled for you:
 
-Plain setup lines in the `%cash_on` cell are fine. Imports, constants,
-literals, `Path(...)` and `os.path.join(...)` get the lineage the notebook
-implies, and statements reading them cache normally.
+- **Setup lines** get the lineage the notebook implies: imports, constants,
+  literals, `Path(...)`, `os.path.join(...)`. Statements reading them cache
+  normally.
+- **Anything that could have read something**, such as
+  `df = pd.read_parquet(...)` or `RAW = DATA.read_text()`, is re-run once
+  under tracking by the first cell that needs it. You'll see it as an
+  `^EXECUTED` upstream row. From then on it's tracked against its file like
+  any other load. After a restart that re-run is served from the cache, as
+  long as the load is expensive enough to be cached at all.
 
-**Fix:** Keep loads out of the `%cash_on` cell. Do the setup there (imports,
-paths, constants) and load data in the cells below it:
+That one re-run is why it's still better to load data in the cells *below*
+`%cash_on`. In a fresh session a load in the `%cash_on` cell reads its file
+twice: once when that cell runs, and once when the first cell needing it
+re-runs it under tracking.
 
 <!-- test:skip reason="illustrative — references missing data/segments.parquet" -->
 ```python
@@ -291,10 +297,6 @@ DATA = Path("data")
 # cell 2 -- cached, and tracked against the file
 segments = pd.read_parquet(DATA / "segments.parquet")
 ```
-
-If you leave the load in the `%cash_on` cell, the statements reading it run
-every time. Cash also cannot promise to notice when that file changes, so
-after you change the file, re-run that cell yourself.
 
 !!! info "Not on this list: a file read through a loader Cash doesn't intercept"
     Cash does **not** refuse to cache a statement because it couldn't see the
