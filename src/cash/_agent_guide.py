@@ -17,7 +17,8 @@ minimal correct path; it is also what `cash.help()` returns.
 
 ## Two front-ends, one engine
 
-- **Notebook** — first cell: `import cash` then `%cash_on`. Every statement caches
+- **Notebook** — first cell: `import cash` then `%cash_on` (imports, paths and
+  constants may share it; load data in the cells below). Every statement caches
   by *(its code + upstream inputs + file deps)*. Editing a cell or any upstream
   input auto-invalidates everything downstream.
 - **Script / module** — `@cash.cache` on an expensive function. Caches by
@@ -42,9 +43,11 @@ row appends ` - <reason>`. The header line carries the cell total and, when any
 row was not cached, a ` - N not cached` suffix.
 
 `CACHED` = served from cache · `EXECUTED` = ran · `NOT CACHED` = ran but not
-stored (too cheap, a side effect, or `# @cash:no-cache`). Check the running total
-with `%cash_stats` ("Net time saved" — honest, and it will report a **loss** if
-you cached something too cheap).
+stored (too cheap, a side effect, or `# @cash:no-cache`; every reason is
+explained in the badge reference). Check the running total with `%cash_stats`
+("Net time saved" — honest, and it will report a **loss** if you cached
+something too cheap), and what the cache on disk holds with `cash inspect` in a
+terminal: every entry's size beside the time it saves.
 
 Two things to know when reading a captured notebook:
 

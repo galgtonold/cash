@@ -126,7 +126,7 @@ Five common causes, each with the badge you'll see and the one-line fix.
 
 <iframe class="cash-badge" src="/_badges/miss_file_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-**Why:** Cash tracks files passed to common I/O calls (`pd.read_csv`, `np.load`, `open`, `joblib.load`, `pickle.load`, `json.load`, and others) and records each file's size and a content hash. The file's **contents** differ from what was recorded when the cache was populated. The size is checked first because it proves a change cheaply; when the size matches, the content hash decides.
+**Why:** Cash tracks files passed to common I/O calls (`pd.read_csv`, `np.load`, `open`, `Path.read_text`, `joblib.load`, `pickle.load`, `json.load`, and others) and records each file's size and a content hash. The file's **contents** differ from what was recorded when the cache was populated. The size is checked first because it proves a change cheaply; when the size matches, the content hash decides.
 
 <!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @bab80523, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
 **Fix:** If you changed the file on purpose, the recompute is correct. For a file up to 256 MiB (`file_hash_full_max_bytes`), a bumped mtime alone will *not* trigger this — a sync tool or a notebook autosave plugin that rewrites the file byte-for-byte leaves the cache valid, so there's nothing to exclude. If you see this badge for such a file without having changed it, the bytes really did move: check for a process rewriting it with different content.
@@ -151,7 +151,7 @@ A larger file is different. Cash hashes three regions of it rather than every by
 
 ## 4. Why wasn't this cached?
 
-A row labelled **NOT CACHED** (ochre rail) ran but Cash refused to store the result, so it will run again on every future run. The cell header counts these in a `not cached` chip. Four common causes:
+A row labelled **NOT CACHED** (ochre rail) ran but Cash refused to store the result, so it will run again on every future run. The cell header counts these in a `not cached` chip. Six common causes:
 
 !!! note "Unseeded randomness is *not* one of them"
     A statement that draws from an unseeded RNG is still cached — Cash warns
@@ -213,6 +213,88 @@ See [Cost model and smart persistence](cost-model.md) for how this decision is m
 **Why:** The statement mutates an object that already existed — `out.append(...)`, `d[k] = v`, `df.sort_values(inplace=True)` — rather than producing a new value. There is no snapshot to restore that would reproduce the mutation, so Cash bumps the receiver's lineage (everything downstream stays correct) and re-executes the statement each run.
 
 **Fix:** Assign the result instead of mutating in place — `out = [f(e) for e in items]` caches at any length where the append loop does not. See [A long `for`-append loop can stop caching](known-limitations.md#a-long-for-append-loop-can-stop-caching).
+
+### Unstable key
+
+```text
+  NOT CACHED: model = fit(features, y)  (4.20s) - unstable key
+  1 statement stopped caching: `model = fit(features, y)`
+  (unstable key: the cache key changed every run, so storing
+  the value could never pay back). They still run normally; ...
+```
+
+<!-- claim: cash/notebook/statement/miss_guard.py:GUARD_AFTER_CONSECUTIVE_CHURN_MISSES == 5, cash/notebook/statement/miss_guard.py:REPROBE_EVERY_N_RUNS == 10 -->
+**Why:** The same statement, with the same source, ran five times in a row
+and got a different cache key every time, without a single hit. A key that
+never repeats can never hit, so writing the value is pure cost, and Cash
+stops writing it. Nothing is stale: the statement still runs and its result
+is correct. Cash keeps looking the key up, and lets one write through every
+10 runs, or at once if the key repeats, so the statement starts caching again
+as soon as its key settles.
+
+The key churns because one of the statement's **inputs** gets a new lineage
+on every run. That almost always means an upstream value is **recomputed on
+every run instead of being restored**. Find that upstream statement and you
+have found the cause. The flagged statement is only where it shows up, which
+is why one upstream problem can flag a whole chain below it. The usual
+suspects are:
+
+- a loop upstream that re-runs some of its iterations each time,
+- an unseeded random draw upstream,
+- a value built from something that differs between runs, such as the
+  current time or a directory listing whose order changes.
+
+**Fix:** Look at the badges of the cells *above* the flagged statement, and
+find a row that shows `EXECUTED` when you expected `CACHED`. Its miss reason
+([§3](#3-why-did-this-re-run)) tells you what it reacted to, and
+`%cash_debug on` prints the lineage of every input. Fixing that upstream row
+fixes the flagged ones too. Don't rewrite the flagged statement itself.
+Rebinding a name (`df = df.assign(c=...)`) does *not* make a key unstable:
+re-running such a cell on its own keeps its key.
+
+### Input variable missing lineage
+
+```text
+  NOT CACHED: segments = load(DATA)  (2.10s) - Input variable missing lineage
+```
+
+**Why:** The statement reads a name that Cash never saw being assigned, so
+there is no lineage to put into the key. A key without it could not tell the
+old value from a new one, so Cash refuses to store rather than risk a wrong
+hit. The statement still runs normally.
+
+This happens when the name was bound somewhere Cash was not watching:
+
+- by `%run`, `exec`, or an IPython startup file;
+- in the `%cash_on` cell, or a cell run before it, by a statement that
+  could have read something. That covers any function or method call that
+  isn't a plain constructor, such as `RAW = DATA.read_text()`,
+  `df = pd.read_parquet(...)` or `cfg = load_config()`. Cash did not see
+  what it read, so it cannot tell when the value goes stale.
+
+Plain setup lines in the `%cash_on` cell are fine. Imports, constants,
+literals, `Path(...)` and `os.path.join(...)` get the lineage the notebook
+implies, and statements reading them cache normally.
+
+**Fix:** Keep loads out of the `%cash_on` cell. Do the setup there (imports,
+paths, constants) and load data in the cells below it:
+
+<!-- test:skip reason="illustrative — references missing data/segments.parquet" -->
+```python
+# cell 1
+import cash
+%cash_on
+import pandas as pd
+from pathlib import Path
+DATA = Path("data")
+
+# cell 2 -- cached, and tracked against the file
+segments = pd.read_parquet(DATA / "segments.parquet")
+```
+
+If you leave the load in the `%cash_on` cell, the statements reading it run
+every time. Cash also cannot promise to notice when that file changes, so
+after you change the file, re-run that cell yourself.
 
 !!! info "Not on this list: a file read through a loader Cash doesn't intercept"
     Cash does **not** refuse to cache a statement because it couldn't see the

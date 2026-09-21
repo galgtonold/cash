@@ -40,6 +40,11 @@ import cash
 That's the whole setup — no decorators, no config file. (`import cash` auto-registers
 the magics, so `%load_ext cash` is not required.)
 
+Your imports, paths and constants can go in this cell too. Load data in the cells
+below it. Cash wasn't listening yet when this cell started, so it cannot see what a
+load in it reads, and the statements that use the result are
+[not cached](../badges.md#input-variable-missing-lineage).
+
 !!! tip "Skip the boilerplate"
     Run `cash autoload on` once and every new IPython/Jupyter kernel starts with
     `import cash` plus `%cash_on` already executed. See the [CLI reference](../cli.md).
@@ -206,7 +211,7 @@ cached whole, mutations included.* See
 
 ### File changes are tracked automatically
 
-Cash intercepts file reads (`pd.read_csv`, `np.load`, `open`, `joblib.load`, …) and
+Cash intercepts file reads (`pd.read_csv`, `np.load`, `open`, `Path.read_text`, …) and
 records each file's fingerprint — change the file on disk and the statements that
 read it recompute, no annotation needed. See the [notebook reference](../notebook_caching_api.md).
 
