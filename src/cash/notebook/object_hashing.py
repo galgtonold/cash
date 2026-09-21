@@ -135,6 +135,16 @@ def compute_hash(obj: Any) -> str:
             sample = str(_content_bytes(obj.flat[:100]) if obj.size > 0 else b'')
             combined = f"{shape_str}:{dtype_str}:{sample}"
             return hashlib.sha256(combined.encode('utf-8')).hexdigest()
+        if isinstance(obj, tuple) and isinstance(getattr(type(obj), '_fields', None), tuple):
+            # A namedtuple is its name, its fields and its values. Pickling it
+            # pickles its CLASS by reference, which fails for a class made on
+            # the spot -- as `df.itertuples()` makes one per call -- and the
+            # identity tier below then keyed every row on `id(row)`, new on
+            # every run: a loop over itertuples() never restored (r28s1, r28s3).
+            fields = type(obj)._fields
+            return hashlib.sha256(
+                f"namedtuple:{type(obj).__name__}:{fields!r}:{_hash_collection(tuple(obj))}"
+                .encode('utf-8')).hexdigest()
         if isinstance(obj, (list, tuple, dict, set, frozenset)):
             return _hash_collection(obj)
         return hashlib.sha256(pickle.dumps(obj)).hexdigest()
