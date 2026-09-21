@@ -122,7 +122,7 @@ class InMemoryBackend(CacheBackend):
         try:
             type_name = type(value).__name__
             if type_name in ('DataFrame', 'Series'):
-                return value.copy(deep=True)
+                return InMemoryBackend._copy_frame(value)
             value_type = type(value)
             if value_type is list or value_type is tuple:
                 scalars = InMemoryBackend._IMMUTABLE_SCALARS
@@ -162,11 +162,26 @@ class InMemoryBackend(CacheBackend):
             return value
 
     @staticmethod
+    def _copy_frame(frame: Any) -> Any:
+        """A copy of a pandas frame/series that no later write can reach.
+
+        Under pandas copy-on-write -- always on from pandas 3 -- a SHALLOW copy
+        is that already: the first write to either side copies then, and only
+        what it writes. A deep copy of every stored frame, and again on every
+        RAM hit, was most of cash's own first-run cost on frame-heavy work:
+        0.28 of 0.44 s for 20 statements making 1M-row frames, against 0.09 s
+        plain (measured after round 28). Without copy-on-write, deep as before.
+        """
+        return frame.copy(deep=not _pandas_copy_on_write())
+
+    @staticmethod
     def _premade_copies(value: dict, memo: dict[int, Any], depth: int = 0) -> None:
         """Put a copy of each plain container in *value*'s dicts into *memo*."""
         for item in value.values():
             item_type = type(item)
-            if item_type is dict:
+            if item_type.__name__ in ('DataFrame', 'Series') and id(item) not in memo:
+                memo[id(item)] = InMemoryBackend._copy_frame(item)
+            elif item_type is dict:
                 if depth < 4:
                     InMemoryBackend._premade_copies(item, memo, depth + 1)
             elif (item_type is tuple or item_type is list) and id(item) not in memo:
@@ -610,3 +625,24 @@ class InMemoryBackend(CacheBackend):
             except (OSError, AttributeError):
                 # Best-effort memory cleanup; safe to ignore on non-glibc systems
                 pass
+
+
+_COW: list[bool] = []
+
+
+def _pandas_copy_on_write() -> bool:
+    """Whether pandas copy-on-write is in force (always, from pandas 3)."""
+    if _COW:
+        return _COW[0]
+    import sys
+    pd = sys.modules.get("pandas")
+    if pd is None:
+        return False            # not decided yet: nothing to copy without pandas
+    try:
+        on = int(str(pd.__version__).split(".")[0]) >= 3
+        if not on:
+            on = bool(pd.get_option("mode.copy_on_write") is True)
+    except Exception:  # noqa: BLE001 - unknown: the safe answer is "deep copy"
+        on = False
+    _COW.append(on)
+    return on
