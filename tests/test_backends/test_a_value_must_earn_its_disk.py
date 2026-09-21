@@ -119,6 +119,30 @@ class TestThroughABackend:
             self._set(b, "spendy", 200 * MIB, 1.2)
         b.shutdown()
 
+    def test_each_refused_statement_is_named_once(self, tmp_path):
+        """Round 28: the refusal was said once per SESSION and named a key.
+
+        r28s1, r28s4 and r28s5 each saw exactly one CACHE-NOT-WORTH-BYTES per
+        kernel -- every later refusal was silent -- and it read
+        ``cached value 'stmt:7ada31...'``, prefixed ``ipkernel.py:460``. Now: one
+        per statement, naming its code, blamed on ``<cash>``.
+        """
+        import warnings
+        b = self._tiered(tmp_path)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self._set(b, "stmt:aaaa", 200 * MIB, 1.2, code="net = net_returns(orders, 4)")
+            self._set(b, "stmt:aaaa2", 200 * MIB, 1.2, code="net = net_returns(orders, 4)")
+            self._set(b, "stmt:bbbb", 200 * MIB, 1.2, code="lines = explode(orders)")
+        b.shutdown()
+        ours = [w for w in caught if "CACHE-NOT-WORTH-BYTES" in str(w.message)]
+        assert len(ours) == 2, [str(w.message)[:80] for w in ours]
+        text = " ".join(str(w.message) for w in ours)
+        assert "net = net_returns(orders, 4)" in text and "lines = explode(orders)" in text, text
+        assert "stmt:" not in text, text
+        assert all(w.filename == "<cash>" for w in ours), [w.filename for w in ours]
+        assert all(getattr(w.message, "code", None) == "CACHE-NOT-WORTH-BYTES" for w in ours)
+
     def test_a_value_that_does_earn_it_is_persisted(self, tmp_path):
         """The control: the gate must not simply refuse everything large."""
         b = self._tiered(tmp_path)

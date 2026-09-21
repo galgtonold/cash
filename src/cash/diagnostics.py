@@ -291,8 +291,16 @@ def warn_diagnostic(
     fix: str,
     *,
     stacklevel: int | None = None,
+    location: tuple[str, int] | None = None,
 ) -> None:
     """Emit *category* carrying *code*, its rendered message, and ``.code``.
+
+    *location* ``(filename, lineno)`` blames that place instead of a frame,
+    keeping ``.code`` (``warn_explicit`` takes the instance as its message).
+    For a warning raised from cash's own machinery with no user frame worth
+    naming: resolved "at emit time" from a notebook backend, the nearest frame
+    outside Cash is ipykernel's, and every such warning read
+    ``ipkernel.py:460: ...`` (round 28).
 
     Warns with an *instance* rather than a message string so the code survives
     to the handler: a caller can test ``w.message.code == "CACHE-THRASH"``
@@ -309,6 +317,10 @@ def warn_diagnostic(
     message = format_diagnostic(code, what, fix)   # raises on an unknown code
     instance = category(message)
     instance.code = code
+    if location is not None:
+        warnings.warn_explicit(instance, category, filename=location[0],
+                               lineno=location[1], registry=None)
+        return
     _warn_at(instance, _user_frame_level() if stacklevel is None else stacklevel + 1, None)
 
 

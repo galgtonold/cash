@@ -334,7 +334,7 @@ Measured over all 3120 of those entries, the rate refuses 76% of the bytes and
 gives up about 1% of the compute.
 
 The refusal emits [`CACHE-NOT-WORTH-BYTES`](warnings.md#cache-not-worth-bytes)
-once per session, and sets `persist_skipped = "bytes"` on the metadata — the
+once per statement, naming its code, and sets `persist_skipped = "bytes"` on the metadata — the
 `skipped_reason` you see is "more cache per second saved than cash will spend".
 Version pruning rations *superseded* copies at half this rate: a spare copy kept
 for undo is speculative, while a live entry is the one that will actually be

@@ -74,7 +74,8 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         # Once-per-session dedup for the oversize-refusal warning.
         self._warned_oversize = False
         #: Same, for the bytes-per-compute-second ceiling (`value_policy`).
-        self._warned_not_worth = False
+        # Statements already told CACHE-NOT-WORTH-BYTES this session.
+        self._warned_not_worth: set[str] = set()
 
     def _promotion_backend_kind(self) -> str:
         """Cost-model backend kind of the first tier past RAM (the primary
@@ -224,7 +225,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                     logger.debug("Could not drop call ref %r", ref, exc_info=True)
 
     def _warn_not_worth_its_bytes(
-        self, key: str, size_bytes: int, compute_seconds: float,
+        self, key: str, size_bytes: int, compute_seconds: float, code: str | None = None,
     ) -> None:
         """Warn once/session that a value cost more disk than it saves compute.
 
@@ -239,9 +240,19 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         oversize warning -- a sweep hits this on every iteration, and 72 copies
         of one message is the same silence by a different route.
         """
-        if self._warned_not_worth:
+        # Once per STATEMENT, not per session: round 28's testers each saw one
+        # of these per kernel and every later refusal was silent -- including
+        # the ones on the steps they restarted into. Named by its code, which
+        # is what a reader can find in their notebook; a key is not.
+        ident = (code or "").strip() or str(key)
+        if ident in self._warned_not_worth:
             return
-        self._warned_not_worth = True
+        self._warned_not_worth.add(ident)
+        lines = [ln for ln in ident.splitlines() if ln.strip()]
+        # A loop body's stored code starts with its context marker comment.
+        first = next((ln for ln in lines if not ln.lstrip().startswith('#')),
+                     lines[0] if lines else str(key))
+        named = f"`{first[:80]}`" if code else repr(key)
         from cash.diagnostics import warn_diagnostic
         from cash.exceptions import CashCacheIneffectiveWarning
         from .adaptive_caps import human_bytes
@@ -250,7 +261,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         warn_diagnostic(
             CashCacheIneffectiveWarning,
             "CACHE-NOT-WORTH-BYTES",
-            f"cached value {key!r} is {human_bytes(size_bytes)} serialized but "
+            f"the value of {named} is {human_bytes(size_bytes)} serialized but "
             f"only takes {compute_seconds:.2f}s to recompute -- "
             f"{rate:,.0f} MiB of cache per second saved, against the "
             f"{human_bytes(WORTH_CEILING_BYTES_PER_SECOND)} per second cash is "
@@ -265,6 +276,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             "better answer for a value this large. `cash inspect` in a "
             "terminal lists what the cache does hold, each entry's size "
             "next to the time it saves.",
+            location=("<cash>", 1),
         )
 
     def peek_metadata(self, key: str) -> MetadataDict | None:
@@ -460,7 +472,8 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             weight = ((stored_metadata.get('size') or size)
                       + int(stored_metadata.get('call_ref_bytes') or 0))
             if not worth_its_bytes(weight, rebuild_seconds):
-                self._warn_not_worth_its_bytes(key, weight, rebuild_seconds)
+                self._warn_not_worth_its_bytes(key, weight, rebuild_seconds,
+                                               code=stored_metadata.get('code'))
                 self._drop_persisted_call_refs(stored_metadata.get('call_refs'))
                 stored_metadata['persist_skipped'] = 'bytes'
                 return False
@@ -611,7 +624,8 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 if not worth_its_bytes(weight, exec_time):
                     past_compute_floor = False
                     bytes_refused = True
-                    self._warn_not_worth_its_bytes(key, weight, exec_time)
+                    self._warn_not_worth_its_bytes(key, weight, exec_time,
+                                                   code=metadata.get('code'))
                     self._drop_persisted_call_refs(metadata.get('call_refs'))
 
             stored, size_refused, refused_size, refusing_caps = (

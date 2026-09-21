@@ -59,7 +59,7 @@ For a notebook statement, three gates, in order:
    of cache per second of compute saved**, and refuses anything over 8 MiB that
    exceeds that rate
    ([`CACHE-NOT-WORTH-BYTES`](../warnings.md#cache-not-worth-bytes) says so once
-   per session).
+   per statement, naming its code).
 
 The cost model uses the value's *real type* when the entry carries one
 (`DataFrame`, `ndarray`, `dict`, …); when it doesn't — an injected policy, an
