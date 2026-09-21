@@ -49,10 +49,40 @@ def _content_bytes(values: Any) -> bytes:
     return values.tobytes()
 
 
+def _frame_dtypes_signature(obj: Any) -> str:
+    """``str(obj.dtypes.to_dict())``, byte for byte, without its per-column cost.
+
+    That expression iterated the column index element by element (slow for
+    pandas' Arrow-backed string index) and called ``repr`` on every column's
+    dtype object. A loop mutating a 3130x800 frame re-hashed it after every
+    iteration, and building that string was 42% of a loop that ran 70x slower
+    under cash than without it (round 28, r28s3). The OUTPUT must not change:
+    it is part of every frame's hash, and keys already on disk must not move
+    (``test_a_numeric_frame_hash_is_unchanged``). So: the columns come out in
+    one ``tolist()``, the dict keeps its semantics for duplicate names, and a
+    dtype is repr'd once however many columns share it.
+    """
+    mapping = dict(zip(obj.columns.tolist(), obj.dtypes.tolist()))
+    reprs: dict[int, str] = {}
+    parts = []
+    for name, dtype in mapping.items():
+        text = reprs.get(id(dtype))
+        if text is None:
+            text = reprs[id(dtype)] = repr(dtype)
+        parts.append(f"{name!r}: {text}")
+    return "{" + ", ".join(parts) + "}"
+
+
 def _hash_dataframe_or_series(obj: Any, type_name: str) -> str:
     """Hash a pandas DataFrame or Series using shape + dtypes + data sample."""
     shape_str = f"{obj.shape}"
-    dtypes_str = str(obj.dtypes.to_dict()) if type_name == 'DataFrame' else str(obj.dtype)
+    if type_name == 'DataFrame':
+        try:
+            dtypes_str = _frame_dtypes_signature(obj)
+        except _HASH_ERRORS:
+            dtypes_str = str(obj.dtypes.to_dict())
+    else:
+        dtypes_str = str(obj.dtype)
     try:
         sample = str(_content_bytes(obj.head(5).values) if len(obj) > 0 else b'')
     except (TypeError, ValueError, AttributeError, pickle.PicklingError):

@@ -18,6 +18,7 @@ them directly.
 import ast
 import inspect
 import os
+import re
 import textwrap
 import types
 from collections.abc import Mapping
@@ -4201,7 +4202,47 @@ def callee_mutated_globals_for_tree(tree, resolve_source, user_ns=None) -> froze
     )
 
 
+#: ``(code, the identifiers in it that name a module) -> StatementAnalysis``.
+#: See ``analyze_statement``.
+_ANALYSIS_MEMO: dict[tuple[str, frozenset], StatementAnalysis] = {}
+_ANALYSIS_MEMO_MAX = 4096
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
 def analyze_statement(
+    code: str,
+    tree: ast.Module | None,
+    user_ns: Mapping[str, Any] | None = None,
+    resolve_source=None,
+) -> StatementAnalysis:
+    """Memoised front of :func:`_analyze_statement` -- see there.
+
+    A loop body's statements are analysed on every iteration, and the analysis
+    is pure AST apart from telling a module apart from an ordinary object. A
+    631-iteration loop spent 15% of its cash overhead re-walking the same four
+    statements (round 28, r28s3). So the result is keyed on the code and on
+    which of its identifiers are bound to modules right now -- everything it
+    reads from *user_ns*. Only without *resolve_source*, whose answers about
+    callee source can change under it. The result is a frozen dataclass of
+    immutable fields, so sharing it is safe.
+    """
+    if resolve_source is not None:
+        return _analyze_statement(code, tree, user_ns, resolve_source)
+    modules = frozenset()
+    if user_ns is not None:
+        modules = frozenset(n for n in set(_IDENTIFIER.findall(code))
+                            if isinstance(user_ns.get(n), types.ModuleType))
+    key = (code, modules)
+    found = _ANALYSIS_MEMO.get(key)
+    if found is None:
+        found = _analyze_statement(code, tree, user_ns, resolve_source)
+        if len(_ANALYSIS_MEMO) >= _ANALYSIS_MEMO_MAX:
+            _ANALYSIS_MEMO.clear()
+        _ANALYSIS_MEMO[key] = found
+    return found
+
+
+def _analyze_statement(
     code: str,
     tree: ast.Module | None,
     user_ns: Mapping[str, Any] | None = None,
