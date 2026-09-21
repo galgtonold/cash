@@ -70,6 +70,14 @@ class ModuleInvalidator:
         """
         if per_module_changed_symbols is None:
             per_module_changed_symbols = {}
+        if changed_modules:
+            # Makes the upstream simulation re-simulate rather than replay its
+            # pre-edit cache -- see TrackingState.module_generation. Taken
+            # before the from-imports are cleared below, while they are still
+            # recognisable by where they came from.
+            state = processor._tracking_state
+            state.module_generation += 1
+            state.reloaded_names.update(self._names_reaching(changed_modules, state))
 
         old_module_lineages = self._update_module_lineages(changed_modules, processor)
         self._clear_from_imported_tracking(changed_modules, processor)
@@ -144,6 +152,21 @@ class ModuleInvalidator:
         user_ns = getattr(self._shell, 'user_ns', None)
         candidate = user_ns.get(name) if isinstance(user_ns, dict) else None
         return candidate if isinstance(candidate, ModuleType) else None
+
+    def _names_reaching(self, changed_modules: dict[str, str], state: Any) -> set[str]:
+        """Every name a cell can use a changed module through."""
+        names: set[str] = set()
+        for mod_name in changed_modules:
+            names.update(self._names_bound_to(mod_name))
+            prefix = mod_name + '.'
+            for var_name, value in list(self._shell.user_ns.items()):
+                owner = getattr(value, '__module__', None)
+                if isinstance(owner, str) and (owner == mod_name or owner.startswith(prefix)):
+                    names.add(var_name)
+            for var_name, src in state.from_import_sources.items():
+                if src == mod_name or src.startswith(prefix):
+                    names.add(var_name)
+        return names
 
     def _names_bound_to(self, mod_name: str) -> list[str]:
         """The module's own name, plus every namespace alias for it.
@@ -363,6 +386,13 @@ class ModuleInvalidator:
         processor.executed_input_lineages.pop(var_name, None)
         processor.current_session_hashes.pop(var_name, None)
         processor._tracking_state.module_attribute_deps.pop(var_name, None)
+        # The value is still in memory, built by the pre-edit module. Dropping
+        # its lineage makes a READER of it recompute, but a cell further down
+        # reading only something built from it compared lineages and saw
+        # nothing to compare: r28s5 exported the pre-edit numbers, 5/5. Ask
+        # for its binding to be re-run instead -- TrackingState.rerun_bindings.
+        if var_name in self._shell.user_ns:
+            processor._tracking_state.rerun_bindings.add(var_name)
         if self._debug:
             print(f"[MODULE_INVALIDATE] Cleared lineage for dependent var '{var_name}'")
 

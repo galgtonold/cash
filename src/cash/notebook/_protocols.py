@@ -96,7 +96,8 @@ class TrackingState:
     | executed_file_deps           | —               | W (after exec)    | R (stale check)   |
     | executed_file_mtimes         | —               | W (after exec)    | —                 |
     | simulated_lineage            | —               | R (ControlStruct) | W (after pass 1)  |
-    | untracked_bindings           | —               | R/W (classifier)  | W (after pass 1)  |
+    | rerun_bindings           | —               | R/W (classifier)  | W (after pass 1)  |
+    | module_generation            | —               | W (module inv.)   | R (incremental)   |
     | variable_hashes              | R (badge)       | W (after exec)    | —                 |
     | variable_sources             | R (badge)       | W (after exec)    | —                 |
     | current_session_hashes       | —               | W (after exec)    | —                 |
@@ -223,15 +224,40 @@ class TrackingState:
     # the recorded outcome stops matching, exactly as a tracked name behaves.
     simulated_lineage: dict[str, str] = field(default_factory=dict)
 
-    # Names that were bound, untracked, before `%cash_on` took effect by a
-    # statement that could have read something (`df = pd.read_parquet(...)`
-    # in the `%cash_on` cell), so the simulation's lineage was NOT adopted for
-    # them. Written once per `%cash_on` by NotebookSimulator; read and emptied
-    # by MismatchClassifier, which re-runs such a binding under tracking the
-    # first time a cell needs it. Only these: a lineage dropped LATER (the
-    # module invalidator after an edit) must stay dropped, or its readers are
-    # served the pre-edit value.
-    untracked_bindings: set[str] = field(default_factory=set)
+    # Names in memory whose value can no longer be vouched for, and which must
+    # be re-bound under tracking before a cell uses them. Read and emptied by
+    # MismatchClassifier, which schedules the binding statement to re-run the
+    # first time a cell needs the name. Two writers:
+    #
+    # * NotebookSimulator, once per `%cash_on`: names bound untracked before
+    #   cash was listening by a statement that could have read something
+    #   (`df = pd.read_parquet(...)` in the `%cash_on` cell).
+    # * ModuleInvalidator, after an edit: every variable BUILT from the edited
+    #   module whose lineage it drops. Without this a cell below that only
+    #   reads such a variable never learned it was stale -- the upstream check
+    #   compares lineages, and a dropped one compares with nothing (r28s5).
+    #
+    # Never a from-imported name itself: its lineage is dropped so that its
+    # readers recompute, and re-running the import put back a key that served
+    # them the pre-edit value.
+    rerun_bindings: set[str] = field(default_factory=set)
+
+    # Bumped by ModuleInvalidator every time it reloads a tracked module. The
+    # upstream simulation caches its per-cell results keyed on each cell's TEXT
+    # and the files it read -- neither of which an edit to a helper module
+    # changes -- so without this it replayed the pre-edit simulation, found
+    # nothing stale, and a cell below the helper's caller printed and exported
+    # the pre-edit value (round 28, r28s5, 5/5; broken since before round 27).
+    module_generation: int = 0
+    # The names a notebook reaches a reloaded module through -- the module and
+    # its aliases, and every name from-imported from it. Written by
+    # ModuleInvalidator with each generation, consumed by the simulation:
+    # re-simulating from the first cell that READS one of them, not from the
+    # top, keeps the import statement itself out of it. Replaying `from m
+    # import X` restores the outcome it recorded before the edit, whose key
+    # does not include the module's content, and X's readers were served the
+    # pre-edit value (test_a_from_imported_constant_that_changed).
+    reloaded_names: set[str] = field(default_factory=set)
 
     # Written by StatementProcessor after each execution.
     # Tracks the most recent content hash within the current session.

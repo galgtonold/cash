@@ -184,7 +184,7 @@ class NotebookSimulator:
             for out in entry[1] or ():
                 binder[out] = entry[0]
         adopted = []
-        untracked = self._tracking_state.untracked_bindings
+        untracked = self._tracking_state.rerun_bindings
         untracked.clear()
         for name, lineage_hash in virtual_lineage.items():
             if (not lineage_hash or name in runtime or name in imported
@@ -193,7 +193,7 @@ class NotebookSimulator:
             code = binder.get(name)
             if code is None or not _binds_without_reading(code, user_ns):
                 # Re-run under tracking instead, by the first cell that needs
-                # it -- see TrackingState.untracked_bindings.
+                # it -- see TrackingState.rerun_bindings.
                 untracked.add(name)
                 continue
             restores.record_restore(var_name=name, lineage_hash=lineage_hash,

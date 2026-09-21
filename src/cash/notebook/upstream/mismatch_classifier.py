@@ -1119,7 +1119,7 @@ class MismatchClassifier:
         ``NotebookSimulator._adopt_untracked_names`` gives one only to bindings
         that provably read nothing, because adopting a lineage for a load
         leaves nothing that knows it came from a file; it lists the others in
-        ``TrackingState.untracked_bindings``. Without a repair, every statement
+        ``TrackingState.rerun_bindings``. Without a repair, every statement
         reading such a name was refused as "Input variable missing lineage",
         run after run, until some other cell happened to trigger one (round
         27, r27s1).
@@ -1137,7 +1137,7 @@ class MismatchClassifier:
         value (``test_a_statement_depends_on_the_symbols_it_reads``, caught by
         the integration sweep).
         """
-        pending = self._tracking_state.untracked_bindings
+        pending = self._tracking_state.rerun_bindings
         if var_name not in pending or var_name in self.variable_lineage:
             return False
         if var_name in utility_vars or var_name.startswith('_'):

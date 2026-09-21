@@ -715,6 +715,27 @@ class VirtualLineage:
                 current_cell_idx, notebook_cells
             )
 
+        # A reloaded helper module changes what cells compute without changing
+        # their text or their files, which is all that scan compares, so it
+        # replayed the pre-edit simulation and a cell below the helper's caller
+        # printed the pre-edit value (r28s5). Re-simulate from the first cell
+        # that READS the module -- see TrackingState.reloaded_names for why not
+        # from the import. Like a file change, this is not flagged as an
+        # upstream CODE modification, which would withdraw trust from every
+        # loop in the notebook.
+        state = self._tracking_state
+        generation = getattr(state, 'module_generation', 0)
+        if generation != getattr(self, '_simulated_module_generation', 0):
+            self._simulated_module_generation = generation
+            reader = _first_cell_reading(notebook_cells, current_cell_idx,
+                                         getattr(state, 'reloaded_names', set()))
+            state.reloaded_names = set()
+            if reader is not None and reader < first_changed_cell:
+                first_changed_cell = reader
+                if self.debug:
+                    logger.debug("[UPSTREAM_DEBUG] A tracked module was reloaded; "
+                                 "re-simulating from cell %d, its first reader.", reader)
+
         # Check the lightweight hash cache for cells beyond the main cache range.
         if not cache_had_hash_mismatch and self._simulation_cell_hashes:
             if self._check_lightweight_hash_cache(current_cell_idx, notebook_cells):
@@ -3321,3 +3342,18 @@ class VirtualLineage:
 
         # Filter out built-ins and loop targets
         return mutated_vars - _BUILTIN_NAMES - loop_targets
+
+
+def _first_cell_reading(notebook_cells: list[str], limit: int, names: set[str]) -> int | None:
+    """Index of the first cell before *limit* that loads any of *names*."""
+    if not names:
+        return None
+    for idx in range(min(limit, len(notebook_cells))):
+        try:
+            tree = ast.parse(CodeAnalyzer.strip_magics(notebook_cells[idx].replace('\r\n', '\n')))
+        except (SyntaxError, ValueError, TypeError):
+            return idx          # cannot tell: assume it reads them
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in names:
+                return idx
+    return None
