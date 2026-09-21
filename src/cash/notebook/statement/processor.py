@@ -2871,6 +2871,25 @@ class StatementProcessor:
                     metrics.setdefault('uncacheable_reasons', []).append(reason)
                     break
 
+        # Nor one producing a CONSUMABLE the cache cannot copy -- an open file
+        # handle, a generator. The RAM tier keeps such a value by reference, so
+        # a "hit" hands back the very object a reader already drained: on a
+        # second Run All `fh = open(p)` was served, and the cell reading `fh`
+        # printed [] where Run All in plain Jupyter reads the file again. It
+        # stayed hidden while that reader was itself restored from the cache
+        # (test_a_consumed_iterator_is_rebuilt_for_its_reader).
+        if not skip_cache:
+            from ..consumables import is_consumable_unrestorable
+            for out in outputs:
+                val = captured_vars.get(out)
+                if val is not None and is_consumable_unrestorable(val):
+                    skip_cache = True
+                    metrics.setdefault('uncacheable_reasons', []).append(
+                        f"'{out}' is consumed as it is read (an open file or a "
+                        f"generator) and cannot be restored: it is re-created "
+                        f"every run")
+                    break
+
         # Record executed file-WRITING statements by code text:
         # writes have no variable edge, so the upstream simulation needs this
         # to tell an edited/new writer from one that already ran.
