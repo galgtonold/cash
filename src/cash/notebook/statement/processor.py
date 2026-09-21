@@ -32,7 +32,7 @@ from cash.notebook.cache_key import (
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.file_dep_snapshot import snapshot_dependencies, snapshot_file_deps
-from cash.notebook.object_hashing import estimate_object_size
+from cash.notebook.object_hashing import estimate_object_size, mutation_fingerprint
 from cash.notebook.purity import is_known_pure, is_pure, is_stateful
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.file_deps import StatementFileDeps
@@ -457,6 +457,7 @@ from ..compiled_source import is_cash_filename, register_cell_source
 from ..function_tracker import FunctionTracker
 from ..write_observer import observe_writes
 from ..cacheability import (
+    bare_call_arguments,
     RECEIVER_READONLY_WRITE_METHODS,
     StatementAnalysis,
     analyze_statement,
@@ -1059,6 +1060,9 @@ class StatementProcessor:
         self.vars_with_mutation_lineage = state.vars_with_mutation_lineage
         self.executed_input_lineages = state.executed_input_lineages
         self.mutation_verdicts = state.mutation_verdicts
+        # Pre-execution fingerprints of a bare call's arguments, by statement
+        # source hash -- see _classify_method_mutations.
+        self._arg_snapshots: dict[str, dict[str, str]] = {}
 
     def process_statement(self, code: str, ttl: int | None = None, silent: bool = False,
                           annotation: CacheAnnotation | None = None,
@@ -2744,6 +2748,9 @@ class StatementProcessor:
         # recorded for the upstream simulation, which cannot observe execution.
         if mut_record:
             newly_mutated = {b for b in mut_observe if self._receiver_mutated(b)}
+            for name, before in self._arg_snapshots.pop(source_hash, {}).items():
+                if mutation_fingerprint(self.shell.user_ns.get(name)) != before:
+                    newly_mutated.add(name)
             if newly_mutated:
                 # ``est_fit`` is non-empty only under ``# @cash:cache-fit``
                 #. Those receivers still enter ``outputs`` (source-based
@@ -3226,7 +3233,8 @@ class StatementProcessor:
         # panel (round 22, tester-session tests).
         drawn_args = {name for name in top_level_call_argument_bases(tree)
                       if receiver_is_identity_coupled(self.shell.user_ns.get(name))}
-        if not candidates and not assigned and not drawn_args:
+        arg_watch = self._bare_call_arguments(tree, outputs) - drawn_args
+        if not candidates and not assigned and not drawn_args and not arg_watch:
             return set(), set(), set(), False
         tier1 = standalone_method_mutation_receivers(tree)
         inner = standalone_method_call_inner_methods(tree)
@@ -3296,8 +3304,36 @@ class StatementProcessor:
             if receiver_is_identity_coupled(receiver) or fits_its_receiver(_method, receiver):
                 pre_route.add(base)
         pre_route |= drawn_args
-        record_verdict = verdict is None and bool(observe or assumed)
+        # Objects handed to a bare call: `im.add_qc(df)`, `sc.tl.leiden(hv)`.
+        # A callee reached through a module is skipped above as "a module
+        # function call", so what it did to its ARGUMENTS was never asked.
+        # scanpy works entirely this way, and a hit "restored" the statement
+        # as a no-op: the column or key it adds was simply missing (round 28,
+        # r28s4, KeyError: 'total_counts' / 'leiden' after a restart).
+        # Observed like a tier-3 receiver, but with a full before/after
+        # fingerprint -- the cache hash samples -- and learned into the same
+        # verdict, so the next run (and the simulation) neither re-observes
+        # nor serves it: `print(df)` is learned as reading only.
+        snapshots: dict[str, str] = {}
+        for name in arg_watch:
+            if verdict is not None:
+                if name in verdict:
+                    pre_route.add(name)
+                continue
+            fingerprint = mutation_fingerprint(self.shell.user_ns.get(name))
+            if fingerprint is None:
+                assumed.add(name)
+                pre_route.add(name)
+            else:
+                snapshots[name] = fingerprint
+        if snapshots:
+            self._arg_snapshots[source_hash] = snapshots
+        record_verdict = verdict is None and bool(observe or assumed or snapshots)
         return pre_route - outputs, observe, assumed, record_verdict
+
+    def _bare_call_arguments(self, tree: ast.Module | None, outputs: set[str]) -> set[str]:
+        """See ``cacheability.bare_call_arguments`` (shared with the simulation)."""
+        return set(bare_call_arguments(tree, self.shell.user_ns)) - outputs
 
     def _resolve_live_function_source(self, name: str) -> str | None:
         # *name* bound directly, else a module-level helper in the __globals__ of

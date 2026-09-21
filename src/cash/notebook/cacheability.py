@@ -16,6 +16,7 @@ them directly.
 """
 
 import ast
+import inspect
 import os
 import textwrap
 import types
@@ -3717,6 +3718,43 @@ def top_level_call_argument_bases(tree: ast.Module | None) -> frozenset[str]:
             if root:
                 names.add(root)
     return frozenset(names)
+
+
+#: Types a call cannot change in place.
+_IMMUTABLE_ARGUMENT_TYPES = (int, float, complex, str, bytes, bool, type(None),
+                             frozenset, tuple, range)
+
+
+def bare_call_arguments(tree: ast.Module | None, user_ns: dict) -> frozenset[str]:
+    """Names a bare expression statement hands straight to its call, which the
+    call could change in place: ``im.add_qc(df)``, ``sc.tl.leiden(hv)``.
+
+    One definition for the runtime (which observes them) and the simulation
+    (which reproduces the runtime's verdict), so the two cannot disagree about
+    which names are candidates. Modules, classes, functions and immutable
+    values are never candidates.
+    """
+    if tree is None:
+        return frozenset()
+    names: set[str] = set()
+    for node in tree.body:
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+            continue
+        call = node.value
+        for arg in [*call.args, *(kw.value for kw in call.keywords)]:
+            if isinstance(arg, ast.Name):
+                names.add(arg.id)
+    out: set[str] = set()
+    for name in names:
+        if name not in user_ns:
+            continue
+        value = user_ns[name]
+        if isinstance(value, (types.ModuleType, type, _IMMUTABLE_ARGUMENT_TYPES)):
+            continue
+        if inspect.isroutine(value):
+            continue
+        out.add(name)
+    return frozenset(out)
 
 
 _PANDAS_PLOT_METHODS = frozenset({'plot', 'hist', 'boxplot'})

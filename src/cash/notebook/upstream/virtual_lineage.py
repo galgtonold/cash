@@ -33,6 +33,7 @@ from ..cacheability import (
     fits_its_receiver,
     is_pandas_plot_call,
     top_level_call_argument_bases,
+    bare_call_arguments,
     function_arg_mutations,
     standalone_call_arg_targets,
     chain_is_pure,
@@ -439,7 +440,18 @@ class VirtualLineage:
         # before the no-method-call early return, exactly as there.
         drawn_args = {name for name in top_level_call_argument_bases(tree)
                       if receiver_is_identity_coupled(self.shell.user_ns.get(name))}
-        if not candidates and not assigned and not drawn_args:
+        # Arguments of a bare call the runtime OBSERVED being changed
+        # (`im.add_qc(df)`, `sc.tl.leiden(hv)` -- see the runtime's
+        # `_classify_method_mutations`). Only its recorded verdict can say so:
+        # nothing static here knows what a library call does to its argument.
+        # Without this the runtime bumped `df` and the simulation did not, so
+        # the next cell rebuilt `df` from its constructor and the column the
+        # call added was gone (KeyError). An unknown verdict is NOT mutating:
+        # the statement has not run, and the runtime will observe it when it
+        # does -- treating every `print(df)` as a change would bump `df` for
+        # every reader.
+        arg_candidates = bare_call_arguments(tree, self.shell.user_ns) - drawn_args
+        if not candidates and not assigned and not drawn_args and not arg_candidates:
             return fam
         tier1 = standalone_method_mutation_receivers(tree)
         inner = standalone_method_call_inner_methods(tree)
@@ -449,6 +461,8 @@ class VirtualLineage:
         verdict = self.mutation_verdicts.get(source_hash)
         if verdict is None:
             verdict = self._persisted_mutation_verdict(source_hash)
+        if verdict:
+            receivers |= {name for name in arg_candidates if name in verdict}
         for base, method in candidates:
             receiver = self.shell.user_ns.get(base)
             if is_module(base):

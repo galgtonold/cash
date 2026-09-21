@@ -327,3 +327,54 @@ def _estimate_set(obj: Any, _depth: int) -> int:
         return base
     sample = next(iter(obj))
     return base + n * estimate_object_size(sample, _depth + 1)
+
+
+def mutation_fingerprint(obj: Any) -> str | None:
+    """A digest that changes when *obj* is changed IN PLACE, or ``None``.
+
+    ``compute_hash`` samples a large frame or array, which is right for a
+    cache key and wrong for "did this call change its argument": a function
+    that adds a column or rescales values in place can leave the sample alone.
+    This reads the whole value -- ``pd.util.hash_pandas_object`` for pandas, the
+    buffer for numpy, and for an AnnData-like object the key sets scanpy adds
+    to (``obs``/``var`` columns, ``uns``/``obsm``/``varm``/``obsp``/``layers``
+    keys) plus a checksum of ``X``. Taken only around a statement that is
+    actually executing, twice, so its O(n) cost is paid next to real work.
+
+    ``None`` when the value cannot be observed (it cannot be pickled, so its
+    only hash would be its ``id``, which no in-place change moves).
+    """
+    h = hashlib.sha256()
+    t = type(obj)
+    h.update(f"{t.__module__}.{t.__qualname__}".encode('utf-8'))
+    try:
+        if t.__name__ in ('DataFrame', 'Series'):
+            import pandas as pd
+            h.update(repr((obj.shape, [str(c) for c in getattr(obj, 'columns', [obj.name])],
+                           [str(d) for d in getattr(obj, 'dtypes', [obj.dtype])])).encode('utf-8'))
+            h.update(pd.util.hash_pandas_object(obj, index=True).to_numpy().tobytes())
+            return h.hexdigest()
+        if t.__name__ == 'ndarray':
+            h.update(repr((obj.shape, str(obj.dtype))).encode('utf-8'))
+            h.update(obj.tobytes() if obj.dtype != object else pickle.dumps(obj))
+            return h.hexdigest()
+        if all(hasattr(obj, a) for a in ('obs', 'var', 'uns', 'X')):
+            parts = [getattr(obj, 'shape', None),
+                     [str(c) for c in obj.obs.columns], [str(c) for c in obj.var.columns]]
+            for slot in ('uns', 'obsm', 'varm', 'obsp', 'varp', 'layers'):
+                mapping = getattr(obj, slot, None)
+                parts.append(sorted(map(str, mapping.keys())) if mapping is not None else None)
+            h.update(repr(parts).encode('utf-8'))
+            x = obj.X
+            data = getattr(x, 'data', x)
+            try:
+                h.update(repr((getattr(x, 'nnz', None), float(data.sum()))).encode('utf-8'))
+            except (TypeError, ValueError, AttributeError):
+                pass
+            return h.hexdigest()
+    except _HASH_ERRORS:
+        pass
+    digest = compute_hash(obj)
+    if digest == identity_hash(obj):
+        return None
+    return digest
