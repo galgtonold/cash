@@ -471,8 +471,12 @@ class CashAdminMagicsMixin:
         # existed. Sending a user who is looking at a multi-hundred-MB .cash
         # to a UsageError is worse than saying nothing, and inspecting the
         # backend is exactly what they came here to do.
-        print("  The cache on disk outlives this kernel; its size and entries")
-        print("  are one `cash info` away in a terminal (`cash clear` empties it).")
+        # `cash inspect` named too: it is the view that answers "is my cache
+        # worth what it costs", and two round-27 testers found it only by
+        # hunting through docs/cli.md.
+        print("  The cache on disk outlives this kernel. In a terminal, `cash info`")
+        print("  gives its size and `cash inspect` lists its entries, the time each")
+        print("  saves beside the space it takes (`cash clear` empties it).")
 
     # ------------------------------------------------------------------
     # Export / import / diff

@@ -739,7 +739,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 "  %cash_provenance --graph  Dependency graph\n"
                 "  %cash_audit on/off  Enable/disable audit logging\n"
                 "  %cash_audit show    View audit log\n"
-                "  %cash_log           View recent log events"
+                "  %cash_log           View recent log events\n"
+                "  !cash inspect       Every cache entry: size, time it saves, uses"
             )
         else:
             print(
@@ -762,6 +763,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 "  %cash_repair         Fix corrupted entries\n"
                 "  %cash_export file    Export cache to file\n"
                 "  %cash_import file    Import cache from file\n"
+                "  !cash inspect        Every entry: size, time it saves, uses\n"
                 "\n"
                 "Module Tracking:\n"
                 "  %cash_track module   Track a module for changes\n"

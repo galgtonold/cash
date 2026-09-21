@@ -157,6 +157,10 @@ def cmd_info(args: argparse.Namespace) -> None:
         print("  Holds:      nothing yet (no cache written here)")
     else:
         print(f"  Holds:      {held[0]} entries, {_format_bytes(held[1])}")
+    if held:
+        # A total alone is a dead end (round 27, r27s1): the next question is
+        # always which entries, and whether they earn their space.
+        print("              `cash inspect` lists them, with what each one saves")
     if config.disable:
         print(f"  Disabled:   yes -- every cached function runs uncached "
               f"({origins.get('disable', 'disable = true')})")

@@ -262,7 +262,9 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             "`@cash.cache` on the function, both of which cash honours without "
             "re-taking the decision. Caching something smaller -- the "
             "aggregate, the sample, the columns you use -- is usually the "
-            "better answer for a value this large.",
+            "better answer for a value this large. `cash inspect` in a "
+            "terminal lists what the cache does hold, each entry's size "
+            "next to the time it saves.",
         )
 
     def peek_metadata(self, key: str) -> MetadataDict | None:
