@@ -2026,7 +2026,12 @@ class CallUnit:
         # (``call_refs``). Only for a call worth persisting -- hashing every
         # byte of a cheap call's result would cost more than the copy saves --
         # and not for one carrying captured globals, whose value is wrapped.
-        if elapsed >= _REF_MIN_COMPUTE_S and not callee_globals:
+        #
+        # Nor for one whose size already refuses it: the statement is judged
+        # on these bytes (`worth_its_bytes`), and pickling r28s5's 1.7 GiB
+        # result to learn that took 2.7 s after 2.8 s of compute. Without a
+        # reference the statement holds the value itself, as for any call.
+        if elapsed >= _REF_MIN_COMPUTE_S and not callee_globals and self._may_be_worth(value, elapsed):
             found = digest_and_size(value)
             if found:
                 metadata[DIGEST_FIELD], metadata[SIZE_FIELD] = found
@@ -2062,6 +2067,16 @@ class CallUnit:
             self._cash.backend.set(key, value, metadata)
         except Exception:  # noqa: BLE001
             logger.debug("call unit: store failed for %s", key)
+
+    @staticmethod
+    def _may_be_worth(value, elapsed: float) -> bool:
+        from cash._sizing import pickled_lower_bound
+        from cash.backends.value_policy import worth_its_bytes
+        bound = pickled_lower_bound(value)
+        if worth_its_bytes(bound, elapsed):
+            return True
+        trace_event("call_ref_skipped", bytes_at_least=bound, seconds=round(elapsed, 3))
+        return False
 
     def _func_name(self, fn) -> str:
         """The name this call's events display under in the badge and stats.

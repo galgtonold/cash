@@ -103,3 +103,55 @@ def pandas_nbytes(obj: Any) -> int | None:
     except (AttributeError, TypeError, ValueError):
         return None
     return None
+
+
+#: How deep into tuples, lists and dicts `pickled_lower_bound` looks.
+_BOUND_DEPTH = 2
+
+
+def _array_bound(arr: Any, seen: set[int]) -> int:
+    """At least what one array adds to a pickle: a numpy buffer's bytes, one
+    byte per element of anything else (Python objects, Arrow, extension
+    arrays). Once per array object -- pickle writes a shared one once, and a
+    pandas 3 frame shares its string columns with the series taken from it."""
+    if id(arr) in seen:
+        return 0
+    seen.add(id(arr))
+    if str(getattr(arr, "dtype", "")) == "category":
+        return _array_bound(arr.codes, seen)
+    if type(arr).__name__ == "ndarray" and arr.dtype.kind != "O":
+        return int(arr.nbytes)
+    try:
+        return len(arr)
+    except TypeError:
+        return 0
+
+
+def pickled_lower_bound(value: Any, _depth: int = 0, _seen: set[int] | None = None) -> int:
+    """A size ``pickle.dumps(value)`` is sure to reach, read off the arrays.
+
+    For a frame, a series, a numpy array and tuples, lists and dicts of them;
+    0 for anything else. Enough to see that a value is too big to be worth
+    storing without pickling it to find out: r28s5's 1.7 GiB result took
+    2.7 s to pickle, after 2.8 s of compute.
+    """
+    seen = set() if _seen is None else _seen
+    kind = type(value).__name__
+    try:
+        if kind == "DataFrame":
+            return sum(_array_bound(arr, seen) for arr in value._mgr.arrays)
+        if kind == "Series":
+            # ``_values``: the ndarray itself for a numpy dtype (``.array``
+            # wraps it), the extension array otherwise.
+            return _array_bound(value._values, seen)
+        if kind == "ndarray":
+            return _array_bound(value, seen)
+    except Exception:  # noqa: BLE001 - a bound is optional: no bound is 0
+        return 0
+    if _depth >= _BOUND_DEPTH:
+        return 0
+    if type(value) in (tuple, list):
+        return sum(pickled_lower_bound(v, _depth + 1, seen) for v in value)
+    if type(value) is dict:
+        return sum(pickled_lower_bound(v, _depth + 1, seen) for v in value.values())
+    return 0
