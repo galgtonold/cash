@@ -158,3 +158,36 @@ def test_the_text_badge_for_a_reload_is_ascii(nb_runner, tmp_path):
     badge = raw[raw.find("[Cash]"):]
     assert "reloaded" in badge.lower(), raw
     assert badge.isascii(), [c for c in badge if not c.isascii()]
+
+
+@pytest.mark.parametrize("import_line,prefix", [
+    ("import helperloop as hm", "hm."),
+    ("import helperloop", "helperloop."),
+])
+def test_a_loop_that_calls_the_helper(nb_runner, tmp_path, import_line, prefix):
+    """r28s5's board pack builds its regional table in a loop. A loop's
+    recorded outcome is reused when what it read still matches, and after the
+    edit the module name still carried its pre-edit lineage in the simulation,
+    so the stale table was adopted (their repro, 2/2 with the loop variants)."""
+    def module(op):
+        return ("def summary(rows, g):\n" + SLOW
+                + "    return " + op + "(rows) + g\n")
+    mod = tmp_path / "helperloop.py"
+    mod.write_text(module("sum"), encoding="utf-8")
+    nb_runner.create_notebook([
+        "import cash\n%cash_on\n%cash_badge print",
+        import_line + "\nROWS = [1, 2, 3, 4]",
+        "blocks = {}\nfor g in [0, 100]:\n    blocks[g] = " + prefix + "summary(ROWS, g)\n"
+        "tbl = sorted(blocks.values())",
+        "print('R', tbl)",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "R [10, 110]" in nb_runner.get_output(4), nb_runner.get_raw_output(4)
+
+    mod.write_text(module("max"), encoding="utf-8")
+    nb_runner.run_cell(4)
+    assert "R [4, 104]" in nb_runner.get_output(4), (
+        "the helper was edited and the table the loop builds kept the "
+        "pre-edit values:\n" + nb_runner.get_raw_output(4)
+    )

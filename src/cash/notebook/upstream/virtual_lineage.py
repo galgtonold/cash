@@ -725,11 +725,12 @@ class VirtualLineage:
         # loop in the notebook.
         state = self._tracking_state
         generation = getattr(state, 'module_generation', 0)
+        reloaded: set[str] = set()
         if generation != getattr(self, '_simulated_module_generation', 0):
             self._simulated_module_generation = generation
-            reader = _first_cell_reading(notebook_cells, current_cell_idx,
-                                         getattr(state, 'reloaded_names', set()))
+            reloaded = set(getattr(state, 'reloaded_names', set()))
             state.reloaded_names = set()
+            reader = _first_cell_reading(notebook_cells, current_cell_idx, reloaded)
             if reader is not None and reader < first_changed_cell:
                 first_changed_cell = reader
                 if self.debug:
@@ -749,6 +750,16 @@ class VirtualLineage:
             (virtual_lineage, virtual_modules,
              simulation_trace, vars_mutated_by_loops,
              vars_with_stale_files) = self._restore_cached_state(first_changed_cell)
+        # The cells kept from the cache include the import, so a reloaded
+        # module's name still carries its PRE-edit lineage there. A loop that
+        # read it recorded its outcome against that lineage and found it
+        # matching -- r28s5's regional table was adopted stale. The invalidator
+        # has already given the name its new lineage; use that one. Module
+        # names only: a from-imported name's lineage is cleared on purpose.
+        for name in reloaded:
+            live = self.variable_lineage.get(name)
+            if live and isinstance(self.shell.user_ns.get(name), types.ModuleType):
+                virtual_lineage[name] = live
 
         new_cache_entries = list(self._simulation_cache[:first_changed_cell]) if self._simulation_cache else []
 
