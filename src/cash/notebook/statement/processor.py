@@ -4491,16 +4491,22 @@ class StatementProcessor:
         # would pay ~1ms/statement of cache-lookup overhead reading
         # them only to discover they're skipped entries. By writing
         # nothing, the next lookup is a fast clean miss.
-        # Waived only for a statement that READS a file itself: reading is the
-        # expensive part then. `file_dependencies` also holds every file the
-        # inputs were built from, and waiving on those exempted everything
-        # downstream of a load from the floor and from the restore-cost check
-        # below (round 28, r28s5: ~400 MiB frames restoring slower than they
-        # computed, served as hits). *direct_reads* None: a caller that does
-        # not say, which keeps the old rule.
+        # The restore-cost check below is waived only for a statement that
+        # READS a file itself: reading is the expensive part then.
+        # `file_dependencies` also holds every file the inputs were built from,
+        # and waiving on those exempted everything downstream of a load (round
+        # 28, r28s5: ~400 MiB frames restoring slower than they computed,
+        # served as hits). *direct_reads* None: a caller that does not say,
+        # which keeps the old rule.
+        #
+        # The too-cheap FLOOR keeps the old rule on purpose. A first version
+        # narrowed it too, and a cheap reader of a file HANDLE
+        # (`lines = [l for l in fh]`) stopped being stored, re-ran on the second
+        # Run All against the handle its skipped producer had left at EOF, and
+        # printed [] (test_file_handle_iteration_second_run_all).
         reads_files = (bool(file_dependencies or accessed_remote)
                        if direct_reads is None else direct_reads)
-        if not force_persist and not reads_files:
+        if not force_persist and not file_dependencies and not accessed_remote:
             config_obj = getattr(self.cash_instance, 'config', None)
             min_exec_time = _config_float(
                 config_obj, 'min_execution_time_to_cache_seconds', 0.01
