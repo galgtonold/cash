@@ -2808,6 +2808,11 @@ class StatementProcessor:
                 # other observed mutation -- including a bare fit WITHOUT the
                 # directive -- still skip-caches its receiver.
                 outputs = outputs | newly_mutated
+                # The caller's ``outputs`` is its own set: without this the
+                # badge row said "Produced -" for ``sc.pp.normalize_total(adata)``
+                # on its first run (round 28, r28s4).
+                produced = metrics.setdefault('evaluated_vars', [])
+                produced.extend(n for n in sorted(newly_mutated) if n not in produced)
                 skip_observed = newly_mutated - est_fit
                 if skip_observed:
                     skip_cache = True
