@@ -520,7 +520,9 @@ class ForLoopHandler:
                 # multiplied by however many cached calls read this loop
                 # var), just no longer skippable via the attribute shortcut
                 # for THIS consumer specifically.
-                h = val._cash_lineage_hash if hasattr(val, '_cash_lineage_hash') else full
+                from ...lineage_tag import own_tag
+                tag = own_tag(val)
+                h = tag if tag is not None else full
                 self.statement_processor.variable_lineage[name] = h
                 loop_var_digests[name] = full
             except (TypeError, ValueError, AttributeError) as exc:

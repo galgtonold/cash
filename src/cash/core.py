@@ -8361,9 +8361,12 @@ class Cash:
             # `df.loc[0, "a"] = 100` left it as it was, and both the memo below
             # and the tag-as-identity shortcut further down served the result
             # for the unmutated object (rounds 17-18).
-            lineage = getattr(arg, '_cash_lineage_hash', None)
+            # The instance's OWN tag: one inherited from a tagged class made
+            # every instance key alike (see cash.lineage_tag).
+            from cash.lineage_tag import own_tag
+            lineage = own_tag(arg)
             if lineage is not None:
-                src = getattr(arg, '_cash_lineage_src', None)
+                src = own_tag(arg, '_cash_lineage_src')
                 if src == LINEAGE_SRC_FROZEN:
                     if not self._audit_frozen(arg):
                         lineage = None

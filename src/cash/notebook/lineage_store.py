@@ -61,7 +61,10 @@ class LineageStore:
         ``value._cash_lineage_hash`` so the dict and the attribute cannot drift.
         """
         self._lineage[var] = hash_
-        if value is not None:
+        # Never a class, module or function: a tag on a class is inherited by
+        # every instance, which then all key alike (cash.lineage_tag).
+        from cash.lineage_tag import taggable
+        if value is not None and taggable(value):
             try:
                 value._cash_lineage_hash = hash_
                 # This layer re-tags the value whenever it changes, which is
@@ -107,7 +110,8 @@ class LineageStore:
         if value is None:
             return None
         try:
-            attr = getattr(value, "_cash_lineage_hash", None)
+            from cash.lineage_tag import own_tag
+            attr = own_tag(value)
             if attr is not None:
                 return attr
             if compute_hash_fn is not None:
