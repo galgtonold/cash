@@ -45,7 +45,7 @@ from cash.notebook.cacheability_decision import decide_cacheability
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_interception import CallSite, _names_read
 from cash.notebook.file_tracker import FileAccessTracker
-from cash.notebook.object_hashing import compute_hash, compute_hash_full, is_identity_fallback_hash
+from cash.notebook.object_hashing import compute_hash, compute_hash_full, estimate_object_size, is_identity_fallback_hash
 from cash.notebook.randomness import capture_rng_state, rng_modules_changed
 from cash.notebook._trace import trace_event
 from cash.notebook.call_refs import DIGEST_FIELD, SIZE_FIELD, digest_and_size
@@ -1203,6 +1203,7 @@ class CallUnit:
                 # it plain -- never look it up, never store over it.
                 return fn(*args, **kwargs)
 
+            hit_started = _time.perf_counter()
             hit, value, recorded_cost, metadata = self._lookup(key)
             self._last_key_s = _time.perf_counter() - key_started
             if hit:
@@ -1231,6 +1232,7 @@ class CallUnit:
                 self._record(func_name, site, key, cache_hit=True, elapsed=0.0, time_saved=recorded_cost)
                 self._last_compute = recorded_cost or 0.0
                 self._last_hit = True
+                self._drop_if_hit_costs_more(key, _time.perf_counter() - hit_started, recorded_cost)
                 return value
 
             # The call runs inside the STATEMENT's ambient capture
@@ -1293,7 +1295,8 @@ class CallUnit:
                 # catches "mutated but returned a *different* object", which
                 # a hit would silently skip.
                 self._refused.add(key)
-            elif elapsed >= self._cost_floor_s() and self._storable(result, args, kwargs):
+            elif (elapsed >= self._cost_floor_s() and self._storable(result, args, kwargs)
+                  and self._restore_pays(result, elapsed)):
                 # CAS-260: the callee's writes to its own globals, captured as
                 # an END STATE. Snapshotting the final value needs no ordering
                 # and no idempotence, which is why this is tractable where
@@ -1758,6 +1761,47 @@ class CallUnit:
             hash_fn = compute_hash_full if full or pos in local else compute_hash
             digests.append(hash_fn(combined[pos]))
         return digests
+
+    #: A hit is judged a loss only past this, so timer noise on a cheap call
+    #: never refuses it.
+    _MIN_HIT_LOSS_S = 0.05
+
+    def _restore_pays(self, result, elapsed: float) -> bool:
+        """Whether restoring *result* is predicted to beat computing it again.
+
+        The statement path has refused a value whose predicted restore exceeds
+        80% of its compute since the cost model was fitted; the call cache,
+        which holds the biggest values in a notebook (round 28, r28s5: 406 MiB
+        `net_returns` results), never asked. Predicted for disk -- where it
+        comes back from after a restart, the case a cache is for.
+        """
+        try:
+            from .cost_model import estimated_restore_time
+            size = estimate_object_size(result)
+            predicted = estimated_restore_time(type(result).__name__, size, "disk")
+        except Exception:  # noqa: BLE001 - no prediction: store, as before
+            return True
+        return predicted <= max(self._MIN_HIT_LOSS_S, 0.8 * elapsed)
+
+    def _drop_if_hit_costs_more(self, key: str, hit_cost: float, saved: float) -> None:
+        """A hit that took longer than the compute it saved is a loss: stop.
+
+        Measured, not predicted -- a prediction can be wrong for a type it was
+        not fitted on, and r28s5's hits were ~10 s against ~4 s of compute,
+        reported as "4/4 hit". The entry is dropped and the site runs plain
+        for the rest of the session (`_refused`, the same bench the argument-
+        mutation and RNG refusals use), so the next run computes rather than
+        paying the loss again.
+        """
+        if hit_cost <= max(self._MIN_HIT_LOSS_S, saved or 0.0):
+            return
+        self._refused.add(key)
+        try:
+            self._cash.backend.delete(key)
+        except Exception:  # noqa: BLE001 - reclaiming is best effort; the refusal holds
+            pass
+        logger.debug("[CALL_UNIT] hit on %s took %.2fs to save %.2fs: dropped, runs plain",
+                     key[:16], hit_cost, saved or 0.0)
 
     def _storable(self, result, args, kwargs) -> bool:
         """Refuse values whose *identity* is load-bearing.

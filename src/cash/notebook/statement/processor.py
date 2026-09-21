@@ -4085,6 +4085,7 @@ class StatementProcessor:
             force_persist=force_persist,
             miss_guarded=miss_guarded,
             inherited_snapshots=inherited_snapshots,
+            direct_reads=bool(accessed_files or accessed_remote),
         )
 
     def _producer_file_snapshots(self, var_name: str) -> dict[str, dict]:
@@ -4469,6 +4470,7 @@ class StatementProcessor:
         force_persist: bool = False,
         miss_guarded: bool = False,
         inherited_snapshots: dict[str, dict] | None = None,
+        direct_reads: bool | None = None,
     ) -> StatementCacheMetadata | None:
         """Store execution results and metadata in the cache. Returns
         metadata, or ``None`` when the statement was so cheap to compute
@@ -4489,7 +4491,16 @@ class StatementProcessor:
         # would pay ~1ms/statement of cache-lookup overhead reading
         # them only to discover they're skipped entries. By writing
         # nothing, the next lookup is a fast clean miss.
-        if not force_persist and not file_dependencies and not accessed_remote:
+        # Waived only for a statement that READS a file itself: reading is the
+        # expensive part then. `file_dependencies` also holds every file the
+        # inputs were built from, and waiving on those exempted everything
+        # downstream of a load from the floor and from the restore-cost check
+        # below (round 28, r28s5: ~400 MiB frames restoring slower than they
+        # computed, served as hits). *direct_reads* None: a caller that does
+        # not say, which keeps the old rule.
+        reads_files = (bool(file_dependencies or accessed_remote)
+                       if direct_reads is None else direct_reads)
+        if not force_persist and not reads_files:
             config_obj = getattr(self.cash_instance, 'config', None)
             min_exec_time = _config_float(
                 config_obj, 'min_execution_time_to_cache_seconds', 0.01
@@ -4516,7 +4527,7 @@ class StatementProcessor:
         # Size-aware caching: skip storing large objects when serialization overhead dominates
         should_skip, skip_reason, prediction = self._should_skip_large_object_caching(
             captured_vars, execution_time, force_persist,
-            has_file_dependencies=bool(file_dependencies or accessed_remote),
+            has_file_dependencies=reads_files,
         )
 
         # Statements whose outputs include a __main__-defined function or

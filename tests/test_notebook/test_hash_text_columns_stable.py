@@ -70,3 +70,31 @@ def test_a_numeric_frame_hash_is_unchanged():
         f"{frame.shape}:{frame.dtypes.to_dict()}:{frame.head(5).values.tobytes()}".encode()
     ).hexdigest()
     assert compute_hash(frame) == legacy
+
+
+def test_a_small_collection_of_large_frames_is_not_pickled_whole():
+    """Round 28, r28s5: a dict holding a few large frames was hashed by
+    pickling the WHOLE dict -- every frame byte for byte -- after each restore
+    and after each loop iteration that changed it, while the same frame on its
+    own is hashed by sampling. At 400 MiB a frame that is seconds per hit, and
+    their "hits" cost more than the compute they saved."""
+    import pickle
+    import time
+    big = pd.DataFrame({"a": np.arange(2_000_000, dtype=float), "b": np.arange(2_000_000, dtype=float)})
+    blocks = {4: big, 8: big + 1}
+    t0 = time.perf_counter()
+    compute_hash(blocks)
+    took = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    pickle.dumps(blocks)
+    full = time.perf_counter() - t0
+    assert took < full / 4, (took, full)
+    assert compute_hash(blocks) != compute_hash({4: big, 8: big + 2})
+
+
+def test_a_plain_small_collection_hash_is_unchanged():
+    """Keys of plain collections already on disk must not move."""
+    import hashlib
+    import pickle
+    value = {"a": [1, 2, 3], "b": "text", "c": 2.5}
+    assert compute_hash(value) == hashlib.sha256(pickle.dumps(value)).hexdigest()

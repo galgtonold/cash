@@ -91,10 +91,30 @@ def _hash_dataframe_or_series(obj: Any, type_name: str) -> str:
     return hashlib.sha256(combined.encode('utf-8')).hexdigest()
 
 
+_BULKY_TYPE_NAMES = frozenset({'DataFrame', 'Series', 'ndarray'})
+
+
 def _hash_collection(obj: Any) -> str:
     """Hash a list/tuple/dict/set/frozenset — sampling large ones to avoid O(n) pickle."""
     n = len(obj)
     if n <= 200:
+        # A few frames in a dict (`blocks = {w: net_returns(orders, w) ...}`)
+        # were pickled WHOLE -- every byte of every frame -- after each restore
+        # and each loop iteration that changed the dict, while a frame on its
+        # own is hashed by sampling: seconds per hit at 400 MiB a frame (round
+        # 28, r28s5). Such a collection is hashed element by element, each
+        # element as ``compute_hash`` would hash it alone. Only then: a plain
+        # collection keeps the hash it always had, so its keys do not move.
+        items = list(obj.items()) if isinstance(obj, dict) else None
+        values = [v for _, v in items] if items is not None else (
+            list(obj) if isinstance(obj, (list, tuple)) else [])
+        if any(type(v).__name__ in _BULKY_TYPE_NAMES for v in values):
+            parts = [f"{type(obj).__name__}:{n}"]
+            if items is not None:
+                parts.extend(f"{k!r}={compute_hash(v)}" for k, v in items)
+            else:
+                parts.extend(compute_hash(v) for v in values)
+            return hashlib.sha256("|".join(parts).encode('utf-8')).hexdigest()
         return hashlib.sha256(pickle.dumps(obj)).hexdigest()
     if isinstance(obj, (list, tuple)):
         combined = f"list:{n}:{repr(obj[:5])}:{repr(obj[-5:])}"
