@@ -59,7 +59,7 @@ Three things gate the promotion:
 
 1. **Hard floor at 100 ms.** Anything that ran faster than `0.1 s` never reaches disk — the I/O alone would cost more than recomputing.
 2. **Restore-vs-recompute check.** Above the floor, Cash predicts how long the value would take to *restore* (`cost_model.estimated_restore_time`, the fitted serialize-write / read-deserialize model) and promotes only when recomputing would cost more, by at least `min_cache_savings_pct` of the compute time. Because the prediction is per-object-size, a **bigger** result that is **expensive** to recompute is now *more* likely to persist — the opposite of the old raw-bandwidth model, which scaled a fake `io_time` with size and left large frames RAM-only.
-3. **What the answer costs.** Both gates above ask whether restoring beats recomputing; neither asks what the cache pays for that. So a third gate caps the *rate*: cash spends at most **128 MiB of cache per second of compute saved**, and refuses anything over 8 MiB that exceeds it ([`CACHE-NOT-WORTH-BYTES`](../../warnings.md#cache-not-worth-bytes) says so once per session). Version pruning rations superseded copies at half that rate: a spare copy kept for undo is speculative, while a live entry is the one that will actually be restored.
+3. **What the answer costs.** Both gates above ask whether restoring beats recomputing; neither asks what the cache pays for that. So a third gate caps the *rate*: cash spends at most **128 MiB of cache per second of compute saved**, and refuses anything over 8 MiB that exceeds it ([`CACHE-NOT-WORTH-BYTES`](../../warnings.md#cache-not-worth-bytes) says so once per statement). Version pruning rations superseded copies at half that rate: a spare copy kept for undo is speculative, while a live entry is the one that will actually be restored.
 
 The first two are one closure, and it carries no *type*, so it assumes the slowest (`_GENERIC`) family as a conservative floor. When the entry does know its type — every notebook-cached value records its `cost_model_family` on the metadata — `TieredBackend.set` recomputes the same decision with the *real* family, so the two persistence gates (this one and the statement processor's Gate A) agree instead of contradicting each other.
 
@@ -75,7 +75,7 @@ The rate ceiling exists because the first two gates, on their own, filled round 
 > single-tier persistent backend (`Cash(backend=FileBackend(...))` or
 > `SQLiteBackend`), which writes every entry regardless of compute time.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.end_cell_persistence @aadd4798, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @ef032b77 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.end_cell_persistence @aadd4798, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @622fe385 -->
 In a notebook, "cheaper to re-run" is judged once more at the end of each cell.
 A statement is often fast only because its inputs are there: `latest =
 sales['week'].max()` takes milliseconds, but after a restart `sales` is gone too,
@@ -148,7 +148,7 @@ so the two paths differ here.)
 
 ## Inspecting where a value actually landed
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @c132780f, cash/backends/tiered_backend.py:TieredBackend.get @d9642778 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @aec60cd8, cash/backends/tiered_backend.py:TieredBackend.get @d9642778 -->
 The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']`. This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (set in `TieredBackend.get`).
 
 When it went no further than RAM, `metadata['persist_skipped']` says why: `"size"` (a tier's size cap), `"bytes"` (the bytes-per-second-saved ceiling), `"compute"` (the notebook's compute floor or its cost model), or `"replaced_in_cell"` (a later statement of the same cell writes that name again, so the version the cell leaves is the one written). Only the first can happen to a `@cash.cache` result: decorating a function is the decision to cache it, so neither the floor nor the cost model is consulted on that path.
@@ -232,7 +232,7 @@ See [Choosing a Backend](choosing-a-backend.md) for how to wire `TieredBackend` 
 
 ## Built-in `_default_promotion_policy` fallback
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._default_promotion_policy @7c228c64, cash/backends/tiered_backend.py:TieredBackend.__init__ @3fa59fb6 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._default_promotion_policy @7c228c64, cash/backends/tiered_backend.py:TieredBackend.__init__ @60c234a9 -->
 When `smart_persistence=False` (so the factory wires in no cost-model closure), or when a user constructs `TieredBackend(..., promotion_policy=None)` directly, the backend falls back to its own bound method `_default_promotion_policy`:
 
 ```python

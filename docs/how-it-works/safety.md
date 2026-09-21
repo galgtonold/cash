@@ -74,7 +74,7 @@ The first can be re-derived from the statement that made it; the second cannot.
 has no store target to give the receiver a fresh lineage. So Cash classifies
 method-call receivers in tiers, in this order:
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @174cd725, cash/notebook/cacheability.py:KNOWN_PURE_METHODS @adc93e66, cash/notebook/cacheability.py:standalone_method_call_inner_methods @c952d0cc, cash/notebook/cacheability.py:chain_is_pure @800f85aa, cash/notebook/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @d0495812, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @81f477db -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @46130a0d, cash/notebook/cacheability.py:KNOWN_PURE_METHODS @adc93e66, cash/notebook/cacheability.py:standalone_method_call_inner_methods @c952d0cc, cash/notebook/cacheability.py:chain_is_pure @800f85aa, cash/notebook/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @d0495812, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @81f477db -->
 
 - **Excluded outright.** A module receiver is a plain function call, not a
   mutation: `np.foo()`, `time.sleep()`, `plt.title()`. The exception is a
@@ -108,6 +108,12 @@ method-call receivers in tiers, in this order:
   the content changed, the receiver mutated. Receivers that can only be
   *sampled* rather than hashed whole (DataFrames, Series, ndarrays, collections
   over 200 elements) can't be proved unchanged, so they are assumed to mutate.
+- **Arguments of a bare call.** A module receiver is excluded, but what a
+  bare call statement is handed is not: in `sc.tl.leiden(hv)` or
+  `im.add_qc(df)`, each argument passed by name (not a module, class, function
+  or immutable value) is fingerprinted in full before and after the call —
+  the whole frame or array, not a sample — and one that changed counts as
+  mutated. One that cannot be fingerprinted is assumed to mutate.
 
 When a receiver is classified as mutating, Cash does two things: it adds the
 receiver to the statement's outputs — so the receiver's lineage advances from

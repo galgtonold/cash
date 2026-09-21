@@ -340,9 +340,9 @@ def warn_diagnostic_explicit(
     happened to call them -- ``warnings.warn``'s ``stacklevel`` cannot express
     "that line over there".
 
-    ``warn_explicit`` takes ``(message, category)`` positionally and gives no
-    way to pass a pre-built instance, so ``.code`` cannot ride along on the
-    warning object here. Callers that need the code programmatically from these
+    This function hands ``warn_explicit`` a message STRING, so ``.code`` does
+    not ride along on the warning object here (``warn_diagnostic(...,
+    location=...)`` passes an instance instead, and keeps it). Callers that need the code programmatically from these
     sites should read it from the rendered text, which always starts
     ``[CODE] ``. ``docs/warnings.md`` tells readers the same thing, and names
     the three codes it reaches: ``RANDOM-REPLAYED`` and ``NOTEBOOK-CELL-SYNTAX``

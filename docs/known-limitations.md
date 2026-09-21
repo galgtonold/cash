@@ -351,7 +351,7 @@ puts you on the content-hashed eager path, or name the file:
 
 Unlike the mutation cases above, this one is **not** isolated-re-run only — it can give a wrong answer on a fresh `Run All`, the first time the loop ever executes.
 
-<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @556e3f16 -->
+<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @040707d2 -->
 Cash decomposes a `for` loop per iteration and uses the loop variable's value — captured at the moment it is *bound*, before any body statement runs — as the per-iteration cache discriminator. That applies both to an ordinary cached statement in the body and to an intercepted (on by default) sub-call whose own arguments give the key nothing else to vary on. If the body **mutates the loop variable before it is used**, the discriminator was already captured before that mutation and cannot see it:
 
 <!-- test:skip reason="illustrative: pull() stands in for a slow call whose only per-iteration signal is the loop variable; call-level caching is on by default and needs no directive to make pull(handle) itself the cached, keyed unit" -->
@@ -441,7 +441,7 @@ Cash normally caches a loop **per iteration**, so a warm re-run restores every o
 
 That is a narrower claim than it used to be. By default, cash also caches the expensive **call inside** the statement (`fetch(e)` below, not the `append` around it) — see [Call-level caching](annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls) — so a single-unit append loop still isn't a total loss: the call itself keeps hitting even though the loop's own bookkeeping does not, and fixing one element's data re-runs only that element's call. Inside a single-unit loop a call is cached only when it can be keyed on the values it receives: its arguments and the callee's state are plain data (numbers, strings, containers, arrays, frames), and the callee does not read, as a global, a name the loop sets. Otherwise it runs uncached. `# @cash:no-cache-calls` turns call caching off and gets you back to "no caching at all" if you need to reproduce it, or the call site simply isn't eligible (it reads the loop's own accumulator, say).
 
-<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._should_execute_loop_as_single_unit @ad980fd0, cash/notebook/control_structures/for_handler.py:ForLoopHandler._MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/for_handler.py:ForLoopHandler._PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/for_handler.py:ForLoopHandler._MIN_OVERHEAD_SEC == 1.0 -->
+<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._should_execute_loop_as_single_unit @5beed55a, cash/notebook/control_structures/for_handler.py:ForLoopHandler._MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/for_handler.py:ForLoopHandler._PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/for_handler.py:ForLoopHandler._MIN_OVERHEAD_SEC == 1.0 -->
 Three conditions must hold together before the switch happens, which is why many append loops never hit it:
 
 - **more than ~50 iterations**, and
@@ -705,13 +705,14 @@ session with a usable hot-exit backup** — both above.
 
 To keep hashing cheap, cash samples large values rather than reading them whole:
 
-<!-- claim: cash/notebook/object_hashing.py:compute_hash @2027fef7 -->
+<!-- claim: cash/notebook/object_hashing.py:compute_hash @ecbfe3dd -->
 | Type | What is hashed |
 |---|---|
 | DataFrame | shape, dtypes, **first 5 rows** |
 | ndarray | first 100 elements |
 | list / tuple (> 200) | length, first 5, last 5 |
 | dict (> 200) | length, first 10 keys — **values are not hashed** |
+| list / tuple / dict (≤ 200) holding a DataFrame, Series or ndarray | each element as it would be hashed alone — so each frame by its first 5 rows |
 
 Two large objects that differ only outside the sampled region therefore hash identically. In normal use cash tracks provenance and does not rely on the hash alone, so this is latent; it becomes reachable only after provenance is lost (for example following `cash.reset_session()`), where a change to row 700 of a 1000-row frame can go unnoticed.
 

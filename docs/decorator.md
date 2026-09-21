@@ -314,7 +314,7 @@ for the cases this model *can't* see.
 
 ### What else is in the key — the ones that cost a recompute
 
-<!-- claim: cash/core.py:Cash._fold_defaults @6339036d, cash/core.py:Cash._hash_arg_payload @7a383ad6, cash/dependency_state.py:DependencyStateHasher.compute @f2914199 -->
+<!-- claim: cash/core.py:Cash._fold_defaults @6339036d, cash/core.py:Cash._hash_arg_payload @c688c59c, cash/dependency_state.py:DependencyStateHasher.compute @f2914199 -->
 None of these gives a wrong answer. Each one costs a recompute you might not
 expect, measured across fresh processes:
 
@@ -1435,7 +1435,7 @@ keyed by path, it was 18× faster.
 
 ### Cheap results are written too
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @c132780f -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @aec60cd8 -->
 A decorated result goes to disk whatever it cost to produce. A millisecond
 aggregate over rows another call already parsed is written like anything else,
 because a new process would have to parse that file again to recompute it, and

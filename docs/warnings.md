@@ -23,11 +23,11 @@ Handlers can branch on the code rather than the wording, which is free to change
     if any(getattr(w.message, "code", None) == "CACHE-THRASH" for w in caught):
         ...
 
-<!-- claim: cash/diagnostics.py:warn_diagnostic_explicit @8c8ea21a, cash/diagnostics.py:warn_diagnostic @32fe7b40 -->
+<!-- claim: cash/diagnostics.py:warn_diagnostic_explicit @69c6c3a8, cash/diagnostics.py:warn_diagnostic @6f292d5b -->
 **That recipe does not reach every warning.** `.code` is an attribute set on a
 warning *object*, and the three notebook-side diagnostics are raised through
-`warnings.warn_explicit`, which takes a message *string* and offers no way to
-pass an object — so there is nothing for the attribute to ride on.
+`warn_diagnostic_explicit`, which hands `warnings.warn_explicit` a message
+*string* rather than an object — so there is nothing for the attribute to ride on.
 [`RANDOM-REPLAYED`](#random-replayed) and
 [`NOTEBOOK-CELL-SYNTAX`](#notebook-cell-syntax) never carry it, and
 [`RANDOM-UNSEEDED`](#random-unseeded) carries it when the decorator raises it

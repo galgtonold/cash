@@ -213,7 +213,7 @@ c.register_hasher(MyModel, lambda model: model.get_fingerprint())
 See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full API, including class-hierarchy matching and versioned hashers.
 
 !!! warning "`register_hasher` is a decorator-path feature"
-    <!-- claim: cash/core.py:Cash.register_hasher @eed1ca57, cash/notebook/object_hashing.py:compute_hash @2027fef7 -->
+    <!-- claim: cash/core.py:Cash.register_hasher @eed1ca57, cash/notebook/object_hashing.py:compute_hash @ecbfe3dd -->
     Registered hashers are consulted when hashing `@cash.cache` **call arguments**. The
     notebook path hashes fallback values through `cash.notebook.object_hashing.compute_hash`,
     a pure function with no registry, so a registered hasher does **not** change a
@@ -224,7 +224,7 @@ See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full
 
 The two paths answer "what is this object's fingerprint?" differently, and the ordering in each is deliberate.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @7a383ad6 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @c688c59c -->
 **Decorator — hashing a call argument** (`Cash._hash_arg_payload`):
 
 1. **Hashers registered with `override=True`** — see [overriding a built-in](../tutorials/feature-guides/custom-hashers.md#overriding-a-built-in-content-hasher). Nothing below runs for such a type.
@@ -236,12 +236,12 @@ The two paths answer "what is this object's fingerprint?" differently, and the o
 
 Content beats the lineage attribute, and that ordering is the fix for a real bug: a notebook variable's `_cash_lineage_hash` is re-derived in every kernel session and is not reproducible across a restart, so keying a persisted decorator entry on it made `train_model(X_train, ...)` miss after a restart and re-train the model. Pinned by `tests/test_core/test_arg_hash_restart_stable.py`.
 
-<!-- claim: cash/notebook/lineage_store.py:LineageStore.resolve @f1dc058b, cash/notebook/object_hashing.py:_hash_dataframe_or_series @39c8fe50, cash/notebook/object_hashing.py:_hash_collection @f3ff9c8e, cash/notebook/object_hashing.py:compute_hash @2027fef7 -->
+<!-- claim: cash/notebook/lineage_store.py:LineageStore.resolve @81312a14, cash/notebook/object_hashing.py:_hash_dataframe_or_series @5636538d, cash/notebook/object_hashing.py:_hash_collection @579b619b, cash/notebook/object_hashing.py:compute_hash @ecbfe3dd -->
 **Notebook — resolving a statement input** (`LineageStore.resolve`):
 
 1. **Virtual lineage** — the simulated value, when an upstream simulation is in flight.
 2. **The recorded lineage** for that variable name.
-3. **`_cash_lineage_hash` attribute** on the value.
+3. **`_cash_lineage_hash` attribute** on the value itself — never one inherited from a class (classes, modules and functions are never tagged).
 4. **`compute_hash(value)`** — type-specific, and *sampled* for large objects (first 5 rows of a DataFrame, first 100 elements of an ndarray, head/tail of a collection over 200 items).
 5. **`sha256(str(value))`.**
 
