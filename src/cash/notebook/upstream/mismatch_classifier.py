@@ -9,6 +9,7 @@ dicts. Pure-phase invariants land in a later refactor.
 """
 
 import ast
+import functools
 import hashlib
 import logging
 import re
@@ -26,6 +27,24 @@ __all__ = ["MismatchClassifier"]
 
 logger = logging.getLogger(__name__)
 
+
+
+@functools.lru_cache(maxsize=4096)
+def import_only(stmt_code: str) -> bool:
+    """Is *stmt_code* nothing but imports? Such a statement is re-run, never
+    restored from the cache: a restored ``from helper import summary`` hands
+    back the function object it bound when it was stored -- the RAM tier keeps
+    functions by reference -- so after an edit to ``helper.py`` the pre-edit
+    function came back, and everything keyed on it matched its pre-edit entry.
+    Found as the intermittent ``test_a_from_import`` failure: it needs the
+    import to be slow enough to have been stored, which a loaded machine made
+    it, and which a helper doing real work at import time always is.
+    """
+    try:
+        body = ast.parse(stmt_code).body
+    except SyntaxError:
+        return False
+    return bool(body) and all(isinstance(node, ast.Import | ast.ImportFrom) for node in body)
 
 class MismatchClassifier:
     """Phase 2 of NotebookSimulator: classify broken / tainted variables.
@@ -1071,6 +1090,11 @@ class MismatchClassifier:
                 if handled:
                     continue
                 restored_vars: set[str] = set()
+                restore_time = 0.0
+                saved_time = 0.0
+            elif import_only(stmt_code):
+                # Re-run, never restored: see `import_only`.
+                restored_vars = set()
                 restore_time = 0.0
                 saved_time = 0.0
             else:

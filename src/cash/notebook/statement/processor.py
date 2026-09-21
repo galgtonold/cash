@@ -3762,6 +3762,15 @@ class StatementProcessor:
                     )
                 return None, True  # updated skip_cache
 
+            if not all_present:
+                # An import runs, it is never stored. Re-running one whose
+                # module is loaded costs microseconds, and restoring one after
+                # a restart imports the module anyway to unpickle what it
+                # binds -- while a stored import hands back the objects it
+                # bound THEN: `from helper import summary` restored after an
+                # edit to helper.py put the pre-edit function back (round 29
+                # prep; see `import_only` in the upstream classifier).
+                return None, True
             if all_present:
                 if self.debug:
                     logger.debug("%s SKIPPING redundant import: %s", _LOG_OPTIMIZATION, code.strip())
