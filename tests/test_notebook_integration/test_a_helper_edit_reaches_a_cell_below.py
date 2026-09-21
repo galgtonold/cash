@@ -222,3 +222,41 @@ def test_a_loop_through_a_helper_that_cannot_be_narrowed(nb_runner, tmp_path):
         "the helper was edited and the table the loop builds kept the "
         "pre-edit values:\n" + nb_runner.get_raw_output(4)
     )
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_a_helper_imported_in_the_cash_on_cell(nb_runner, tmp_path, restart):
+    """Round 28, r28s4, WRONG, 1/1 real + 3/3 alias + 3/3 plain
+    (``r28s4/repro/helper_edit_stale``), and it survived Restart & Run All.
+
+    Their first cell is `import cash`, `%cash_on`, then their imports -- the
+    layout the quickstart now says is fine. Cash tracks a local module when a
+    cell it processes imports it, and it does not process the cell that turns
+    it on. So the helper was never tracked: an edit reloaded nothing, and the
+    helper's source reached no key, so `z = hm.norm(y)` kept its pre-edit
+    entry even after a restart, while `y` itself was recomputed.
+    """
+    mod = tmp_path / ("helpercashon" + ("r" if restart else "") + ".py")
+    name = mod.stem
+    mod.write_text(_module("sum"), encoding="utf-8")
+    nb_runner.create_notebook([
+        "import cash\n%cash_on\n%cash_persist on\n%cash_badge print\nimport " + name + " as hm",
+        "ROWS = [1, 2, 3, 4]",
+        "tbl = hm.summary(ROWS)",
+        "note = 'total ' + str(tbl) + ' ' + str(sum(i * i for i in range(2_000_000)) % 1)",
+        "print('R', note)",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "R total 10 0" in nb_runner.get_output(5), nb_runner.get_raw_output(5)
+
+    mod.write_text(_module("max"), encoding="utf-8")
+    if restart:
+        nb_runner.restart()
+        nb_runner.run_all()
+    else:
+        nb_runner.run_cell(5)
+    assert "R total 4 0" in nb_runner.get_output(5), (
+        "the helper imported in the %cash_on cell was edited and the cell "
+        "below kept the pre-edit result:\n" + nb_runner.get_raw_output(5)
+    )

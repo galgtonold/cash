@@ -141,6 +141,43 @@ class NotebookSimulator:
         self._virtual_lineage.reset_caches()
         self._adopt_untracked_pending = True
 
+    def _track_modules_bound_before_cash_on(self) -> None:
+        """Track the local modules the namespace reached before cash was listening.
+
+        Cash starts tracking a project module when a cell it PROCESSES imports
+        it, and the cell that turns cash on is not one of them. So
+        `import cash; %cash_on; import helpers as hm` -- the layout the
+        quickstart recommends -- left `helpers` untracked: an edit to it
+        reloaded nothing, and its source reached no cache key, so a value built
+        from it was served pre-edit, even after Restart & Run All (round 28,
+        r28s4, exported). Done before pass 1, so this very simulation already
+        keys the module's readers on its source.
+        """
+        ft = getattr(self._virtual_lineage, 'function_tracker', None)
+        user_ns = getattr(self.shell, 'user_ns', None)
+        if ft is None or not user_ns:
+            return
+        import sys
+        import types
+        from ..function_tracker import is_local_module
+        names: set[str] = set()
+        for value in list(user_ns.values()):
+            if isinstance(value, types.ModuleType):
+                names.add(value.__name__)
+            else:
+                owner = getattr(value, '__module__', None)
+                if isinstance(owner, str) and owner != '__main__':
+                    names.add(owner)
+        for mod_name in names:
+            module = sys.modules.get(mod_name)
+            if module is None or mod_name in ft._tracked_modules:
+                continue
+            try:
+                if is_local_module(module):
+                    ft.track_module(mod_name)
+            except (AttributeError, OSError, TypeError, ValueError):
+                logger.debug("Could not track '%s' at %%cash_on", mod_name)
+
     def _adopt_untracked_names(self, virtual_lineage: dict[str, str],
                                simulation_trace: list) -> None:
         """Give names bound before cash was listening the simulation's lineage.
@@ -949,6 +986,9 @@ class NotebookSimulator:
                     required_inputs=required_inputs or set(),
                     selfref=current_cell_selfref_vars or set(),
                     method_receivers=current_cell_method_receivers or set())
+        if getattr(self, '_adopt_untracked_pending', False):
+            self._track_modules_bound_before_cash_on()
+
         # Pass 1: Simulate ALL statements to build final virtual state
         stmt_lookup_times = {}  # stmt_code -> cache_lookup_time (disk I/O during simulation)
         loop_target_vars = set()  # Track loop iteration variables (e.g., 'item' in 'for item in data')
