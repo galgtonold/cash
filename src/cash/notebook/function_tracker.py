@@ -664,40 +664,6 @@ class FunctionTracker:
         return changed
 
     @staticmethod
-    def _collect_top_level_names(tree: ast.AST) -> set[str]:
-        """Return all top-level symbol names defined in *tree*."""
-        names: set[str] = set()
-        for node in ast.iter_child_nodes(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                names.add(node.name)
-            elif isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        names.add(target.id)
-        return names
-
-    @staticmethod
-    def _collect_intra_refs(tree: ast.AST, top_level_names: set[str]) -> dict[str, set[str]]:
-        """Map each top-level function/class to the top-level names it references."""
-        deps: dict[str, set[str]] = {}
-        for node in ast.iter_child_nodes(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                continue
-            sym_name = node.name
-            referenced: set[str] = set()
-            for child in ast.walk(node):
-                if (
-                    isinstance(child, ast.Name)
-                    and isinstance(child.ctx, ast.Load)
-                    and child.id in top_level_names
-                    and child.id != sym_name
-                ):
-                    referenced.add(child.id)
-            if referenced:
-                deps[sym_name] = referenced
-        return deps
-
-    @staticmethod
     def get_intra_module_call_deps(file_path: str) -> dict[str, set[str]]:
         """Analyze a module file to find which top-level functions call which other
         top-level functions/symbols within the same module.
@@ -717,15 +683,25 @@ class FunctionTracker:
         if not file_path or not os.path.isfile(file_path):
             return {}
 
-        try:
-            with open(file_path, encoding='utf-8') as f:
-                source = f.read()
-            tree = ast.parse(source, filename=file_path)
-        except (SyntaxError, OSError, UnicodeDecodeError):
+        # Built from ``module_symbols``' analysis, the one per-symbol cache
+        # keys use: every top-level statement that binds a name, and every
+        # module-level name it reads. The walk this replaced looked inside
+        # functions and classes only, so `TABLE = build_table()` recorded no
+        # edge and an edit to `build_table` left TABLE, and every reader of it,
+        # counted as unchanged -- a lineage the invalidator could wrongly keep.
+        from .module_symbols import _analysis_for
+        analysis = _analysis_for(file_path)
+        if analysis is None:
             return {}
-
-        top_level_names = FunctionTracker._collect_top_level_names(tree)
-        return FunctionTracker._collect_intra_refs(tree, top_level_names)
+        deps: dict[str, set[str]] = {}
+        for name, indices in analysis.binders.items():
+            referenced: set[str] = set()
+            for i in indices:
+                referenced |= analysis.reads[i]
+            referenced.discard(name)
+            if referenced:
+                deps[name] = referenced
+        return deps
 
     @staticmethod
     def expand_changed_symbols_transitively(
