@@ -157,6 +157,33 @@ def _compute_bytecode_hash(func: Any) -> str | None:
         return None
 
 
+
+def _reload_from_source(module) -> None:
+    """``importlib.reload(module)``, compiled from the source file whatever
+    bytecode sits next to it.
+
+    Python takes a ``.pyc`` as current when the source's mtime in WHOLE
+    SECONDS and its size match what it recorded, so an edit that keeps the
+    size (``sum`` -> ``max``) within the second of the last import reloads the
+    OLD code. Deleting the ``.pyc`` first is not enough: on Windows a file
+    just written is often held open for a moment by an antivirus or indexer
+    scan, the delete fails, and the reload ran the pre-edit function under a
+    MODULE RELOADED badge (``test_a_from_import``, under load). An empty
+    ``sys.pycache_prefix`` for the reload leaves the loader no bytecode to use.
+    """
+    import importlib
+    import shutil
+    import tempfile
+
+    previous = sys.pycache_prefix
+    empty = tempfile.mkdtemp(prefix="cash-reload-")
+    sys.pycache_prefix = empty
+    try:
+        importlib.reload(module)
+    finally:
+        sys.pycache_prefix = previous
+        shutil.rmtree(empty, ignore_errors=True)
+
 class FunctionTracker:
     """Tracks function source code for cache key computation.
 
@@ -949,15 +976,16 @@ class FunctionTracker:
             # Invalidate import caches to ensure fresh source is read
             importlib.invalidate_caches()
 
-            # Remove compiled .pyc file if it exists
+            # Remove compiled .pyc file if it exists, so a later fresh
+            # import is not served it either. Best-effort: see below.
             file_path = getattr(module, '__file__', None)
             if file_path:
                 cache_file = importlib.util.cache_from_source(file_path)
                 if os.path.isfile(cache_file):
-                    with contextlib.suppress(OSError):  # Stale .pyc removal is best-effort
+                    with contextlib.suppress(OSError):
                         os.remove(cache_file)
 
-            importlib.reload(module)
+            _reload_from_source(module)
             if file_path and os.path.isfile(file_path):
                 self._module_mtimes[module_name] = os.path.getmtime(file_path)
             # Clear source cache for functions from this module
