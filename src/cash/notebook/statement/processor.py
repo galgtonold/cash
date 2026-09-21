@@ -2492,6 +2492,9 @@ class StatementProcessor:
             or getattr(annotation, 'no_cache', False)
         ):
             return code, tree
+        # Which statement's calls the call cache's "returned last" is about
+        # (`_plain_call_result`): set below only when this one's are wrapped.
+        self._calls_wrapped_for = None
         cash_instance = self._get_cash_instance()
         if cash_instance is None:
             return code, tree
@@ -2598,6 +2601,7 @@ class StatementProcessor:
                 )
                 self._call_cache_owner = cash_instance
             self._call_cache.set_sites(sites)
+            self._calls_wrapped_for = code
             self.shell.user_ns[HELPER_NAME] = self._call_cache.resolve
             return new_code, rewritten
         except (SyntaxError, ValueError, TypeError, AttributeError):
@@ -4670,7 +4674,9 @@ class StatementProcessor:
         referenced: dict[str, int] = {}
         if self._call_cache is not None:
             from cash.notebook.call_refs import with_call_refs
-            variables = with_call_refs(variables, self._call_cache.held_results(), referenced)
+            trusted, unpacked = self._plain_call_result(code)
+            variables = with_call_refs(variables, self._call_cache.held_results(), referenced,
+                                       trusted=trusted, unpacked=unpacked)
         payload = {
             'variables': variables,
             'stdout': captured_output.stdout,
@@ -4869,6 +4875,45 @@ class StatementProcessor:
         if not names:
             return False
         return not all(name in self.shell.user_ns for name in names)
+
+    def _plain_call_result(self, code: str) -> tuple[tuple[str, int] | None, dict[str, int] | None]:
+        """``(trusted, unpacked)`` for `with_call_refs` when the statement is
+        ``name = call(...)`` or ``a, b = call(...)``: nothing but binding the
+        names runs after that call returns, so its result is known unchanged
+        without digesting it again. ``(None, None)`` otherwise."""
+        if getattr(self, "_calls_wrapped_for", None) != code:
+            return None, None
+        outermost = getattr(self._call_cache, "outermost_result", None)
+        found = outermost() if callable(outermost) else None
+        if not found:
+            return None, None
+        try:
+            body = ast.parse(code).body
+        except SyntaxError:
+            return None, None
+        if len(body) != 1:
+            return None, None
+        node = body[0]
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            target = node.target
+        else:
+            return None, None
+        # The call that returned last must be the statement's value itself:
+        # in ``x = f(g(y))`` with ``f`` not wrapped, ``g`` returned last, and
+        # ``f`` may have changed that result and handed it back.
+        if not isinstance(node.value, ast.Call) or ast.unparse(node.value) != found[2]:
+            return None, None
+        found = (found[0], found[1])
+        if isinstance(target, ast.Name):
+            return found, None
+        if isinstance(target, ast.Tuple | ast.List) and all(isinstance(e, ast.Name) for e in target.elts):
+            positions: dict[str, int] = {}
+            for position, element in enumerate(target.elts):
+                positions[element.id] = position       # a name bound twice keeps the last
+            return found, positions
+        return None, None
 
     def _import_bindings_hold(self, tree: ast.AST) -> bool:
         """Does every name an import-only *tree* binds already hold the object

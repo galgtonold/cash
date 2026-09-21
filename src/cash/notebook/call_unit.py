@@ -34,6 +34,7 @@ import pathlib as _pathlib
 import sys
 import time as _time
 import types as _types
+import uuid
 import warnings
 from collections.abc import Callable, Mapping
 from types import ModuleType as _ModuleType
@@ -48,7 +49,13 @@ from cash.notebook.file_tracker import FileAccessTracker
 from cash.notebook.object_hashing import compute_hash, compute_hash_full, estimate_object_size, is_identity_fallback_hash
 from cash.notebook.randomness import capture_rng_state, rng_modules_changed
 from cash.notebook._trace import trace_event
-from cash.notebook.call_refs import DIGEST_FIELD, SIZE_FIELD, digest_and_size
+from cash.notebook.call_refs import (
+    DIGEST_FIELD,
+    ESTIMATED_FIELD,
+    SIZE_FIELD,
+    UNHASHED_PREFIX,
+    digest_and_size,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1031,6 +1038,8 @@ class CallUnit:
         self.hits_saved_s = 0.0
         self._last_hit = False
         self._last_key_s: float | None = None
+        self._invoked_keys: list[str | None] = []
+        self.last_returned: tuple[str | None, int, str] | None = None
         #: ``id(result) -> (result, key, digest)`` for the call results this
         #: cell stored or was served, so the statement holding one stores a
         #: reference to its entry rather than a second copy (``call_refs``).
@@ -1078,6 +1087,15 @@ class CallUnit:
     def begin_statement(self) -> None:
         """A new statement run: every site starts over (see :meth:`_entry_for`)."""
         self._site_runs.clear()
+        self.last_returned = None
+
+    def outermost_result(self) -> tuple[str, int, str] | None:
+        """``(call key, id(result), call source)`` of the call that returned
+        LAST in this statement -- in ``x = f(g(y))``, ``f``'s -- or ``None``
+        when it ran without the cache. The statement uses it to trust a
+        reference without re-digesting the value (``call_refs.with_call_refs``)."""
+        found = getattr(self, "last_returned", None)
+        return found if found and found[0] else None
 
     def _entry_for(self, fn, site: CallSite, invoke):
         """*invoke* behind the many-cheap-calls guard.
@@ -1123,6 +1141,7 @@ class CallUnit:
                 started = _time.perf_counter()
                 result = fn(*args, **kwargs)
                 _log_plain(_time.perf_counter() - started)
+                self.last_returned = (None, id(result), site.source)
                 return result
             if run.probing:
                 started = _time.perf_counter()
@@ -1145,13 +1164,21 @@ class CallUnit:
                                 cached_ms=round(cached * 1000, 3),
                                 keyed_ms=round(keyed * 1000, 3),
                                 plain_ms=round(plain * 1000, 3), plain=run.plain)
+                self.last_returned = (None, id(result), site.source)
                 return result
             self._last_compute = None
             self._last_key_s = None
             self._last_hit = False
+            # One slot per invocation: a call the callee makes through a
+            # lambda it was handed runs its own `_invoke` inside this one.
+            self._invoked_keys.append(None)
             started = _time.perf_counter()
-            result = invoke(*args, **kwargs)
+            try:
+                result = invoke(*args, **kwargs)
+            finally:
+                invoked_key = self._invoked_keys.pop()
             spent = _time.perf_counter() - started
+            self.last_returned = (invoked_key, id(result), site.source)
             run.total_s += spent
             if self._last_compute is not None:
                 if self._last_hit:
@@ -1197,7 +1224,13 @@ class CallUnit:
                 # uncached rather than risk a collapsed, wrong key.
                 return fn(*args, **kwargs)
 
+            # Only a result this entry holds may be referred to: set once the
+            # key is usable, and never for a refused key below.
+            if self._invoked_keys:
+                self._invoked_keys[-1] = key
             if key in self._refused:
+                if self._invoked_keys:
+                    self._invoked_keys[-1] = None
                 # A previous miss on this exact site proved its effects
                 # cannot be replayed (argument mutation or an RNG draw). Run
                 # it plain -- never look it up, never store over it.
@@ -2027,14 +2060,19 @@ class CallUnit:
         # byte of a cheap call's result would cost more than the copy saves --
         # and not for one carrying captured globals, whose value is wrapped.
         #
-        # Nor for one whose size already refuses it: the statement is judged
-        # on these bytes (`worth_its_bytes`), and pickling r28s5's 1.7 GiB
-        # result to learn that took 2.7 s after 2.8 s of compute. Without a
-        # reference the statement holds the value itself, as for any call.
-        if elapsed >= _REF_MIN_COMPUTE_S and not callee_globals and self._may_be_worth(value, elapsed):
-            found = digest_and_size(value)
+        # Nor pickled whole when its size already refuses it: pickling
+        # r28s5's 1.7 GiB result to learn that took 2.7 s after 2.8 s of
+        # compute. It gets a one-off token for a digest and its estimated size
+        # (`ESTIMATED_FIELD`): judged for disk on its own, and referred to only
+        # by the statement it is the plain result of.
+        if elapsed >= _REF_MIN_COMPUTE_S and not callee_globals:
+            estimate = self._too_big_to_digest(value, elapsed)
+            found = (digest_and_size(value) if estimate is None
+                     else (UNHASHED_PREFIX + uuid.uuid4().hex, estimate))
             if found:
                 metadata[DIGEST_FIELD], metadata[SIZE_FIELD] = found
+                if estimate is not None:
+                    metadata[ESTIMATED_FIELD] = True
                 self._hold(key, value, *found)
         if stdout:
             metadata["stdout"] = stdout
@@ -2069,14 +2107,18 @@ class CallUnit:
             logger.debug("call unit: store failed for %s", key)
 
     @staticmethod
-    def _may_be_worth(value, elapsed: float) -> bool:
-        from cash._sizing import pickled_lower_bound
+    def _too_big_to_digest(value, elapsed: float) -> int | None:
+        """The estimated pickled size of *value* when even half of it is more
+        than its compute is worth on disk, else ``None``. Half: the estimate
+        must be clearly over, since a digest skipped for a value worth keeping
+        costs the statement its reference."""
+        from cash._sizing import pickled_size_estimate
         from cash.backends.value_policy import worth_its_bytes
-        bound = pickled_lower_bound(value)
-        if worth_its_bytes(bound, elapsed):
-            return True
-        trace_event("call_ref_skipped", bytes_at_least=bound, seconds=round(elapsed, 3))
-        return False
+        estimate = pickled_size_estimate(value)
+        if worth_its_bytes(estimate // 2, elapsed):
+            return None
+        trace_event("call_digest_skipped", bytes_estimated=estimate, seconds=round(elapsed, 3))
+        return estimate
 
     def _func_name(self, fn) -> str:
         """The name this call's events display under in the badge and stats.

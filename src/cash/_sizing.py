@@ -14,6 +14,7 @@ Arrow-backed strings (pandas 3's default) report their real size as ``nbytes``.
 """
 from __future__ import annotations
 
+import pickle
 import random
 import sys
 from typing import Any
@@ -105,53 +106,105 @@ def pandas_nbytes(obj: Any) -> int | None:
     return None
 
 
-#: How deep into tuples, lists and dicts `pickled_lower_bound` looks.
-_BOUND_DEPTH = 2
+#: How deep into tuples, lists and dicts `pickled_size_estimate` looks.
+_ESTIMATE_DEPTH = 2
 
 
-def _array_bound(arr: Any, seen: set[int]) -> int:
-    """At least what one array adds to a pickle: a numpy buffer's bytes, one
-    byte per element of anything else (Python objects, Arrow, extension
-    arrays). Once per array object -- pickle writes a shared one once, and a
-    pandas 3 frame shares its string columns with the series taken from it."""
+def _pickled_item_cost(item: Any) -> int:
+    """What one Python object adds to a pickle, the first time it is written."""
+    if type(item) is str:
+        n = len(item.encode("utf-8", "surrogatepass"))
+        return n + (2 if n < 256 else 5) + 1          # opcode, length, memo
+    if type(item) in (int, float, bool) or item is None:
+        return 9
+    try:
+        return len(pickle.dumps(item, protocol=5))
+    except Exception:  # noqa: BLE001 - an estimate: count what cannot be seen as small
+        return 8
+
+
+def _objects_estimate(values: Any, seen: set[int]) -> int:
+    """Python objects, sampled. Pickle writes an object once and each repeat
+    of the SAME object as a memo reference -- two bytes while the memo is
+    small, five past 256 entries -- while equal strings that are distinct
+    objects are each written whole. An object sampled from an earlier array
+    counts as repeated: on pandas 2 a column taken from a frame is a new
+    array of the same strings."""
+    n = len(values)
+    if not n:
+        return 0
+    if n <= _OBJECT_SAMPLE:
+        sample = list(values)
+    else:
+        sample = [values[i] for i in sorted(random.Random(n).sample(range(n), _OBJECT_SAMPLE))]
+    distinct = {id(v): v for v in sample}
+    new = [v for k, v in distinct.items() if k not in seen]
+    seen.update(distinct)
+    share = len(new) / len(sample)
+    # A sample that keeps meeting the same objects has seen about all there
+    # are; otherwise their count scales with the column.
+    objects = len(distinct) if len(distinct) < len(sample) // 2 else share * n
+    repeat = 2 if objects < 256 else 5
+    if not new:
+        return repeat * n
+    mean = sum(map(_pickled_item_cost, new)) / len(new)
+    return int(n * (share * mean + (1 - share) * repeat))
+
+
+def _array_estimate(arr: Any, seen: set[int]) -> int:
+    """One array's share of a pickle, once per array object (pickle writes a
+    shared one once; a pandas 3 frame shares string columns with its series)."""
     if id(arr) in seen:
         return 0
     seen.add(id(arr))
     if str(getattr(arr, "dtype", "")) == "category":
-        return _array_bound(arr.codes, seen)
-    if type(arr).__name__ == "ndarray" and arr.dtype.kind != "O":
-        return int(arr.nbytes)
-    try:
-        return len(arr)
-    except TypeError:
+        return _array_estimate(arr.codes, seen) + _array_estimate(
+            arr.categories.to_numpy(dtype=object), seen)
+    if type(arr).__name__ == "ndarray":
+        if arr.dtype.kind != "O":
+            return int(arr.nbytes)
+        # pandas 2 hands out its 2-D blocks: a column of strings is one row
+        # of one, which sampled as ONE item pickled it whole.
+        return _objects_estimate(arr.reshape(-1) if arr.ndim != 1 else arr, seen)
+    if _holds_python_objects(getattr(arr, "dtype", None)):
+        return _objects_estimate(arr.to_numpy(dtype=object), seen)
+    nbytes = getattr(arr, "nbytes", None)              # Arrow and other extension arrays
+    return int(nbytes) if isinstance(nbytes, int) else 0
+
+
+def _index_estimate(index: Any, seen: set[int]) -> int:
+    """A RangeIndex pickles as its three numbers, not as the values."""
+    if type(index).__name__ == "RangeIndex":
         return 0
+    return _array_estimate(index._values, seen)
 
 
-def pickled_lower_bound(value: Any, _depth: int = 0, _seen: set[int] | None = None) -> int:
-    """A size ``pickle.dumps(value)`` is sure to reach, read off the arrays.
+def pickled_size_estimate(value: Any, _depth: int = 0, _seen: set[int] | None = None) -> int:
+    """About what ``pickle.dumps(value)`` comes to, read off the arrays.
 
-    For a frame, a series, a numpy array and tuples, lists and dicts of them;
-    0 for anything else. Enough to see that a value is too big to be worth
-    storing without pickling it to find out: r28s5's 1.7 GiB result took
-    2.7 s to pickle, after 2.8 s of compute.
+    For frames, series, numpy arrays and tuples, lists and dicts of them;
+    0 for anything else. Fixed-width data counts exactly; Python objects are
+    sampled. Enough to see that a value is far too big to be worth storing
+    without pickling it to find out: r28s5's 1.7 GiB result took 2.7 s to
+    pickle, after 2.8 s of compute.
     """
     seen = set() if _seen is None else _seen
     kind = type(value).__name__
     try:
         if kind == "DataFrame":
-            return sum(_array_bound(arr, seen) for arr in value._mgr.arrays)
+            return (sum(_array_estimate(arr, seen) for arr in value._mgr.arrays)
+                    + _index_estimate(value.index, seen))
         if kind == "Series":
-            # ``_values``: the ndarray itself for a numpy dtype (``.array``
-            # wraps it), the extension array otherwise.
-            return _array_bound(value._values, seen)
+            # ``_values``: the ndarray itself for a numpy dtype, else the extension array.
+            return _array_estimate(value._values, seen) + _index_estimate(value.index, seen)
         if kind == "ndarray":
-            return _array_bound(value, seen)
-    except Exception:  # noqa: BLE001 - a bound is optional: no bound is 0
+            return _array_estimate(value, seen)
+    except Exception:  # noqa: BLE001 - an estimate is optional: none is 0
         return 0
-    if _depth >= _BOUND_DEPTH:
+    if _depth >= _ESTIMATE_DEPTH:
         return 0
     if type(value) in (tuple, list):
-        return sum(pickled_lower_bound(v, _depth + 1, seen) for v in value)
+        return sum(pickled_size_estimate(v, _depth + 1, seen) for v in value)
     if type(value) is dict:
-        return sum(pickled_lower_bound(v, _depth + 1, seen) for v in value.values())
+        return sum(pickled_size_estimate(v, _depth + 1, seen) for v in value.values())
     return 0

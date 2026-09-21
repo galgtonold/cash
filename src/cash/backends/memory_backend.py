@@ -29,6 +29,11 @@ except ImportError:
 __all__ = ["InMemoryBackend"]
 
 
+#: A list or tuple with at most this many items has the frames in it
+#: copied as `_copy_frame` copies them, not deep (`_safe_deep_copy`).
+_PREMADE_ITEMS_MAX = 64
+
+
 class InMemoryBackend(CacheBackend):
     """
     In-memory cache backend using a dictionary.
@@ -144,6 +149,13 @@ class InMemoryBackend(CacheBackend):
                 # for one object still come back as one object.
                 memo: dict[int, Any] = {}
                 InMemoryBackend._premade_copies(value, memo)
+                return copy.deepcopy(value, memo)
+            if (value_type is list or value_type is tuple) and len(value) <= _PREMADE_ITEMS_MAX:
+                # ``frame, summary, n = build()``: a call's result is a tuple,
+                # and deepcopy copies a frame in it deep even where a shallow
+                # copy is safe (`_copy_frame`).
+                memo = {}
+                InMemoryBackend._premade_copies(dict(enumerate(value)), memo)
                 return copy.deepcopy(value, memo)
             return copy.deepcopy(value)
         except (TypeError, pickle.PicklingError, RecursionError, AttributeError) as exc:

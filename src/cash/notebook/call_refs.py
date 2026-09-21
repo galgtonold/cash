@@ -38,6 +38,13 @@ logger = logging.getLogger(__name__)
 #: pickled size.
 DIGEST_FIELD = "value_digest"
 SIZE_FIELD = "value_bytes"
+#: Set when ``SIZE_FIELD`` is an estimate and ``DIGEST_FIELD`` a one-off token:
+#: a result too big to be worth its bytes is not pickled to be digested. Such
+#: an entry is judged for disk on its own (``TieredBackend``), and a statement
+#: refers to it only where nothing can have changed the value since the call
+#: returned it (``with_call_refs``'s *trusted*).
+ESTIMATED_FIELD = "value_bytes_estimated"
+UNHASHED_PREFIX = "unhashed:"
 
 #: How deep into plain dicts, lists and tuples a reference is looked for.
 _DEPTH = 2
@@ -49,6 +56,10 @@ class CallRef:
 
     key: str
     digest: str
+    #: The position in the call's returned tuple, for a name bound by
+    #: unpacking it (``a, b = f()``); ``None`` for the whole value. A default,
+    #: so a reference pickled before this field existed still loads.
+    item: int | None = None
 
 
 class _Missing(Exception):
@@ -91,11 +102,23 @@ REF_BYTES_FIELD = "call_ref_bytes"
 
 
 def with_call_refs(variables: dict[str, Any], held: dict[int, tuple[Any, str, str, int]],
-                   referenced: dict[str, int] | None = None) -> dict[str, Any]:
+                   referenced: dict[str, int] | None = None, *,
+                   trusted: tuple[str, int] | None = None,
+                   unpacked: dict[str, int] | None = None) -> dict[str, Any]:
     """*variables* with each value that is an unchanged held call result
     replaced by a :class:`CallRef`. *held* maps ``id(result)`` to
     ``(result, call key, digest, pickled bytes)``; *referenced*, when given,
-    collects ``{call key: bytes}`` for the references made."""
+    collects ``{call key: bytes}`` for the references made.
+
+    "Unchanged" is proved by digesting the value again -- a second pickle of
+    all of it -- except for *trusted*, ``(call key, id(result))`` of a result
+    nothing can have changed since the call returned it: the statement is
+    ``names = call(...)`` and that call returned last. Then the reference is
+    made without a digest, and *unpacked* (``{name: position}``, for
+    ``a, b = call(...)``) refers each name to its item of the result. A result
+    whose digest is a one-off token (`UNHASHED_PREFIX`) can only be referred
+    to that way.
+    """
     if not held:
         return variables
     verified: dict[int, bool] = {}
@@ -104,14 +127,31 @@ def with_call_refs(variables: dict[str, Any], held: dict[int, tuple[Any, str, st
         entry = held.get(id(value))
         if entry is None or entry[0] is not value:
             return None
-        ok = verified.get(id(value))
-        if ok is None:
-            ok = verified[id(value)] = digest_of(value) == entry[2]
-        if not ok:
-            return None
+        if trusted != (entry[1], id(value)):
+            if str(entry[2]).startswith(UNHASHED_PREFIX):
+                return None
+            ok = verified.get(id(value))
+            if ok is None:
+                ok = verified[id(value)] = digest_of(value) == entry[2]
+            if not ok:
+                return None
         if referenced is not None:
             referenced[entry[1]] = entry[3]
         return CallRef(entry[1], entry[2])
+
+    if trusted and unpacked:
+        entry = held.get(trusted[1])
+        result = entry[0] if entry is not None and entry[1] == trusted[0] else None
+        if type(result) in (tuple, list):
+            refs = {}
+            for name, position in unpacked.items():
+                if (name in variables and position < len(result)
+                        and variables[name] is result[position]):
+                    refs[name] = CallRef(entry[1], entry[2], item=position)
+            if refs:
+                if referenced is not None:
+                    referenced[entry[1]] = entry[3]
+                variables = {**variables, **refs}
 
     def swap(value, depth):
         ref = ref_for(value)
@@ -175,7 +215,14 @@ def resolve_call_refs(payload: Any, backend: Any) -> Any:
 
     def swap(value, depth):
         if isinstance(value, CallRef):
-            return load(value)
+            loaded_value = load(value)
+            item = getattr(value, "item", None)
+            if item is None:
+                return loaded_value
+            try:
+                return loaded_value[item]
+            except (TypeError, IndexError, KeyError) as exc:
+                raise _Missing(value.key) from exc
         if depth <= 0:
             return value
         if type(value) is dict:

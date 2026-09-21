@@ -48,3 +48,12 @@ def test_a_frame_inside_an_entry_is_shared_too():
     copy = InMemoryBackend._safe_deep_copy({"variables": {"df": df, "n": [1, 2]}})
     assert np.shares_memory(copy["variables"]["df"]["x"].to_numpy(), df["x"].to_numpy())
     assert copy["variables"]["n"] == [1, 2]
+
+
+def test_a_frame_inside_a_returned_tuple_is_shared_too():
+    """A call's result is often a tuple: ``frame, n = build()``. deepcopy
+    copied the frame in it deep."""
+    df = _frame()
+    copy = InMemoryBackend._safe_deep_copy((df, 3, "x"))
+    assert np.shares_memory(copy[0]["x"].to_numpy(), df["x"].to_numpy())
+    assert copy[1:] == (3, "x") and copy[0] is not df
