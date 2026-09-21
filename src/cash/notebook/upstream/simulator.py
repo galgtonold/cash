@@ -133,8 +133,71 @@ class NotebookSimulator:
             self._classifier.set_tracking_state(state)
 
     def reset_caches(self) -> None:
-        """Clear simulation and AST caches."""
+        """Clear simulation and AST caches.
+
+        Called only by ``%cash_on``, so it also arms the one adoption of
+        untracked names -- see ``_adopt_untracked_names``.
+        """
         self._virtual_lineage.reset_caches()
+        self._adopt_untracked_pending = True
+
+    def _adopt_untracked_names(self, virtual_lineage: dict[str, str],
+                               simulation_trace: list) -> None:
+        """Give names bound before cash was listening the simulation's lineage.
+
+        A name bound in the ``%cash_on`` cell (``DATA = Path(...)``, ``N = 3``)
+        has no runtime lineage: cash was not listening when that cell started.
+        The first statement reading it was refused as "Input variable missing
+        lineage" -- in the quickstart's own layout, that is the cell that loads
+        the data (round 27, r27s1 and r27s4). The simulation reads the cell out
+        of the .ipynb and has a lineage for it like any other, and it is the
+        one the simulation keys the reader with, so adopting it is also what
+        lets the runtime store under the key a restart will look up.
+
+        Once per ``%cash_on``, at the first check after it, and only there:
+        before anything is tracked no lineage can have been dropped ON PURPOSE
+        (the module invalidator drops a from-import's lineage to force the
+        next reader to miss), so there is nothing for this to undo. Names the
+        runtime already has a lineage for are left alone; import-bound names
+        already had theirs propagated and are not touched either.
+
+        Only for a name whose binding statement cannot have read anything
+        (``_binds_without_reading``). Nothing under tracking saw that statement
+        run, so nothing recorded a file it read: adopt ``RAW = DATA.read_text()``
+        and a changed file leaves every cell below serving the old text, where
+        Restart & Run All would not
+        (``test_a_value_read_in_the_cash_on_cell_still_follows_its_file``,
+        which is how the first draft of this was caught). Such a name keeps the
+        old behaviour -- refused once, then repaired under tracking.
+        """
+        if not getattr(self, '_adopt_untracked_pending', False):
+            return
+        self._adopt_untracked_pending = False
+        user_ns = getattr(self.shell, 'user_ns', None)
+        if not user_ns:
+            return
+        runtime = self._tracking_state.variable_lineage
+        imported = self._virtual_lineage._propagated_imports
+        restores = self._virtual_lineage._restores
+        binder: dict[str, str] = {}
+        for entry in simulation_trace or ():
+            for out in entry[1] or ():
+                binder[out] = entry[0]
+        adopted = []
+        for name, lineage_hash in virtual_lineage.items():
+            if (not lineage_hash or name in runtime or name in imported
+                    or name.startswith('_') or name not in user_ns):
+                continue
+            code = binder.get(name)
+            if code is None or not _binds_without_reading(code, user_ns):
+                continue
+            restores.record_restore(var_name=name, lineage_hash=lineage_hash,
+                                    value=user_ns[name])
+            adopted.append(name)
+        apply_collected_mutations(restores, self._tracking_state)
+        if adopted and self.debug:
+            logger.debug("[UPSTREAM_DEBUG] Adopted simulated lineage for names "
+                         "bound before %%cash_on: %s", sorted(adopted))
 
     def _apply_phase_mutations(self) -> None:
         """Drain phase RestoreCollectors and apply buffered ops to TrackingState.
@@ -904,6 +967,7 @@ class NotebookSimulator:
         # after pass 1 and before the cell runs, so it describes the state the
         # cell is about to start from.
         self._tracking_state.simulated_lineage = dict(virtual_lineage)
+        self._adopt_untracked_names(virtual_lineage, simulation_trace)
 
         # Detect whether any upstream cell was actually modified since last simulation.
         # This is True only when we had a prior simulation cache AND a cached cell's hash
@@ -1058,3 +1122,78 @@ class NotebookSimulator:
         self._apply_phase_mutations()
         return result
 
+
+#: Builtins a ``%cash_on``-cell binding may call and still count as reading
+#: nothing. Classes are judged separately (``_binds_without_reading``).
+_PURE_BUILTINS = frozenset({
+    'len', 'range', 'min', 'max', 'abs', 'round', 'sorted', 'sum', 'zip',
+    'enumerate', 'reversed', 'repr', 'hash', 'isinstance', 'getattr',
+})
+
+#: ``os.path`` functions that only compute a string -- ``DATA =
+#: os.path.join(ROOT, "data")`` is as common in a setup cell as ``Path(...)``.
+_PURE_PATH_FUNCS = frozenset({
+    'join', 'dirname', 'basename', 'split', 'splitext', 'normpath',
+    'abspath', 'expanduser',
+})
+
+
+def _resolve_callee(func: ast.expr, user_ns: dict) -> Any:
+    """The object *func* names in *user_ns*, or ``None`` if not a plain path."""
+    import builtins
+    parts: list[str] = []
+    while isinstance(func, ast.Attribute):
+        parts.append(func.attr)
+        func = func.value
+    if not isinstance(func, ast.Name):
+        return None
+    if func.id in user_ns:
+        obj = user_ns[func.id]
+    elif hasattr(builtins, func.id):
+        obj = getattr(builtins, func.id)
+    else:
+        return None
+    for attr in reversed(parts):
+        try:
+            obj = getattr(obj, attr)
+        except AttributeError:
+            return None
+    return obj
+
+
+def _binds_without_reading(code: str, user_ns: dict) -> bool:
+    """True when *code* provably reads nothing outside the notebook.
+
+    Every call must be a standard-library or builtin CLASS (``Path(...)``,
+    ``datetime.date(...)``) or one of ``_PURE_BUILTINS``. A method call
+    (``DATA.read_text()``), a third-party or user function, or anything that
+    does not resolve fails -- deliberately: one ``load(DATA)`` wrongly adopted
+    pins a stale value, while one wrongly refused only costs the first
+    reader's cache.
+    """
+    import builtins
+    import os
+    import sys
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return False
+    stdlib = getattr(sys, 'stdlib_module_names', frozenset())
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = _resolve_callee(node.func, user_ns)
+        if callee is None:
+            return False
+        if isinstance(callee, type):
+            root = (getattr(callee, '__module__', '') or '').split('.')[0]
+            if root == 'builtins' or root in stdlib:
+                continue
+            return False
+        name = getattr(callee, '__name__', None)
+        if name in _PURE_BUILTINS and getattr(builtins, name, None) is callee:
+            continue
+        if name in _PURE_PATH_FUNCS and getattr(os.path, name, None) is callee:
+            continue
+        return False
+    return True
