@@ -306,7 +306,7 @@ _NOTEBOOK_ALIASES = frozenset({'notebook', 'notebooks', 'statements',
                                'notebook statements'})
 
 
-def _function_of(key: str) -> str:
+def _function_of(key: str, metadata: dict | None = None) -> str:
     """The function a cache key belongs to.
 
     Decorator keys are ``{module.qualname}:{state}:{dynamic}:{args}``, so the
@@ -317,6 +317,10 @@ def _function_of(key: str) -> str:
     """
     if key.startswith('stmt:'):
         return '(notebook statements)'
+    # An intercepted call's key is `call:<sha>`: its function is recorded in
+    # the entry instead. Older entries without it still read "call".
+    if key.startswith('call:') and metadata and metadata.get('function'):
+        return str(metadata['function'])
     return key.split(':', 1)[0] if ':' in key else '(unknown)'
 
 
@@ -366,7 +370,7 @@ def _scan_entries(cache_path: Path) -> list[_Entry]:
         outputs = metadata.get('outputs') or ()
         entries.append(_Entry(
             stem=entry_file.stem,
-            function=_function_of(key),
+            function=_function_of(key, metadata),
             key=key,
             size=stat.st_size,
             mtime=stat.st_mtime,

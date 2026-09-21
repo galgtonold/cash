@@ -792,6 +792,21 @@ class CodeAnalyzer:
                 extra = frozenset()
             if extra:
                 outputs = outputs | set(extra)
+        if user_ns is not None and outputs:
+            # A statement that neither imports nor assigns a name cannot have
+            # produced a MODULE. `sc.pp.calculate_qc_metrics(adata, inplace=True)`
+            # read as mutating its receiver, which is rooted at `sc`: the badge
+            # said "Produced sc" and every such line bumped the module's lineage,
+            # so every statement reading `sc` missed (round 28, r28s4). What the
+            # call really changes, `adata`, is observed at runtime instead. Module
+            # SETTINGS (`plt.rcParams.update(...)`) are routed separately.
+            bound = {n.id for n in ast.walk(tree)
+                     if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    bound.update((a.asname or a.name).split('.')[0] for a in node.names)
+            outputs = {o for o in outputs
+                       if o in bound or not isinstance(user_ns.get(o), types.ModuleType)}
         return inputs, outputs
 
     @staticmethod

@@ -1319,6 +1319,7 @@ class CallUnit:
                         stdout=stdout_text,
                         stderr=stderr_text,
                         callee_globals=captured,
+                        function=func_name,
                     )
                     stored = True
             self._record(func_name, site, key, cache_hit=False, elapsed=elapsed, stored=stored)
@@ -1976,6 +1977,7 @@ class CallUnit:
         stdout: str = "",
         stderr: str = "",
         callee_globals: Mapping[str, Any] | None = None,
+        function: str | None = None,
     ) -> None:
         """Write through ``backend.set(key, value, metadata)`` -- the same
         two-positional-argument shape the statement path uses
@@ -1997,6 +1999,10 @@ class CallUnit:
         no new required field when these stay absent.
         """
         metadata: dict[str, Any] = {"execution_time": elapsed, "timestamp": _time.time()}
+        if function:
+            # What `cash inspect` names the entry by: a call key is `call:<sha>`,
+            # so every intercepted call used to be listed as "call" (r28s1).
+            metadata["function"] = function
         # CAS-269. `TieredBackend` reads exactly this key to bypass the ~0.1s
         # persistence floor, so threading the statement's resolved annotation
         # here is the whole fix -- the statement path writes the same field
