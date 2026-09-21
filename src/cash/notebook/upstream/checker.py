@@ -1269,6 +1269,7 @@ class UpstreamChecker:
             'variable_hashes', 'variable_sources', 'executed_cell_codes',
             'executed_cell_hashes', 'executed_file_deps', 'executed_file_mtimes',
             'granular_preserved_vars', 'module_attribute_deps', 'from_import_sources',
+            'from_import_components',
         )
         for var in to_evict:
             self.shell.user_ns.pop(var, None)

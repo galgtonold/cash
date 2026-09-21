@@ -277,6 +277,15 @@ class TrackingState:
     # Maps var_name -> source_module_name for ``from X import Y`` bindings.
     from_import_sources: dict[str, str] = field(default_factory=dict)
 
+    # Written by StatementLineageBuilder; read by module_invalidator. The
+    # NARROWED source component (``:from_sym_src:``) a ``from X import Y``
+    # name's lineage was built with -- only what Y reaches inside X. On a
+    # reload of X the invalidator recomputes it against the new file and keeps
+    # Y's lineage when it is identical, instead of dropping every name X
+    # exported: that drop left `DATA = load(6)` "Input variable missing
+    # lineage" and uncached after an edit to an unrelated function in X.
+    from_import_components: dict[str, str] = field(default_factory=dict)
+
     # Written by StatementProcessor after observing a standalone method call;
     # read by VirtualLineage (upstream simulation). Maps a statement's
     # source_hash -> the set of receiver names that method call mutates (the

@@ -56,7 +56,12 @@ from ..cache_key import (
 )
 from ..cache_status import CacheStatus
 from ..control_structures import extract_target_names, get_control_structure_type, is_control_structure
-from ..lineage_formula import callable_source_component, module_source_component, output_lineage
+from ..lineage_formula import (
+    callable_source_component,
+    module_read_lineage,
+    module_source_component,
+    output_lineage,
+)
 from ..randomness import (
     observed_rng_reads,
     hidden_lineage_reads,
@@ -2005,7 +2010,14 @@ class VirtualLineage:
                 except (TypeError, AttributeError):
                     logger.debug("Type check failed for input variable %s", inp)
 
-            lineage = self._resolve_input_lineage(inp, virtual_lineage, virtual_modules)
+            # The runtime values a module read by plain attribute access by what
+            # those attributes reach (`lineage_formula.module_read_lineage`);
+            # this must reach the same value from the same arguments, or every
+            # statement reading a module "changed" in the simulation alone.
+            narrowed = module_read_lineage(
+                getattr(self, 'function_tracker', None), inp, val, stmt_code)
+            lineage = narrowed if narrowed is not None else \
+                self._resolve_input_lineage(inp, virtual_lineage, virtual_modules)
 
             if lineage:
                 input_lineages_all.append(lineage)

@@ -31,7 +31,12 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ..cache_key import is_cash_instrumentation, is_module_like
-from ..lineage_formula import callable_source_component, module_source_component, output_lineage
+from ..lineage_formula import (
+    callable_source_component,
+    module_read_lineage,
+    module_source_component,
+    output_lineage,
+)
 from ..randomness import hidden_lineage_reads
 from .derivation_edges import (
     bump_derived_lineages,
@@ -138,7 +143,8 @@ class StatementLineageBuilder:
             value = user_ns[var_name]
             captured_vars[var_name] = value
 
-            input_lineage_hashes, input_lineage_map = self._build_input_lineages(tracking_state, lineage_inputs, user_ns)
+            input_lineage_hashes, input_lineage_map = self._build_input_lineages(
+                tracking_state, lineage_inputs, user_ns, code)
             tracking_state.executed_input_lineages[var_name] = input_lineage_map
 
             # The formula and its ingredients are shared with the simulator
@@ -219,6 +225,7 @@ class StatementLineageBuilder:
 
     def _build_input_lineages(
         self, tracking_state: 'TrackingState', inputs: set[str], user_ns: dict,
+        code: str | None = None,
     ) -> tuple[list[str], dict[str, str]]:
         """Build input lineage hashes list and map for a set of input variables.
 
@@ -234,6 +241,16 @@ class StatementLineageBuilder:
         input_lineage_hashes: list[str] = []
         input_lineage_map: dict[str, str] = {}
         for input_var in inputs:
+            # A module read by plain attribute access is valued by what those
+            # attributes reach, as the cache key values it -- see
+            # `lineage_formula.module_read_lineage`. Recorded in the input map
+            # too, which is what the upstream check compares against.
+            narrowed = module_read_lineage(
+                self.function_tracker, input_var, user_ns.get(input_var), code)
+            if narrowed is not None:
+                input_lineage_hashes.append(narrowed)
+                input_lineage_map[input_var] = narrowed
+                continue
             if input_var in tracking_state.variable_lineage:
                 lineage = tracking_state.variable_lineage[input_var]
                 input_lineage_hashes.append(lineage)
@@ -327,8 +344,15 @@ class StatementLineageBuilder:
         the runtime also records where a ``from`` import came from, for
         module invalidation.
         """
-        return module_source_component(
+        component = module_source_component(
             self.function_tracker, value, var_name, code, tree,
             note_from_import=tracking_state.from_import_sources.__setitem__,
         )
-        return ""
+        # Kept only when narrowed: it is the evidence the invalidator needs to
+        # keep this name's lineage across a reload of its module. A whole-
+        # module component, or none, must never vouch for it.
+        if component.startswith(":from_sym_src:"):
+            tracking_state.from_import_components[var_name] = component
+        else:
+            tracking_state.from_import_components.pop(var_name, None)
+        return component

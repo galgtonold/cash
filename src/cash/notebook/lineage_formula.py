@@ -33,6 +33,48 @@ def read_module_source_hash(mod_file: str, dep_files: set[str] | None = None) ->
     return read(mod_file, dep_files)
 
 
+def module_read_lineage(
+    function_tracker: Any, var_name: str, value: Any, code: str | None,
+) -> str | None:
+    """What a statement reading module *var_name* depends on, narrowed to the
+    names it reads -- or None, meaning the module's whole lineage, as before.
+
+    A statement reading ``lib.load`` was keyed on the whole of ``lib``, so
+    editing any other function in the file re-ran it and everything built on
+    it. Round 27, r27s2: editing one helper re-read all 10,000 of their
+    ticket files, 48.7 s against a 17.3 s control, later 9.1x. This returns
+    a digest of exactly what ``load`` reaches inside the module (see
+    ``module_symbols``), plus the module's tracked dependency FILES whole --
+    what `load` does can depend on another local module, and those files are
+    what the whole-module digest folded in for that; per-symbol keying within
+    one module changes nothing across modules.
+
+    ONE function for all three places a module input is valued, because
+    they must agree byte for byte: the cache key (``cache_key``), the output
+    lineage the runtime records (``statement/lineage.py``), and the one the
+    simulation recomputes (``upstream/virtual_lineage.py``). If the key alone
+    narrowed, ``DATA = lib.load(6)`` would hit and still get a new lineage,
+    and everything downstream of it would miss anyway.
+
+    None -- keep the whole lineage -- whenever narrowing is not safe or not
+    possible: the module is not live, not a tracked local file, the statement
+    uses the module other than by plain attribute reads, or the closure
+    cannot be bounded. None is always correct; it is only slower.
+    """
+    if function_tracker is None or not code or not isinstance(value, types.ModuleType):
+        return None
+    mod_file = getattr(value, "__file__", None)
+    real = getattr(value, "__name__", var_name)
+    names = {real, var_name}
+    if not (mod_file and os.path.isfile(mod_file) and names & _tracked(function_tracker)):
+        return None
+    from .module_symbols import static_attribute_reads
+    attrs = static_attribute_reads(code, var_name)
+    if not attrs:
+        return None
+    return _closure_with_deps(function_tracker, mod_file, names, attrs, "symread:" + real)
+
+
 def output_lineage(
     source_hash: str,
     input_lineages: Iterable[str],
@@ -60,15 +102,71 @@ def _tracked(function_tracker: Any) -> set[str]:
     return getattr(function_tracker, "_tracked_modules", None) or set()
 
 
-def _from_module_hash(module_name: str, function_tracker: Any) -> str:
+def _closure_with_deps(
+    function_tracker: Any, mod_file: str, owners: set[str], attrs: Iterable[str], tag: str,
+) -> str | None:
+    """What *attrs* reach inside *mod_file*, plus the module's tracked
+    dependency files whole; None when the closure cannot be bounded.
+
+    Shared by the two narrowings -- a module read by attribute
+    (:func:`module_read_lineage`) and a name brought in by ``from ... import``
+    (:func:`_from_module_hash`) -- so they bound a closure the same way.
+    """
+    from .module_symbols import closure_digest
+    digest = closure_digest(mod_file, attrs)
+    if digest is None:
+        return None
+    parents = getattr(function_tracker, "_dep_file_to_parents", None) or {}
+    dep_files = sorted(dep for dep, o in parents.items() if owners & set(o))
+    h = hashlib.sha256(("%s:%s" % (tag, digest)).encode("utf-8"))
+    for dep in dep_files:
+        h.update((":" + (read_module_source_hash(dep) or "missing")).encode("utf-8"))
+    return h.hexdigest()
+
+
+def _from_module_hash(module_name: str, function_tracker: Any, name: str | None = None) -> str:
+    """The source component of a name imported from *module_name*.
+
+    With the *name* the import statement read, only what that name reaches
+    inside the module: `from helpers import load` then depends on `load`, and
+    editing `report` in the same file no longer re-runs everything built on
+    `load` (round 27, r27s2 -- the same fix as `module_read_lineage`, for the
+    other common spelling). Without one, or when the closure cannot be
+    bounded, the whole module, as before.
+    """
     if module_name not in _tracked(function_tracker):
         return ""
     mod_obj = sys.modules.get(module_name)
     mod_file = getattr(mod_obj, "__file__", None) if mod_obj else None
     if not (mod_file and os.path.isfile(mod_file)):
         return ""
+    if name is not None:
+        narrowed = _closure_with_deps(
+            function_tracker, mod_file, {module_name}, {name}, "fromsym:" + module_name)
+        if narrowed is not None:
+            return f":from_sym_src:{narrowed}"
     digest = read_module_source_hash(mod_file)
     return f":from_mod_src:{digest}" if digest else ""
+
+
+def imported_from(var_name: str, code: str, tree: ast.Module | None = None) -> tuple[str, str] | None:
+    """``(module, name)`` when a ``from ... import`` in *code* bound *var_name*."""
+    try:
+        parsed = tree if tree is not None else ast.parse(code.strip())
+    except SyntaxError:
+        return None
+    for node in parsed.body:
+        if isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                if (alias.asname or alias.name) == var_name and alias.name != '*':
+                    return node.module, alias.name
+    return None
+
+
+def _imported_name(var_name: str, code: str, tree: ast.Module | None) -> str | None:
+    """The name a ``from ... import`` in *code* bound as *var_name*, if one did."""
+    found = imported_from(var_name, code, tree)
+    return found[1] if found else None
 
 
 def module_source_component(
@@ -121,7 +219,11 @@ def module_source_component(
             return ""
         if note_from_import is not None:
             note_from_import(var_name, obj_module)
-        return _from_module_hash(obj_module, function_tracker)
+        # Narrowed only when THIS statement is the `from ... import` that bound
+        # it. A callable a module function returns (`fn = helpers.make()`)
+        # has no import to read a name from, and keeps the whole module.
+        return _from_module_hash(obj_module, function_tracker,
+                                 _imported_name(var_name, code, tree))
 
     try:
         parsed = tree if tree is not None else ast.parse(code.strip())
@@ -134,5 +236,5 @@ def module_source_component(
             if (alias.asname or alias.name) == var_name:
                 if note_from_import is not None:
                     note_from_import(var_name, node.module)
-                return _from_module_hash(node.module, function_tracker)
+                return _from_module_hash(node.module, function_tracker, alias.name)
     return ""

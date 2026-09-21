@@ -6,14 +6,14 @@ Every cached result is stored under a key that captures exactly what was compute
 
 A cache key is a deterministic fingerprint of a computation: the same source code over the same inputs always produces the same key, so a hit means the result can be reused without re-executing anything. Any relevant change — edited code, a recomputed upstream variable, a changed helper function — produces a different key and causes a miss.
 
-<!-- claim: cash/notebook/cache_key.py:compute_cache_key @271a6245 -->
+<!-- claim: cash/notebook/cache_key.py:compute_cache_key @fd02e4dc -->
 The statement-level key is built by `compute_cache_key()` in `cash.notebook.cache_key`:
 
 ```
 combined  = source_hash                      # SHA256 of the statement's own text
           + ":" + input_lineages             # one lineage per input, ordered by variable name
           + [":" + func_source_hashes]       # "name:hash" per called function, sorted
-          + [":" + module_source_hashes]     # "name:hash" per tracked module, sorted
+          + [":" + module_source_hashes]     # "name:hash" per tracked module read, sorted
           + ":occ" + occurrence_index        # 0-based; disambiguates a repeated statement
           + [":callees:" + callee_globals]   # "name:lineage" per global a callee reaches for
 
@@ -32,6 +32,13 @@ Five details of that formula are load-bearing:
   `input_lineages` and routed to the module component instead. Hashing a module object
   would fall back to its memory address, which is fresh in every kernel and would make
   every downstream key drift across a restart.
+  <!-- claim: cash/notebook/lineage_formula.py:module_read_lineage @9f636985 -->
+  The module component is not the whole module when it need not be. A statement
+  that only reads attributes of a local module — `helpers.load(x)` — is keyed on
+  what those attributes reach inside it, so editing `helpers.report` leaves it alone.
+  The same value goes into the statement's output lineage, and the upstream
+  simulation computes it with the same function. Otherwise the key would hit while
+  everything built on the result still missed.
 - **The namespace is a parameter, not a constant.** It is `stmt` for a statement
   and `call` for a [sub-statement call unit](../annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls),
   which is why the two live in separate key spaces while sharing one builder.
@@ -241,7 +248,7 @@ Content beats the lineage attribute, and that ordering is the fix for a real bug
 `compute_hash` itself ends at `sha256(str(id(obj)))` for an object that cannot be pickled. That does not corrupt anything — the statement executes normally and the result is stored — but the key is then tied to a memory address, so the entry is effectively per-session and will not restore after a kernel restart.
 
 ??? note "Under the hood"
-    <!-- claim: cash/notebook/statement/lineage.py:StatementLineageBuilder.capture_and_track_variables @914377b7, cash/notebook/lineage_formula.py:output_lineage @988eddb7, cash/notebook/lineage_formula.py:module_source_component @5672689a -->
+    <!-- claim: cash/notebook/statement/lineage.py:StatementLineageBuilder.capture_and_track_variables @6f5ddcb9, cash/notebook/lineage_formula.py:output_lineage @988eddb7, cash/notebook/lineage_formula.py:module_source_component @f64dca48 -->
     All statement keys are built by `compute_cache_key()` in
     `cash.notebook.cache_key`, and every output lineage by the functions in
     `cash.notebook.lineage_formula` — both shared by runtime execution

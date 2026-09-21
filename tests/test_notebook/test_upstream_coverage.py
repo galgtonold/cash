@@ -715,8 +715,12 @@ class TestModuleSourceComponent:
         tracker = MagicMock()
         tracker._tracked_modules = {"zz_helpers_mod"}
         code = "from zz_helpers_mod import clean, THRESHOLD"
-        assert self._component(tracker, mod.clean, "clean", code).startswith(":from_mod_src:")
-        assert self._component(tracker, 3, "THRESHOLD", code).startswith(":from_mod_src:")
+        # Narrowed to what each name reaches inside the module (`from_sym_src`)
+        # since per-symbol keying; the whole-module `from_mod_src` is what a
+        # name gets when its closure cannot be bounded. Either way it carries
+        # source -- the thing this test is about.
+        assert self._component(tracker, mod.clean, "clean", code).startswith(":from_sym_src:")
+        assert self._component(tracker, 3, "THRESHOLD", code).startswith(":from_sym_src:")
 
 # ===========================================================================
 # UpstreamChecker initialization

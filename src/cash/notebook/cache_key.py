@@ -456,6 +456,7 @@ def _process_input_var(
     func_source_hashes: list[str],
     module_source_hashes: list[str],
     virtual_callables: Mapping[str, VirtualCallable] | None = None,
+    code: str | None = None,
 ) -> None:
     """Process one input variable, appending to input_hashes / func_source_hashes / module_source_hashes."""
     val = user_ns.get(var_name)
@@ -466,6 +467,14 @@ def _process_input_var(
         return
 
     if is_module_like(var_name, val, virtual_modules):
+        # Narrowed to the names the statement reads when that is safe; see
+        # `lineage_formula.module_read_lineage`, which the output lineage on
+        # both engines calls too, so all three agree.
+        from .lineage_formula import module_read_lineage
+        narrowed = module_read_lineage(function_tracker, var_name, val, code)
+        if narrowed is not None:
+            module_source_hashes.append(f"{var_name}:{narrowed}")
+            return
         if var_name in variable_lineage:
             module_source_hashes.append(f"{var_name}:{variable_lineage[var_name]}")
             if debug:
@@ -653,7 +662,7 @@ def compute_cache_key(
             var_name, virtual_modules, user_ns, variable_lineage, virtual_lineage,
             ctx._lineage_store, compute_hash_fn, function_tracker, debug, debug_print_fn,
             input_hashes, func_source_hashes, module_source_hashes,
-            ctx.virtual_callables,
+            ctx.virtual_callables, code=code,
         )
 
     # Build the final combined hash string

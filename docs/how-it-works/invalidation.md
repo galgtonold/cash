@@ -23,7 +23,7 @@ A *failed* lookup is memoised too, but for two seconds rather than five minutes 
 
 ## Upstream simulation
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker @03186417, cash/notebook/upstream/simulator.py:NotebookSimulator @fcfa1111, cash/notebook/server_discovery.py:_read_notebook_code_cells @f6b1396e broad="the simulation story is the two orchestrating classes, not one method" -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker @1812d85f, cash/notebook/upstream/simulator.py:NotebookSimulator @fcfa1111, cash/notebook/server_discovery.py:_read_notebook_code_cells @f6b1396e broad="the simulation story is the two orchestrating classes, not one method" -->
 The classic problem: you edited cell 1 but then ran cell 3 directly. Cash solves this with a virtual-lineage approach. When cell 3 runs, Cash reads the notebook's current cell state — from a live source when one is available, the saved file otherwise — and *simulates* the upstream cells — cells 1 and 2 — without executing them. It parses each upstream statement's AST to compute what its lineage hash *should* be given the current code, then compares those virtual lineages against the in-memory lineages stored from the last actual run. Only the cells whose simulated lineage differs from what is in memory are re-executed. A value that matches is used as it is, and one missing from memory is restored straight from cache — which is how a variable you never computed this session appears in the namespace without its cell running. Only what the cell you run depends on is considered: a stale chart, export or model fit above it that the cell does not read stays as it is until a cell that needs it runs. A statement that writes a file counts as needed when something the cell depends on reads that file, even through a helper function.
 
 <!-- claim: cash/notebook/server_discovery.py:_read_notebook_code_cells @f6b1396e, cash/notebook/server_discovery.py:last_cell_source @b653689d -->
@@ -136,9 +136,10 @@ flowchart TD
 ```
 
 ??? note "Finer points"
-    - **Granular module invalidation**: only variables that actually use the changed symbol are invalidated; variables that only touch unchanged symbols are preserved.
+    <!-- claim: cash/notebook/lineage_formula.py:module_read_lineage @9f636985, cash/notebook/module_symbols.py:closure_digest @7ee6f069 -->
+    - **Editing one function re-runs only what uses it.** A statement that reads `helpers.load` — or `load`, after `from helpers import load` — depends on `load` and on everything `load` reaches inside the module: the helpers it calls, the constants it reads, the decorators on it, and any code that runs at import time. Editing `report` in the same file leaves it cached, and so is everything built on it. Every `# @cash:` line in the file still counts, because those are instructions to Cash rather than comments. Another local module the file imports counts in full.
+    - **When Cash cannot say, the whole module counts.** That happens if the statement uses the module other than by reading attributes — passing it to a function, `getattr(helpers, name)` — or if the module reaches its own namespace dynamically (`globals()`, `exec`, `setattr`, `from x import *`, a module-level `__getattr__`). It also happens if something the name reaches computes a different value on every run, such as `STAMP = time.time()` at import time: an edit anywhere in the file reloads the module and recomputes it. The whole module is always correct; it is only slower.
     - **From-import constants**: `from mymodule import VALUE` is tracked; if `VALUE` changes in the source module, downstream caches miss.
-    - **Module-attribute dependencies**: Cash tracks attribute access paths (e.g. `mymodule.helper.process`) so that a change deep in a module tree propagates only to callers of the changed attribute, not to unrelated callers.
     - **Notebook TTL / freshness**: the resolved notebook path is considered fresh for five minutes; subsequent runs within that window skip the discovery step entirely, keeping overhead near zero.
 
 ## Mutation bumps the receiver's lineage

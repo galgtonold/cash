@@ -177,7 +177,17 @@ class ModuleInvalidator:
     # ------------------------------------------------------------------
 
     def _clear_callable_from_imports(self, mod_name: str, processor: StatementProcessor) -> None:
-        """Category 1: clear tracking for callable from-imports from *mod_name*."""
+        """Category 1: clear tracking for callable from-imports from *mod_name*.
+
+        Except a name imported by ``from mod import name`` whose narrowed
+        source component -- what ``name`` reaches inside the module -- is the
+        same against the reloaded file as the one its lineage was built with.
+        Its code did not change, so neither does anything built on it: it is
+        refreshed to the reloaded object and keeps its lineage. Dropping it,
+        as every name used to be dropped, left `DATA = load(6)` refused as
+        "Input variable missing lineage" after an edit to an unrelated
+        function in the same file.
+        """
         for var_name, var_value in list(self._shell.user_ns.items()):
             if var_name.startswith('_'):
                 continue
@@ -186,6 +196,9 @@ class ModuleInvalidator:
                 value_module == mod_name
                 or value_module.startswith(mod_name + '.')
             ):
+                if self._keep_unchanged_from_import(var_name, var_value, processor):
+                    continue
+                processor._tracking_state.from_import_components.pop(var_name, None)
                 processor.executed_cell_codes.pop(var_name, None)
                 processor.executed_input_lineages.pop(var_name, None)
                 processor.current_session_hashes.pop(var_name, None)
@@ -196,6 +209,46 @@ class ModuleInvalidator:
                         f"from-imported '{var_name}' (module: {mod_name})"
                     )
 
+    def _keep_unchanged_from_import(
+        self, var_name: str, var_value: Any, processor: StatementProcessor,
+    ) -> bool:
+        """True -- and the name refreshed -- when its narrowed component still holds.
+
+        Needs all three: a component recorded when the lineage was built (only
+        ever a NARROWED one; see ``from_import_components``), the ``from ...
+        import`` statement that bound the name, and the same component
+        recomputed from that statement against the reloaded file. Anything
+        missing or different falls through to clearing, as before.
+        """
+        state = processor._tracking_state
+        recorded = state.from_import_components.get(var_name)
+        code = processor.executed_cell_codes.get(var_name)
+        if not recorded or not code:
+            return False
+        try:
+            from .lineage_formula import imported_from, module_source_component
+            source = imported_from(var_name, code)
+            if source is None:
+                return False
+            current = module_source_component(
+                processor.function_tracker, var_value, var_name, code)
+            if current != recorded:
+                return False
+            module = sys.modules.get(source[0])
+            if module is None or not hasattr(module, source[1]):
+                return False
+            fresh = getattr(module, source[1])
+        except Exception:  # noqa: BLE001 - any doubt means clear, the old behaviour
+            logger.debug("keeping from-import %s failed", var_name, exc_info=True)
+            return False
+        # What a re-import would bind, from the module the statement names. For
+        # a function it matters beyond the value: the old object's line numbers
+        # describe the old file, and its source hash is read by them.
+        self._shell.user_ns[var_name] = fresh
+        if self._debug:
+            print(f"[MODULE_INVALIDATE] Kept '{var_name}': what it reaches in the module is unchanged")
+        return True
+
     def _clear_constant_from_imports(
         self, mod_name: str, processor: StatementProcessor, reloaded_mod: Any
     ) -> None:
@@ -203,6 +256,12 @@ class ModuleInvalidator:
         for var_name, src_mod in list(processor._tracking_state.from_import_sources.items()):
             if src_mod != mod_name and not src_mod.startswith(mod_name + '.'):
                 continue
+            # This map holds callables as well as constants, so this pass saw
+            # -- and dropped -- every name Category 1 had just kept.
+            if self._keep_unchanged_from_import(
+                    var_name, self._shell.user_ns.get(var_name), processor):
+                continue
+            processor._tracking_state.from_import_components.pop(var_name, None)
             processor.executed_cell_codes.pop(var_name, None)
             processor.executed_input_lineages.pop(var_name, None)
             processor.current_session_hashes.pop(var_name, None)
