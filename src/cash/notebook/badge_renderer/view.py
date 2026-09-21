@@ -258,6 +258,9 @@ class SkippedBucket:
 
     items: tuple[Union["StatementRow", "ForLoopGroup"], ...]
     total_saved_time_s: float
+    #: ``(code, paths)`` of file writers left out of the repair although what
+    #: they write changed: their file on disk is out of date (round 28).
+    stale_exports: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)

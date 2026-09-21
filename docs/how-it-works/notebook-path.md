@@ -258,6 +258,14 @@ line of the chart, or an upstream edit to the data it writes. Writes a C
 extension makes without going through Python's `open` are not seen; such a
 writer is re-run as before.
 
+<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._find_stale_file_writer_indices @4434dea5, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._note_stale_exports @32f95ad2 -->
+A writer whose file the cell you run does not read is left alone, as a plain
+kernel leaves a cell you did not run. If an upstream edit changed what that
+writer writes, its file on disk is now out of date, and the badge says so with
+a `STALE FILE: sweep.csv not rewritten ...` line naming the statement to
+re-run. It is not listed among the steps "not re-run" because what they built
+is still current.
+
 !!! tip "The other half of the story"
     Restoration is only safe because Cash can prove the cached value is still
     current. That proof — lineage hashes, upstream simulation, what counts as a

@@ -866,6 +866,9 @@ def _section_item_from_grouped(item: dict[str, Any]) -> SectionItem:
 def _skipped_bucket(skipped_metrics: list[dict[str, Any]]) -> SkippedBucket | None:
     if not skipped_metrics:
         return None
+    stale = tuple((str(m.get("code", "")), tuple(m.get("written_paths") or ()))
+                  for m in skipped_metrics if m.get("stale_export"))
+    skipped_metrics = [m for m in skipped_metrics if not m.get("stale_export")]
     total_saved = sum(float(m.get("saved_time", 0.0)) for m in skipped_metrics)
     grouped = _group_loop_iterations(skipped_metrics)
     items: list[StatementRow | ForLoopGroup] = []
@@ -879,7 +882,8 @@ def _skipped_bucket(skipped_metrics: list[dict[str, Any]]) -> SkippedBucket | No
             items.append(node.row)
         elif isinstance(node, ControlGroup):
             items.extend(node.rows)
-    return SkippedBucket(items=tuple(items), total_saved_time_s=total_saved)
+    return SkippedBucket(items=tuple(items), total_saved_time_s=total_saved,
+                         stale_exports=stale)
 
 
 # ---------------------------------------------------------------------------

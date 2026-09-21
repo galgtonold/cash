@@ -21,6 +21,8 @@ the wall of text without any test noticing.
 """
 from __future__ import annotations
 
+import os
+
 from ..statement.miss_guard import GUARD_SKIP_REASON
 
 __all__ = [
@@ -84,3 +86,31 @@ def guard_summary_line(count: int, codes: list[str] | None = None) -> str | None
         f"re-probes periodically\n"
         f"  and resumes caching if the key settles."
     )
+
+
+def stale_export_text(code: str, paths) -> str:
+    """One line for a file the upstream repair left out of date.
+
+    The repair rebuilt what the write reads but not the write itself --
+    nothing the run needs reads the file, and a plain kernel leaves a cell the
+    user did not run alone too. The file keeps the old data; say which, and
+    what rewrites it (round 28, r28s3: the badge called it "already current").
+    """
+    first = (code.splitlines() or [""])[0].strip()
+    if len(first) > 50:
+        first = first[:47] + "..."
+    target = ", ".join(_shown_path(p) for p in paths[:3]) if paths else "a file"
+    if paths and len(paths) > 3:
+        target += f" and {len(paths) - 3} more"
+    return (f"STALE FILE: {target} not rewritten, though its data changed "
+            f"upstream -- run the cell with `{first}` to update it")
+
+
+def _shown_path(path) -> str:
+    """*path* relative to the working folder when it is inside it (``report/sweep.csv``)."""
+    path = str(path)
+    try:
+        rel = os.path.relpath(path)
+    except ValueError:              # another drive
+        return path
+    return path if rel.startswith("..") else rel.replace(os.sep, "/")

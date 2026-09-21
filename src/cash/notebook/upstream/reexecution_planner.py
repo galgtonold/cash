@@ -21,6 +21,7 @@ from ..cacheability import (
     statement_written_paths,
 )
 from ..cache_key import write_provenance_key
+from ..cache_status import CacheStatus
 from ..file_dep_snapshot import file_dep_is_fresh
 from .._trace import trace_event
 from ..carrier_history import carrier_history_fingerprint
@@ -212,6 +213,8 @@ class ReexecutionPlanner:
         self._virtual_lineage = virtual_lineage
         self._classifier = classifier
         self.debug = debug
+        #: ``(trace index, paths)`` of the writers the last plan left out of date.
+        self.stale_exports: list[tuple[int, list[str]]] = []
 
     @staticmethod
     def _drop_scheduled_from_restored(simulation_trace, stmts_to_run_indices, restored):
@@ -254,6 +257,7 @@ class ReexecutionPlanner:
             for i, (stmt, outputs, _, _, _, _) in enumerate(simulation_trace):
                 logger.debug("[UPSTREAM_DEBUG]   [%s] outputs=%s: %s...", i, outputs, stmt[:60])
 
+        self.stale_exports = []
         loop_derived_trust_overridden = self._virtual_lineage._check_loop_derived_trust_override(
             upstream_has_modifications, vars_mutated_by_loops, simulation_trace_codes,
         )
@@ -327,6 +331,8 @@ class ReexecutionPlanner:
             virtual_modules, stmt_lookup_times,
         )
         restored_statements_info.extend(skipped_metrics)
+        restored_statements_info = self._note_stale_exports(
+            simulation_trace, stmts_to_run_indices, restored_statements_info)
 
         stmts_to_run_indices = self._schedule_loop_var_contexts(stmts_to_run_indices, simulation_trace)
         stmts_to_run_indices = self._virtual_lineage._filter_accumulator_reinits(stmts_to_run_indices, simulation_trace, vars_mutated_by_loops)
@@ -359,6 +365,32 @@ class ReexecutionPlanner:
         )
 
         return statements_to_reexecute, restored_statements_info, total_restore_time
+
+    def _note_stale_exports(self, simulation_trace: list, stmts_to_run_indices: list[int],
+                            restored_statements_info: list[dict]) -> list[dict]:
+        """Mark the writers this repair left out of date (see
+        :meth:`_find_stale_file_writer_indices`) as such, in place of the
+        "already current" skipped row they would otherwise get."""
+        stale = {i: paths for i, paths in getattr(self, 'stale_exports', None) or ()
+                 if i not in set(stmts_to_run_indices)}
+        if not stale:
+            return restored_statements_info
+        kept = [m for m in restored_statements_info if m.get('position') not in stale
+                or str(m.get('status')) != str(CacheStatus.SKIPPED)]
+        for i, paths in sorted(stale.items()):
+            trace_event("stale_export", stmt=simulation_trace[i][0][:80], paths=paths)
+            kept.append({
+                'code': simulation_trace[i][0],
+                'status': CacheStatus.SKIPPED,
+                'saved_time': 0.0,
+                'is_upstream': True,
+                'source': 'Skipped',
+                'position': i,
+                'has_cache': False,
+                'stale_export': True,
+                'written_paths': paths,
+            })
+        return kept
 
     def _schedule_consumable_producer_touches(
         self,
@@ -1269,11 +1301,13 @@ class ReexecutionPlanner:
             run = runtime_lineage.get(name)
             return virt is not None and run is not None and virt != run
 
+        self.stale_exports = []
         writer_indices = self._find_stale_file_writer_indices(
             simulation_trace, scheduled_outputs=changed_inputs, skip=scheduled,
             virtual_lineage=virtual_lineage,
             relevant_read_paths=relevant_read_paths,
             relevant_read_paths_known=relevant_read_paths_known,
+            stale_exports=self.stale_exports,
         )
         if not writer_indices:
             return stmts_to_run_indices, restored_statements_info
@@ -1435,6 +1469,7 @@ class ReexecutionPlanner:
         virtual_lineage: dict | None = None,
         relevant_read_paths: set[str] | None = None,
         relevant_read_paths_known: bool = True,
+        stale_exports: list | None = None,
     ) -> list[int]:
         """Trace indices of file-WRITING statements whose effect is stale.
 
@@ -1454,6 +1489,12 @@ class ReexecutionPlanner:
         reconstruct any value the current cell needs. The gate applies only when
         the read set is fully known and the writer's own path resolves; every
         uncertain case falls through to the prior (conservative) behaviour.
+
+        A writer the scope gate leaves alone although what it writes has
+        changed -- an input's lineage drifted from the one it was written
+        with -- is appended to *stale_exports* as ``(index, paths)``: the
+        file on disk is now out of date, and the badge must not call it
+        current (round 28, r28s3 and r28s5).
         """
         tracking = getattr(self._classifier, '_tracking_state', None)
         executed_writes = getattr(tracking, 'executed_write_stmt_codes', None)
@@ -1494,6 +1535,8 @@ class ReexecutionPlanner:
                         read_paths_known=relevant_read_paths_known,
                         read_paths=sorted(relevant_read_paths or ())[:20])
             if unread:
+                if stale_exports is not None and any(_input_lineage_drifted(v) for v in inputs):
+                    stale_exports.append((i, sorted(self._writer_paths(stmt_code, simulation_trace) or ())))
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM] File-writer output read by no relevant "

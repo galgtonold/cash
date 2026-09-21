@@ -38,6 +38,7 @@ _CONFIGURED_TIERS: ContextVar[tuple[str, ...]] = ContextVar(
 )
 
 from .. import theme
+from .._reasons import stale_export_text
 from ..view import (
     BadgeHeader,
     BadgeStatus,
@@ -777,6 +778,14 @@ label.c3-row {{ cursor: pointer; }}
   font-size: 10px;
   color: {theme.INK_4};
   margin-left: auto;
+}}
+/* A file the repair left out of date (its data changed, its write did not re-run) */
+.c3-stale-export {{
+  padding: 6px 12px;
+  font-size: 11px;
+  color: {theme.RAIL_WARN};
+  background: {theme.BG_UPSTREAM};
+  border-bottom: 1px solid #ececec;
 }}
 
 /* Footer */
@@ -1906,8 +1915,10 @@ def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
     ``virtual_lineage._collect_skipped_statement_metrics`` for the
     dependency-walk that flags them.
     """
+    stale = "".join(f'<div class="c3-stale-export">{_esc(stale_export_text(code, paths))}</div>'
+                    for code, paths in sb.stale_exports)
     if not sb.items:
-        return ""
+        return stale
     n = len(sb.items)
     label = f"{n} upstream step{'s' if n != 1 else ''} not re-run"
     title = (
@@ -1928,6 +1939,7 @@ def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
         f"</summary>"
         f"{body}"
         f"</details>"
+        f"{stale}"
     )
 
 

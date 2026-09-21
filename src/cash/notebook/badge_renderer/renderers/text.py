@@ -11,7 +11,7 @@ rows one step further in.
 from __future__ import annotations
 
 from .. import theme
-from .._reasons import guard_summary_line, is_guard_reason, shorten_skipped_reason
+from .._reasons import guard_summary_line, is_guard_reason, shorten_skipped_reason, stale_export_text
 from ..view import (
     BadgeHeader,
     BadgeStatus,
@@ -293,11 +293,14 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
         # repair did not need, and a row apiece put 18 ``^SKIPPED: import os``
         # style rows into a report cell's badge (round 25, r25s1).
         n = len(item.items)
-        if not n:
-            return []
         lead = "^" if is_upstream else ""
-        return [f"{pad}  {lead}{n} upstream step{'s' if n != 1 else ''} not re-run "
-                f"(what they built is already current)"]
+        out = [f"{pad}  {lead}{n} upstream step{'s' if n != 1 else ''} not re-run "
+               f"(what they built is already current)"] if n else []
+        # A write the repair left alone although its data changed: the file
+        # is out of date, and "already current" would say otherwise (r28s3).
+        for code, paths in item.stale_exports:
+            out.append(f"{pad}  {lead}{stale_export_text(code, paths)}")
+        return out
     if isinstance(item, OverheadBreakdown | DecoratorCallGroup):
         return []  # rendered separately
     return []
