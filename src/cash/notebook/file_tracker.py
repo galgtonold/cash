@@ -142,6 +142,15 @@ def _regular_file_stat(path: str) -> tuple[int, int, int] | None:
 #: The folder joblib memory-maps a parallel call's large arguments into.
 _SCRATCH_MEMMAP = "joblib_memmapping_folder_"
 
+#: Caches a runtime keeps for ITSELF: the interpreter's bytecode and numba's
+#: JIT index/data (``.nbi`` / ``.nbc``), which live in a ``__pycache__`` next to
+#: the code or wherever ``NUMBA_CACHE_DIR`` points. Never the user's data, and
+#: rewritten by any other process that runs the same function -- recorded,
+#: scanpy's normalize made every step after it re-run after a restart (round
+#: 28, r28s4, 3/3).
+_RUNTIME_CACHE_SEGMENT = "/__pycache__/"
+_RUNTIME_CACHE_SUFFIXES = (".nbi", ".nbc", ".pyc")
+
 
 def _is_pseudo_fs(path: str) -> bool:
     """True for kernel pseudo-filesystem paths, which are machine state rather
@@ -1537,6 +1546,9 @@ class FileAccessTracker:
             # for ever -- r25s1's ``cross_val_predict(n_jobs=4)`` loop re-ran
             # on every run of the report cell (round 25).
             logger.debug("[TRACKER] Ignoring joblib scratch read %r", abs_path)
+            return
+        if _RUNTIME_CACHE_SEGMENT in abs_path or abs_path.endswith(_RUNTIME_CACHE_SUFFIXES):
+            logger.debug("[TRACKER] Ignoring runtime-cache read %r", abs_path)
             return
         if _is_cash_internal(abs_path):
             # See _CASH_INTERNAL_SEGMENTS. Checked after realpath so a relative

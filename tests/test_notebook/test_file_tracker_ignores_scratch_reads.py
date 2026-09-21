@@ -46,3 +46,30 @@ def test_opening_a_file_descriptor_records_no_path(tmp_path, monkeypatch):
             pass
     tracked = _tracked(read)
     assert not tracked, tracked
+
+
+def test_a_jit_or_bytecode_cache_read_is_not_a_dependency(tmp_path):
+    """Round 28, r28s4, 3/3 (``r28s4/repro/numba_restart``): scanpy's
+    normalize reads numba's cache index,
+    ``scanpy/preprocessing/__pycache__/_normalize_csr-parallel-29.py314.nbi``,
+    and it was recorded as a file the statement read. Any other process in
+    the venv running the same function rewrites it, and every step after
+    normalisation re-ran after each restart. A ``__pycache__`` directory only
+    ever holds the interpreter's or a JIT's own caches; ``NUMBA_CACHE_DIR`` can
+    move numba's anywhere, so its index/data extensions are dropped too."""
+    pyc = tmp_path / "pkg" / "__pycache__"
+    pyc.mkdir(parents=True)
+    (pyc / "_normalize_csr-parallel-29.py314.nbi").write_bytes(b"x")
+    elsewhere = tmp_path / "numba_cache"
+    elsewhere.mkdir()
+    (elsewhere / "f-12.py314.nbc").write_bytes(b"x")
+    (tmp_path / "data.csv").write_text("a\n1\n")
+
+    def read():
+        for p in (pyc / "_normalize_csr-parallel-29.py314.nbi",
+                  elsewhere / "f-12.py314.nbc", tmp_path / "data.csv"):
+            with open(p, "rb"):
+                pass
+    tracked = _tracked(read)
+    assert not [t for t in tracked if "__pycache__" in t or t.endswith((".nbi", ".nbc"))], tracked
+    assert any(t.endswith("data.csv") for t in tracked), tracked
