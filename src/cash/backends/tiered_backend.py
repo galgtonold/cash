@@ -617,12 +617,13 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             # whose compute is actually being saved.
             weight = cap_size + int(metadata.get('call_ref_bytes') or 0)
             is_call_entry = str(key).startswith('call:')
-            # ...except one too big to have been digested (`call_refs.
-            # ESTIMATED_FIELD`): only the statement it is the plain result of
-            # refers to it, so no other statement's refusal would drop it, and
-            # it was already found not worth its bytes on its own compute.
+            # ...except one not digested (`call_refs.ESTIMATED_FIELD`): only
+            # the statement it is the plain result of refers to it, so no
+            # other statement's refusal would drop it. Weighed by its
+            # estimated PICKLED size, which is what disk holds: r28s5's result
+            # is 402 MiB pickled and 1.7 GiB in memory, as 3.7 million strings.
             if is_call_entry and metadata.get('value_bytes_estimated'):
-                weight = max(cap_size, int(metadata.get('value_bytes') or 0))
+                weight = int(metadata.get('value_bytes') or cap_size)
                 is_call_entry = False
             bytes_refused = False
             if (past_compute_floor and not (force_persist or decorated)

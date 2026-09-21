@@ -112,6 +112,20 @@ class TestThroughABackend:
         assert meta.get("persist_skipped") == "bytes", meta
         assert not list(tmp_path.glob("*.entry"))
 
+    def test_an_undigested_call_entry_is_weighed_by_its_pickled_size(self, tmp_path):
+        """A call entry that was not digested (`call_refs.ESTIMATED_FIELD`) is
+        judged on its own, by the pickled size estimated for it -- what disk
+        holds -- not by what it takes in memory: r28s5's result is 402 MiB
+        pickled and 1.7 GiB in memory, as 3.7 million strings."""
+        b = self._tiered(tmp_path)
+        kept = self._set(b, "call:kept", 200 * MIB, 1.2,
+                         value_bytes=100 * MIB, value_bytes_estimated=True)
+        refused = self._set(b, "call:refused", 20 * MIB, 1.2,
+                            value_bytes=300 * MIB, value_bytes_estimated=True)
+        b.shutdown()
+        assert "DISK" in (kept.get("storage") or []), kept
+        assert "DISK" not in (refused.get("storage") or []), refused
+
     def test_the_refusal_says_so(self, tmp_path):
         """Round 26's unanimous complaint was silence, not size."""
         b = self._tiered(tmp_path)
