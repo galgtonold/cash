@@ -298,7 +298,12 @@ class StatementLineageBuilder:
             mod_deps: dict[str, set[str]] = {}
             for input_name, attrs in attr_accesses.items():
                 input_val = user_ns.get(input_name)
-                if isinstance(input_val, types.ModuleType) and input_name in self.function_tracker._tracked_modules:
+                # Tracked under its REAL name; recorded under the name read,
+                # which is what the invalidator looks it up by. Checking the
+                # name read missed `import tickets_lib as tl` (see 9785293).
+                if (isinstance(input_val, types.ModuleType)
+                        and getattr(input_val, '__name__', input_name)
+                        in self.function_tracker._tracked_modules):
                     mod_deps[input_name] = attrs
             if mod_deps:
                 tracking_state.module_attribute_deps[var_name] = mod_deps
