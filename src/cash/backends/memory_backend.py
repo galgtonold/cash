@@ -66,6 +66,11 @@ class InMemoryBackend(CacheBackend):
         self.max_entries = max_entries
         self._max_size_bytes = max_size_bytes
         self._current_size_bytes = 0
+        #: The footprint the first check of the current memory-pressure episode
+        #: left, and the machine's memory percent when that share was taken;
+        #: both None outside an episode. See `_evict`.
+        self._pressure_floor: int | None = None
+        self._pressure_percent: float | None = None
         self._set_count = 0
         #: Keys whose stored value holds only tuples and immutable primitives
         #: below its top: a hit copies the top list alone, with no new check.
@@ -84,6 +89,12 @@ class InMemoryBackend(CacheBackend):
         #: degenerated into directory order.
         self._access_seq = 0
         self._seq_by_key: dict[str, int] = {}
+
+    #: How far the machine's memory percent must climb within one pressure
+    #: episode before the tier takes a fresh share rather than holding flat.
+    #: Two points: well above the jitter of consecutive psutil readings, well
+    #: below the nine points between the 90% trigger and the 81% target.
+    _PRESSURE_WORSENED_POINTS = 2.0
 
     #: Types whose instances cannot be mutated, so SHARING one between the
     #: stored entry and the caller is safe. Exact-type membership, never
@@ -312,6 +323,8 @@ class InMemoryBackend(CacheBackend):
         self._gdsf_base.clear()
         self._seq_by_key.clear()
         self._current_size_bytes = 0
+        self._pressure_floor = None
+        self._pressure_percent = None
         # Also try to free memory back to OS
         self._try_malloc_trim()
 
@@ -404,19 +417,58 @@ class InMemoryBackend(CacheBackend):
         try:
             mem = psutil.virtual_memory()
             if mem.percent / 100.0 > self.max_memory_percent:
-                self._evict()
+                self._evict(mem)
+            else:
+                # The episode is over: the next one takes a fresh share.
+                self._pressure_floor = None
+                self._pressure_percent = None
         except (OSError, AttributeError) as exc:
             logger.debug("Memory check failed: %s", exc)
 
-    def _evict(self) -> None:
-        """Evict items until memory usage is safe (target: 90% of max threshold).
+    def _evict(self, mem: Any = None) -> None:
+        """Give back this tier's SHARE of the machine's memory pressure.
 
         Same order as the byte cap (`_evict_to_byte_cap`): least value per
         byte first. It used to score ``execution_time * access_count / size``,
         which put every entry not yet read at zero -- a 30-second result went
         before a 1 ms one that had been read once.
+
+        **How much.** This used to drop entries until the WHOLE MACHINE fell
+        under the target. When the pressure is someone else's, that never
+        happens, so one check emptied the tier -- measured: 200 entries to 0
+        in a single call -- and every later check emptied it again. Round 27
+        ran five testers on one box, each with a cash kernel and an uncached
+        oracle kernel over its full dataset: r27s3's parameter sweep went from
+        13.4 s to ~100 s, stayed there through reruns and even through
+        reverting the edit it blamed, while the uncached kernel beside it
+        barely moved. Its `cached=` count fell from 601 to ~170 and never
+        recovered. A clean replay of the same seven steps on a quiet machine
+        stays at 9-12 s throughout. Emptying a cache the machine's pressure
+        does not come from costs its user everything and the machine nothing.
+
+        So it sheds its share: ``overshoot * own / in_use`` bytes, where
+        ``own`` is this tier's footprint. A tier that IS most of the memory in
+        use sheds nearly the whole overshoot, as before; one that holds a
+        sliver of it sheds a sliver.
+
+        **Once per episode.** Under pressure that never relents, taking the
+        share again on every check (one per ``check_interval`` writes) is the
+        same drain, geometrically -- ~15% per check across the hundreds of
+        writes one sweep makes. So the first check of an episode takes the
+        share, records the footprint it left, and later checks in the same
+        episode only hold the tier at that level: new entries displace the
+        least valuable old ones rather than the tier shrinking again. The
+        episode ends at the first check that finds no pressure.
+
+        Falls back to the old drain-to-target when the reading carries no
+        ``total`` -- psutil always provides it, so that is only ever a test
+        double -- because the share cannot be computed without it.
         """
         target_percent = self.max_memory_percent * 0.9
+        share = self._pressure_share(mem, target_percent)
+        if share is not None:
+            self._shed(share)
+            return
 
         items = [
             (self._gdsf_priority(key, meta), self._seq_by_key.get(key, 0), key)
@@ -440,6 +492,56 @@ class InMemoryBackend(CacheBackend):
 
         if evicted_count > 0:
             self._try_malloc_trim()
+
+    def _pressure_share(self, mem: Any, target_percent: float) -> float | None:
+        """Bytes this tier should give back now, or None when it cannot tell.
+
+        The first check of a pressure episode: its proportional share of the
+        overshoot. Every later one: whatever it has grown past the level the
+        first one left.
+        """
+        total = getattr(mem, 'total', None)
+        percent = getattr(mem, 'percent', None)
+        if not isinstance(total, (int, float)) or not isinstance(percent, (int, float)) or total <= 0:
+            return None
+        own = self._current_size_bytes
+        worsening = (self._pressure_percent is not None
+                     and percent > self._pressure_percent + self._PRESSURE_WORSENED_POINTS)
+        if self._pressure_floor is not None and not worsening:
+            return max(0.0, own - self._pressure_floor)
+        # A fresh share: the episode's first check, or pressure that has got
+        # WORSE since the last one. Holding flat is right while the pressure is
+        # steady; if it keeps climbing, something -- possibly this tier, if the
+        # memory it freed has not gone back to the OS yet -- is still growing,
+        # and refusing to shed again would let the machine swap. The old loop
+        # erred towards emptying the cache; this must not err the other way.
+        self._pressure_percent = percent
+        in_use = total * percent / 100.0
+        overshoot = in_use - total * target_percent
+        if overshoot <= 0 or in_use <= 0:
+            return 0.0
+        return min(float(own), overshoot * min(1.0, own / in_use))
+
+    def _shed(self, nbytes: float) -> None:
+        """Drop the least valuable entries until *nbytes* are freed."""
+        freed = 0
+        if nbytes > 0:
+            items = sorted(
+                (self._gdsf_priority(key, meta), self._seq_by_key.get(key, 0), key)
+                for key, (meta, _val) in self._store.items()
+            )
+            for priority, _seq, key in items:
+                if freed >= nbytes:
+                    break
+                entry = self._store.get(key)
+                if entry is None:
+                    continue
+                freed += entry[0].get('size', 0) or 0
+                self._drop(key)
+                self._gdsf_clock = max(self._gdsf_clock, priority)
+            if freed:
+                self._try_malloc_trim()
+        self._pressure_floor = self._current_size_bytes
 
     def _touch(self, key: str) -> None:
         """Record a write or read: it re-bases the entry's GDSF priority."""
