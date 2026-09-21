@@ -1039,6 +1039,9 @@ class CallUnit:
         self._last_hit = False
         self._last_key_s: float | None = None
         self._invoked_keys: list[str | None] = []
+        #: The source of the call the current statement is nothing but
+        #: (``a, b = build()``), set by the statement with its sites.
+        self.plain_value_source: str | None = None
         self.last_returned: tuple[str | None, int, str] | None = None
         #: ``id(result) -> (result, key, digest)`` for the call results this
         #: cell stored or was served, so the statement holding one stores a
@@ -1353,6 +1356,7 @@ class CallUnit:
                         stderr=stderr_text,
                         callee_globals=captured,
                         function=func_name,
+                        plain_value=site.source == self.plain_value_source,
                     )
                     stored = True
             self._record(func_name, site, key, cache_hit=False, elapsed=elapsed, stored=stored)
@@ -2011,6 +2015,7 @@ class CallUnit:
         stderr: str = "",
         callee_globals: Mapping[str, Any] | None = None,
         function: str | None = None,
+        plain_value: bool = False,
     ) -> None:
         """Write through ``backend.set(key, value, metadata)`` -- the same
         two-positional-argument shape the statement path uses
@@ -2065,8 +2070,13 @@ class CallUnit:
         # compute. It gets a one-off token for a digest and its estimated size
         # (`ESTIMATED_FIELD`): judged for disk on its own, and referred to only
         # by the statement it is the plain result of.
+        #
+        # Nor for the call a statement is nothing but (``a, b = build()``,
+        # `plain_value`): that statement's reference is trusted without a
+        # digest, so a token serves -- r28s5's 402 MiB result was worth
+        # keeping, and pickling it for a digest took 2.6 s of 3.7.
         if elapsed >= _REF_MIN_COMPUTE_S and not callee_globals:
-            estimate = self._too_big_to_digest(value, elapsed)
+            estimate = self._too_big_to_digest(value, elapsed, plain_value)
             found = (digest_and_size(value) if estimate is None
                      else (UNHASHED_PREFIX + uuid.uuid4().hex, estimate))
             if found:
@@ -2107,15 +2117,18 @@ class CallUnit:
             logger.debug("call unit: store failed for %s", key)
 
     @staticmethod
-    def _too_big_to_digest(value, elapsed: float) -> int | None:
-        """The estimated pickled size of *value* when even half of it is more
-        than its compute is worth on disk, else ``None``. Half: the estimate
-        must be clearly over, since a digest skipped for a value worth keeping
-        costs the statement its reference."""
+    def _too_big_to_digest(value, elapsed: float, plain_value: bool = False) -> int | None:
+        """The estimated pickled size of *value* when it is not to be
+        digested, else ``None``: when even half of it is more than its compute
+        is worth on disk (half: a digest skipped for a value worth keeping
+        costs other statements their reference), or when it is its
+        statement's plain value, whose reference needs no digest."""
         from cash._sizing import pickled_size_estimate
         from cash.backends.value_policy import worth_its_bytes
         estimate = pickled_size_estimate(value)
-        if worth_its_bytes(estimate // 2, elapsed):
+        if not estimate:
+            return None                 # nothing to estimate from: digest as before
+        if not plain_value and worth_its_bytes(estimate // 2, elapsed):
             return None
         trace_event("call_digest_skipped", bytes_estimated=estimate, seconds=round(elapsed, 3))
         return estimate

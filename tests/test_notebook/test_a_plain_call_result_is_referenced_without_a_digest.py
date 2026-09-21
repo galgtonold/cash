@@ -81,3 +81,27 @@ def test_a_subscript_of_the_result_is_not_trusted(cash_magics, seen):
     stored.clear()
     cash_magics.cash("", "first = build()[0]")
     assert not isinstance(stored[-1]["first"], call_refs.CallRef)
+
+
+def test_a_plain_value_worth_keeping_is_not_pickled_either(cash_magics, seen):
+    """r28s5's result was 402 MiB for 3.7 s: worth keeping, and the digest the
+    statement's trusted reference does not need took 2.6 s."""
+    stored, digests = seen
+    cash_magics.cash("", BUILD + "def small():\n    time.sleep(0.12)\n"
+                     "    return pd.DataFrame({'x': np.arange(1000, dtype=float)})\n")
+    stored.clear()
+    cash_magics.cash("", "s = small()")
+    assert isinstance(stored[-1]["s"], call_refs.CallRef)
+    assert digests == []
+    del cash_magics.shell.user_ns["s"]
+    cash_magics.cash("", "s = small()")
+    assert float(cash_magics.shell.user_ns["s"]["x"].iloc[999]) == 999.0
+
+
+def test_a_value_used_elsewhere_is_still_digested(cash_magics, seen):
+    stored, digests = seen
+    cash_magics.cash("", BUILD + "def small():\n    time.sleep(0.12)\n"
+                     "    return pd.DataFrame({'x': np.arange(1000, dtype=float)})\n")
+    cash_magics.cash("", "acc = []")
+    cash_magics.cash("", "acc.append(small())")
+    assert digests, "a call that is not its statement's plain value is digested as before"

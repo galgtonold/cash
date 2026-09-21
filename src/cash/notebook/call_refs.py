@@ -38,11 +38,13 @@ logger = logging.getLogger(__name__)
 #: pickled size.
 DIGEST_FIELD = "value_digest"
 SIZE_FIELD = "value_bytes"
-#: Set when ``SIZE_FIELD`` is an estimate and ``DIGEST_FIELD`` a one-off token:
-#: a result too big to be worth its bytes is not pickled to be digested. Such
-#: an entry is judged for disk on its own (``TieredBackend``), and a statement
-#: refers to it only where nothing can have changed the value since the call
-#: returned it (``with_call_refs``'s *trusted*).
+#: Set when ``SIZE_FIELD`` is an estimate and ``DIGEST_FIELD`` a one-off token,
+#: the result not having been pickled to be digested: it is too big to be worth
+#: its bytes, or it is the plain value of its statement (``a, b = build()``),
+#: whose reference needs no digest. Such an entry is judged for disk on its
+#: own (``TieredBackend``), and a statement refers to it only where nothing can
+#: have changed the value since the call returned it (``with_call_refs``'s
+#: *trusted*).
 ESTIMATED_FIELD = "value_bytes_estimated"
 UNHASHED_PREFIX = "unhashed:"
 

@@ -522,6 +522,35 @@ def _is_only_definitions(code: str) -> bool:
         isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in body)
 
 
+
+def _plain_call_assignment(code: str) -> tuple[str, dict[str, int] | None] | None:
+    """``(call source, {name: position} or None)`` when *code* is nothing but
+    ``name = call(...)`` (``None`` positions) or ``a, b = call(...)``; else
+    ``None``. Nothing runs after that call returns but binding the names."""
+    try:
+        body = ast.parse(code).body
+    except SyntaxError:
+        return None
+    if len(body) != 1:
+        return None
+    node = body[0]
+    if isinstance(node, ast.Assign) and len(node.targets) == 1:
+        target = node.targets[0]
+    elif isinstance(node, ast.AnnAssign) and node.value is not None:
+        target = node.target
+    else:
+        return None
+    if not isinstance(node.value, ast.Call):
+        return None
+    if isinstance(target, ast.Name):
+        return ast.unparse(node.value), None
+    if isinstance(target, ast.Tuple | ast.List) and all(isinstance(e, ast.Name) for e in target.elts):
+        positions: dict[str, int] = {}
+        for position, element in enumerate(target.elts):
+            positions[element.id] = position           # a name bound twice keeps the last
+        return ast.unparse(node.value), positions
+    return None
+
 class StatementProcessor:
     """
     Processes and caches individual Python statements.
@@ -2600,7 +2629,8 @@ class StatementProcessor:
                     loop_var_digests_provider=self.current_loop_var_digests_for_call_key,
                 )
                 self._call_cache_owner = cash_instance
-            self._call_cache.set_sites(sites)
+            plain = _plain_call_assignment(code)
+            self._call_cache.set_sites(sites, plain_value_source=plain[0] if plain else None)
             self._calls_wrapped_for = code
             self.shell.user_ns[HELPER_NAME] = self._call_cache.resolve
             return new_code, rewritten
@@ -4887,33 +4917,13 @@ class StatementProcessor:
         found = outermost() if callable(outermost) else None
         if not found:
             return None, None
-        try:
-            body = ast.parse(code).body
-        except SyntaxError:
-            return None, None
-        if len(body) != 1:
-            return None, None
-        node = body[0]
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = node.targets[0]
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            target = node.target
-        else:
-            return None, None
+        plain = _plain_call_assignment(code)
         # The call that returned last must be the statement's value itself:
         # in ``x = f(g(y))`` with ``f`` not wrapped, ``g`` returned last, and
         # ``f`` may have changed that result and handed it back.
-        if not isinstance(node.value, ast.Call) or ast.unparse(node.value) != found[2]:
+        if plain is None or plain[0] != found[2]:
             return None, None
-        found = (found[0], found[1])
-        if isinstance(target, ast.Name):
-            return found, None
-        if isinstance(target, ast.Tuple | ast.List) and all(isinstance(e, ast.Name) for e in target.elts):
-            positions: dict[str, int] = {}
-            for position, element in enumerate(target.elts):
-                positions[element.id] = position       # a name bound twice keeps the last
-            return found, positions
-        return None, None
+        return (found[0], found[1]), plain[1]
 
     def _import_bindings_hold(self, tree: ast.AST) -> bool:
         """Does every name an import-only *tree* binds already hold the object

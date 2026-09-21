@@ -381,10 +381,11 @@ class CallCache:
     def outermost_result(self):
         return self._call_unit.outermost_result()
 
-    def set_sites(self, sites: list[CallSite]) -> None:
+    def set_sites(self, sites: list[CallSite], plain_value_source: str | None = None) -> None:
         self._sites = sites
         # One call per statement run: each site's guard starts over.
         self._call_unit.begin_statement()
+        self._call_unit.plain_value_source = plain_value_source
 
     def drain_call_log(self) -> list[dict]:
         """Events :class:`~cash.notebook.call_unit.CallUnit` recorded since the
