@@ -12,7 +12,7 @@ where the answer is *we wouldn't, and here is what we do about it*.
 Figures below are derived from the repository by
 [`scripts/doc_numbers.py`](https://github.com/galgtonold/cash/blob/main/scripts/doc_numbers.py)
 and re-checked in CI, so they cannot quietly go stale — they are current as of
-<!-- docnum:version -->0.10.0<!-- /docnum -->. The mechanisms matter more than the counts, and they
+<!-- docnum:version -->0.11.0<!-- /docnum -->. The mechanisms matter more than the counts, and they
 are the part that does not change.
 
 ## The shape of the suite
@@ -22,7 +22,7 @@ spread over <!-- docnum:test_files -->~1,500<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | <!-- docnum:tests_unit -->~5,830<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
+| Unit | <!-- docnum:tests_unit -->~5,850<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
 | Notebook integration | <!-- docnum:tests_integration -->~4,530<!-- /docnum --> | Real kernels executing real notebooks, cell by cell |
 | Docs | <!-- docnum:tests_docs -->~380<!-- /docnum --> | The documentation itself — see [below](#the-docs-are-tested-too) |
 
