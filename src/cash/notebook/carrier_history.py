@@ -41,6 +41,7 @@ __all__ = ["FIGURE_KINDS", "carrier_history_fingerprint"]
 FIGURE_KINDS = frozenset({"matplotlib Figure", "matplotlib Axes"})
 
 _CONTROL = (ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try)
+_LOOPS = (ast.For, ast.AsyncFor, ast.While)
 
 
 def _parse(code: str) -> ast.Module | None:
@@ -98,7 +99,10 @@ def carrier_history_fingerprint(
     siblings = _assigned_names(parsed[start][2])
     digest = hashlib.sha256()
     for code, lineages, tree in parsed[start:]:
-        if any(isinstance(node, _CONTROL) for node in tree.body):
+        # A loop is hashed as one statement: both the runtime and the
+        # simulation log it whole (`StatementProcessor.begin_control_log`).
+        # A branch or a `with` still cannot vouch.
+        if any(isinstance(node, _CONTROL) and not isinstance(node, _LOOPS) for node in tree.body):
             return None
         if any(marker in code for marker in _READ_TEXT_MARKERS):
             return None

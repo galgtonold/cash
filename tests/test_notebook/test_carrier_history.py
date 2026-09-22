@@ -77,10 +77,21 @@ def test_no_fingerprint_for_a_figure_not_made_here():
     assert carrier_history_fingerprint(CHART, "other") is None
 
 
-def test_no_fingerprint_when_the_span_holds_a_loop():
-    """One trace entry to the simulation, statement by statement to the runtime."""
+def test_a_loop_in_the_span_is_one_statement_of_the_history():
+    """A loop is one trace entry to the simulation, and the runtime logs it the
+    same way (`StatementProcessor.begin_control_log`). It used to make the
+    history unknowable -- and a chart drawn through ``for ax in axes`` was then
+    never known to be current, or to be stale (round 29, r29s4)."""
     looped = CHART + [("for c in cols:\n    ax.plot(df[c])", {"cols": "C", "ax": "A2", "df": "D"})]
-    assert carrier_history_fingerprint(looped, "fig") is None
+    fingerprint = carrier_history_fingerprint(looped, "fig")
+    assert fingerprint is not None
+    redrawn = CHART + [("for c in cols:\n    ax.plot(df[c])", {"cols": "C", "ax": "A2", "df": "D2"})]
+    assert carrier_history_fingerprint(redrawn, "fig") != fingerprint
+
+
+def test_no_fingerprint_when_the_span_holds_a_branch():
+    branched = CHART + [("if flag:\n    ax.plot(df['a'])", {"flag": "B", "ax": "A2", "df": "D"})]
+    assert carrier_history_fingerprint(branched, "fig") is None
 
 
 def test_no_fingerprint_when_the_span_reads_a_file():

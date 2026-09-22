@@ -1991,11 +1991,17 @@ class CellExecutor:
                         # merge, which cannot tell a directive on the loop from one on
                         # a single body statement — passing it would disable caching
                         # for every sibling in the body.
-                        ctrl_result = self._control_structure_processor.process(
-                            node, ttl=self._magics._global_ttl, silent=True,
-                            raw_cell=raw_cell,
-                            prev_node=tree.body[i - 1] if i > 0 else None,
-                        )
+                        # Logged as ONE statement, as the upstream simulation
+                        # traces it, for the figure histories a writer records.
+                        control_log = self._statement_processor.begin_control_log(stmt_code)
+                        try:
+                            ctrl_result = self._control_structure_processor.process(
+                                node, ttl=self._magics._global_ttl, silent=True,
+                                raw_cell=raw_cell,
+                                prev_node=tree.body[i - 1] if i > 0 else None,
+                            )
+                        finally:
+                            self._statement_processor.end_control_log(control_log)
                         buffered_result_outputs = self._collect_ctrl_outputs(
                             ctrl_result, is_last, all_metrics, buffered_result_outputs,
                         )

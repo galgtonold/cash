@@ -2278,6 +2278,9 @@ class StatementProcessor:
         log = self._cell_stmt_log
         if len(log) >= self._MAX_CELL_STMT_LOG:
             return
+        log.append((code, self._lineages_read(inputs)))
+
+    def _lineages_read(self, inputs: set[str]) -> dict[str, str]:
         from ..cache_key import called_function_dependencies
         read = {}
         for dep in called_function_dependencies(
@@ -2286,7 +2289,29 @@ class StatementProcessor:
             if lineage != 'ABSENT':
                 read[name] = lineage
         read.update({n: self.variable_lineage[n] for n in inputs if n in self.variable_lineage})
-        log.append((code, read))
+        return read
+
+    def begin_control_log(self, code: str):
+        """Start logging control structure *code* as ONE statement, the way the
+        upstream simulation traces it: with the lineages it reads as it starts.
+        Its body's statements log themselves per iteration, and a figure drawn
+        through ``for ax in axes`` then had a history the simulation could never
+        reproduce -- a chart drawn in a loop was never known to be current, nor
+        known to be stale (round 29, r29s4). Pass the result to `end_control_log`."""
+        try:
+            inputs, _outputs = CodeAnalyzer.analyze_code_block(
+                code, resolve_source=self._resolve_live_function_source, user_ns=self.shell.user_ns)
+            return len(self._cell_stmt_log), (code, self._lineages_read(inputs))
+        except Exception:  # noqa: BLE001 - a history is optional; none means "cannot vouch"
+            return len(self._cell_stmt_log), (code, {})
+
+    def end_control_log(self, mark) -> None:
+        """Replace what the body of the control structure begun at *mark* logged
+        with the structure itself."""
+        start, entry = mark
+        del self._cell_stmt_log[start:]
+        if len(self._cell_stmt_log) < self._MAX_CELL_STMT_LOG:
+            self._cell_stmt_log.append(entry)
 
     def cell_rng_observation(self) -> tuple[set[str], dict | None, dict | None]:
         """What this cell's statements changed, and the positions either side.

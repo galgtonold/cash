@@ -1535,8 +1535,9 @@ class ReexecutionPlanner:
                         read_paths_known=relevant_read_paths_known,
                         read_paths=sorted(relevant_read_paths or ())[:20])
             if unread:
-                if stale_exports is not None and any(_input_lineage_drifted(v) for v in inputs):
-                    stale_exports.append((i, sorted(self._writer_paths(stmt_code, simulation_trace) or ())))
+                if stale_exports is not None:
+                    self._note_if_stale(stale_exports, i, stmt_code, inputs, virtual_lineage,
+                                        runtime_lineage, simulation_trace)
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM] File-writer output read by no relevant "
@@ -1610,6 +1611,26 @@ class ReexecutionPlanner:
                         "inputs_changed=%s)", i, stmt_code[:40], changed, inputs_changed,
                     )
         return writer_indices
+
+    def _note_if_stale(self, stale_exports: list, i: int, stmt_code: str, inputs,
+                       virtual_lineage: dict | None, runtime_lineage: dict,
+                       simulation_trace: list) -> None:
+        """Add writer *i* to *stale_exports* when what it recorded as it wrote
+        says its data has changed since: an input's lineage, or for a figure
+        what was drawn into it. Not the drift of its inputs at the end of the
+        simulation: that missed a chart drawn through ``for ax in axes`` --
+        ``fig`` itself never changes -- and every chart after a restart, which
+        has no runtime lineage to drift from (round 29, r29s4 and r29s5). A
+        folder has no content to be out of date (r29s2: ``os.makedirs``)."""
+        reason = self._writer_not_fresh_because(
+            stmt_code, inputs, virtual_lineage, runtime_lineage,
+            simulation_trace=simulation_trace, index=i)
+        if reason not in self._DATA_CHANGED:
+            return
+        paths = sorted(p for p in (self._writer_paths(stmt_code, simulation_trace) or ())
+                       if not os.path.isdir(p))
+        if paths:
+            stale_exports.append((i, paths))
 
     def _written_path_forms(self, simulation_trace: list, writer_indices) -> set[str] | None:
         """Comparable forms of every path the writers write, or ``None`` if any
@@ -1784,18 +1805,39 @@ class ReexecutionPlanner:
         unreadable / stale output file, or a drifted input lineage all return
         False, so the writer is scheduled exactly as before (round-3).
         """
-        def stale(reason: str, **detail) -> bool:
+        return self._writer_not_fresh_because(
+            stmt_code, inputs, virtual_lineage, runtime_lineage, must_cover,
+            simulation_trace, index) is None
+
+    #: Reasons `_writer_not_fresh_because` gives that mean the file on disk was
+    #: written from data that has since changed -- the rest mean only that
+    #: nothing vouches for it.
+    _DATA_CHANGED = frozenset({"input changed", "figure drawn differently"})
+
+    def _writer_not_fresh_because(
+        self,
+        stmt_code: str,
+        inputs,
+        virtual_lineage: dict | None,
+        runtime_lineage: dict,
+        must_cover: set[str] | frozenset[str] = frozenset(),
+        simulation_trace: list | None = None,
+        index: int | None = None,
+    ) -> str | None:
+        """Why a writer's file is not provably current, or ``None`` when it is.
+        See :meth:`_writer_output_already_fresh`."""
+        def stale(reason: str, **detail) -> str:
             trace_event("writer_not_fresh", stmt=stmt_code[:80], reason=reason, **detail)
-            return False
+            return reason
 
         cash = getattr(self._virtual_lineage, 'cash_instance', None)
         backend = getattr(cash, 'backend', None) if cash is not None else None
         if backend is None or not hasattr(backend, 'get_metadata'):
-            return False
+            return "no backend"
         try:
             record = backend.get_metadata(write_provenance_key(stmt_code))
         except (OSError, TypeError, ValueError, AttributeError):
-            return False
+            return "no provenance"
         if not record or not record.get('write_provenance'):
             return stale("no provenance")
         paths = record.get('paths') or []
@@ -1832,7 +1874,7 @@ class ReexecutionPlanner:
                 current = runtime_lineage.get(var)
             if current != stored_lineage:
                 return stale("input changed", var=var)
-        return True
+        return None
 
     @staticmethod
     def _carrier_history_at(simulation_trace: list, index: int, carrier: str) -> str | None:
