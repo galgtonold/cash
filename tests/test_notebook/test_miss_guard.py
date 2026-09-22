@@ -279,6 +279,16 @@ class _Session:
         self.cash.config.min_execution_time_to_cache_seconds = 0.0
         self.shell = _MockShell()
         self.magics = CashMagics(self.shell, self.cash)
+        # ...and from the cheap-write exemption, which spares a guarded statement
+        # whose write costs at most a tenth of its measured compute. ``out`` is
+        # one int (~0.5 ms estimated write) standing in for the large value the
+        # guard exists for, and the statement runs in ~0.2 ms -- but measured as
+        # wall time, so a single ~5 ms stall on a loaded CI runner made that one
+        # write "cheap" and let it through, one serialisation over the count
+        # (macOS, 3.10 and 3.12). A share of zero makes no write cheap. The
+        # exemption itself is tested end to end in
+        # test_a_slow_result_stays_saved_through_edits.py.
+        self.magics._statement_processor._CHEAP_WRITE_SHARE = 0.0
         self.magics._auto_cache_enabled = True
         self.metrics: list[dict] = []
         self.magics._render_interactive_badge = (
