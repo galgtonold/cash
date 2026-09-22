@@ -8272,6 +8272,9 @@ class Cash:
         try:
             ours = Cash._held_block_refs(held) if held is not None else {}
             for block in obj._mgr.blocks:
+                # Counted before this loop binds the array to a name of its
+                # own, exactly as the baseline was measured.
+                refcount = Cash._block_refcount(block)
                 values = block.values
                 base = getattr(values, "base", None)
                 if base is not None or not getattr(getattr(values, "flags", None), "owndata", True):
@@ -8281,9 +8284,9 @@ class Cash:
                 # extra reference the caller still holds tells them apart. A
                 # count above the baseline can only make cash re-hash a frame
                 # it could have memoised: slower, never wrong.
-                baseline = Cash._BLOCK_REFCOUNT_BASELINE + ours.get(id(values), 0)
-                if sys.getrefcount(values) > baseline:
+                if refcount > Cash._block_refcount_baseline() + ours.get(id(values), 0):
                     return True
+                del values, base
         except Exception:  # noqa: BLE001 - a pandas internals change: keep the memo
             return False
         return False
@@ -8303,10 +8306,31 @@ class Cash:
                     refs[id(ref)] = refs.get(id(ref), 0) + 1
         return refs
 
-    #: References a block's array has when only its block (and this call's own
-    #: temporary) hold it. Anything above means something outside can write to
-    #: it; see ``_frame_borrows_its_data``.
-    _BLOCK_REFCOUNT_BASELINE = 3
+    @staticmethod
+    def _block_refcount(block: Any) -> int:
+        """``sys.getrefcount`` of *block*'s array, taken the same way for the
+        baseline and for every check."""
+        return sys.getrefcount(block.values)
+
+    @staticmethod
+    def _block_refcount_baseline() -> int:
+        """What `_block_refcount` reads for an array only its block holds.
+
+        Measured rather than written down: what ``sys.getrefcount`` counts
+        besides the holders varies across Python versions (3.14 counts one
+        fewer), and a baseline one too high lets a caller's array through
+        as the frame's own -- the stale answer this check exists to stop.
+        """
+        baseline = Cash._BLOCK_REFCOUNT_BASELINE
+        if baseline is None:
+            import pandas as pd
+            probe = pd.Series([0.0, 1.0, 2.0])
+            baseline = Cash._BLOCK_REFCOUNT_BASELINE = Cash._block_refcount(probe._mgr.blocks[0])
+        return baseline
+
+    #: See ``_block_refcount_baseline``; anything above it means something
+    #: outside can write to the array, see ``_frame_borrows_its_data``.
+    _BLOCK_REFCOUNT_BASELINE: int | None = None
 
     def _frame_memo_lookup(self, obj: Any) -> str | None:
         """The content hash recorded for *obj*, if *obj* has not changed since."""
