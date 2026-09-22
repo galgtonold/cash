@@ -252,11 +252,13 @@ class TrackingState:
     # The names a notebook reaches a reloaded module through -- the module and
     # its aliases, and every name from-imported from it. Written by
     # ModuleInvalidator with each generation, consumed by the simulation:
-    # re-simulating from the first cell that READS one of them, not from the
-    # top, keeps the import statement itself out of it. Replaying `from m
-    # import X` restores the outcome it recorded before the edit, whose key
-    # does not include the module's content, and X's readers were served the
-    # pre-edit value (test_a_from_imported_constant_that_changed).
+    # re-simulating from the first cell that reads one of them, or binds one
+    # by `from m import X`, not from the top. The binding cell once had to be
+    # kept out: replaying it restored the outcome recorded before the edit and
+    # X's readers were served the pre-edit value
+    # (test_a_from_imported_constant_that_changed). Imports are never restored
+    # now (b4f2539), and leaving it out kept X's pre-reload lineage in the
+    # simulation, keyed apart from a fresh kernel's (round 29, r29s1/r29s3).
     reloaded_names: set[str] = field(default_factory=set)
 
     # Written by StatementProcessor after each execution.

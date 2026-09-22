@@ -335,6 +335,29 @@ class StatementLineageBuilder:
                 if self.debug:
                     logger.debug("[CACHE DEBUG] Could not hash captured variable '%s': %s", var_name, e)
 
+    def lineage_if_rerun(self, tracking_state: 'TrackingState', var_name: str, value: Any,
+                         code: str) -> str:
+        """The lineage *var_name* would get if *code* ran again now: the same
+        formula and ingredients as :meth:`capture_and_track_variables`, without
+        running anything. For an import after its module was reloaded, so the
+        name gets what a fresh kernel's import gives it (round 29, r29s1/r29s3:
+        keyed with the reload's own hash, what the session computed after an
+        edit was never restored the next morning)."""
+        import hashlib
+
+        from ..analysis import CodeAnalyzer
+        user_ns = self.shell.user_ns
+        inputs, _outputs = CodeAnalyzer.analyze_code_block(code, user_ns=user_ns)
+        input_lineage_hashes, _map = self._build_input_lineages(
+            tracking_state, inputs | hidden_lineage_reads(code), user_ns, code)
+        return output_lineage(
+            hashlib.sha256(code.encode('utf-8')).hexdigest(),
+            input_lineage_hashes,
+            "",
+            callable_source_component(self.function_tracker, inputs, user_ns),
+            module_source_component(self.function_tracker, value, var_name, code),
+        )
+
     def _compute_module_lineage_component(
         self,
         tracking_state: 'TrackingState',

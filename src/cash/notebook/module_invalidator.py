@@ -128,7 +128,8 @@ class ModuleInvalidator:
                 old_lineage = processor.variable_lineage.get(name)
                 if old_lineage:
                     old_module_lineages[name] = old_lineage
-                processor.variable_lineage[name] = new_lineage
+                processor.variable_lineage[name] = (
+                    self._lineage_as_imported(name, processor) or new_lineage)
                 processor.executed_cell_codes.pop(name, None)
                 processor.executed_input_lineages.pop(name, None)
                 processor.current_session_hashes.pop(name, None)
@@ -143,6 +144,28 @@ class ModuleInvalidator:
             processor.recently_reloaded_modules.add(mod_name)
 
         return old_module_lineages
+
+    def _lineage_as_imported(self, name: str, processor: StatementProcessor) -> str | None:
+        """The lineage the import that bound *name* gives it, run again now,
+        or None when no import is known for it.
+
+        What a fresh kernel's import computes -- the reload's own file hash
+        was a different formula. A statement that reads the module whole (one
+        whose closure cannot be bounded: a helper that reads the clock) is
+        keyed on this lineage, so everything the session computed after an
+        edit was keyed apart from what the next morning looked up: nothing
+        restored until a second restart (round 29, r29s1 2/2, r29s3 2/2).
+        """
+        from .upstream.mismatch_classifier import import_only
+        code = processor.executed_cell_codes.get(name)
+        value = self._shell.user_ns.get(name)
+        if not code or value is None or not import_only(code):
+            return None
+        try:
+            return processor._lineage.lineage_if_rerun(processor._tracking_state, name, value, code)
+        except Exception:  # noqa: BLE001 - the reload's own hash is always a valid fallback
+            logger.debug("[MODULE] could not re-derive %s's import lineage", name, exc_info=True)
+            return None
 
     def _module_named(self, name: str) -> Any | None:
         """The module *name* refers to, whether it is a real name or an alias."""

@@ -3370,7 +3370,16 @@ class VirtualLineage:
 
 
 def _first_cell_reading(notebook_cells: list[str], limit: int, names: set[str]) -> int | None:
-    """Index of the first cell before *limit* that loads any of *names*."""
+    """Index of the first cell before *limit* that loads any of *names*, or
+    binds one by a ``from ... import``.
+
+    The binding cell too: kept from the cache, it carried the name's
+    pre-reload lineage into every reader below, while a fresh kernel's import
+    gives it the reloaded file's. A helper whose function reads the whole
+    module (a clock read) was keyed apart in the session from the next
+    morning, and nothing it built restored (round 29, r29s1/r29s3). Replaying
+    the import is safe since imports are never restored (b4f2539).
+    """
     if not names:
         return None
     for idx in range(min(limit, len(notebook_cells))):
@@ -3380,5 +3389,8 @@ def _first_cell_reading(notebook_cells: list[str], limit: int, names: set[str]) 
             return idx          # cannot tell: assume it reads them
         for node in ast.walk(tree):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in names:
+                return idx
+            if isinstance(node, ast.ImportFrom) and any(
+                    (alias.asname or alias.name) in names for alias in node.names):
                 return idx
     return None
