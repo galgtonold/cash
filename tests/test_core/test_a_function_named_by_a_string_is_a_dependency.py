@@ -113,7 +113,11 @@ RUNTIME_NAME = textwrap.dedent('''
 
 def _run(tmp_path, script, **fmt):
     (tmp_path / "main.py").write_text(script.format(**fmt) if fmt else script)
-    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="always")
+    # No .pyc: Python trusts one whose source has the same size and the same
+    # whole-second mtime, and `return 10` -> `return 20` keeps the size, so an
+    # edit landing in the previous run's second imported the old helpers.
+    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="always",
+               PYTHONDONTWRITEBYTECODE="1")
     proc = subprocess.run([sys.executable, "main.py"], cwd=tmp_path, env=env,
                           capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, proc.stderr
