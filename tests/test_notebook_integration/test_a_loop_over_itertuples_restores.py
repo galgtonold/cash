@@ -38,7 +38,10 @@ def test_an_unchanged_itertuples_loop_restores(nb_runner):
 
     nb_runner.run_cell(3)
     raw = nb_runner.get_raw_output(3)
-    assert nb_runner.get_output(3).split("R ")[1][:40] == first.split("R ")[1][:40], raw
+    # The printed line only: the badge headline below it now differs by design
+    # (a mostly restored cell reads CACHED).
+    assert (nb_runner.get_output(3).split("R ")[1].splitlines()[0]
+            == first.split("R ")[1].splitlines()[0]), raw
     assert "3 ran" not in raw and "EXECUTED: out[d.name]" not in raw, (
         "an unchanged loop over itertuples() re-ran its iterations:\n" + raw
     )
