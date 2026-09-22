@@ -67,13 +67,15 @@ def test_cash_tracking_time_is_not_counted_as_the_statements(magics_fixture, mon
     magics, shell, backend = magics_fixture
     clock = [0.0]
 
-    # Every statement is charged 0.25 s of tracking, so a 0.3 s sleep keeps
-    # ~0.05 s plus whatever the machine adds. At 0.125 s that left 25 ms of
-    # room, and a sleep overshooting on a macOS runner used it up.
+    # Every statement is charged 0.45 s of tracking against a 0.5 s sleep, so
+    # the right record is ~0.05 s plus whatever the machine adds, and one that
+    # kept the tracking is over 0.5 s. The bound sits between with 350 ms of
+    # room: macOS runners add up to ~170 ms to a statement this size, which
+    # used up the 25 ms the first version of this test left.
     def tracked():
-        clock[0] += 0.25
+        clock[0] += 0.45
         return clock[0]
     monkeypatch.setattr(file_tracker, "tracking_seconds", tracked)
-    magics.cash("", "import time\nx = (time.sleep(0.3), 7)[1]")
+    magics.cash("", "import time\nx = (time.sleep(0.5), 7)[1]")
     assert shell.user_ns["x"] == 7
-    assert _cost_of(backend, "time.sleep(0.3)") < 0.2
+    assert _cost_of(backend, "time.sleep(0.5)") < 0.4
