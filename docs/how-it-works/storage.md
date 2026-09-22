@@ -135,6 +135,63 @@ caching evaporated on restart. A value that big is often over the RAM tier's own
 limit too (90% of its cap), and then nothing holds it; see
 [`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big).
 
+## When the disk fills up
+
+The disk tier has a size cap (`max_cache_size`; by default a quarter of the
+room on the disk). Going over it is what makes Cash delete entries, and this
+section is about when and how that happens.
+
+<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @48041900, cash/backends/file_backend.py:FileBackend._check_and_evict @92057a04 -->
+**Only a write can trigger eviction.** Each time an entry lands on disk, the
+background write thread adds its size to a running total and compares that
+total to the cap. If the cache is over, it deletes entries until the cache is
+back under **90%** of the cap. The extra 10% of room means the next few writes
+fit without each one starting another round.
+
+<!-- claim: cash/backends/file_backend.py:FileBackend._ensure_size_scanned @1ec3940e, cash/backends/file_backend.py:FileBackend.get @1d0ed922 -->
+**Reading never evicts.** A cache hit deletes nothing from disk to make room, however
+full the cache is. A process that only reads, such as a kernel restart that
+replays everything from cache, never even adds up the directory's size. That
+one-time walk over every file happens on the process's first write, and on the
+write thread, so no cell waits for it. The one thing a read can delete is the
+entry it just read, when that entry is older than its `ttl`. That is expiry, not
+making room, and it happens whether or not a cap is set.
+
+**What goes first is whatever is worth least per byte:** how long the value took
+to compute, multiplied by how often it has been read, divided by its size.
+A result that took 30 seconds outlives a newer one that took 50 ms, and one huge
+cheap value goes before many small expensive ones. Entries nobody reads slowly
+lose their standing and age out, however valuable they once were, and entries
+of about equal worth go least recently used first.
+[Choosing a Backend](../tutorials/feature-guides/choosing-a-backend.md#filebackend)
+covers how that ranking is kept cheap on a directory of 100k files.
+
+<!-- claim: cash/backends/file_backend.py:FileBackend._touched_since @7dad895c -->
+A few entries are passed over in a round:
+
+- **One that was read since the ranking was made.** The ranking is reused
+  across many rounds, so a read after it was taken would not otherwise count.
+- **One that has another write on its way.** That write will replace it anyway.
+
+The value that was just written is **not** protected. If it is the least
+valuable thing in the cache, it goes first. When that keeps happening, the cap
+is too small for what is being cached, and
+[`CACHE-THRASH`](../warnings.md#cache-thrash) warns once per session. If a round
+runs out of entries it is allowed to delete, it stops and the cache stays a
+little over its cap until the next write tries again.
+
+**Each process enforces the cap on its own writes.** Several processes sharing
+one cache directory each count what they wrote, so together they can go over
+the cap before one of them evicts. With the default automatic cap, a
+long-running process also re-measures the disk about once a minute while it
+writes, so a disk that other programs are filling can shrink the cap and start
+a round on the next write.
+
+Separately from the cap, a re-run notebook statement drops its old versions
+when the new one is written, so a notebook you keep editing doesn't fill the
+cache with results nobody will ask for again (see
+[old versions](../tutorials/feature-guides/choosing-a-backend.md#filebackend)).
+
 ## Turning objects into bytes
 
 <!-- claim: cash/backends/serialization.py:get_serializer @76cf2c1b, cash/backends/serialization.py:ParquetSerializer, cash/backends/serialization.py:PickleSerializer, cash/backends/serialization.py:CloudPickleSerializer -->

@@ -269,7 +269,8 @@ class FileBackend(CacheBackend):
         Args:
             cache_dir: Directory for cache files.
             compress: Whether to gzip-compress data files.
-            max_size_bytes: Maximum total cache size in bytes (triggers LRU eviction).
+            max_size_bytes: Maximum total cache size in bytes. A write that takes the
+                cache over it evicts the least valuable entries per byte.
             flush_interval: Seconds between metadata flush cycles.
             default_ttl: Default time-to-live in seconds for cache entries. None = no expiration.
             adaptive_cap: Whether ``max_size_bytes`` came from the machine-scaling
