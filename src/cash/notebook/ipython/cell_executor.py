@@ -941,11 +941,27 @@ class CellExecutor:
         """
         # Each file is hashed at most once per cell run (file_dep_snapshot).
         begin_file_state_epoch()
+        # One CACHE-NOT-WORTH-BYTES per cell, not per statement (round 29).
+        backend = self._cell_warning_backend()
+        if backend is not None:
+            backend.begin_cell_warnings()
         try:
             with _builtin_trap(self.shell):
                 return self._execute_cell_pipeline(raw_cell, args, kwargs, original_run_cell)
         finally:
             end_file_state_epoch()
+            if backend is not None:
+                backend.end_cell_warnings()
+
+    def _cell_warning_backend(self):
+        """The backend that batches this cell's warnings, if it does."""
+        try:
+            cash = self._statement_processor._get_cash_instance()
+            backend = getattr(cash, 'backend', None)
+        except Exception:  # noqa: BLE001 - batching is cosmetic; never block a cell
+            return None
+        begin = getattr(type(backend), 'begin_cell_warnings', None)
+        return backend if callable(begin) else None
 
     def _execute_cell_pipeline(
         self,

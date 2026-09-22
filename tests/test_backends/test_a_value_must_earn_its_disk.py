@@ -126,6 +126,22 @@ class TestThroughABackend:
         assert "DISK" in (kept.get("storage") or []), kept
         assert "DISK" not in (refused.get("storage") or []), refused
 
+    def test_the_refusals_of_one_cell_are_said_once(self, tmp_path):
+        """Round 29, r29s5: about 30 of these warnings, 12 from one sweep cell,
+        five lines each. One per cell, naming its statements."""
+        import warnings
+        b = self._tiered(tmp_path)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            b.begin_cell_warnings()
+            for i in range(3):
+                self._set(b, f"stmt:c{i}", 200 * MIB, 1.2, code=f"row{i} = expand(orders, {i})")
+            b.end_cell_warnings()
+        b.shutdown()
+        ours = [str(w.message) for w in caught if "CACHE-NOT-WORTH-BYTES" in str(w.message)]
+        assert len(ours) == 1, ours
+        assert all(f"`row{i} = expand(orders, {i})`" in ours[0] for i in range(3)), ours[0]
+
     def test_a_refused_call_entry_leaves_the_saying_to_its_statement(self, tmp_path):
         """r29s1, r29s3: every refusal was printed twice, the second naming an
         internal ``call:efa280...`` key -- the statement holding the call's

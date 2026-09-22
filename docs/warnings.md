@@ -511,7 +511,10 @@ writes through a shared object, so a read-only caller loses nothing — pass
 **What happened.** A value was large enough to matter and cheap enough to
 rebuild that caching it costs more disk than it saves time, so it was not
 persisted. The message names both numbers and the rate between them: cash
-spends at most **128 MiB of cache per second of compute saved**.
+spends at most **128 MiB of cache per second of compute saved**. A cell that
+refuses several values says so once, naming each with its size and compute
+time; a result cached by a call inside a statement is named by that
+statement, never by an internal `call:` key.
 
 A cache trades bytes for seconds, and every other gate asks only whether
 restoring beats recomputing -- never what the answer costs. Round 26's five

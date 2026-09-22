@@ -76,6 +76,8 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         #: Same, for the bytes-per-compute-second ceiling (`value_policy`).
         # Statements already told CACHE-NOT-WORTH-BYTES this session.
         self._warned_not_worth: set[str] = set()
+        #: Refusals held for one warning per cell (`begin_cell_warnings`).
+        self._not_worth_batch: list[tuple[str, int, float]] | None = None
 
     def _promotion_backend_kind(self) -> str:
         """Cost-model backend kind of the first tier past RAM (the primary
@@ -253,20 +255,52 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         first = next((ln for ln in lines if not ln.lstrip().startswith('#')),
                      lines[0] if lines else str(key))
         named = f"`{first[:80]}`" if code else repr(key)
+        if self._not_worth_batch is not None:
+            self._not_worth_batch.append((named, size_bytes, compute_seconds))
+            return
+        self._say_not_worth([(named, size_bytes, compute_seconds)])
+
+    def begin_cell_warnings(self) -> None:
+        """Hold CACHE-NOT-WORTH-BYTES refusals until `end_cell_warnings`, to
+        say them once for the cell: a sweep cell said it 12 times, five lines
+        each (round 29, r29s5)."""
+        self._not_worth_batch = []
+
+    def end_cell_warnings(self) -> None:
+        batch, self._not_worth_batch = self._not_worth_batch, None
+        if batch:
+            self._say_not_worth(batch)
+
+    #: Statements a combined refusal names; the rest are counted.
+    _NOT_WORTH_NAMED = 5
+
+    def _say_not_worth(self, refused: list[tuple[str, int, float]]) -> None:
         from cash.diagnostics import warn_diagnostic
         from cash.exceptions import CashCacheIneffectiveWarning
         from .adaptive_caps import human_bytes
         from .value_policy import WORTH_CEILING_BYTES_PER_SECOND
-        rate = size_bytes / max(compute_seconds, 1e-9) / (1024 ** 2)
+        ceiling = human_bytes(WORTH_CEILING_BYTES_PER_SECOND)
+        if len(refused) == 1:
+            named, size_bytes, compute_seconds = refused[0]
+            rate = size_bytes / max(compute_seconds, 1e-9) / (1024 ** 2)
+            what = (f"the value of {named} is {human_bytes(size_bytes)} serialized but "
+                    f"only takes {compute_seconds:.2f}s to recompute -- "
+                    f"{rate:,.0f} MiB of cache per second saved, against the "
+                    f"{ceiling} per second cash is willing to spend. It was not "
+                    f"persisted, so it is recomputed rather than restored.")
+        else:
+            shown = ", ".join(f"{named} ({human_bytes(size)} for {secs:.2f}s)"
+                              for named, size, secs in refused[:self._NOT_WORTH_NAMED])
+            more = len(refused) - self._NOT_WORTH_NAMED
+            what = (f"{len(refused)} values in this cell take more cache per second "
+                    f"saved than the {ceiling} cash is willing to spend: {shown}"
+                    + (f" and {more} more" if more > 0 else "")
+                    + ". They were not persisted, so they are recomputed rather "
+                    "than restored.")
         warn_diagnostic(
             CashCacheIneffectiveWarning,
             "CACHE-NOT-WORTH-BYTES",
-            f"the value of {named} is {human_bytes(size_bytes)} serialized but "
-            f"only takes {compute_seconds:.2f}s to recompute -- "
-            f"{rate:,.0f} MiB of cache per second saved, against the "
-            f"{human_bytes(WORTH_CEILING_BYTES_PER_SECOND)} per second cash is "
-            f"willing to spend. It was not persisted, so it is recomputed "
-            f"rather than restored.",
+            what,
             "nothing, if the recompute is cheap enough that you had not "
             "noticed it -- that is the trade being made. To cache it anyway, "
             "say so explicitly: `@cash:persist` on the statement, or "
