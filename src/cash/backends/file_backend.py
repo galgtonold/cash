@@ -1445,9 +1445,13 @@ class FileBackend(CacheBackend):
         entries -- go to the least recently used, then to the older write.
         mtime is last access (recording a read rewrites the header in place),
         overridden by an unflushed in-memory ``last_access``, and broken by the
-        write sequence because a filesystem stamps mtimes in steps (~0.57 ms
-        on ext4): a burst of small writes shares one mtime, and ``sorted`` then
-        keeps ``scandir`` order, which is a hash.
+        write order because a filesystem stamps mtimes in steps (~0.57 ms
+        on ext4, a 4 ms kernel tick on Linux): a burst of writes shares one
+        mtime, and ``sorted`` then keeps ``scandir`` order, which is a hash.
+        The write order is the rank index's line order, because a new process
+        has no in-memory sequence for the entries an earlier one wrote:
+        measured, a restarted process evicted such a burst in hash order, the
+        oldest entry and then the sixth.
 
         The ranking is a QUEUE, consumed across many eviction passes and
         rebuilt only when it runs out: a full cache evicts on most writes, so a
@@ -1477,19 +1481,35 @@ class FileBackend(CacheBackend):
 
         prio: dict[str, float] = {}
         recency: dict[str, float] = {}
+        stamps: dict[str, float] = {}
         seqs: dict[str, int] = {}
         with self._lock:
             self._gdsf_clock = max(self._gdsf_clock, index_clock)
             self._clock_loaded = True
             clock = self._gdsf_clock
             for path, (mtime, size) in ranks.items():
-                recency[path] = mtime
+                recency[path] = stamps[path] = mtime
                 key = self._paths.get(path)
                 meta = self._metadata_cache.get(key) if key is not None else None
                 if meta is not None:
                     last_access = meta.get('last_access')
                     if last_access is not None and last_access > mtime:
-                        recency[path] = last_access
+                        # What `_touched_since` compares against later, so a
+                        # ``last_access`` already known here never reads as
+                        # a read since.
+                        stamps[path] = last_access
+                        # But only a read not yet on disk ORDERS by it. Once
+                        # written, mtime is the entry's recency, as it is for
+                        # every entry this process has not touched. The
+                        # header's own ``last_access`` is ``time.time()`` taken
+                        # just before the write; mtime is the filesystem's
+                        # clock, which on Linux ticks in 4 ms steps behind it.
+                        # Ordered by the first, an entry whose metadata was
+                        # merely looked at (`get_metadata`) outranked
+                        # neighbours written a tick after it, and survived
+                        # them: measured, 13 runs in 60 in the metadata test.
+                        if key in self._dirty_metadata:
+                            recency[path] = last_access
                     seqs[path] = self._write_seq_by_key.get(key, 0)
                 # Only a write or a read in this process re-bases an entry.
                 # Metadata merely LOOKED AT (`get_metadata`, which freshness
@@ -1510,12 +1530,19 @@ class FileBackend(CacheBackend):
                     # the start of the clock -- as old as anything can be.
                     prio[path] = self._priority(meta or {}, size, 0.0)
 
-        ordered = sorted(ranks, key=lambda p: (prio[p], recency[p], seqs.get(p, 0)))
+        # The index's order is the write order ACROSS processes; an entry with
+        # no record there sorts first, as old as anything. The in-process
+        # sequence only covers this process's writes, and only decides when
+        # the index could not be written.
+        recorded_at = {stem: i for i, stem in enumerate(indexed)}
+        ordered = sorted(ranks, key=lambda p: (
+            prio[p], recency[p], recorded_at.get(self._stem(p), -1), seqs.get(p, 0),
+        ))
         # A deque: drained from the front across many passes, and list.pop(0)
         # would make that quadratic in a large cache. Each item carries the
         # recency it was RANKED at, so `_touched_since` can tell whether the
         # entry has been read in the meantime.
-        self._evict_queue = deque((p, ranks[p][1], recency[p]) for p in ordered)
+        self._evict_queue = deque((p, ranks[p][1], stamps[p]) for p in ordered)
         self._rank_h = prio
         self._evict_fresh = []
         self._ranked = True

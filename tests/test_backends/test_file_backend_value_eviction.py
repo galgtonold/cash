@@ -206,6 +206,67 @@ def test_reading_an_entrys_metadata_does_not_protect_it(tmp_path):
     b.shutdown()
 
 
+def _twenty_through_the_cap(cache):
+    """Process A's part of the two tests below: 20 equal entries through
+    the cap. Returns the survivors' keys, oldest first."""
+    a = _backend(cache)
+    for i in range(20):
+        _put(a, f"e-{i}", MB, 1.0)
+    survivors = [f"e-{i}" for i in range(20) if _held(a, f"e-{i}")]
+    a.shutdown()
+    return survivors
+
+
+def test_a_looked_at_entry_ranks_by_its_mtime_like_the_rest(tmp_path):
+    """Break caught: the test above, made deterministic. It failed about 1
+    run in 15 with the natural timing.
+
+    An entry's header ``last_access`` is ``time.time()`` taken just before
+    its write. Its mtime is the filesystem's clock, which on Linux steps in
+    4 ms ticks behind that. So the stamp can be later than the mtimes of
+    entries written a moment after it. B ranked the entries whose metadata
+    it had looked at by that stamp and the rest by mtime. Here every
+    survivor's mtime is below the oldest's stamp but still in write order,
+    as one tick leaves them.
+    """
+    cache = tmp_path / "c"
+    survivors = _twenty_through_the_cap(cache)
+    oldest = survivors[0]
+
+    b = _backend(cache)
+    stamp_ns = int(b.get_metadata(oldest)["last_access"] * 1e9)
+    for n, key in enumerate(survivors):
+        mtime_ns = stamp_ns - 4_000_000 + n * 100_000
+        os.utime(b._get_path(key), ns=(mtime_ns, mtime_ns))
+    for i in range(3):
+        _put(b, f"later-{i}", MB, 1.0)
+
+    assert not _held(b, oldest)
+    b.shutdown()
+
+
+def test_a_burst_sharing_one_mtime_goes_in_write_order_after_a_restart(tmp_path):
+    """Break caught: equal entries with equal mtimes go in ``scandir`` order.
+
+    A burst of writes can share one mtime, and then only the write order
+    tells them apart. The writing process knows it, but a new one does not.
+    B evicted such a burst in hash order, here the oldest entry and then the
+    sixth. With everything equal, the two that go must be the two oldest.
+    """
+    cache = tmp_path / "c"
+    survivors = _twenty_through_the_cap(cache)
+
+    b = _backend(cache)
+    shared_ns = os.stat(b._get_path(survivors[-1])).st_mtime_ns
+    for key in survivors:
+        os.utime(b._get_path(key), ns=(shared_ns, shared_ns))
+    for i in range(2):
+        _put(b, f"later-{i}", MB, 1.0)
+
+    assert [k for k in survivors if not _held(b, k)] == survivors[:2]
+    b.shutdown()
+
+
 def test_a_valuable_entry_nobody_reads_is_not_immortal(tmp_path):
     """Break caught: the clock never advances, so priorities stop aging.
 

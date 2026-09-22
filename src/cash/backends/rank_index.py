@@ -96,7 +96,8 @@ class RankIndex:
 
     def load(self) -> tuple[dict[str, float], float, int]:
         """``(priority by stem, clock, line count)``; empty when unreadable.
-        Flushes this process's buffer first, so the file is the whole story."""
+        Flushes this process's buffer first, so the file is the whole story.
+        The priorities are in the order they were last recorded, oldest first."""
         self.flush()
         ranks: dict[str, float] = {}
         clock = 0.0
@@ -117,6 +118,10 @@ class RankIndex:
                     if parts[0] == _CLOCK_TAG:
                         clock = max(clock, value)
                     else:
+                        # Moved to the end, so the dict's order is each
+                        # entry's LAST record: the order of writes and access
+                        # flushes, which a ranking breaks ties by.
+                        ranks.pop(parts[0], None)
                         ranks[parts[0]] = value
         except FileNotFoundError:
             pass
