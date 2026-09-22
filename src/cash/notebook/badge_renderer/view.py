@@ -102,6 +102,10 @@ class StatementRow:
     uncacheable_reasons: tuple[str, ...] = ()    # populated when status==COMPUTED but not cached
     skipped_reason: str | None = None            # populated when the row was skipped at cache time
     guard_cause: str | None = None               # for "unstable key": what kept changing the key
+    #: What an upstream statement the repair re-ran printed (stdout, stderr).
+    #: Kept out of the cell's own output -- it belongs to another cell -- and
+    #: shown under the step instead (round 29, r29s3).
+    output_text: str = ""
     # Notification-row metadata (FUNCTION_CHANGED / MODULE_RELOADED rows).
     changed_functions: tuple[str, ...] = ()
     changed_modules: tuple[str, ...] = ()

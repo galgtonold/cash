@@ -259,6 +259,21 @@ def _loop_body(item: ForLoopGroup) -> tuple:
     return item.body or (tuple(item.stmts) + tuple(item.nested))
 
 
+#: Lines of a re-run upstream step's output shown in the text badge.
+_OUTPUT_LINES_MAX = 5
+
+
+def _output_lines(row: StatementRow, pad: str) -> list[str]:
+    """What a re-run upstream step printed, under it (round 29, r29s3)."""
+    if not row.output_text:
+        return []
+    lines = row.output_text.splitlines()
+    shown = [f"{pad}      | {ln[:160]}" for ln in lines[:_OUTPUT_LINES_MAX]]
+    if len(lines) > _OUTPUT_LINES_MAX:
+        shown.append(f"{pad}      | ... {len(lines) - _OUTPUT_LINES_MAX} more lines")
+    return shown
+
+
 def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> list[str]:
     """Lines for *item*, recursing into nested groups.
 
@@ -271,7 +286,8 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
     """
     pad = _INDENT * indent
     if isinstance(item, StatementRow):
-        return [pad + _row_line(item, is_upstream=is_upstream), *_sub_unit_lines(item, pad)]
+        return [pad + _row_line(item, is_upstream=is_upstream), *_sub_unit_lines(item, pad),
+                *_output_lines(item, pad)]
     if isinstance(item, ForLoopGroup):
         out: list[str] = []
         for sub in _loop_body(item):

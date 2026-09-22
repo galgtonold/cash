@@ -1186,6 +1186,10 @@ def _rowtip_html(row: StatementRow) -> str:
         )
     elif row.skipped_reason:
         dl_parts.append(f"<dt>Skipped</dt><dd>{_esc(row.skipped_reason)}</dd>")
+    if row.output_text:
+        # What a re-run upstream step printed (round 29, r29s3).
+        dl_parts.append(f"<dt>Printed</dt><dd><pre class=\"c3-rt-code\">"
+                        f"{_esc(row.output_text[:4000])}</pre></dd>")
         if row.guard_cause:
             # What kept changing the key (round 29, r29s1).
             dl_parts.append(f"<dt>Key changed by</dt><dd>{_esc(row.guard_cause)}</dd>")

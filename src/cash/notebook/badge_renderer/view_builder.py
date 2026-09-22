@@ -664,6 +664,12 @@ def _statement_display_time(m: dict[str, Any]) -> float:
     return float(m.get("execution_time", 0.0) or m.get("total_time", 0.0))
 
 
+def _upstream_output(m: dict[str, Any]) -> str:
+    """What a re-run upstream statement printed, stdout then stderr."""
+    parts = [str(m.get(k) or "") for k in ("stdout", "stderr")]
+    return "".join(p if p.endswith("\n") or not p else p + "\n" for p in parts).rstrip("\n")
+
+
 def _statement_row_from_metric(m: dict[str, Any]) -> StatementRow:
     """Translate one metric dict into a :class:`StatementRow`."""
     status = map_status(m.get("status"))
@@ -724,6 +730,8 @@ def _statement_row_from_metric(m: dict[str, Any]) -> StatementRow:
         uncacheable_reasons=_tup_str(m.get("uncacheable_reasons")),
         skipped_reason=m.get("skipped_reason") or None,
         guard_cause=m.get("guard_cause") or None,
+        output_text=(_upstream_output(m) if m.get("is_upstream")
+                     and status is BadgeStatus.COMPUTED else ""),
         changed_functions=_tup_str(m.get("changed_functions")),
         changed_modules=changed_modules_tup,
         decorator_calls=dec_calls,
