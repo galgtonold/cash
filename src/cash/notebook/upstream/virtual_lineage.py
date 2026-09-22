@@ -53,6 +53,7 @@ from ..cache_key import (
     compute_cache_key,
     is_cash_instrumentation,
     is_module_like,
+    statement_source_hash,
     virtual_callable_key,
     virtual_namespace,
 )
@@ -465,7 +466,7 @@ class VirtualLineage:
         inner = standalone_method_call_inner_methods(tree)
         settings = module_setting_receivers(tree)
         receivers: set[str] = set()
-        source_hash = hashlib.sha256(stmt_code.encode('utf-8')).hexdigest()
+        source_hash = statement_source_hash(stmt_code)
         verdict = self.mutation_verdicts.get(source_hash)
         if verdict is None:
             verdict = self._persisted_mutation_verdict(source_hash)
@@ -1649,7 +1650,7 @@ class VirtualLineage:
         extra_outputs: set[str] = set()
         if not mutated_vars:
             return extra_outputs
-        source_hash = hashlib.sha256(stmt_code.encode('utf-8')).hexdigest()
+        source_hash = statement_source_hash(stmt_code)
         input_lineages_sorted = sorted(input_hashes.values())
         for mv in mutated_vars:
             if mv not in outputs and mv in inputs:
@@ -2628,7 +2629,7 @@ class VirtualLineage:
             if not outputs:
                 return set(), 0.0, False, {}
 
-            source_hash = hashlib.sha256(stmt_code.encode('utf-8')).hexdigest()
+            source_hash = statement_source_hash(stmt_code)
 
             key_lineage_inputs = inputs | hidden_reads
 
@@ -3277,7 +3278,7 @@ class VirtualLineage:
                      # Input missing entirely. Cannot verify.
                      return False
 
-             source_hash = hashlib.sha256(code.encode('utf-8')).hexdigest()
+             source_hash = statement_source_hash(code)
              # Route through the shared func-inclusive projection (matches the
              # recorder in statement/lineage.py) so an unsaved edit that calls a
              # user-defined function is not spuriously rejected for lacking the

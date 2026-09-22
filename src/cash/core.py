@@ -85,6 +85,7 @@ from .purity_analyzer import (
 )
 from .source_norm import (
     bytecode_identity,
+    code_consts_without_docstring,
     loaded_class_identity,
     loaded_code_matches_disk,
     source_identity_digest,
@@ -5920,7 +5921,7 @@ class Cash:
             repr(code.co_varnames),
             repr(code.co_freevars),
         ]
-        for const in code.co_consts:
+        for const in code_consts_without_docstring(code):
             if isinstance(const, types.CodeType):
                 parts.append(
                     Cash._code_fingerprint(const, _depth + 1)
@@ -6279,7 +6280,7 @@ class Cash:
 
         Comments and formatting are absent from bytecode, so they do not
         invalidate -- strictly better than source hashing. Docstrings live in
-        ``co_consts`` and do.
+        ``co_consts`` and are masked out, so they do not either.
 
         Instance method (not static) because defaults/kwdefaults go through
         ``_value_identity`` -> ``self._hash_arg_payload``: a default like
@@ -6325,7 +6326,7 @@ class Cash:
             tuple(
                 self._code_object_identity(k) if isinstance(k, types.CodeType)
                 else self._value_identity(k)
-                for k in code.co_consts
+                for k in code_consts_without_docstring(code)
             ),
             tuple(code.co_names),
         )
@@ -6797,6 +6798,16 @@ class Cash:
                 # not invalidate" (see _code_identity) true on 3.13+ too.
                 if name in ("__dict__", "__weakref__", "__module__", "__firstlineno__"):
                     continue
+                # The class docstring is documentation, the same as a method's
+                # (masked in `_code_object_identity`), so it is folded as if
+                # there were none -- the member itself stays, because for a
+                # type whose surface is nothing else (a C type like
+                # `_thread.lock`) dropping it left no surface at all and the
+                # type was reported as unhashable code. Except on a pydantic
+                # model: its docstring is the schema's `description`, which
+                # structured-output libraries send to the model as the prompt.
+                if name == "__doc__" and not self._pydantic_field_parts(base):
+                    member = None
                 # Pydantic v2 compiles three Rust objects onto every model.
                 # They are DERIVED from the field declarations, and their
                 # digest differs in every process -- measured: the same
@@ -6977,8 +6988,7 @@ class Cash:
         if cached is not None:
             return cached
         try:
-            src = inspect.getsource(cls)
-            h = hashlib.sha256(src.encode("utf-8")).hexdigest()
+            h = source_identity_digest(inspect.getsource(cls))
         except SOURCE_RETRIEVAL_ERRORS:
             # No source to hash (or it doesn't parse). _hash_callable_source
             # has no class branch of its own: a class has no __code__, so ITS

@@ -15,6 +15,7 @@ from ...exceptions import (AmbiguousCellError, CashUpstreamSyntaxWarning,
 from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
+from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
 from ..annotations import extract_annotations_for_statements, parse_annotation_line
 from ..staleness import StalenessTracker
@@ -769,7 +770,7 @@ class UpstreamChecker:
             if inp in self.variable_lineage
         ]
 
-        source_hash = hashlib.sha256(last_executed_code.encode('utf-8')).hexdigest()
+        source_hash = statement_source_hash(last_executed_code)
 
         func_lineage_component = ""
         function_tracker = self.function_tracker if hasattr(self, 'function_tracker') else None

@@ -1,7 +1,8 @@
 """Comment- and format-insensitive code identity.
 
-A comment edit, a reformat, or a blank line must NOT invalidate a cache
-entry: the compiled behaviour is unchanged, so recomputing is pure waste.
+A comment edit, a docstring edit, a reformat, or a blank line must NOT
+invalidate a cache entry: the compiled behaviour is unchanged, so
+recomputing is pure waste.
 Two things must still move the digest -- a real code change, and a
 ``# @cash:`` annotation, because those are directives that change caching
 behaviour rather than ordinary prose.
@@ -77,6 +78,67 @@ def test_reindentation_keeps_identity():
     assert _same(BASE, edited)
 
 
+def test_docstring_change_keeps_identity():
+    a = '''
+        def f(n):
+            "one"
+            return n
+        '''
+    b = '''
+        def f(n):
+            """Two, and at more length.
+
+            With a second paragraph.
+            """
+            return n
+        '''
+    assert _same(a, b)
+
+
+def test_adding_a_docstring_keeps_identity():
+    documented = '''
+        def f(n):
+            """Double n, then keep it."""
+            total = n * 2
+            return total
+        '''
+    assert _same(BASE, documented)
+
+
+def test_a_docstring_on_the_def_line_keeps_identity():
+    a = 'def f(n): "one"; return n\n'
+    b = 'def f(n): "two"; return n\n'
+    assert _same(a, b)
+
+
+def test_class_and_method_docstrings_keep_identity():
+    a = '''
+        class Box:
+            """A box."""
+
+            def size(self):
+                """How big."""
+                return 3
+        '''
+    b = '''
+        class Box:
+            def size(self):
+                return 3
+        '''
+    assert _same(a, b)
+
+
+def test_a_nested_function_s_docstring_keeps_identity():
+    a = '''
+        def outer(n):
+            def inner():
+                """One."""
+                return n
+            return inner()
+        '''
+    assert _same(a, a.replace("One.", "Two."))
+
+
 # --- edits that MUST change identity -----------------------------------
 
 def test_real_code_change_breaks_identity():
@@ -88,19 +150,38 @@ def test_real_code_change_breaks_identity():
     assert not _same(BASE, edited)
 
 
-def test_docstring_change_breaks_identity():
-    """Docstrings are ordinary constants; a function may return one."""
+def test_a_returned_string_still_counts():
+    """Only the docstring is prose. A string the function returns is its
+    result."""
     a = '''
         def f(n):
-            "one"
-            return n
+            return "one"
         '''
     b = '''
         def f(n):
-            "two"
-            return n
+            return "two"
         '''
     assert not _same(a, b)
+
+
+def test_a_directive_beside_a_docstring_still_counts():
+    a = '''
+        def f(n):
+            """Doc."""  # @cash:ttl=60
+            return n
+        '''
+    b = a.replace("ttl=60", "ttl=600")
+    assert not _same(a, b)
+
+
+def test_a_bytes_literal_in_the_docstring_slot_still_counts():
+    """``ast.get_docstring``'s rule: only a ``str`` is a docstring."""
+    a = '''
+        def f(n):
+            b"one"
+            return n
+        '''
+    assert not _same(a, a.replace('b"one"', 'b"two"'))
 
 
 def test_indentation_that_changes_structure_breaks_identity():
@@ -325,6 +406,42 @@ def test_reformatting_hits(cache_env):
     )
     assert edited != _MODULE
     assert _call(work, c, edited) is True
+
+
+_DOCUMENTED = '''"""A module docstring."""
+
+class Schema:
+    """What the result looks like."""
+    FIELD = "a"
+
+def helper(x):
+    """Double x."""
+    return x * 2
+
+@cash_instance.cache
+def compute(n, schema):
+    """Compute the thing."""
+    return helper(n) + len(schema.FIELD)
+'''
+
+
+def test_docstring_edits_everywhere_hit(cache_env):
+    """The cached function, a helper it calls, a class it is passed, and
+    the module around them: rewording any docstring leaves the key alone."""
+    c, work = cache_env
+    assert _call(work, c, _DOCUMENTED) is False
+    edited = (_DOCUMENTED
+              .replace("A module docstring.", "The module, described anew.")
+              .replace("What the result looks like.", "The shape of a result.")
+              .replace("Double x.", "Return twice x.")
+              .replace("Compute the thing.", "Compute the thing.\n\n    At length."))
+    assert _call(work, c, edited) is True
+
+
+def test_adding_docstrings_hits(cache_env):
+    c, work = cache_env
+    _call(work, c, _MODULE)
+    assert _call(work, c, _DOCUMENTED) is True
 
 
 def test_real_body_change_still_recomputes(cache_env):

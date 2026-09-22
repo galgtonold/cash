@@ -9,7 +9,7 @@ Measured on this notebook, 2026-09-21: adding one comment re-executed the
 reported it at scale -- editing one helper re-read all 10,000 of their ticket
 files, 48.7 s against a 17.3 s control, later 9.1x. The unit twin is
 ``tests/test_notebook/test_a_module_is_its_code_not_its_formatting.py`` and
-pins what still counts: docstrings, and ``@cash:`` directives.
+pins what still counts: ``@cash:`` directives. Docstrings do not.
 """
 import pytest
 
@@ -71,6 +71,49 @@ def test_the_same_through_an_alias(nb_runner, tmp_path):
     assert "CACHED: DATA" in raw, (
         "a comment was added and the call re-ran, reached through an "
         "alias:\n" + raw
+    )
+
+
+@LOAD_SENSITIVE
+def test_a_docstring_reworded_in_a_module_does_not_re_run_its_callers(
+        nb_runner, tmp_path):
+    documented = _module().replace(
+        "def load(n):\n", 'def load(n):\n    """Load n rows."""\n')
+    mod = tmp_path / "fmtdoc.py"
+    mod.write_text(documented, encoding="utf-8")
+    nb_runner.create_notebook([
+        HEAD,
+        "import fmtdoc",
+        "DATA = fmtdoc.load(8)",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    mod.write_text(documented.replace("Load n rows.", "Return n rows, as strings."),
+                   encoding="utf-8")
+    nb_runner.run_cell(3)
+    raw = nb_runner.get_raw_output(3)
+    assert "CACHED: DATA" in raw, (
+        "only a docstring in the module changed and the call re-ran:\n" + raw
+    )
+
+
+@LOAD_SENSITIVE
+def test_a_docstring_reworded_in_a_cell_does_not_re_run_its_callers(nb_runner):
+    """The notebook twin: the function is defined in a cell, not a file."""
+    define = ('def load(n):\n'
+              '    """Load n rows."""\n'
+              '    return [str(i) + "-" + str(' + WORK + ' % 7) for i in range(n)]')
+    nb_runner.create_notebook([HEAD, define, "DATA = load(8)"])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    nb_runner.set_cell_source(2, define.replace("Load n rows.", "Return n rows."))
+    nb_runner.run_cells([2, 3])
+    raw = nb_runner.get_raw_output(3)
+    assert "CACHED: DATA" in raw, (
+        "only the docstring of the function changed and its caller re-ran:\n"
+        + raw
     )
 
 

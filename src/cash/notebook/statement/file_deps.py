@@ -29,6 +29,7 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
+from ...source_norm import drop_docstrings
 from ...utils import normalize_path
 from ..file_dep_snapshot import realpath_of_read_this_run
 from ..server_discovery import get_notebook_path
@@ -166,8 +167,8 @@ def _module_identity(raw: bytes) -> bytes:
     portable across machines (see docs/how-it-works/cache-keys-and-lineage.md),
     but there is no reason to add a reason.
 
-    Docstrings stay, because the AST keeps them: they are string literals a
-    program can read, not commentary.
+    Docstrings go too, the module's own included (``strip_docstrings``): they
+    are prose, the same as comments.
 
     And ``@cash:`` directives stay, because they are instructions TO cash --
     ``# @cash:assume-safe`` on a line waives a purity check, and cash's own
@@ -190,7 +191,9 @@ def _module_identity(raw: bytes) -> bytes:
     """
     try:
         text = raw.decode('utf-8')
-        rendered = ast.unparse(ast.parse(text))
+        tree = ast.parse(text)
+        drop_docstrings(tree, module=True)
+        rendered = ast.unparse(tree)
     except (UnicodeDecodeError, SyntaxError, ValueError, AttributeError, RecursionError):
         return raw
     from ..annotations import ANNOTATION_PATTERN

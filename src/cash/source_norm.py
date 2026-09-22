@@ -18,9 +18,6 @@ Deliberately KEPT in the digest:
   editing one must move the key. They survive as a normalized
   ``@cash:<directive>[=<value>]`` atom, so re-spacing a directive is free
   but re-targeting it is not.
-* Docstrings. At the token level a docstring is an ordinary string
-  constant, indistinguishable from a returned literal, and keeping it
-  costs nothing.
 * Block structure. INDENT/DEDENT enter the stream as width-independent
   markers, so a 4-space to 2-space reformat is free while dedenting a
   statement out of an ``if`` body -- a real behaviour change -- is not.
@@ -30,6 +27,9 @@ Deliberately COLLAPSED, beyond whitespace and comments:
 * Numeric literals, to one spelling per value -- see `_canonical_number`.
   ``0.5`` and ``0.50`` compile to the same constant, so they are the same
   function. Type is kept, so ``1`` and ``1.0`` stay apart.
+* Docstrings of functions and classes -- see `strip_docstrings`. They are
+  documentation, like comments: rewording one re-ran every cached result
+  built on the function.
 """
 
 import ast
@@ -37,15 +37,20 @@ import functools
 import hashlib
 import io
 import re
+import sys
 import textwrap
 import tokenize
 import types
 
 __all__ = [
     "bytecode_identity",
+    "code_consts_without_docstring",
+    "drop_docstrings",
     "normalize_source_for_hash",
     "source_identity_digest",
     "strip_cache_decorator",
+    "strip_docstrings",
+    "unparse_without_docstrings",
 ]
 
 # Populated on first use from ``cash.notebook.annotations``. Imported
@@ -136,6 +141,148 @@ def _annotation_atom(comment: str) -> str | None:
     return f"@cash:{directive}" + (f"={value}" if value else "")
 
 
+_DOCSTRING_OWNERS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+_DEF_OR_CLASS = re.compile(r"\b(?:def|class)\b")
+_LINE = re.compile(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+\Z")
+
+
+def _docstring_owners(tree: ast.AST, module: bool) -> list[ast.AST]:
+    """Every function and class in *tree* whose body opens with a docstring.
+
+    The same test as ``ast.get_docstring``: the first statement of the body,
+    a bare ``str`` constant. A bytes literal or an f-string in that spot is
+    not a docstring and stays.
+    """
+    found = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, _DOCSTRING_OWNERS)
+                or (module and isinstance(node, ast.Module))):
+            continue
+        body = node.body
+        if (body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            found.append(node)
+    return found
+
+
+def drop_docstrings(tree: ast.AST, module: bool = False) -> bool:
+    """Remove the docstrings from *tree* in place; True when there were any.
+
+    The AST twin of `strip_docstrings`, for digests built from
+    ``ast.unparse``. A body left empty unparses as a bare header, which is
+    never compiled, only hashed.
+    """
+    owners = _docstring_owners(tree, module)
+    for owner in owners:
+        owner.body.pop(0)
+    return bool(owners)
+
+
+@functools.lru_cache(maxsize=4096)
+def unparse_without_docstrings(code: str) -> str:
+    """*code*, in ``ast.unparse`` form, with function and class docstrings gone.
+
+    For statement text, which is always ``ast.unparse`` output and so has no
+    comments left to lose. Returns *code* itself when it has no docstring or
+    does not parse, which keeps every key that never had a docstring in it
+    byte-identical. Re-rendering is what makes adding or removing a
+    docstring free as well: the result is exactly the text the statement
+    would have had without one.
+
+    A module-level docstring is not touched. A notebook statement that is a
+    bare string is the cell's displayed value, not documentation.
+    """
+    if not _may_have_docstring(code):
+        return code
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError, RecursionError):
+        return code
+    if not drop_docstrings(tree):
+        return code
+    try:
+        return ast.unparse(tree)
+    except (ValueError, RecursionError):
+        return code
+
+
+def _may_have_docstring(source: str) -> bool:
+    """Cheap reject before paying for a parse: this runs per lookup."""
+    if '"' not in source and "'" not in source:
+        return False
+    return _DEF_OR_CLASS.search(source) is not None
+
+
+def _char_col(line: str, byte_col: int) -> int:
+    """``ast`` columns count UTF-8 bytes; string slicing counts characters."""
+    return len(line.encode("utf-8")[:byte_col].decode("utf-8", errors="ignore"))
+
+
+@functools.lru_cache(maxsize=2048)
+def strip_docstrings(source: str) -> str:
+    """Return *source* with the docstrings of its functions and classes cut out.
+
+    A docstring is documentation, the same as a comment, and comments were
+    already free. Rewording one re-ran every cached result built on the
+    function, which is the opposite of what anyone editing prose expects.
+
+    Adding or removing a docstring is free too, not only rewording one: a
+    docstring on lines of its own takes those whole lines with it, so the
+    function reads exactly as if it never had one.
+
+    What this gives up: a program that reads ``f.__doc__`` at run time --
+    ``docopt``, a CLI built from docstrings -- is not re-run when the text
+    changes. That is the same trade ``python -OO`` makes.
+
+    Kept: *source*'s own leading string, which is a module docstring only
+    when *source* is a whole module -- and then `drop_docstrings` handles it.
+    Kept too: a ``# @cash:`` directive sharing a docstring's line, since this
+    cuts text rather than re-rendering it.
+
+    Returns *source* unchanged when it has no docstring or does not parse (a
+    fragment, a mid-edit syntax error). Coarse beats raising from inside a
+    hasher, and leaving docstring-free source byte-identical keeps every
+    existing cache key that never had a docstring in it.
+    """
+    if not _may_have_docstring(source):
+        return source
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError):
+        return source
+    nodes = [owner.body[0] for owner in _docstring_owners(tree, module=False)]
+    if not nodes:
+        return source
+
+    # Not ``splitlines``: it also breaks on form feeds and other separators
+    # that can sit inside a string, which ``ast`` does not count as lines.
+    lines = _LINE.findall(source)
+    # Bottom-up, so an earlier cut never shifts a later one's coordinates.
+    for node in sorted(nodes, key=lambda n: (n.lineno, n.col_offset), reverse=True):
+        first, last = node.lineno - 1, (node.end_lineno or node.lineno) - 1
+        if last >= len(lines):
+            return source
+        start = _char_col(lines[first], node.col_offset)
+        end = _char_col(lines[last], node.end_col_offset or 0)
+        before = lines[first][:start]
+        after = lines[last][end:]
+        # ``"doc"; x = 1`` -- the separator belongs to the docstring.
+        if after.lstrip().startswith(";"):
+            after = after.lstrip()[1:]
+        if not after.strip():
+            if before.strip():
+                replacement = [before.rstrip() + "\n"]    # def f(): "doc"
+            else:
+                replacement = []                          # a line of its own
+        elif before.strip():
+            replacement = [before.rstrip() + " " + after.lstrip()]
+        else:
+            replacement = [before + after.lstrip()]
+        lines[first:last + 1] = replacement
+    return "".join(lines)
+
+
 @functools.lru_cache(maxsize=2048)
 def normalize_source_for_hash(source: str) -> str:
     """Return a canonical form of *source* for hashing.
@@ -154,7 +301,7 @@ def normalize_source_for_hash(source: str) -> str:
     always normalizes identically, and edited text is a different key.
     """
     try:
-        readline = io.StringIO(textwrap.dedent(source)).readline
+        readline = io.StringIO(strip_docstrings(textwrap.dedent(source))).readline
         tokens = list(tokenize.generate_tokens(readline))
     except (tokenize.TokenError, IndentationError, SyntaxError, ValueError):
         return source
@@ -324,6 +471,38 @@ _PRIMITIVE_CONSTS = (bool, int, float, complex, str, bytes, type(None))
 _MAX_CONST_DEPTH = 8
 
 
+_CO_OPTIMIZED = 0x0001
+# Python 3.14 flags a code object whose ``co_consts[0]`` is its docstring.
+_CO_HAS_DOCSTRING = 0x4000000
+
+
+def code_consts_without_docstring(code: types.CodeType) -> tuple:
+    """``code.co_consts`` with the docstring, if any, replaced by ``None``.
+
+    Compiled code keeps a function's docstring as its first constant, so
+    without this the bytecode identities -- the fallback when source cannot be
+    read -- moved on a docstring edit while the source identity did not.
+
+    Up to 3.13 every function reserves that slot, holding ``None`` when there
+    is no docstring, so replacing it makes a docstring free to add, remove or
+    reword. Lambdas and comprehensions (names in ``<...>``) never have one,
+    and neither do class bodies or modules, which are not ``CO_OPTIMIZED``.
+
+    3.14 only reserves the slot when there IS a docstring, and shifts every
+    other constant's index to fit, which ``co_code`` shows. There rewording a
+    docstring is free and adding or removing one is not.
+    """
+    consts = code.co_consts
+    if not consts or not isinstance(consts[0], str):
+        return consts
+    if sys.version_info >= (3, 14):
+        has_doc = bool(code.co_flags & _CO_HAS_DOCSTRING)
+    else:
+        has_doc = (bool(code.co_flags & _CO_OPTIMIZED)
+                   and not code.co_name.startswith("<"))
+    return (None,) + consts[1:] if has_doc else consts
+
+
 def _stabilize_const(const: object, depth: int) -> str:
     """Describe one const so the description never embeds an address."""
     if isinstance(const, _PRIMITIVE_CONSTS):
@@ -344,7 +523,8 @@ def _stabilize_const(const: object, depth: int) -> str:
 
 def _code_atoms(code: types.CodeType, depth: int = 0) -> str:
     """Serialize a code object's behaviour-bearing fields."""
-    consts = ",".join(_stabilize_const(c, depth) for c in code.co_consts)
+    consts = ",".join(_stabilize_const(c, depth)
+                      for c in code_consts_without_docstring(code))
     return _SEP.join(
         (
             code.co_code.hex(),

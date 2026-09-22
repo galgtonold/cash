@@ -20,6 +20,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from cash.notebook.lineage_store import LineageStore
+from cash.source_norm import unparse_without_docstrings
 
 __all__ = [
     "CacheKeyContext",
@@ -27,9 +28,27 @@ __all__ = [
     "VirtualCallable",
     "compute_cache_key",
     "control_outcome_key",
+    "statement_source_hash",
     "write_provenance_key",
     "read_provenance_key",
 ]
+
+
+def statement_source_hash(code: str) -> str:
+    """The code half of a statement's cache key and of its outputs' lineage.
+
+    ``sha256`` of *code* with its function and class docstrings removed (see
+    ``unparse_without_docstrings``). Statements reach here as ``ast.unparse`` text, which
+    has already dropped comments; this drops the other kind of prose, so
+    rewording the docstring of a function defined in a cell does not re-run
+    everything that calls it.
+
+    Every place that recomputes this digest -- the simulator's projections,
+    the upstream checker, the mismatch classifier's executed-hash lookup --
+    must call this, not ``sha256(code)``, or the two sides stop agreeing for
+    any statement that carries a docstring.
+    """
+    return hashlib.sha256(unparse_without_docstrings(code).encode("utf-8")).hexdigest()
 
 
 def write_provenance_key(code: str) -> str:
@@ -647,7 +666,7 @@ def compute_cache_key(
     debug_print_fn = ctx.debug_print_fn or print
 
 
-    source_hash = hashlib.sha256(code.encode('utf-8')).hexdigest()
+    source_hash = statement_source_hash(code)
 
     input_hashes: list[str] = []
     func_source_hashes: list[str] = []

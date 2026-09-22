@@ -10,7 +10,6 @@ dicts. Pure-phase invariants land in a later refactor.
 
 import ast
 import functools
-import hashlib
 import logging
 import re
 import types
@@ -19,6 +18,7 @@ from .._protocols import TrackingState
 from .._trace import trace_event
 from ..analysis import CodeAnalyzer
 from ..cacheability import analyze_statement
+from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
 from ._types import RestoreCollector, apply_collected_mutations
 from .virtual_lineage import VirtualLineage, _BUILTIN_NAMES, _normalize_stmt
@@ -928,7 +928,7 @@ class MismatchClassifier:
         history = self.executed_cell_hashes.get(inp)
         if not history:
             return False
-        return any(hashlib.sha256(code.encode('utf-8')).hexdigest() in history
+        return any(statement_source_hash(code) in history
                    for code in simulation_trace_codes)
 
     def _check_inp_lineage_skip(

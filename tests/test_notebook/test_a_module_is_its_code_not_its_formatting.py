@@ -11,11 +11,12 @@ that used a function the edit did not touch -- both for ``import lib`` and
 helper re-read all 10,000 of their ticket files, 48.7 s against a 17.3 s
 control, later 9.1x.
 
+Docstrings are prose too, the module's own included, and do not count.
+
 What must still count is the part nobody should have to think about twice:
-docstrings, which are values a program can read, and ``@cash:`` directives,
-which are instructions to cash -- ``# @cash:assume-safe`` waives a purity
-check, and cash's own diagnostic says directives are part of a function's
-source identity.
+``@cash:`` directives, which are instructions to cash --
+``# @cash:assume-safe`` waives a purity check, and cash's own diagnostic says
+directives are part of a function's source identity.
 """
 import pytest
 
@@ -44,6 +45,18 @@ class TestWhatStopsMattering:
     def test_blank_lines_do_not(self):
         assert _id(BASE) == _id(BASE.replace("\n\n", "\n\n\n\n"))
 
+    def test_a_docstring_does_not(self):
+        assert _id(BASE) == _id(BASE.replace("def load(n):\n",
+                                             'def load(n):\n    """rows"""\n'))
+
+    def test_nor_does_rewording_one(self):
+        a = BASE.replace("def load(n):\n", 'def load(n):\n    """rows"""\n')
+        b = BASE.replace("def load(n):\n", 'def load(n):\n    """The rows, n of them."""\n')
+        assert _id(a) == _id(b)
+
+    def test_nor_does_the_module_s_own(self):
+        assert _id(BASE) == _id('"""Loading and reporting."""\n' + BASE)
+
     def test_nor_does_reflowing_a_call(self):
         wrapped = BASE.replace("    return list(range(n))",
                                "    return list(\n        range(n)\n    )")
@@ -59,10 +72,9 @@ class TestWhatStillMatters:
     def test_a_new_function(self):
         assert _id(BASE) != _id(BASE + "def extra():\n    return 1\n")
 
-    def test_a_docstring(self):
-        """A docstring is a value, not commentary: ``f.__doc__`` reads it."""
-        assert _id(BASE) != _id(BASE.replace("def load(n):\n",
-                                             'def load(n):\n    "rows"\n'))
+    def test_a_string_the_function_returns(self):
+        assert _id(BASE) != _id(BASE.replace("return len(rows)",
+                                             "return 'rows: ' + str(len(rows))"))
 
     def test_a_cash_directive_appearing(self):
         assert _id(BASE) != _id(BASE.replace("def load(n):",

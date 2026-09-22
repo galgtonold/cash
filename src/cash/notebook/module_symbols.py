@@ -47,6 +47,8 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from ..source_norm import unparse_without_docstrings
+
 __all__ = ["closure_digest", "static_attribute_reads"]
 
 #: Names whose use means the code can reach the module namespace by string.
@@ -321,7 +323,7 @@ def _digest(analysis: _Analysis, names: Iterable[str]) -> str | None:
     h = hashlib.sha256()
     h.update(("names:" + ",".join(names) + "\n").encode('utf-8'))
     for i in sorted(included):
-        h.update(ast.unparse(analysis.statements[i]).encode('utf-8'))
+        h.update(unparse_without_docstrings(ast.unparse(analysis.statements[i])).encode('utf-8'))
         h.update(b"\n")
     for line in analysis.directives:
         h.update(line.encode('utf-8'))
