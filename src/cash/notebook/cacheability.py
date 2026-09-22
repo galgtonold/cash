@@ -1096,6 +1096,7 @@ def statement_read_paths(
             tree = ast.parse(textwrap.dedent(code))
         except (SyntaxError, ValueError):
             return None
+    loop_paths = _loop_variable_paths(tree, namespace)
     paths: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -1104,9 +1105,76 @@ def statement_read_paths(
         if not is_path_bearing:
             continue
         if resolved is None:
+            # ``pd.read_csv(f) for f in FILES``: the elements of FILES.
+            arg = node.args[0] if node.args else None
+            if isinstance(arg, ast.Name) and arg.id in loop_paths:
+                paths.update(loop_paths[arg.id])
+                continue
             return None  # a read target we could not pin down -> unknown
         paths.add(resolved)
     return paths
+
+
+#: A list of more paths than this is not worth listing: the gate stays off.
+_PATH_LIST_MAX = 4096
+
+
+def resolve_path_list(node: ast.AST, namespace: dict[str, Any] | None) -> list[str] | None:
+    """The paths in a list, tuple or set of paths, or ``None``.
+
+    A literal display whose every element resolves, a name bound to such a
+    list in *namespace*, or either wrapped in ``sorted``/``list``/``tuple``.
+    Round 30 (r30s5): ``pd.concat([pd.read_csv(f) for f in TF])`` read as
+    unknown, so a cell doing it re-drew an unrelated stale chart above.
+    """
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        if len(node.elts) > _PATH_LIST_MAX:
+            return None
+        out = [_resolve_literal_path(e, namespace) for e in node.elts]
+        return None if any(p is None for p in out) else out
+    if isinstance(node, ast.Name) and namespace is not None:
+        val = namespace.get(node.id)
+        if not isinstance(val, (list, tuple, set, frozenset)) or len(val) > _PATH_LIST_MAX:
+            return None
+        out = []
+        for v in val:
+            if isinstance(v, str):
+                out.append(v)
+            elif isinstance(v, os.PathLike):
+                try:
+                    out.append(os.fspath(v))
+                except TypeError:
+                    return None
+            else:
+                return None
+        return out
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id in ('sorted', 'list', 'tuple') and len(node.args) == 1):
+        return resolve_path_list(node.args[0], namespace)
+    return None
+
+
+def _loop_variable_paths(tree: ast.AST, namespace: dict[str, Any] | None) -> dict[str, list[str]]:
+    """``{loop variable: the paths it takes}`` for ``for f in FILES`` loops and
+    comprehensions whose iterable is a resolvable list of paths."""
+    found: dict[str, list[str]] = {}
+    unknown: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.For, ast.comprehension)):
+            if not isinstance(node.target, ast.Name):
+                unknown.update(n.id for n in ast.walk(node.target) if isinstance(n, ast.Name))
+                continue
+            values = resolve_path_list(node.iter, namespace)
+            if values is None:
+                unknown.add(node.target.id)
+            else:
+                found.setdefault(node.target.id, []).extend(values)
+        elif isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.NamedExpr)):
+            # ``f = other`` inside the loop: f is no longer only the list's elements.
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for t in targets:
+                unknown.update(n.id for n in ast.walk(t) if isinstance(n, ast.Name))
+    return {k: v for k, v in found.items() if k not in unknown}
 
 
 def _receiver_is_pyplot_module(recv: ast.AST, namespace: dict[str, Any] | None) -> bool:

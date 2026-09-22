@@ -14,6 +14,7 @@ orchestrator (``UpstreamChecker``) takes that plan and runs it via the real
 """
 
 import ast
+import collections
 import logging
 import re
 from collections.abc import Callable
@@ -60,6 +61,33 @@ def _statement_codes(cell_source: str) -> list[str]:
             code += ';'
         codes.append(code)
     return codes
+
+
+def _bind_literal_paths(stmt: str, bound: dict, namespace) -> None:
+    """Record in *bound* a name *stmt* binds to a path or a list of paths.
+
+    ``TF = [Path('other.csv')]`` binds ``TF``; any other binding of a name
+    drops it, so a later statement never reads a stale value from here.
+    """
+    from ..cacheability import _resolve_literal_path, resolve_path_list
+    try:
+        tree = ast.parse(CodeAnalyzer.strip_magics(stmt))
+    except (SyntaxError, ValueError, TypeError):
+        return
+    node = tree.body[0] if len(tree.body) == 1 else None
+    if (isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)):
+        name = node.targets[0].id
+        value = resolve_path_list(node.value, namespace)
+        if value is None:
+            value = _resolve_literal_path(node.value, namespace)
+        if value is not None:
+            bound[name] = value
+            return
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+            bound[n.id] = None
+
 
 logger = logging.getLogger(__name__)
 
@@ -903,7 +931,7 @@ class NotebookSimulator:
             # store a plain set/list of paths -- accept either shape.
             paths.update(dep.keys() if hasattr(dep, 'keys') else dep)
 
-        def _collect(src: str, outputs=()) -> None:
+        def _collect(src: str, outputs=(), namespace=None) -> None:
             nonlocal fully_known
             try:
                 clean = CodeAnalyzer.strip_magics(src.replace('\r\n', '\n'))
@@ -912,7 +940,7 @@ class NotebookSimulator:
             if not clean.strip():
                 return
             try:
-                r = statement_read_paths(clean, namespace=user_ns)
+                r = statement_read_paths(clean, namespace=user_ns if namespace is None else namespace)
             except (SyntaxError, ValueError, TypeError):
                 r = None
             if r is None and outputs and all(o in efd for o in outputs):
@@ -957,8 +985,13 @@ class NotebookSimulator:
             # One statement at a time, keyed as the runtime keys them, so a
             # statement's persisted read record is found after a restart (the
             # whole cell's text is no statement's key).
+            # The cell has not run yet, so a path its own earlier statement
+            # binds (``TF = [Path('other.csv')]``) is in no namespace; resolve
+            # it from the code (round 30, r30s5).
+            bound: dict = {}
             for stmt in _statement_codes(notebook_cells[current_cell_idx]):
-                _collect(stmt)
+                _collect(stmt, namespace=collections.ChainMap(bound, user_ns or {}))
+                _bind_literal_paths(stmt, bound, collections.ChainMap(bound, user_ns or {}))
 
         return paths, fully_known
 
