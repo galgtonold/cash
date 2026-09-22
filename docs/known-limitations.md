@@ -444,7 +444,7 @@ That is a narrower claim than it used to be. By default, cash also caches the ex
 <!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._should_execute_loop_as_single_unit @5beed55a, cash/notebook/control_structures/for_handler.py:ForLoopHandler._MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/for_handler.py:ForLoopHandler._PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/for_handler.py:ForLoopHandler._MIN_OVERHEAD_SEC == 1.0 -->
 Three conditions must hold together before the switch happens, which is why many append loops never hit it:
 
-- **more than ~50 iterations**, and
+- **more than ~50 iterations** — cash has to be able to tell how many there will be without running the loop, which it can for a sized iterable and for one reached through plain attribute and key access (`run.var['symbol'].items()`). An iterable whose length it cannot work out reads as unknown, and an unknown count never switches — so the loop pays per-statement bookkeeping however long it is, and
 - **estimated bookkeeping above ~1 second** — roughly `iterations × statements-in-body × 8ms`, so a multi-statement body can qualify just past the 50 mark while a **one-line body does not until ~125 iterations** — and
 - **no file I/O written directly in the loop body** (a call to a function that does the I/O internally does not count — only I/O written in the body itself).
 

@@ -278,19 +278,23 @@ cached, and nothing re-measures it. So the ledger reads:
 
 | Line | Evidence behind it |
 |------|--------------------|
-| `Compute time` | measured this session |
+| `Compute time` | measured this session — **your code's**, with cash's own time inside the statement taken out |
 | `Gross time saved` | estimated — the cost of each value *when first cached* |
-| `Cash overhead` | measured this session |
-| `Net time saved` | verified savings − measured overhead |
+| `Cash overhead` | measured this session, including what cash spends inside a statement keying and hashing the calls it routes |
+| `Net time saved` | verified + measured savings − measured overhead |
+
+A saving counts when a measurement backs it: one *this* session took
+(**verified**), or the least an earlier kernel on this machine ever measured
+(**measured** — a minimum, so a cold first run's timing cannot be paid out
+forever). The label on the line says which.
 
 The consequence is that Cash *understates* a session that really did save time
-but never re-measured a baseline. That is the intended direction of error: an
-overstatement would be the bug. When the verified savings don't cover the
-overhead but the gross figure would, it prints a range ("at least … at best …")
-instead of picking the flattering end; and when even the gross reading is a
-loss, it says so plainly.
+but has no measurement to point at — a cache built on another machine, say.
+That is the intended direction of error: an overstatement would be the bug.
+There it prints a range ("at least … at best …") instead of picking the
+flattering end; and when even the gross reading is a loss, it says so plainly.
 
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @84f2d380 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @b0b7e9c7 -->
 `%cash_stats` deliberately does not walk the backend — on a disk cache with
 thousands of entries that is an O(N) scan that opens every metadata file, and
 paying it every time you want a hit rate is not a trade worth making. For size

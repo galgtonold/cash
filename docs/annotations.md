@@ -255,11 +255,16 @@ An unseeded opted-in fit warns that the cached model is a frozen replay (the
 
 ### Call-level caching (default) and `# @cash:no-cache-calls` (alias: `nocachecalls`)
 
-Cash caches **one level down** by default, from the statement to the
-expensive call inside it, not just the statement itself. This is on
-automatically — no directive needed — which is exactly what makes it help in
-the one place statement-level caching structurally cannot: a cheap wrapper
-around slow work.
+Cash caches **below the statement** by default, not just the statement
+itself: the expensive call inside it, and an expensive call handed to another
+call (`weights(fit(x, y), cap)` caches the `fit` as well as the `weights`).
+This is on automatically — no directive needed — which is exactly what makes
+it help in the one place statement-level caching structurally cannot: a cheap
+wrapper around slow work.
+
+An argument runs whether the call around it is served from the cache or not,
+so a slow call nested in one is work no outer entry can save; writing it on
+its own line is no longer the difference between cached and not.
 
 <!-- test:skip reason="illustrative: `compute` and `items` are the reader's own" -->
 ```python { .nb-cell }

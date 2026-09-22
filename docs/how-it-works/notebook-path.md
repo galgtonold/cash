@@ -242,14 +242,17 @@ counts as a change to the module, so after a restart a cell that uses the
 module runs the setting line again before it draws or prints. Before this, a
 chart drawn after a restart silently lost the notebook's style.
 
-<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writer_output_already_fresh @7d9f7246, cash/notebook/write_observer.py:observe_writes @cb18a8f7, cash/notebook/carrier_history.py:carrier_history_fingerprint @b003c9ce -->
+<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writer_output_already_fresh @7d9f7246, cash/notebook/write_observer.py:observe_writes @cb18a8f7, cash/notebook/carrier_history.py:carrier_history_fingerprint @82562d46 -->
 A cell that writes files (`df.to_csv(...)`, a loop saving one chart per kind)
 is not re-run after a restart just because it ran in an earlier kernel. When it
 runs, Cash records the files it actually wrote, whether the path is in the code or
 inside a helper, along with their size and modification time and the lineages
 of what it read, including the globals of the functions it calls. A chart is
 recorded by what was drawn into it: the statements from `plt.subplots()` to the
-`savefig`, with the lineages of the data they read, since a new kernel cannot
+`savefig`, with the lineages of the data they read — an artist the figure hands
+back (`sc = ax.scatter(...)`, later given to `fig.colorbar(sc)`) belongs to the
+figure rather than to the data and is left out, like `fig` and `ax` themselves.
+This matters because a new kernel cannot
 reproduce a lineage for the figure object itself. After a restart the writer is
 re-run only when the cell you run reads one of its files (a folder it makes or
 clears counts as read when the cell reads a file inside it) *and* that file is
@@ -260,7 +263,11 @@ writer is re-run as before.
 
 <!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._find_stale_file_writer_indices @707c07d8, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._note_stale_exports @32f95ad2 -->
 A writer whose file the cell you run does not read is left alone, as a plain
-kernel leaves a cell you did not run. If an upstream edit changed what that
+kernel leaves a cell you did not run. "Does not read" has to be provable: a
+path in the code, a name bound to one, or a list of paths a loop or
+comprehension walks all count as read. A read whose path cash cannot work out
+at all — built by a function, or an f-string of values it cannot resolve —
+rules nothing out, and a writer above may then be re-run to be safe. If an upstream edit changed what that
 writer writes, its file on disk is now out of date, and the badge says so with
 a `STALE FILE: sweep.csv not rewritten ...` line naming the statement to
 re-run. It is not listed among the steps "not re-run" because what they built

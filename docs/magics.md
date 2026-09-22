@@ -218,17 +218,32 @@ Set the badge display mode for subsequent cached cells. See
 ```
 
 ### `%cash_stats`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @84f2d380 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @b0b7e9c7 -->
 
 Show cache statistics for this kernel session (a restart resets them; what the
 cache on disk holds is `cash info`'s): counts, hit rate, compute time, and the
 savings broken out as **gross saved**, **cash overhead**, and **net saved**,
-plus tracked variables. The headline net is `verified saved − overhead` — the
-subset of savings *this* session re-measured itself, not the full gross, so a
-stale first-run timing can never inflate it. (`gross − overhead` is reported
-separately as an upper bound.) Reporting net keeps the headline honest:
-cash's own per-cell overhead is subtracted from the recompute it avoided, and a session whose overhead outweighs its hits reads as
-a plain "cash cost you Xs this session" rather than a phantom win. The command
+plus tracked variables. The headline net counts only savings backed by a
+measurement, never the full gross, so a stale first-run timing can never
+inflate it. Two kinds of measurement count, and the line says which:
+
+* **verified** — this session recomputed the same statement, so it knows
+  today's cost;
+* **measured** — an earlier kernel on this machine did. The *least* it was
+  ever measured to cost is what gets credited, so a baseline taken on a cold
+  first run cannot be paid out forever.
+
+The second kind is what makes a Restart & Run All readable: a fresh kernel
+recomputes nothing, so before it the net after a restart printed as a range
+whose floor was exactly minus cash's own overhead.
+
+(`gross − overhead` is still reported separately as an upper bound, and a
+cache built on another machine vouches for nothing: there the range remains.)
+Reporting net keeps the headline honest: cash's own overhead is subtracted
+from the recompute it avoided — including the time it spends *inside* a
+statement, keying and hashing the calls it routes, which is charged to cash
+and not to your code — and a session whose overhead outweighs its hits reads
+as a plain "cash cost you Xs this session" rather than a phantom win. The command
 deliberately avoids walking the backend so it stays cheap on large on-disk
 caches.
 

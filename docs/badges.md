@@ -122,6 +122,19 @@ Five common causes, each with the badge you'll see and the one-line fix.
 
 **Fix:** If the upstream re-ran legitimately (you changed it), there's nothing to fix; let the downstream catch up. If you didn't expect the upstream to re-run, jump to that row's badge — its `miss_reason` will explain what it was reacting to.
 
+### A cached call re-ran
+
+**Why:** the statement's `sub-call` line reads `sub-call fit(rows, k): 0/6 hit`,
+and when Cash can say what moved it adds it: `- changed: rows`. The name is a
+part of that call's own key — an argument, a variable it reads, a global its
+callee reaches — that differs from the last run of the same statement.
+
+**Fix:** the same as for a statement. If that input changed because you meant
+it to, the re-run is right. Nothing is added when nothing named moved, when
+it is the first run in this kernel, or when the key moved with no visible
+part moving (a file the callee reads, or the callee's own source) — naming
+nothing beats naming the wrong thing.
+
 ### File changed
 
 <iframe class="cash-badge" src="/_badges/miss_file_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
@@ -212,7 +225,7 @@ See [Cost model and smart persistence](cost-model.md) for how this decision is m
 
 **Why:** The statement mutates an object that already existed — `out.append(...)`, `d[k] = v`, `df.sort_values(inplace=True)` — rather than producing a new value. There is no snapshot to restore that would reproduce the mutation, so Cash bumps the receiver's lineage (everything downstream stays correct) and re-executes the statement each run.
 
-That includes a function you pass the object to, when it changes the object in place and returns nothing. This is how scanpy works (`sc.pp.calculate_qc_metrics(adata, inplace=True)`, `sc.tl.leiden(adata)`), and so does a helper like `add_qc(df)`. Cash checks the objects a bare call like that is given before and after it runs, and if one changed, the statement is treated as an in-place mutation from then on. It re-runs every time, so the change is made every time. It does this for a bare call only: `res = f(df)`, where `f` also changes `df`, is not covered, so return the changed object instead.
+That includes a function you pass the object to, when it changes the object in place and returns nothing. This is how scanpy works (`sc.pp.calculate_qc_metrics(adata, inplace=True)`, `sc.tl.leiden(adata)`), and so does a helper like `add_qc(df)`. Cash checks the objects a bare call like that is given before and after it runs, and if one changed, the statement is treated as an in-place mutation from then on. It re-runs every time, so the change is made every time — including after a kernel restart, where the object is restored from the cache and the call is replayed over it before anything below reads it. It does this for a bare call only: `res = f(df)`, where `f` also changes `df`, is not covered, so return the changed object instead.
 
 **Fix:** Assign the result instead of mutating in place — `out = [f(e) for e in items]` caches at any length where the append loop does not. See [A long `for`-append loop can stop caching](known-limitations.md#a-long-for-append-loop-can-stop-caching).
 

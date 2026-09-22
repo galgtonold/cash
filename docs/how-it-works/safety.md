@@ -74,7 +74,7 @@ The first can be re-derived from the statement that made it; the second cannot.
 has no store target to give the receiver a fresh lineage. So Cash classifies
 method-call receivers in tiers, in this order:
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @46130a0d, cash/notebook/cacheability.py:KNOWN_PURE_METHODS @adc93e66, cash/notebook/cacheability.py:standalone_method_call_inner_methods @c952d0cc, cash/notebook/cacheability.py:chain_is_pure @800f85aa, cash/notebook/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @d0495812, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @81f477db -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @46130a0d, cash/notebook/cacheability.py:KNOWN_PURE_METHODS @adc93e66, cash/notebook/cacheability.py:standalone_method_call_inner_methods @c952d0cc, cash/notebook/cacheability.py:chain_is_pure @530e6134, cash/notebook/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @d0495812, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @81f477db -->
 
 - **Excluded outright.** A module receiver is a plain function call, not a
   mutation: `np.foo()`, `time.sleep()`, `plt.title()`. The exception is a
@@ -84,9 +84,13 @@ method-call receivers in tiers, in this order:
   excluded too — `df.to_csv(path)` *reads* the frame and writes a file, so it must
   never bump `df`'s lineage — and so is anything on the known-pure list
   (`head`, `describe`, `value_counts`, `round`, `mean`, `groupby`, `plot`, …).
-  A chained call counts by its last method, as long as nothing inside the
-  chain is known to change the object: `df.sort_values('x').head()` leaves
-  `df` alone, `df.pop('b').round(2)` does not.
+  A chain counts as pure when its last method is on that list, or when it
+  passes through one: a known-pure method returns a NEW object, and what
+  follows acts on that, not on your receiver. `df.sort_values('x').head()`
+  and `df[mask].groupby('hour').size()` both leave `df` alone — `size` is not
+  on the list, but it runs on the `GroupBy` that `groupby` made. Anything
+  known to change the object anywhere in the chain still counts:
+  `df.pop('b').round(2)` does.
   pandas' plotting entry
   points count as pure on a pandas receiver however they are spelled —
   `df.plot.bar(...)`, `df.groupby(k)[c].mean().plot(...)`, `df.hist()` — they
