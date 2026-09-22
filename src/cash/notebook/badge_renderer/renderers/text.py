@@ -203,6 +203,11 @@ def _sub_unit_lines(row: StatementRow, pad: str) -> list[str]:
         f"{pad}    sub-call {g.call_source}: "
         f"{sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)}/{len(g.calls)} hit"
         + (f", {g.ran_plain} run plain (too cheap to cache)" if getattr(g, "ran_plain", 0) else "")
+        # Why it was not served, when the runtime worked it out. The HTML badge
+        # has shown this; the text badge said only "0/6 hit", and a tester read
+        # a correct re-run as a bug for want of the word after it (round 30,
+        # r30s4).
+        + (f" - {g.miss_reason}" if g.miss_reason else "")
         for g in row.sub_units
         if not (g.unstored and g.unstored == len(g.calls) and not g.miss_reason)
     ]

@@ -1035,6 +1035,15 @@ class CallUnit:
         #: Monotonic; a statement reads the difference across its run (see
         #: ``StatementProcessor._execute_and_drain``).
         self.overhead_s = 0.0
+        # Per call SITE: what its key was built from last time, and what moved
+        # since -- the badge's answer to "why did this re-run?".
+        self._site_parts: dict[tuple, tuple[str, dict]] = {}
+        self._site_reason: dict[tuple, str | None] = {}
+        # Sites already keyed in THIS statement run. A site called once per
+        # loop item keys differently per item BY DESIGN -- that is the loop
+        # variable doing its job, not something to explain. Only the first
+        # call of each run is compared, against the first call of the last.
+        self._keyed_this_run: set = set()
         self.hits_saved_s = 0.0
         self._last_hit = False
         self._last_key_s: float | None = None
@@ -1090,6 +1099,7 @@ class CallUnit:
     def begin_statement(self) -> None:
         """A new statement run: every site starts over (see :meth:`_entry_for`)."""
         self._site_runs.clear()
+        self._keyed_this_run.clear()
         self.last_returned = None
 
     def outermost_result(self) -> tuple[str, int, str] | None:
@@ -1670,9 +1680,10 @@ class CallUnit:
             name_digests = self._name_digests(site, args, kwargs) if by_content else None
             if by_content and loop_vars:
                 loop_vars = _loop_vars_the_call_can_read(fn, site, loop_vars, name_digests)
-            return call_cache_key(
+            ctx = self._ctx_provider()
+            key = call_cache_key(
                 site,
-                ctx=self._ctx_provider(),
+                ctx=ctx,
                 arg_digests=arg_digests,
                 loop_vars=loop_vars,
                 loop_var_digests=self._current_loop_var_digests(),
@@ -1680,6 +1691,8 @@ class CallUnit:
                 by_content=by_content,
                 name_digests=name_digests,
             )
+            self._note_key_parts(site, key, ctx, arg_digests, global_digests)
+            return key
         except Exception:  # noqa: BLE001 - never let keying break the call
             logger.debug("call unit: key build failed for %s", site.source)
             return None
@@ -2133,6 +2146,59 @@ class CallUnit:
         trace_event("call_digest_skipped", bytes_estimated=estimate, seconds=round(elapsed, 3))
         return estimate
 
+    def _note_key_parts(self, site: CallSite, key, ctx, arg_digests, global_digests) -> None:
+        """Remember what this call site was keyed on, and what moved since the
+        last time it was keyed (read back by :meth:`_why_missed`).
+
+        In-memory and per site, like the statement guard's own components. A
+        first run in a fresh kernel has nothing to compare against and says
+        nothing -- the same deliberate silence a statement keeps, since "first
+        time" is self-evident to someone running a cell for the first time.
+        """
+        if key is None:
+            return
+        try:
+            site_id = self._site_id(site)
+            if site_id in self._keyed_this_run:
+                return
+            self._keyed_this_run.add(site_id)
+            lineages = getattr(ctx, 'variable_lineage', None) or {}
+            parts = {name: lineages.get(name) for name in site.free_names}
+            for i, digest in enumerate(arg_digests or ()):
+                parts[f'argument {i + 1}'] = digest
+            for name, digest in (global_digests or {}).items():
+                parts[name] = digest
+            seen = self._site_parts.get(site_id)
+            self._site_parts[site_id] = (key, parts)
+            if not seen or seen[0] == key:
+                self._site_reason.pop(site_id, None)
+                return
+            moved = sorted(name for name in set(parts) | set(seen[1])
+                           if parts.get(name) != seen[1].get(name))
+            # The key moved with no named part of it moving: something else did
+            # (a file the callee reads, the callee's own source). Naming
+            # nothing beats naming the wrong thing.
+            named = ", ".join(moved[:3]) + (", ..." if len(moved) > 3 else "")
+            self._site_reason[site_id] = f"changed: {named}" if moved else None
+        except Exception:  # noqa: BLE001 - attribution never breaks a call
+            logger.debug("call unit: could not note key parts for %s", site.source)
+
+    @staticmethod
+    def _site_id(site: CallSite) -> tuple[str, int, str]:
+        return (site.source, site.occurrence_index, getattr(site, 'stmt_identity', ''))
+
+    def _why_missed(self, site: CallSite) -> str | None:
+        """Which named part of this call's key moved since it was last keyed.
+
+        Round 30, r30s4: a sweep re-ran and the badge said only "0/6 hit", so
+        the tester had to guess why -- and guessed wrong, then reported the
+        re-run as a suspected bug.
+        """
+        try:
+            return self._site_reason.get(self._site_id(site))
+        except Exception:  # noqa: BLE001
+            return None
+
     def _func_name(self, fn) -> str:
         """The name this call's events display under in the badge and stats.
 
@@ -2173,6 +2239,9 @@ class CallUnit:
             # A miss whose result went to the cache. False for a call below
             # the cost floor or refused: the badge has nothing to say about it.
             "stored": bool(stored),
+            # Why this call was not served: which part of its key moved since
+            # the site was last keyed. Only on a miss, and only when known.
+            "miss_reason": None if cache_hit else self._why_missed(site),
         })
 
     def drain(self) -> list[dict]:
