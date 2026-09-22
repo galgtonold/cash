@@ -5,6 +5,7 @@ import builtins
 import logging
 import os
 import stat
+import sys
 import re
 import textwrap
 import types
@@ -193,6 +194,21 @@ def _is_definition(code: str) -> bool:
     return len(body) == 1 and isinstance(body[0], (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
 
 
+
+def _imported_roots(code: str) -> set[str]:
+    """The top-level modules an import-only statement imports."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return set()
+    roots: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            roots.update(alias.name.split('.')[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            roots.add(node.module.split('.')[0])
+    return roots
+
 class ReexecutionPlanner:
     """Phase 3 of NotebookSimulator: build the re-execution plan.
 
@@ -318,6 +334,9 @@ class ReexecutionPlanner:
                 stmts_to_run_indices, simulation_trace, virtual_lineage, virtual_modules,
             )
             stmts_to_run_indices = self._complete_later_producers(
+                stmts_to_run_indices, simulation_trace,
+            )
+            stmts_to_run_indices = self._complete_import_path_setup(
                 stmts_to_run_indices, simulation_trace,
             )
             if len(stmts_to_run_indices) == before:
@@ -715,6 +734,33 @@ class ReexecutionPlanner:
                     trace_event("later_producer_completion", stmt=simulation_trace[p][0][:80],
                                 var=v, after=simulation_trace[i][0][:80])
         return sorted(scheduled)
+
+    @staticmethod
+    def _complete_import_path_setup(stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
+        """Before a re-run import of a module that is not loaded, the notebook's
+        earlier changes to ``sys.path``.
+
+        ``sys.path.insert(0, lib)`` is a setting of ``sys``, replayed for a
+        statement that reads ``sys``. An import does not read it, yet finding a
+        module not loaded yet depends on it: after a restart, a jump below
+        ``import bt`` re-ran the import without the insert above it and stopped
+        on ``No module named 'bt'`` (round 29, r29s3, 2/2).
+        """
+        from .mismatch_classifier import import_only
+        scheduled = set(stmts_to_run_indices)
+        added: set[int] = set()
+        for i in sorted(scheduled):
+            code = simulation_trace[i][0]
+            if not import_only(code) or all(m in sys.modules for m in _imported_roots(code)):
+                continue
+            for j in range(i):
+                if j in scheduled or j in added:
+                    continue
+                entry_code = simulation_trace[j][0]
+                if 'sys' in simulation_trace[j][1] and 'path' in entry_code:
+                    added.add(j)
+                    trace_event("import_path_setup", stmt=entry_code[:80], before=code[:80])
+        return sorted(scheduled | added)
 
     def _latest_producer(self, simulation_trace: list, var: str, before: int) -> int | None:
         """Index of the LAST statement before *before* that outputs *var*."""
