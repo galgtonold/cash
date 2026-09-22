@@ -137,19 +137,65 @@ def _dotted(func: ast.expr) -> list[str]:
     return []
 
 
-def _is_dynamic(stmt: ast.stmt) -> bool:
-    """Can *stmt* make a closure unboundable? See the module docstring."""
+_FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
+
+
+def _is_nondeterministic_call(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    chain = _dotted(node.func)
+    return bool(chain) and (chain[-1] in _NONDETERMINISTIC_TAILS
+                            or any(p in _NONDETERMINISTIC_ROOTS for p in chain))
+
+
+def _is_dynamic(stmt: ast.stmt, runs_at_import: bool = True) -> bool:
+    """Can *stmt* make a closure unboundable? See the module docstring.
+
+    Reaching the namespace by string counts wherever it is. A result that
+    differs run to run counts only in code that runs at import time: a
+    function's body runs when it is called, and a reload gives it nothing new
+    -- a helper timing its own steps (``t0 = time.perf_counter()``) keyed
+    every statement using it on the whole module, so any edit to the file
+    re-ran them (round 29, r29s1 and r29s3). *runs_at_import* is False for a
+    ``def`` nothing at import time calls; its decorators and default values
+    run at import time all the same.
+    """
     for node in ast.walk(stmt):
         if isinstance(node, ast.Call):
             chain = _dotted(node.func)
             if len(chain) == 1 and chain[0] in _DYNAMIC_CALLS:
                 return True
-            if chain and (chain[-1] in _NONDETERMINISTIC_TAILS
-                          or any(p in _NONDETERMINISTIC_ROOTS for p in chain)):
-                return True
         if isinstance(node, ast.Attribute) and node.attr in _DYNAMIC_ATTRS:
             return True
-    return False
+    if runs_at_import or not isinstance(stmt, _FUNCTIONS):
+        return any(_is_nondeterministic_call(node) for node in ast.walk(stmt))
+    at_import = [*stmt.decorator_list, *stmt.args.defaults,
+                 *(d for d in stmt.args.kw_defaults if d is not None)]
+    return any(_is_nondeterministic_call(node) for part in at_import for node in ast.walk(part))
+
+
+def _called_at_import(statements: tuple[ast.stmt, ...]) -> set[str]:
+    """Names of the module's functions that code run at import time calls,
+    directly or through one another. Everything but a ``def``'s body runs at
+    import time; a class body does too, methods and all -- over-counting only
+    keeps the old, whole-module answer."""
+    defs = {s.name: s for s in statements if isinstance(s, _FUNCTIONS)}
+
+    def calls(nodes) -> set[str]:
+        return {n.func.id for part in nodes for n in ast.walk(part)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in defs}
+
+    pending = calls(s for s in statements if not isinstance(s, _FUNCTIONS))
+    for fn in defs.values():
+        pending |= calls([*fn.decorator_list, *fn.args.defaults,
+                          *(d for d in fn.args.kw_defaults if d is not None)])
+    reached: set[str] = set()
+    while pending:
+        name = pending.pop()
+        if name not in reached:
+            reached.add(name)
+            pending |= calls(defs[name].body) - reached
+    return reached
 
 
 def _analyse(source: str) -> _Analysis | None:
@@ -172,6 +218,7 @@ def _analyse(source: str) -> _Analysis | None:
             if name in ('__getattr__', '__dir__'):
                 opaque = True
     bound = frozenset(binders)
+    import_called = _called_at_import(statements)
     reads = tuple(
         frozenset(n.id for n in ast.walk(stmt)
                   if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
@@ -183,7 +230,8 @@ def _analyse(source: str) -> _Analysis | None:
         binders={k: tuple(v) for k, v in binders.items()},
         reads=reads,
         effectful=frozenset(effectful),
-        dynamic=tuple(_is_dynamic(s) for s in statements),
+        dynamic=tuple(_is_dynamic(s, not isinstance(s, _FUNCTIONS) or s.name in import_called)
+                      for s in statements),
         directives=tuple(ln.strip() for ln in source.splitlines() if _DIRECTIVE.search(ln)),
         opaque=opaque,
     )

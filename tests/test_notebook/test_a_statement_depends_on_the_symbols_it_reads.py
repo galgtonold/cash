@@ -275,6 +275,26 @@ class TestNondeterministicImportTimeCode:
         src = "def build():\n    return 2\nTABLE = build()\ndef load():\n    return TABLE\n"
         assert _d(src, "load") is not None
 
+    def test_a_clock_read_inside_a_function_is_not_import_time_code(self):
+        """Round 29, r29s1 and r29s3: a helper that times its own steps made
+        every edit to its module -- even appending an unrelated function --
+        re-run everything built on it. A clock read that runs only when the
+        function is CALLED gives no new value on a reload."""
+        src = ("import time\ndef summary(rows):\n    t0 = time.perf_counter()\n"
+               "    print(time.perf_counter() - t0)\n    return sum(rows)\n")
+        assert _d(src, "summary") is not None
+        assert _d(src + "def unrelated():\n    return 1\n", "summary") == _d(src, "summary")
+
+    @pytest.mark.parametrize("src", [
+        "def make():\n    return time.time()\nSTAMP = make()\n",
+        "def inner():\n    return time.time()\ndef make():\n    return inner()\nSTAMP = make()\n",
+        "def make():\n    return time.time()\nclass C:\n    stamp = make()\nSTAMP = C.stamp\n",
+        "def make(t=time.time()):\n    return t\nSTAMP = 1\n",
+    ], ids=["called_at_import", "called_through_another", "called_in_a_class_body", "a_default"])
+    def test_a_function_run_at_import_time_still_counts(self, src):
+        src = "import time\n" + src + "def load():\n    return STAMP, make\n"
+        assert _d(src, "load") is None
+
     def test_nondeterminism_nothing_in_the_closure_reaches(self):
         """Only what the read name reaches counts -- except import-time code,
         which is in every closure; a def that is never called is not."""

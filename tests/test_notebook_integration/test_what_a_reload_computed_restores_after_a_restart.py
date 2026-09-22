@@ -65,3 +65,24 @@ def test_the_next_kernel_restores_what_the_reload_computed(nb_runner, tmp_path, 
     assert "CACHED" in raw or "RESTORED" in raw, (
         "the morning after the edit, the value computed after the reload was "
         "recomputed instead of restored:\n" + raw)
+
+
+@pytest.mark.parametrize("import_line, call", [
+    ("import {m} as hm", "hm.summary"),
+    ("from {m} import summary", "summary"),
+], ids=["aliased", "from_import"])
+def test_an_unrelated_edit_to_a_timed_helper_re_runs_nothing(nb_runner, tmp_path, import_line, call):
+    """r29s1 (8/8 edits) and r29s3: a helper that times its own steps was keyed
+    whole, so appending an unrelated function re-ran everything built on it
+    -- the 60-day load and the map-match, 57 s + 100 s per edit."""
+    name = "helpertimed_" + ("a" if " as " in import_line else "f")
+    mod = tmp_path / f"{name}.py"
+    mod.write_text(_module("sum", clock=True), encoding="utf-8")
+    nb_runner.create_notebook(_cells(import_line.format(m=name), call))
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    mod.write_text(_module("sum", "\n\ndef unrelated(x):\n    return x * 2\n", clock=True), encoding="utf-8")
+    nb_runner.run_cell(4)
+    raw = nb_runner.get_raw_output(4)
+    assert "R 10" in nb_runner.get_output(4), raw
+    assert "EXECUTED: tbl =" not in raw, raw
