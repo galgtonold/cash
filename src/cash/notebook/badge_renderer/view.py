@@ -101,6 +101,7 @@ class StatementRow:
     restored_vars: tuple[str, ...] = ()          # vars hydrated from cache (RESTORED rows)
     uncacheable_reasons: tuple[str, ...] = ()    # populated when status==COMPUTED but not cached
     skipped_reason: str | None = None            # populated when the row was skipped at cache time
+    guard_cause: str | None = None               # for "unstable key": what kept changing the key
     # Notification-row metadata (FUNCTION_CHANGED / MODULE_RELOADED rows).
     changed_functions: tuple[str, ...] = ()
     changed_modules: tuple[str, ...] = ()

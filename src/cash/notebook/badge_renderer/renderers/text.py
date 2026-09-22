@@ -151,7 +151,8 @@ def _row_line_computed(row: StatementRow, tag: str, code: str) -> str:
         # Shortened, not dropped: the row still says it wasn't cached and
         # why. The guard's full paragraph is emitted once per cell by
         # ``_guard_summary_lines`` instead of once per statement.
-        return f"  {tag}: {code}  {timing} - {shorten_skipped_reason(row.skipped_reason)}"
+        cause = f" ({row.guard_cause})" if row.guard_cause else ""
+        return f"  {tag}: {code}  {timing} - {shorten_skipped_reason(row.skipped_reason)}{cause}"
     if row.storage_tiers:
         return f"  {tag}: {code}  {timing} -> {'+'.join(row.storage_tiers)}"
     return f"  {tag}: {code}  {timing}"

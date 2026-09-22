@@ -1186,6 +1186,9 @@ def _rowtip_html(row: StatementRow) -> str:
         )
     elif row.skipped_reason:
         dl_parts.append(f"<dt>Skipped</dt><dd>{_esc(row.skipped_reason)}</dd>")
+        if row.guard_cause:
+            # What kept changing the key (round 29, r29s1).
+            dl_parts.append(f"<dt>Key changed by</dt><dd>{_esc(row.guard_cause)}</dd>")
 
     if row.restored_vars:
         dl_parts.append(f"<dt>Restored</dt><dd>{_esc(', '.join(row.restored_vars))}</dd>")

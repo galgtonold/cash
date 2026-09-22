@@ -1376,7 +1376,7 @@ class StatementProcessor:
                 skip_cache = True
         effective_ttl = self._ttl_floor_from_called_functions(inputs, effective_ttl)
         metadata, cached_data, cache_check_time = self._do_cache_lookup(skip_cache, cache_key, effective_ttl, inputs)
-        self._observe_miss_guard(skip_cache, code, source_hash, cache_key, cached_data)
+        self._observe_miss_guard(skip_cache, code, source_hash, cache_key, cached_data, inputs)
 
         if self.debug:
             self._print_cache_debug(code, cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
@@ -1645,7 +1645,7 @@ class StatementProcessor:
                 skip_cache = True
         effective_ttl = self._ttl_floor_from_called_functions(inputs, effective_ttl)
         metadata, cached_data, cache_check_time = self._do_cache_lookup(skip_cache, cache_key, effective_ttl, inputs)
-        self._observe_miss_guard(skip_cache, code, source_hash, cache_key, cached_data)
+        self._observe_miss_guard(skip_cache, code, source_hash, cache_key, cached_data, inputs)
 
         if self.debug:
             self._print_cache_debug(code, cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
@@ -2410,6 +2410,7 @@ class StatementProcessor:
         source_hash: str,
         cache_key: str,
         cached_data: Any,
+        inputs: set[str] | None = None,
     ) -> None:
         """Feed one lookup outcome to the perpetual-miss guard.
 
@@ -2435,7 +2436,8 @@ class StatementProcessor:
             return
         if '# __iteration_context__:' in code or '# control_context:' in code:
             return
-        self._miss_guard.observe(source_hash, cache_key, hit=cached_data is not None)
+        self._miss_guard.observe(source_hash, cache_key, hit=cached_data is not None,
+                                 components=self._lineages_read(inputs) if inputs else {})
 
     #: The perpetual-miss guard spares a statement whose value is written in at
     #: most this share of what computing it cost: each write it wastes is then
@@ -3041,6 +3043,11 @@ class StatementProcessor:
             metrics['storage'] = saved_metadata.storage
         if saved_metadata and saved_metadata.skipped_reason is not None:
             metrics['skipped_reason'] = saved_metadata.skipped_reason
+            if saved_metadata.skipped_reason == GUARD_SKIP_REASON:
+                # What kept changing the key (round 29, r29s1).
+                cause = self._miss_guard.cause(source_hash)
+                if cause:
+                    metrics['guard_cause'] = cause
         if saved_metadata:
             for k in _COST_MODEL_KEYS:
                 value = getattr(saved_metadata, k)

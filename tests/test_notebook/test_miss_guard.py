@@ -384,6 +384,14 @@ class TestUnstableKeyStopsSerialising:
         assert "Perpetual cache miss" in reason
         assert "different cache key" in reason  # the WHY: the key churns and never hits
 
+    def test_badge_names_what_kept_changing(self, session):
+        """Round 29, r29s1: "unstable key" with no hint of why; their helper
+        module was changing the key each run."""
+        keys = _unstable()
+        for _ in range(N_CHURN + 1):
+            m = session.run(next(keys))
+        assert m.get("guard_cause") == "`big` changed each run", m.get("guard_cause")
+
     def test_persist_annotation_outranks_the_guard(self, session):
         """The guard is a default, not a veto: a user who explicitly asks for
         persistence gets it."""

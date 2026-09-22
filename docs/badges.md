@@ -219,7 +219,7 @@ That includes a function you pass the object to, when it changes the object in p
 ### Unstable key
 
 ```text
-  NOT CACHED: model = fit(features, y)  (4.20s) - unstable key
+  NOT CACHED: model = fit(features, y)  (4.20s) - unstable key (`features` changed each run)
   1 statement stopped caching: `model = fit(features, y)`
   (unstable key: the cache key changed every run, so storing
   the value could never pay back). They still run normally; ...
@@ -244,7 +244,14 @@ suspects are:
 - a loop upstream that re-runs some of its iterations each time,
 - an unseeded random draw upstream,
 - a value built from something that differs between runs, such as the
-  current time or a directory listing whose order changes.
+  current time or a directory listing whose order changes,
+- a local module you keep editing, when the statement uses it directly.
+
+<!-- claim: cash/notebook/statement/miss_guard.py:MissGuard.cause @fde6ecee -->
+The row names what kept changing, in brackets: the input or inputs whose
+lineage moved most often between those runs (`` `features` changed each run``),
+or "something outside its inputs" -- a file the statement reads, or the code
+of a function it calls -- when the key moved while every input stayed put.
 
 **Fix:** Look at the badges of the cells *above* the flagged statement, and
 find a row that shows `EXECUTED` when you expected `CACHED`. Its miss reason

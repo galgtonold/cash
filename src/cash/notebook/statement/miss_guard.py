@@ -143,6 +143,12 @@ class _Record:
     guarded: bool = False
     runs_since_probe: int = 0
     probe_now: bool = False
+    #: The statement's inputs and their lineages at the last lookup, and how
+    #: often each changed from one churning run to the next: what the badge
+    #: names as the cause (round 29, r29s1: "unstable key" said nothing more).
+    last_components: dict | None = None
+    changed: dict | None = None
+    churned_without_a_change: int = 0
 
 
 class MissGuard:
@@ -222,10 +228,13 @@ class MissGuard:
 
     # -- the state machine ----------------------------------------------
 
-    def observe(self, source_hash: str, cache_key: str, hit: bool) -> None:
+    def observe(self, source_hash: str, cache_key: str, hit: bool,
+                components: dict | None = None) -> None:
         """Record one lookup outcome for *source_hash*.
 
         Call once per run of a statement that actually performed a lookup.
+        *components*, the statement's inputs and their lineages, let `cause`
+        say which of them kept changing.
         """
         self._ensure_loaded()
         rec = self._records.get(source_hash)
@@ -233,8 +242,19 @@ class MissGuard:
             # First sighting: record the baseline key and nothing else. A cold
             # run MUST serialise — that is the entire product — so churn is only
             # ever counted against a key we have already seen.
-            self._records[source_hash] = _Record(last_key=cache_key)
+            self._records[source_hash] = _Record(last_key=cache_key, last_components=components)
             return
+        if not hit and cache_key != rec.last_key and components is not None                 and rec.last_components is not None:
+            moved = [name for name in set(components) | set(rec.last_components)
+                     if components.get(name) != rec.last_components.get(name)]
+            if moved:
+                rec.changed = rec.changed or {}
+                for name in moved:
+                    rec.changed[name] = rec.changed.get(name, 0) + 1
+            else:
+                rec.churned_without_a_change += 1
+        if components is not None:
+            rec.last_components = components
 
         rec.probe_now = False
 
@@ -285,6 +305,20 @@ class MissGuard:
         if rec is None or not rec.guarded:
             return True
         return rec.probe_now
+
+    def cause(self, source_hash: str) -> str | None:
+        """What kept changing the key, for the badge, or None if not known."""
+        rec = self._records.get(source_hash)
+        if rec is None:
+            return None
+        if rec.changed:
+            top = sorted(rec.changed.items(), key=lambda kv: (-kv[1], kv[0]))[:2]
+            names = " and ".join(f"`{name}`" for name, _n in top)
+            return f"{names} changed each run"
+        if rec.churned_without_a_change:
+            return ("something outside its inputs changed each run (a file it reads, "
+                    "or the code of a function it calls)")
+        return None
 
     def is_guarded(self, source_hash: str) -> bool:
         """True once the verdict has flipped, probe run or not."""

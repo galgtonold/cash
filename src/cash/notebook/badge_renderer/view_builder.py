@@ -723,6 +723,7 @@ def _statement_row_from_metric(m: dict[str, Any]) -> StatementRow:
         restored_vars=restored_vars,
         uncacheable_reasons=_tup_str(m.get("uncacheable_reasons")),
         skipped_reason=m.get("skipped_reason") or None,
+        guard_cause=m.get("guard_cause") or None,
         changed_functions=_tup_str(m.get("changed_functions")),
         changed_modules=changed_modules_tup,
         decorator_calls=dec_calls,
