@@ -632,8 +632,13 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 if not worth_its_bytes(weight, exec_time):
                     past_compute_floor = False
                     bytes_refused = True
-                    self._warn_not_worth_its_bytes(key, weight, exec_time,
-                                                   code=metadata.get('code'))
+                    # A `call:` entry is said by the statement holding its
+                    # result, which names the code the user wrote; said here
+                    # too, every refusal was printed twice, the second naming
+                    # an internal key (round 29, r29s1 and r29s3).
+                    if not str(key).startswith('call:'):
+                        self._warn_not_worth_its_bytes(key, weight, exec_time,
+                                                       code=metadata.get('code'))
                     self._drop_persisted_call_refs(metadata.get('call_refs'))
 
             stored, size_refused, refused_size, refusing_caps = (

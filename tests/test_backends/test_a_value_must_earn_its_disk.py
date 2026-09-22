@@ -126,6 +126,19 @@ class TestThroughABackend:
         assert "DISK" in (kept.get("storage") or []), kept
         assert "DISK" not in (refused.get("storage") or []), refused
 
+    def test_a_refused_call_entry_leaves_the_saying_to_its_statement(self, tmp_path):
+        """r29s1, r29s3: every refusal was printed twice, the second naming an
+        internal ``call:efa280...`` key -- the statement holding the call's
+        result says it, naming the code the user wrote."""
+        import warnings
+        b = self._tiered(tmp_path)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self._set(b, "call:efa280", 20 * MIB, 1.2,
+                      value_bytes=300 * MIB, value_bytes_estimated=True)
+        b.shutdown()
+        assert not [w for w in caught if "CACHE-NOT-WORTH-BYTES" in str(w.message)]
+
     def test_the_refusal_says_so(self, tmp_path):
         """Round 26's unanimous complaint was silence, not size."""
         b = self._tiered(tmp_path)
