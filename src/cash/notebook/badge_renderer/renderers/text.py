@@ -11,6 +11,7 @@ rows one step further in.
 from __future__ import annotations
 
 from .. import theme
+from .._headline import mixed_headline
 from .._reasons import guard_summary_line, is_guard_reason, shorten_skipped_reason, stale_export_text
 from ..view import (
     BadgeHeader,
@@ -53,7 +54,13 @@ def _header_line(h: BadgeHeader) -> str:
         return f"CACHED (saved {h.total_saved_s:.2f}s)"
     if h.computed_count == 0 and h.skipped_count > 0:
         return "SKIPPED (already computed)"
-    if h.total_saved_s > 0:
+    if h.restored_count and h.computed_count:
+        # Counts, and CACHED when restoring saved more than running cost: a
+        # sweep cell that restored 12 fits and ran `sweep_rows = []` read
+        # "EXECUTED · saved 257s" (round 29, r29s4).
+        label, counts = mixed_headline(h)
+        line = f"{label} ({counts}; {h.total_exec_s:.2f}s, saved {h.total_saved_s:.2f}s)"
+    elif h.total_saved_s > 0:
         line = (f"EXECUTED ({h.total_exec_s:.2f}s, saved {h.total_saved_s:.2f}s)"
                 if h.total_exec_s else f"EXECUTED (saved {h.total_saved_s:.2f}s)")
     else:

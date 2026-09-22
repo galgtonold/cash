@@ -38,6 +38,7 @@ _CONFIGURED_TIERS: ContextVar[tuple[str, ...]] = ContextVar(
 )
 
 from .. import theme
+from .._headline import mixed_headline
 from .._reasons import stale_export_text
 from ..view import (
     BadgeHeader,
@@ -2176,6 +2177,11 @@ def _summary_meta(header: BadgeHeader) -> tuple[str, str, str]:
             sub = "already computed"
         return "cached", label, sub
 
+    if header.restored_count and header.computed_count:
+        # See `_headline.mixed_headline` (round 29, r29s4).
+        label, counts = mixed_headline(header)
+        return ("cached" if label == "CACHED" else "exec", label,
+                f"{counts} · {header.total_exec_s:.2f}s · saved {header.total_saved_s:.2f}s")
     label = "EXECUTED"
     if header.total_saved_s > theme.MIN_TIME_DISPLAY_S:
         sub = f"{header.total_exec_s:.2f}s · saved {header.total_saved_s:.2f}s"

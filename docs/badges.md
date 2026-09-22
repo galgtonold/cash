@@ -55,8 +55,8 @@ One word per state, and the **same** word whether you are reading a single row o
 
 | Label | Rail color | When you see it |
 |---|---|---|
-| **CACHED** | green | The value came from the cache. On the cell header this means *every* statement was served — nothing ran. |
-| **EXECUTED** | ochre | It ran. On the cell header this means at least one statement ran. |
+| **CACHED** | green | The value came from the cache. On the cell header this means nothing ran — or, with counts beside it (`12 restored, 1 ran`), that restoring saved more time than running took. |
+| **EXECUTED** | ochre | It ran. On the cell header this means at least one statement ran and running took more time than restoring saved; when some were restored too, the counts say how many of each (`2 ran, 3 restored`). |
 | **NOT CACHED** | ochre | It ran and Cash did *not* store the result, so it will run again every time. The row names the reason; the cell header counts these in a `not cached` chip. |
 | **SKIPPED** | green | There was nothing to do: a redundant `import` whose names are already bound, or an upstream statement the simulation found already satisfied. Not a branch that didn't run — an untaken branch gets no row at all. |
 | **MIXED** | (loop aggregates only) | Some iterations came from cache, some ran. |
