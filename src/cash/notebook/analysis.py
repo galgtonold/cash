@@ -383,6 +383,36 @@ class _ForbiddenVisitor(ast.NodeVisitor):
             self.found_reasons.append(self.forbidden_objs[func_obj])
         self.generic_visit(node)
 
+    def visit_FunctionDef(self, node) -> None:  # noqa: N802
+        """A function's BODY runs when it is called, not where it is defined.
+
+        Round 30 (r30s1): every ``def`` whose body called ``time.time()`` got
+        a "NOT CACHED: def f(...) - time.time" row -- "a def is never
+        something I wanted cached; the row reads as if cash refuses to cache
+        my function". What does run here is the decorators, the default
+        arguments and the annotations, so those are still visited. A CLASS
+        body runs at definition time and is left alone.
+        """
+        for deco in node.decorator_list:
+            self.visit(deco)
+        args = node.args
+        for default in list(args.defaults) + [d for d in args.kw_defaults if d is not None]:
+            self.visit(default)
+        for arg in (list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs)
+                    + [a for a in (args.vararg, args.kwarg) if a is not None]):
+            if arg.annotation is not None:
+                self.visit(arg.annotation)
+        if node.returns is not None:
+            self.visit(node.returns)
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802
+        """Its body runs when it is called, like a function's."""
+        for default in list(node.args.defaults) + [d for d in node.args.kw_defaults
+                                                   if d is not None]:
+            self.visit(default)
+
     def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
         for alias in node.names:
             base_name = alias.name.split('.')[0]
