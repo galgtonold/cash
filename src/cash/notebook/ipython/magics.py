@@ -1608,7 +1608,15 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             status = m.get('status')
             if status == CacheStatus.COMPUTED:
                 stats['statements_computed'] += 1
-                exec_time = m.get('execution_time', 0.0)
+                # What the USER's code cost: the statement's wall time less
+                # cash's own time inside it -- recording file reads, keying and
+                # hashing the arguments of the calls it routes, storing them
+                # (``cash_tax``, the same measurement ``_statement_cost``
+                # uses). Counting that as the user's compute cancelled it out
+                # of the overhead below, so a paired run measured 370 s of
+                # slowdown where %cash_stats reported 210 s (round 30, r30s4;
+                # two other testers the same shape).
+                exec_time = max(0.0, m.get('execution_time', 0.0) - m.get('cash_tax', 0.0))
                 stats['total_compute_time'] += exec_time
                 cell_compute_time += exec_time
                 code = m.get('code')

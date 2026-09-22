@@ -2727,6 +2727,7 @@ class StatementProcessor:
         self._display_execution_output(captured, wall_time, silent, stream_output, metrics)
         metrics['execution_time'] = wall_time
         metrics['compute_cost'] = execution_time
+        metrics['cash_tax'] = self._cash_tax_seconds(marks)
 
         if not result.success:
             metrics['status'] = CacheStatus.ERROR
@@ -2788,6 +2789,7 @@ class StatementProcessor:
         self._display_execution_output(captured, wall_time, silent, stream_output, metrics)
         metrics['execution_time'] = wall_time
         metrics['compute_cost'] = execution_time
+        metrics['cash_tax'] = self._cash_tax_seconds(marks)
 
         if not result.success:
             metrics['status'] = CacheStatus.ERROR
@@ -2805,6 +2807,31 @@ class StatementProcessor:
         return (tracking_seconds(), unit, getattr(unit, 'overhead_s', 0.0),
                 getattr(unit, 'hits_saved_s', 0.0))
 
+    def _statement_tax(self, marks: tuple[float, Any, float, float]) -> tuple[float, float]:
+        """``(cash's own seconds inside this statement, what its cached calls saved)``.
+
+        The tax is time recording file reads, and keying, hashing and storing
+        the calls cash routed -- work the user's own kernel would not have
+        done. It is measured, not estimated: the file tracker and the call
+        unit both count their own seconds.
+
+        Used twice, and the two must not diverge: to price the statement for
+        storing (:meth:`_statement_cost`) and to report it as OVERHEAD rather
+        than as the user's compute. Counting it as compute cancelled it out of
+        `%cash_stats`, which reported 210 s of overhead for a run a pairing
+        measured 370 s slower (round 30, r30s4).
+        """
+        from cash.notebook.file_tracker import tracking_seconds
+        tracking0, unit0, overhead0, saved0 = marks
+        tracking = max(0.0, tracking_seconds() - tracking0)
+        unit = getattr(getattr(self, '_call_cache', None), '_call_unit', None)
+        overhead = saved = 0.0
+        if unit is not None:
+            base_overhead, base_saved = (overhead0, saved0) if unit is unit0 else (0.0, 0.0)
+            overhead = max(0.0, getattr(unit, 'overhead_s', 0.0) - base_overhead)
+            saved = max(0.0, getattr(unit, 'hits_saved_s', 0.0) - base_saved)
+        return tracking + overhead, saved
+
     def _statement_cost(self, wall_time: float, marks: tuple[float, Any, float, float]) -> float:
         """What the statement's own code cost, for storing and for crediting a hit.
 
@@ -2816,18 +2843,17 @@ class StatementProcessor:
         cache (r25s5). The badge's run time stays the wall time.
         """
         try:
-            from cash.notebook.file_tracker import tracking_seconds
-            tracking0, unit0, overhead0, saved0 = marks
-            tracking = max(0.0, tracking_seconds() - tracking0)
-            unit = getattr(getattr(self, '_call_cache', None), '_call_unit', None)
-            overhead = saved = 0.0
-            if unit is not None:
-                base_overhead, base_saved = (overhead0, saved0) if unit is unit0 else (0.0, 0.0)
-                overhead = max(0.0, getattr(unit, 'overhead_s', 0.0) - base_overhead)
-                saved = max(0.0, getattr(unit, 'hits_saved_s', 0.0) - base_saved)
-            return max(0.0, wall_time - tracking - overhead) + saved
+            tax, saved = self._statement_tax(marks)
+            return max(0.0, wall_time - tax) + saved
         except Exception:  # noqa: BLE001 - a cost estimate never breaks a statement
             return wall_time
+
+    def _cash_tax_seconds(self, marks: tuple[float, Any, float, float]) -> float:
+        """The tax alone, for the session's overhead accounting."""
+        try:
+            return self._statement_tax(marks)[0]
+        except Exception:  # noqa: BLE001 - never let accounting break a statement
+            return 0.0
 
     def _post_execute(
         self,
