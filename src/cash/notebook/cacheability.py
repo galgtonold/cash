@@ -3755,8 +3755,15 @@ def chain_is_pure(method: str, inner: frozenset[str]) -> bool:
     place almost always returns ``None`` and cannot be chained; asking that
     every inner method be listed made r23s2's ``vs_plan.sort_values(...).head()``
     an assumed mutation, and a restart rebuilt the frame from 1,312 files.
+
+    A known-pure method inside the chain counts too: it returns a new object,
+    and what follows acts on that. ``dwells[m].groupby('hour').size()`` was a
+    mutation of ``dwells`` because ``size`` is not listed (round 30, r30s1),
+    and a repair re-ran it and everything built from ``dwells``.
     """
-    return method in KNOWN_PURE_METHODS and not (inner & MUTATING_METHODS)
+    if inner & MUTATING_METHODS:
+        return False
+    return method in KNOWN_PURE_METHODS or bool(inner & KNOWN_PURE_METHODS)
 
 
 def _argument_root(node: ast.AST) -> str | None:

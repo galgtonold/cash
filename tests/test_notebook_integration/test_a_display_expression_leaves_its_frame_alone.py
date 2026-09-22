@@ -13,6 +13,11 @@ its last method unless something inside it is known to mutate:
 inner method to be listed made them mutations and a restart rebuilt the frame
 from 1,312 files), ``df.pop('b').round(2)`` still changes ``df``.
 
+Round 30 (r30s1): ``dwells[dwells.kind == 'bay'].groupby('hour').size()``
+was a mutation of ``dwells``, although ``size`` is called on the GroupBy that
+``groupby`` made. A chain that passes through a known-pure method acts on a
+new object from there on.
+
 Counted with ``os.write`` from inside the cached function.
 """
 from pathlib import Path
@@ -65,14 +70,37 @@ def test_editing_how_a_frame_is_shown_keeps_what_is_built_from_it(nb_runner, sho
     assert _runs(nb_runner) == 1, f"editing `{shown}` counted as a change to df; its total ran again"
 
 
+BIG = SETUP.replace("range(1000), 'b': [0.123] * 1000", "range(300_000), 'b': [0.123] * 300_000")
+
+
+@pytest.mark.parametrize("shown, edited", [
+    ("df[df.b > 0].groupby('b').size()", "df[df.b > 0].groupby('a').size()"),
+    ("df.groupby('b')['a'].cumcount()", "df.groupby('a')['a'].cumcount()"),
+])
+def test_a_method_on_a_grouping_leaves_the_frame_alone(nb_runner, shown, edited):
+    """Round 30 (r30s1): the last method is called on the GroupBy.
+
+    A frame over the 1 MiB up to which a call keys on its argument's value,
+    so a bump of ``df``'s lineage would show."""
+    nb_runner.create_notebook([ON, BIG, shown, TOTAL])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert _runs(nb_runner) == 1
+
+    nb_runner.set_cell_source(3, edited)
+    nb_runner.run_all()
+
+    assert "TOTAL" in nb_runner.get_output(4)
+    assert _runs(nb_runner) == 1, f"`{shown}` counted as a change to df; its total ran again"
+
+
 def test_a_chain_that_changes_the_frame_still_counts(nb_runner):
     """``pop`` removes the column whatever comes after it.
 
     The frame is over the 1 MiB up to which a call keys on the value of an
     argument passed by name: a small ``df`` holds the same values after the
     edit, and ``slow_total(df)`` is then rightly served."""
-    setup = SETUP.replace("range(1000), 'b': [0.123] * 1000", "range(300_000), 'b': [0.123] * 300_000")
-    nb_runner.create_notebook([ON, setup, "df.pop('b').round(2)", TOTAL,
+    nb_runner.create_notebook([ON, BIG, "df.pop('b').round(2)", TOTAL,
                                "print(list(df.columns))"])
     nb_runner.start_kernel()
     nb_runner.run_all()

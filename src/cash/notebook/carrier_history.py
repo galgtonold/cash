@@ -64,6 +64,12 @@ def _assigned_names(tree: ast.Module) -> set[str]:
     return names
 
 
+def _reads_any(tree: ast.Module, names: set[str]) -> bool:
+    """Does this statement READ one of *names*?"""
+    return any(isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+               and node.id in names for node in ast.walk(tree))
+
+
 def _counted(tree: ast.Module) -> bool:
     """Does the simulation give this statement a trace entry the way the runtime
     runs it? Bindings and calls do; ``del``, ``pass`` and a bare name shown at
@@ -99,6 +105,13 @@ def carrier_history_fingerprint(
     siblings = _assigned_names(parsed[start][2])
     digest = hashlib.sha256()
     for code, lineages, tree in parsed[start:]:
+        # What a draw on the figure hands back (``sc = ax.scatter(...)``, then
+        # ``fig.colorbar(sc)``) belongs to the figure like ``fig`` and ``ax``:
+        # the two sides give it different lineages, so counting it made every
+        # chart with a colorbar read as stale (round 30, r30s1 and r30s5). The
+        # data that statement read is counted there, where it is read.
+        if _reads_any(tree, siblings):
+            siblings |= _assigned_names(tree)
         # A loop is hashed as one statement: both the runtime and the
         # simulation log it whole (`StatementProcessor.begin_control_log`).
         # A branch or a `with` still cannot vouch.
