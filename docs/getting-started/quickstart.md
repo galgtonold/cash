@@ -234,9 +234,7 @@ editing the body invalidates the entry:
 ```python
 import cash
 
-c = cash.Cash(cache_dir='./my_cache')
-
-@c.cache
+@cash.cache
 def expensive_function(x, y):
     import time
     time.sleep(5)          # stand-in for real work
@@ -259,7 +257,7 @@ different objects:
 
 <!-- test:skip reason="illustrative — references undefined df/weights" -->
 ```python
-@c.cache
+@cash.cache
 def summarize(df, weights):        # a pandas DataFrame and a numpy array
     return (df * weights).sum()
 
@@ -278,15 +276,13 @@ Cash folds the source of the functions you *call* into the key, **transitively**
 ```python
 import cash
 
-c = cash.Cash()
-
 def clean(text):
     return text.strip().lower()
 
 def features(text):
     return len(set(clean(text).split()))
 
-@c.cache
+@cash.cache
 def pipeline(text):
     return features(text)
 
@@ -324,12 +320,12 @@ annotation required:
 
 <!-- test:skip reason="illustrative — references missing data.csv" -->
 ```python
-@c.cache
+@cash.cache
 def load():
     return pd.read_csv("data.csv")   # change data.csv on disk → recomputes
 ```
 
-For explicit control there's `@c.cache(file_depends_on="data.csv")` and `depends_on=`.
+For explicit control there's `@cash.cache(file_depends_on="data.csv")` and `depends_on=`.
 
 And the two paths meet: **call a `@cash.cache` function inside a notebook and its
 hits show up on that cell's badge** — the same engine, either way.
@@ -343,8 +339,9 @@ purity analyzer, and `explain()` — is in the [decorator guide](../decorator.md
 
 <!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @0f6959f6 -->
 `%cash_on` takes only an optional `ttl=N`; to pick a different backend or cache
-directory, construct a `Cash(backend=...)` instance before enabling the magic (in a
-notebook), or decorate with its `@c.cache` (in a script). Optional backends — SQLite,
+directory, call `cash.configure(...)` first — `cash.configure(cache_dir="./my_cache")`
+before `%cash_on` in a notebook, or before the first `@cash.cache` call in a script.
+Both paths share that one default instance. Optional backends — SQLite,
 Redis, S3 — install via extras (`pip install "cash-lib[redis]"`, `[s3]`, `[all]`) and
 work the same for either path. See [Configuration](configuration.md).
 
