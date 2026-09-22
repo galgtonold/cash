@@ -315,6 +315,9 @@ class CashAdminMagicsMixin:
             # them would credit a post-reset hit as "verified" against a compute
             # the reset claims to have forgotten.
             self._session.measured_decorator_compute.clear()
+            # On disk too: a reset that kept them would credit a later hit
+            # against a measurement it claims to have forgotten.
+            self._baselines().clear()
             print("[OK] Session statistics reset.")
             return
 
@@ -353,8 +356,13 @@ class CashAdminMagicsMixin:
         # an overstatement is the bug.
         gross_saved = stats['total_time_saved']
         verified_saved = stats.get('total_verified_saved', 0.0)
+        # Measured on this machine in an earlier kernel, at the least it ever
+        # cost. Evidence of the same kind as ``verified``, one run older --
+        # and the only kind a Restart & Run All can have, which is where the
+        # net used to print as a range straddling zero (round 30).
+        measured_saved = stats.get('total_measured_saved', 0.0)
         overhead = stats.get('total_overhead', 0.0)
-        net_saved = verified_saved - overhead
+        net_saved = verified_saved + measured_saved - overhead
         net_upper = gross_saved - overhead
 
         # NOTE: We deliberately don't walk the backend here (no
@@ -381,6 +389,7 @@ class CashAdminMagicsMixin:
                 'discarded_writes': len(discarded),
                 'net_time_saved': net_saved,
                 'net_time_saved_upper_bound': net_upper,
+                'total_measured_saved': measured_saved,
                 # False ⇒ the upper bound rests on baselines nobody re-measured,
                 # so its sign is not evidence of anything.
                 'net_sign_verified': net_saved >= 0 or net_upper < 0,
@@ -433,7 +442,10 @@ class CashAdminMagicsMixin:
         # tax is paid, counting only savings this session could verify. Show a
         # negative plainly rather than flooring it.
         if net_saved >= 0:
-            print(f"  Net time saved:      {_fmt_signed_time(net_saved)}  (verified)")
+            # "verified" = this kernel recomputed it; "measured" = an earlier
+            # run on this machine did, and the least it ever cost is credited.
+            basis = "verified" if measured_saved <= 0 else "measured"
+            print(f"  Net time saved:      {_fmt_signed_time(net_saved)}  ({basis})")
         elif net_upper < 0:
             # Even the most generous reading of the cache's own baselines is a
             # loss, so the sign is certain without verifying anything.

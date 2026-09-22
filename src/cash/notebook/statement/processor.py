@@ -451,59 +451,55 @@ def capture_output(stdout: bool = True, stderr: bool = True, display: bool = Tru
 from ...analytics import AnalyticsManager
 from ..analysis import CodeAnalyzer
 from ..annotations import CacheAnnotation
-from ..call_interception import HELPER_NAME, CallCache, wrap_eligible_calls
-from ..call_unit import call_site_is_cacheable
-from ..compiled_source import is_cash_filename, register_cell_source
-from ..function_tracker import FunctionTracker
-from ..write_observer import observe_writes
 from ..cacheability import (
-    bare_call_arguments,
     RECEIVER_READONLY_WRITE_METHODS,
     StatementAnalysis,
     analyze_statement,
-    fits_its_receiver,
-    is_pandas_plot_call,
-    top_level_call_argument_bases,
     assigned_method_call_receivers,
+    bare_call_arguments,
     called_function_global_mutations,
-    function_arg_mutations,
-    standalone_call_arg_targets,
     chain_is_pure,
-    standalone_method_call_inner_methods,
+    fits_its_receiver,
+    function_arg_mutations,
+    is_pandas_plot_call,
     module_setting_receivers,
+    standalone_call_arg_targets,
+    standalone_method_call_inner_methods,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
+    top_level_call_argument_bases,
 )
 from ..cacheability_decision import (
     decide_cacheability,
     identity_coupled_reason,
     receiver_is_identity_coupled,
 )
+from ..call_interception import HELPER_NAME, CallCache, wrap_eligible_calls
+from ..call_unit import call_site_is_cacheable
+from ..compiled_source import is_cash_filename, register_cell_source
+from ..function_tracker import FunctionTracker
 from ..purity import analyze_function_purity
 from ..randomness import (
-    publish_seed_epochs,
-    observed_rng_reads,
-    entropy_write_lineage,
-    get_entropy_reseed_modules,
-    rng_virtual_var,
     RandomnessDetector,
     capture_object_rng_states,
     capture_rng_state,
+    check_and_warn_randomness,
+    entropy_write_lineage,
     get_drawing_rng_modules,
+    get_entropy_reseed_modules,
     get_seeding_rng_modules,
-    rng_modules_changed,
     hidden_lineage_reads,
     hidden_lineage_writes,
     hidden_write_lineage,
-    check_and_warn_randomness,
+    observed_rng_reads,
+    publish_seed_epochs,
+    rng_modules_changed,
+    rng_virtual_var,
     warn_stale_estimator_fit,
     warn_stale_randomness,
     warn_unseeded_estimator_fit,
 )
-
-
-
-
+from ..write_observer import observe_writes
 
 
 def _version_slot(source_hash: str, outputs: set[str]) -> str:
@@ -3249,6 +3245,7 @@ class StatementProcessor:
         """
         try:
             from cash.notebook.cacheability import statement_written_paths
+
             from ..cache_key import called_function_globals
 
             raw_paths = statement_written_paths(code, tree, self.shell.user_ns) or set()

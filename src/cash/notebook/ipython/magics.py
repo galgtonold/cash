@@ -25,6 +25,7 @@ from .. import badge_renderer as _badge
 from .._protocols import ShellProtocol
 from ..audit import AuditLogger
 from ..cache_status import CacheStatus
+from .. import compute_baselines
 from .cell_executor import (
     CellExecutor,
     _EarlyReturn,
@@ -106,6 +107,13 @@ def new_session_stats() -> dict[str, Any]:
             # RESTORED here, so the recompute cost is known under today's
             # conditions rather than assumed from the cache.
             'total_verified_saved': 0.0,
+            # The subset whose baseline was measured on this machine in an
+            # EARLIER kernel (``compute_baselines``, the least cost ever
+            # measured). A Restart & Run All recomputes nothing, so without
+            # this the headline net after a restart was "at least -overhead,
+            # at best <gross>" -- a range straddling zero in the one reading
+            # every tester takes (round 30, r30s3 and r30s5).
+            'total_measured_saved': 0.0,
             # Cash's OWN added wall-time this session (restore + simulation +
             # hashing + badge machinery), accumulated per cell. Subtracted from
             # the gross ``total_time_saved`` to report an honest NET saving so a
@@ -133,7 +141,7 @@ class CashSession:
     """
 
     __slots__ = ('stats', 'provenance', 'audit', 'measured_compute',
-                 'measured_decorator_compute')
+                 'measured_decorator_compute', 'baselines')
 
     def __init__(self) -> None:
         self.stats: dict[str, Any] = new_session_stats()
@@ -146,6 +154,11 @@ class CashSession:
         # The @cash.cache sibling of measured_compute: it lets a later decorator
         # HIT be credited as VERIFIED under the same rule.
         self.measured_decorator_compute: dict[str, float] = {}
+        # The same two measurements, kept on disk beside the cache so the next
+        # kernel can still point at one. Bound to a real directory on first
+        # use (``CashMagics._baselines``), not here: the backend is not
+        # settled while the magics are being constructed.
+        self.baselines: Any = compute_baselines.get_store(None)
 
 
 _OP_MAP = {
@@ -1567,6 +1580,24 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             'status': overall_status,
         }
 
+    def _baselines(self):
+        """Measurements from earlier kernels against this cache directory.
+
+        Resolved on use, not in ``__init__``: a notebook's backend is not
+        settled when the magics are constructed (``%cash_on`` may still
+        replace it), and a store bound to "nowhere to persist" then would
+        stay that way for the session -- silently reporting no measured
+        saving, which is the bug this store exists to fix.
+        """
+        store = self._session.baselines
+        if getattr(store, '_path', None) is None:
+            resolved = compute_baselines.store_for_backend(
+                getattr(self._cash_instance, 'backend', None))
+            if resolved is not None and getattr(resolved, '_path', None) is not None:
+                self._session.baselines = resolved
+                return resolved
+        return store
+
     def _update_session_stats(self, all_metrics: list[ProcessResult], cell_total_time: float = 0.0) -> None:
         """Increment session-wide caching statistics from *all_metrics*.
 
@@ -1595,6 +1626,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """
         stats = self._session.stats
         measured = self._session.measured_compute
+        baselines = self._baselines()
         stats['cells_executed'] += 1
         cell_compute_time = 0.0
         # Cash's own "too cheap to cache" floor, so the cacheable/trivial split
@@ -1622,6 +1654,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 code = m.get('code')
                 if code:
                     measured[code] = exec_time
+                    # Kept on disk too, so tomorrow's kernel can still point at
+                    # a measurement of what this costs.
+                    baselines.record(code, exec_time)
                 # Measured today: a real miss on a statement worth caching.
                 if exec_time >= floor:
                     stats['statements_cacheable_miss'] += 1
@@ -1644,6 +1679,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 today = measured.get(m.get('code'))
                 if today is not None:
                     stats['total_verified_saved'] += min(saved, today)
+                else:
+                    # Nothing recomputed it here -- the usual case right after
+                    # a restart. An earlier run on this machine measured it,
+                    # and the least it ever cost is what it is credited.
+                    before = baselines.get(m.get('code') or '')
+                    if before is not None:
+                        stats['total_measured_saved'] += min(saved, before)
             elif status == CacheStatus.SKIPPED:
                 stats['statements_skipped'] += 1
             # A ``@cash.cache`` HIT inside this statement saved real compute that
@@ -1659,6 +1701,10 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # Floor at 0: the wall time always covers the compute it contains, but
         # clamp defensively against clock skew / partial timing.
         stats['total_overhead'] += max(0.0, cell_total_time - cell_compute_time)
+        # One small write per cell that measured something new, and none at
+        # all for a cell that restored everything. A Restart & Run All kills
+        # the kernel, so nothing may be left for an exit hook to write.
+        baselines.flush()
 
     def _credit_decorator_calls(
         self, decorator_calls: 'list[dict[str, Any]] | None',
@@ -1684,6 +1730,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         if not decorator_calls:
             return
         measured = self._session.measured_decorator_compute
+        baselines = self._baselines()
         for call in decorator_calls:
             if call.get('ran_plain'):
                 continue        # run without the cache: neither a hit nor a measured miss
@@ -1696,10 +1743,15 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 today = measured.get(key)
                 if today is not None:
                     stats['total_verified_saved'] += min(saved, today)
+                else:
+                    before = baselines.get(f'call:{key}') if key is not None else None
+                    if before is not None:
+                        stats['total_measured_saved'] += min(saved, before)
             else:
                 # A miss's execution_time IS the measured compute for this key.
                 if key is not None:
                     measured[key] = call.get('execution_time', 0.0) or 0.0
+                    baselines.record(f'call:{key}', call.get('execution_time', 0.0) or 0.0)
                 if (call.get('execution_time', 0.0) or 0.0) >= floor:
                     stats['statements_cacheable_miss'] += 1
 

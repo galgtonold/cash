@@ -432,6 +432,7 @@ _CASH_FILE_SUFFIXES: tuple[str, ...] = (
 _CASH_FILE_NAMES: frozenset[str] = frozenset({
     "CACHE_VERSION",        # the on-disk format stamp
     "_loop_split.json",     # the notebook loop-split store
+    "_compute_baselines.json",   # measured compute costs, for %cash_stats
 })
 
 
