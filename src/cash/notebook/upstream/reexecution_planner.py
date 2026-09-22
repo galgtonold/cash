@@ -693,6 +693,13 @@ class ReexecutionPlanner:
         and the report raised ``UpstreamStateError: 'logreg'`` with the dict
         left empty (round 25, r25s1). The backward completion cannot see it:
         it asks for the producer BEFORE a reader, and the init is one.
+
+        Only a statement that READS the variable as it writes it continues
+        what the earlier one built. One that only binds the name starts over
+        and owes it nothing: a re-run ``for r in sorted(obs.run.unique())``
+        pulled in a chart loop with a ``for r`` of its own, whose ``ax`` pulled
+        in the UMAP loop ``for ax, col in zip(axes, ...)`` -- which then drew the
+        new labels over an embedding nothing had rebuilt (round 29, r29s4).
         """
         scheduled = set(stmts_to_run_indices)
         pending = sorted(scheduled)
@@ -700,7 +707,8 @@ class ReexecutionPlanner:
             i = pending.pop(0)
             for v in simulation_trace[i][1]:
                 for p in range(i + 1, len(simulation_trace)):
-                    if p in scheduled or v not in simulation_trace[p][1]:
+                    if (p in scheduled or v not in simulation_trace[p][1]
+                            or v not in simulation_trace[p][2]):
                         continue
                     scheduled.add(p)
                     pending.append(p)
