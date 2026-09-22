@@ -3726,6 +3726,20 @@ _IMMUTABLE_ARGUMENT_TYPES = (int, float, complex, str, bytes, bool, type(None),
                              frozenset, tuple, range)
 
 
+def bare_call_argument_names(tree: ast.Module | None) -> frozenset[str]:
+    """Every plain name a bare expression statement hands straight to its call,
+    live or not: `bare_call_arguments` without the namespace filter."""
+    if tree is None:
+        return frozenset()
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            call = node.value
+            names.update(arg.id for arg in [*call.args, *(kw.value for kw in call.keywords)]
+                         if isinstance(arg, ast.Name))
+    return frozenset(names)
+
+
 def bare_call_arguments(tree: ast.Module | None, user_ns: dict) -> frozenset[str]:
     """Names a bare expression statement hands straight to its call, which the
     call could change in place: ``im.add_qc(df)``, ``sc.tl.leiden(hv)``.

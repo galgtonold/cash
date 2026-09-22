@@ -33,6 +33,7 @@ from ..cacheability import (
     fits_its_receiver,
     is_pandas_plot_call,
     top_level_call_argument_bases,
+    bare_call_argument_names,
     bare_call_arguments,
     function_arg_mutations,
     standalone_call_arg_targets,
@@ -451,7 +452,14 @@ class VirtualLineage:
         # does -- treating every `print(df)` as a change would bump `df` for
         # every reader.
         arg_candidates = bare_call_arguments(tree, self.shell.user_ns) - drawn_args
-        if not candidates and not assigned and not drawn_args and not arg_candidates:
+        # ...and one not live yet: after a restart nothing is, and the recorded
+        # verdict is all there is to go on. Filtering on the namespace dropped
+        # it, so `sc.pp.calculate_qc_metrics(adata, inplace=True)` was never
+        # replayed before its readers -- a KeyError, and with
+        # `heapq.heapify(xs)` a silently wrong `xs[0]` (round 30, r30s4).
+        absent_args = {n for n in bare_call_argument_names(tree)
+                       if n not in self.shell.user_ns} - drawn_args
+        if not candidates and not assigned and not drawn_args and not arg_candidates                 and not absent_args:
             return fam
         tier1 = standalone_method_mutation_receivers(tree)
         inner = standalone_method_call_inner_methods(tree)
@@ -462,7 +470,7 @@ class VirtualLineage:
         if verdict is None:
             verdict = self._persisted_mutation_verdict(source_hash)
         if verdict:
-            receivers |= {name for name in arg_candidates if name in verdict}
+            receivers |= {name for name in arg_candidates | absent_args if name in verdict}
         for base, method in candidates:
             receiver = self.shell.user_ns.get(base)
             if is_module(base):
