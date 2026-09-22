@@ -59,7 +59,11 @@ MAIN = textwrap.dedent('''
 def _run(tmp_path, factor=10, rate=0):
     (tmp_path / "models.py").write_text(MODELS.replace("{FACTOR}", str(factor)).replace("{RATE}", str(rate)))
     (tmp_path / "main.py").write_text(MAIN)
-    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="always")
+    # No .pyc: Python validates one by whole-second mtime and size, so the
+    # RATE 0 -> 1 edit (same size) landing in the second run's second loaded
+    # the old bytecode, and printed 400 with or without cash.
+    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="always",
+               PYTHONDONTWRITEBYTECODE="1")
     proc = subprocess.run([sys.executable, "main.py"], cwd=tmp_path, env=env,
                           capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, proc.stderr
