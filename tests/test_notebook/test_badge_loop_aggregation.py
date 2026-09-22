@@ -80,3 +80,24 @@ def test_collect_iterations_already_descends_into_nested() -> None:
     outer = _outer_with_nested()
     iters = _collect_iterations((outer,))
     assert len(iters) == 2
+
+
+def test_the_loop_tip_counts_trips_not_statement_runs() -> None:
+    """Round 29, r29s4: ``for mg in [200, 400, 600]:`` with three body
+    statements read "Iterations 9" -- the statement-iterations summed. The
+    loop ran three times."""
+    from cash.notebook.badge_renderer.renderers.html import _for_loop_group_html
+
+    def stmt(code, statuses):
+        return LoopStatement(base_code=code, iterations=tuple(
+            IterationRow(status=s, code=code, time_s=0.01, saved_time_s=0.1) for s in statuses))
+    R, C = BadgeStatus.RESTORED, BadgeStatus.COMPUTED
+    loop = ForLoopGroup(
+        loop_var_names=("mg",),
+        stmts=(stmt("sel = pick(mg)", (R, R, C)), stmt("n = count(sel)", (R, C, C)),
+               stmt("rows.append(n)", (R, R, C))),
+        loop_header="for mg in [200, 400, 600]:",
+    )
+    html = _for_loop_group_html(loop, 1.0)
+    assert "<dt>Iterations</dt><dd>3</dd>" in html, html[:400]
+    assert "<dt>Iterations</dt><dd>9</dd>" not in html

@@ -1526,6 +1526,7 @@ def _loop_tip_html(
     total_time: float,
     total_saved: float,
     kind: str,
+    trips: int | None = None,
 ) -> str:
     """Hover tooltip for an aggregate loop row (head or body line)."""
     status_label = (
@@ -1543,8 +1544,15 @@ def _loop_tip_html(
         time_html += f' <span class="c3-rt-saved">· saved {total_saved:.2f}s</span>'
     code_block = f'<pre class="c3-rt-code">{highlight_python(title_code)}</pre>'
     counts = []
-    if total > 0:
-        counts.append(f"<dt>Iterations</dt><dd>{total}</dd>")
+    # The loop's trip count, not its statement-iterations summed: a 3-trip
+    # loop with three body statements read "Iterations 9" (round 29, r29s4).
+    # Cached/Computed count statement runs, so they are labelled as such
+    # whenever that total differs from the trips.
+    trips = total if trips is None else trips
+    if trips > 0:
+        counts.append(f"<dt>Iterations</dt><dd>{trips}</dd>")
+    if total != trips and total > 0:
+        counts.append(f"<dt>Statement runs</dt><dd>{total}</dd>")
     if cached:
         counts.append(f"<dt>Cached</dt><dd>{cached}</dd>")
     if computed:
@@ -1691,6 +1699,7 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float) -> str:
         title_code=loop_header,
         total=total, cached=cached, computed=(total - cached),
         total_time=head_total_time, total_saved=head_total_saved, kind=head_kind,
+        trips=iters_per_stmt,
     )
     head_rid = _uid("rx")
     if getattr(g, "suppress_head", False):
