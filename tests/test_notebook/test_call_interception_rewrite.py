@@ -181,7 +181,7 @@ def test_a_call_inside_an_uninterceptable_call_is_found():
         return k
 
     _, without_ns = wrap_eligible_calls(tree)
-    assert [s.source for s in without_ns] == ["dict(k=k, err=score(df, k))"]
+    assert [s.source for s in without_ns] == ["dict(k=k, err=score(df, k))", "score(df, k)"]
     _, with_ns = wrap_eligible_calls(tree, namespace={"score": score})
     assert [s.source for s in with_ns] == ["score(df, k)"]
 
@@ -192,7 +192,7 @@ def test_a_call_the_gate_rejects_is_searched_inside():
     assert [s.source for s in sites] == ["compute(x)"]
 
 
-def test_a_plain_function_is_still_the_outermost_call():
+def test_a_plain_function_is_the_outermost_call_and_the_inner_one_follows():
     tree = ast.parse("out.append(outer(inner(x)))")
 
     def outer(v):
@@ -202,7 +202,7 @@ def test_a_plain_function_is_still_the_outermost_call():
         return v
 
     _, sites = wrap_eligible_calls(tree, namespace={"outer": outer, "inner": inner})
-    assert [s.source for s in sites] == ["outer(inner(x))"]
+    assert [s.source for s in sites] == ["outer(inner(x))", "inner(x)"]
 
 
 def test_names_outside_any_comprehension_are_unchanged():

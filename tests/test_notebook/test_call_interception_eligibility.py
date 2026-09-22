@@ -52,14 +52,18 @@ class TestEligibility(unittest.TestCase):
         """
         self.assertEqual(_calls("y = compute(x)"), ["compute(x)"])
 
-    def test_only_the_outermost_eligible_call_is_returned(self):
-        """Nested eligible calls must not both be intercepted.
+    def test_a_nested_call_is_returned_after_the_outer_one(self):
+        """An argument runs whether the outer call hits or not.
 
-        Intercepting `f(...)` already covers `g(x)` inside it; returning both
-        would mint two keys for one piece of work and cache the inner result
-        redundantly.
+        Wrapping a call replaces its callee expression only, so ``g(x)``
+        executes either way: taking it as well is the only way its work is
+        ever reused (round 30, r30s3 -- nine fits nested in another call
+        re-ran every time). The outer call comes first.
         """
-        self.assertEqual(_calls("out.append(f(g(x)))"), ["f(g(x))"])
+        self.assertEqual(_calls("out.append(f(g(x)))"), ["f(g(x))", "g(x)"])
+
+    def test_a_nested_call_reading_the_target_is_still_excluded(self):
+        self.assertEqual(_calls("out.append(f(g(out)))"), [])
 
     def test_multiple_independent_calls_are_all_returned(self):
         """Siblings are separate work and each deserves its own entry."""

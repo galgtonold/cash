@@ -671,10 +671,10 @@ _SIMPLE_STATEMENTS = (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Expr)
 def eligible_call_nodes(stmt: ast.stmt) -> list[ast.Call]:
     """Return the calls in *stmt* that may be cached independently of it.
 
-    Outermost-first, in source order, and never nested: once a call is
-    accepted its subtree is not searched, because intercepting the outer call
-    already covers everything inside it. Returning both would mint two cache
-    entries for one piece of work.
+    Outermost-first, in source order. Once a call is accepted its CALLEE
+    expression is not searched again -- that is the site's own. Its arguments
+    are, because they run whether the outer call hits or not, so an expensive
+    call nested there is work no outer entry ever saves (round 30, r30s3).
 
     **Only simple statements are searched, and that is a safety rule rather
     than a simplification.** (A loop run as one unit is searched per body
@@ -856,7 +856,14 @@ def _collect(node: ast.AST, targets: set[str], found: list, local: frozenset[str
             and not (_names_read(node.func) & local)
             and not (skip is not None and skip(node, local))):
         found.append((node, local))
-        return  # accepted -- do not search inside it
+        # Accepted -- its callee expression is now this site's, so nothing
+        # there may be taken again. Its ARGUMENTS are a different matter:
+        # wrapping a call replaces the callee only, so an argument runs
+        # whether the outer call hits or not, and an expensive one nested
+        # there was never reused (round 30, r30s3: nine fits re-ran, 19 s).
+        for child in node.args + [kw.value for kw in node.keywords]:
+            _collect(child, targets, found, local, skip)
+        return
     for child in ast.iter_child_nodes(node):
         _collect(child, targets, found, local, skip)
 
