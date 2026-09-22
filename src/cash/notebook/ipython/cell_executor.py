@@ -1112,11 +1112,16 @@ class CellExecutor:
         """
         # Each file is hashed at most once per cell run (file_dep_snapshot).
         begin_file_state_epoch()
+        backend = self._cell_warning_backend()      # as execute_cell
+        if backend is not None:
+            backend.begin_cell_warnings()
         try:
             with _builtin_trap(self.shell):
                 return await self._execute_cell_pipeline_async(raw_cell, args, kwargs, original_run_cell)
         finally:
             end_file_state_epoch()
+            if backend is not None:
+                backend.end_cell_warnings()
 
     async def _execute_cell_pipeline_async(
         self,
@@ -2163,10 +2168,14 @@ class CellExecutor:
                             # through the PyCF_ALLOW_TOP_LEVEL_AWAIT-capable path.
                             if self._debug:
                                 print("[CONTROL] Await inside control body, running as awaited single unit")
-                            ctrl_result = await self._control_structure_processor.process_await_unit(
-                                node, ttl=self._magics._global_ttl, silent=True,
-                                raw_cell=raw_cell,
-                            )
+                            control_log = self._statement_processor.begin_control_log(stmt_code)
+                            try:
+                                ctrl_result = await self._control_structure_processor.process_await_unit(
+                                    node, ttl=self._magics._global_ttl, silent=True,
+                                    raw_cell=raw_cell,
+                                )
+                            finally:
+                                self._statement_processor.end_control_log(control_log)
                         else:
                             if self._debug:
                                 print("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
@@ -2178,11 +2187,15 @@ class CellExecutor:
                             # merge, which cannot tell a directive on the loop from one on
                             # a single body statement — passing it would disable caching
                             # for every sibling in the body.
-                            ctrl_result = self._control_structure_processor.process(
-                                node, ttl=self._magics._global_ttl, silent=True,
-                                raw_cell=raw_cell,
-                                prev_node=tree.body[i - 1] if i > 0 else None,
-                            )
+                            control_log = self._statement_processor.begin_control_log(stmt_code)
+                            try:
+                                ctrl_result = self._control_structure_processor.process(
+                                    node, ttl=self._magics._global_ttl, silent=True,
+                                    raw_cell=raw_cell,
+                                    prev_node=tree.body[i - 1] if i > 0 else None,
+                                )
+                            finally:
+                                self._statement_processor.end_control_log(control_log)
                         buffered_result_outputs = self._collect_ctrl_outputs(
                             ctrl_result, is_last, all_metrics, buffered_result_outputs,
                         )
