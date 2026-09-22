@@ -248,6 +248,28 @@ class TestModuleReadLineage:
         dep.write_text("VALUE = 2\n", encoding="utf-8")
         assert module_read_lineage(tracker, "lib", module, "x = lib.load(3)") != before
 
+    def test_an_edit_inside_one_timestamp_tick_is_still_seen(self, tmp_path):
+        """Same size, same mtime, new code: what a Windows timer tick allows.
+
+        The closure and the analysis under it are memoised on the file's
+        stat, and a same-size rewrite within one tick keeps it -- the two
+        tests above failed intermittently on Windows CI that way. Forced here
+        by putting the mtime back.
+        """
+        import os
+
+        from cash.notebook.lineage_formula import module_read_lineage
+
+        path, module, tracker = self._setup(tmp_path)
+        st = os.stat(path)
+        before = module_read_lineage(tracker, "lib", module, "x = lib.load(3)")
+        path.write_text(textwrap.dedent(BASE).replace("return n + 1", "return n + 2"),
+                        encoding="utf-8")
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+        assert os.stat(path).st_size == st.st_size
+
+        assert module_read_lineage(tracker, "lib", module, "x = lib.load(3)") != before
+
 
 class TestNondeterministicImportTimeCode:
     """A hole narrowing would open, closed.

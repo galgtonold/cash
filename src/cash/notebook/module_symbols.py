@@ -47,7 +47,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from ..source_norm import unparse_without_docstrings
+from ..source_norm import stat_has_settled, unparse_without_docstrings
 
 __all__ = ["closure_digest", "static_attribute_reads"]
 
@@ -251,12 +251,14 @@ def _analysis_for(path: str) -> _Analysis | None:
     cached = _ANALYSES.get(path)
     if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
         return cached[2]
+    settled = stat_has_settled(st)
     try:
         with open(path, encoding='utf-8') as fh:
             analysis = _analyse(fh.read())
     except (OSError, UnicodeDecodeError):
         analysis = None
-    _ANALYSES[path] = (st.st_mtime_ns, st.st_size, analysis)
+    if settled:
+        _ANALYSES[path] = (st.st_mtime_ns, st.st_size, analysis)
     return analysis
 
 
@@ -287,8 +289,11 @@ def closure_digest(path: str, names: Iterable[str]) -> str | None:
     cached = _DIGESTS.get(key)
     if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
         return cached[2]
+    settled = stat_has_settled(st)
     analysis = _analysis_for(path)
     digest = _digest(analysis, key[1]) if analysis is not None else None
+    if not settled:
+        return digest
     if len(_DIGESTS) >= _MAX_DIGESTS:
         _DIGESTS.clear()
     _DIGESTS[key] = (st.st_mtime_ns, st.st_size, digest)

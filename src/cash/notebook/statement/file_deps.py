@@ -29,7 +29,7 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
-from ...source_norm import drop_docstrings
+from ...source_norm import drop_docstrings, stat_has_settled
 from ...utils import normalize_path
 from ..file_dep_snapshot import realpath_of_read_this_run
 from ..server_discovery import get_notebook_path
@@ -214,6 +214,7 @@ def _identity_digest(path: str) -> str | None:
     cached = _IDENTITY_CACHE.get(path)
     if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
         return cached[2]
+    settled = stat_has_settled(st)
     try:
         with open(path, 'rb') as fh:
             raw = fh.read()
@@ -221,9 +222,11 @@ def _identity_digest(path: str) -> str | None:
         return None
     # Keyed on the same signal `FunctionTracker.check_tracked_modules` uses to
     # notice a module changed at all, so a change this memo would miss is one
-    # cash would not have reloaded for either.
+    # cash would not have reloaded for either -- once the file has settled,
+    # since a same-size save inside one mtime tick keeps that stat too.
     digest = hashlib.sha256(_module_identity(raw)).hexdigest()
-    _IDENTITY_CACHE[path] = (st.st_mtime_ns, st.st_size, digest)
+    if settled:
+        _IDENTITY_CACHE[path] = (st.st_mtime_ns, st.st_size, digest)
     return digest
 
 

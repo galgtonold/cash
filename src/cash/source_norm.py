@@ -48,6 +48,7 @@ __all__ = [
     "drop_docstrings",
     "normalize_source_for_hash",
     "source_identity_digest",
+    "stat_has_settled",
     "strip_cache_decorator",
     "strip_docstrings",
     "unparse_without_docstrings",
@@ -597,6 +598,32 @@ _MODULE_CODE_CACHE: dict[str, tuple[int, int, types.CodeType | None]] = {}
 _MODULE_CODE_CACHE_MAX = 256
 _PROCESS_START: float | None = None
 
+#: How long a file must have been left alone before something read from it is
+#: memoised on its ``(mtime, size)``. See `stat_has_settled`.
+_SETTLED_SECONDS = 2.0
+
+
+def stat_has_settled(st: object) -> bool:
+    """True when the file *st* describes may be memoised on its stat.
+
+    A memo keyed on ``(mtime, size)`` cannot see an edit that keeps both, and
+    a same-size edit moments after the last one can: the mtime moves in
+    ticks -- ~15.6 ms on Windows, whole seconds on HFS+ and ext3, two on FAT
+    -- so two saves inside one tick share it. The module digests served the
+    first save's code for the second that way, and five tests that rewrite a
+    file straight after reading it failed intermittently on Windows CI.
+
+    Git's "racy git" rule, applied when the entry is made: a file whose mtime
+    is within a tick of now may still be written again without the stat
+    moving, so it is read every time; one untouched for longer than the
+    coarsest tick cannot be, so what was read from it holds until the stat
+    moves. Ask BEFORE reading the file, so an edit the read missed cannot be
+    one that kept the stat. Costs a re-read for a couple of seconds after
+    each save. (``file_dep_snapshot`` holds its input digests to the same
+    rule, over a longer window.)
+    """
+    return _time.time() - st.st_mtime > _SETTLED_SECONDS
+
 
 def _process_start_time() -> float:
     """Wall-clock time this process started, best effort, cached."""
@@ -657,6 +684,7 @@ def _compiled_module(path: str) -> types.CodeType | None:
     cached = _MODULE_CODE_CACHE.get(path)
     if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
         return cached[2]
+    settled = stat_has_settled(st)
     try:
         # FileIO, not `open`: this read is cash checking the code it runs, and
         # through `open` a cached call it runs inside recorded it as an input.
@@ -665,6 +693,8 @@ def _compiled_module(path: str) -> types.CodeType | None:
         code: types.CodeType | None = compile(source, path, "exec", dont_inherit=True)
     except (OSError, SyntaxError, ValueError):
         code = None
+    if not settled:
+        return code
     if len(_MODULE_CODE_CACHE) >= _MODULE_CODE_CACHE_MAX:
         _MODULE_CODE_CACHE.clear()
     _MODULE_CODE_CACHE[path] = (st.st_mtime_ns, st.st_size, code)
