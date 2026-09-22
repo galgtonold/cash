@@ -1380,15 +1380,38 @@ class FileBackend(CacheBackend):
             self._clock_loaded = True
 
     def _record_rank(self, key: str, path: str, metadata: dict, size: int) -> None:
-        """A write: store its priority, and make it a candidate at once."""
+        """A write: store its priority, and make it a candidate at once.
+
+        It is ranked at the recency `_rebuild_evict_queue` would give it --
+        its own mtime, or its ``last_access`` if newer -- not at ``time.time()``.
+        `_touched_since` compares a candidate's mtime against that stamp, and
+        mtime is the FILESYSTEM's clock: on Windows before Python 3.13
+        ``time.time()`` steps every 15.6 ms and the file's stamp is not on that
+        grid, so the write's own mtime read as newer than the moment it was
+        ranked. Every fresh entry looked read-since, was dropped as a
+        candidate, and eviction was left with only the newest few -- ordinary
+        LRU turnover reported as CACHE-THRASH.
+        """
         self._ensure_clock()
+        # Only once a ranking exists: before that there is no heap to join,
+        # and a ranking taken after this point walked the directory after
+        # this write landed, so it already holds the entry.
+        ranked_at = None
+        if self._ranked:
+            try:
+                ranked_at = os.path.getmtime(path)
+            except OSError:
+                ranked_at = time.time()
+            last_access = metadata.get('last_access')
+            if last_access is not None and last_access > ranked_at:
+                ranked_at = last_access
         with self._lock:
             clock = self._gdsf_clock
             self._gdsf_base[key] = clock
             priority = self._priority(metadata, size, clock)
-            if self._ranked:
+            if self._ranked and ranked_at is not None:
                 heapq.heappush(self._evict_fresh, (
-                    priority, self._write_seq_by_key.get(key, 0), path, size, time.time(),
+                    priority, self._write_seq_by_key.get(key, 0), path, size, ranked_at,
                 ))
         self._rank_index.append([(self._stem(path), priority)])
 

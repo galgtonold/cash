@@ -796,6 +796,41 @@ def test_a_healthy_small_entry_cache_never_warns_at_all(tmp_path):
     b.shutdown()
 
 
+def test_a_coarse_process_clock_does_not_make_fresh_writes_look_read(tmp_path, monkeypatch):
+    """The same healthy cache, with ``time.time()`` stepping like Windows'.
+
+    Before Python 3.13, ``time.time()`` on Windows advances every 15.6 ms,
+    and a file's mtime is not on that grid. A fresh write was queued at
+    ``time.time()``, so its own mtime read as NEWER than the moment it was
+    ranked, `_touched_since` took that for a read, and the entry was dropped
+    as a candidate. With every recent write dropped, eviction reached the
+    newest few and CACHE-THRASH fired -- only on Windows runners, and only
+    on 3.10-3.12.
+
+    The step is forced here so this fails on any platform: what is under
+    test is that a write's own mtime is not a read, not the host's clock.
+    """
+    import warnings
+
+    tick = 0.015625
+    real_time = time.time
+    monkeypatch.setattr(time, "time", lambda: real_time() // tick * tick)
+
+    cache = tmp_path / "c"
+    b = FileBackend(str(cache), max_size_bytes=60 * 1024, flush_interval=0)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for i in range(600):
+            b.set(f"k{i}", b"x" * 4096, {"size": 4096})
+        b._writes.wait_all()
+
+    assert not [w for w in caught if "evicting entries" in str(w.message)], (
+        "a coarse time.time() made fresh writes look read-since-ranked, so "
+        "eviction was left with only the newest entries"
+    )
+    b.shutdown()
+
+
 def test_eviction_breaks_mtime_ties_by_write_order(tmp_path):
     """A burst that lands inside one filesystem timestamp tick is still LRU.
 
