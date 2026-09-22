@@ -7,6 +7,160 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-22
+
+Eight rounds of user testing on the notebook path — five projects each, run by
+testers who had not seen the code — plus several sweeps spent deliberately
+attacking the decorator. They found wrong answers, stale charts, repairs that
+gave up, and a great deal of time cash was spending on itself. This release is
+those fixes — 236 commits of them — and the last round found no wrong value in
+any of its five projects, the first round for which that is true.
+
+Nothing here breaks an API. Some cached statements will recompute once after you
+upgrade — see **Upgrading** at the end.
+
+### Added
+
+- **`cash info`, and a cache you can look at.** `cash info` says what the cache
+  holds and what it weighs; `cash inspect` lists entries with the time each saves
+  beside the space it takes, and names the function behind a call entry.
+  `%cash_stats` now says up front that its numbers are this kernel's.
+- **`cash.disabled()` and `CASH_DISABLE`.** Turn caching off for a block and get
+  back exactly what you had, or run a whole program uncached — the measurement a
+  "did cash help?" question actually needs, and the way to test code that uses
+  cash.
+- **Why a call missed.** The miss reason survives a process boundary and shows up
+  in the summary, per call, and in `explain()`. In a notebook, a cached call that
+  re-ran names the input that moved rather than reporting "0/6 hit" and leaving
+  you to guess.
+- **A net saving you can quote after a restart.** `%cash_stats` keeps what each
+  computation cost beside the cache and credits the least it was ever measured to
+  cost, so a Restart & Run All reports a number instead of a range straddling
+  zero. A cache built on another machine still vouches for nothing and still
+  prints the range.
+- **A statement depends on the symbols it reads, not on the whole module.**
+  Editing one helper in a shared `utils.py` no longer invalidates everything that
+  imported anything from it.
+- **A damaged entry is a miss.** A truncated or corrupt entry recomputes instead
+  of raising — or, worse, being trusted.
+- **`CACHE-RESULT-SHARED`** names a result the caller still holds: the shape where
+  mutating what you got back changes what the cache serves next.
+
+### Fixed
+
+**Wrong or stale answers.**
+
+- **A library call that changes its argument in place is replayed after a
+  restart.** The scanpy shape — `sc.pp.calculate_qc_metrics(adata, inplace=True)`
+  — restored `adata` from its constructor and never re-ran the call, so the cell
+  below stopped with `KeyError`. `heapq.heapify(xs)` is the silent form: no error,
+  the wrong answer. The same call is no longer restored as a no-op mid-session
+  either, and the decorator no longer stores a call that changed an argument it
+  was given.
+- **The runtime and the upstream simulation agree on every lineage.** The two
+  engines derived a statement's inputs differently in a dozen places — imports,
+  two calls on one line, a loop's accumulator, a `def` consuming the globals its
+  body reads, an attribute a callee uses. Each disagreement was a statement that
+  re-ran forever, or one served against state the simulation had mis-modelled.
+- **An edited helper module reaches the cells below its caller.** A reload
+  compiles from source rather than stale bytecode, an aliased module is still the
+  module it is, what a reload computed restores in the next kernel, and the repair
+  rebuilds the whole chain built from the edit rather than its last link.
+- **After a restart, the repair finishes the job.** Imports are re-run and never
+  stored; a re-run import gets the `sys.path` setup above it; a call to a notebook
+  function, what a loop built, a frame rebuilt in steps, and a writer whose files
+  are already on disk all behave as the kernel that made them would.
+- **Consumables are never served.** A statement producing an open file handle or a
+  generator is not cached, and the decorator keeps a returned file handle a file
+  handle.
+- **Files cash could not see.** `Path.stat()`, `Path.glob` on 3.10 and 3.13,
+  pyarrow readers, a reader called by keyword, a file read once and memoised, a
+  file read in a thread pool or a process pool the call started, and a file that
+  changes *while* the call runs — each was a dependency that went unrecorded, or a
+  cache that kept serving after the file moved.
+- **Reads that are not your data no longer key your work.** The interpreter's own
+  files, package metadata, what a library reads while importing, and a file
+  belonging to another installed package — a time zone `zoneinfo` loads once per
+  process was the last of these, and it made the first restart after an edit re-run
+  an entire pipeline.
+- **Hashing.** A namedtuple row (so `itertuples` loops restore), a frame with a
+  text column (by content, not by address), an F-like strided array against its
+  F-contiguous copy, a cyclic argument holding a set (reported instead of hanging),
+  and a mutated cached result keyed by what it holds.
+- **The decorator's key.** Several attack sweeps closed the ways a call could be
+  served a result built from code or data the key never saw: globals reached
+  through a callable or a default, constants imported inside a function, a module
+  in a closure, `itemgetter`-type globals and partials, classes named in type
+  annotations, a helper edited on disk after import, a patched helper, a mocked
+  library function (now run uncached rather than storing the fake), and a function
+  run by joblib's or a spawned pool's workers.
+
+**Repairs and charts.**
+
+- **A chart is judged by what was drawn into it.** A figure's own artists —
+  `sc = ax.scatter(...)`, handed to `fig.colorbar(sc)` — are part of the figure,
+  not part of the data, so a chart with a colorbar is no longer reported stale
+  whenever an unrelated repair asks. A chart already on disk is not drawn again
+  after a restart, a helper handed an `Axes` in a loop draws on every run, and a
+  replay redraws a figure with all of its history, only when it must.
+- **A stale export is named.** When an upstream edit changes what a writer would
+  write, the badge says which file is now out of date instead of leaving it to be
+  discovered later — judged by what that writer recorded when it wrote, so the
+  notice fires on a real change rather than on a lineage that merely moved.
+- **A cell that reads files through a list of paths leaves unrelated writers
+  alone.** A read whose path is only known at run time used to rule nothing out,
+  so a new cell could silently redraw a chart above it.
+- **A display expression does not change the frame it shows.**
+  `df[mask].groupby('hour').size()` counted as an in-place mutation of `df`, and
+  everything built from `df` re-ran.
+
+**Badges, warnings and numbers.**
+
+- The text badge headlines a mostly restored cell as CACHED with its counts, lists
+  an upstream step once, follows the notebook's order, shows what a re-run upstream
+  step printed, counts a loop's trips rather than its statement runs, says ERROR in
+  the header when a statement raised, and names what kept changing an unstable key.
+- A `def` is no longer refused for a clock its body reads when called, and a clock
+  read inside a helper no longer keys the whole module.
+- `CACHE-NOT-WORTH-BYTES` fires once per cell naming its statements rather than
+  once per statement; several warnings that were simply wrong were removed; and a
+  warning or traceback quotes the line you wrote.
+- **`%cash_stats` counts cash's own time inside a statement as overhead**, not as
+  your compute. A paired run measured 370 s of slowdown where the badge reported
+  210 s.
+
+### Changed
+
+- **Cache weight and eviction.** Both tiers evict by value per byte rather than by
+  age, a statement's superseded versions are pruned by what they are worth, a value
+  built from cached calls is stored once, and a value that cannot earn the disk it
+  occupies is not written. A value the RAM cap cannot hold is refused rather than
+  stored and immediately dropped.
+- **Cash spends less on itself.** A long cheap loop runs as one unit instead of
+  snapshotting every iteration; a folder read, a crowded directory, a shared input
+  file and a file's fingerprint are each paid for once per cell rather than per
+  statement or per file; a frame is shared under copy-on-write instead of
+  deep-copied; plain data is keyed and sized without walking it in Python.
+- **More calls are cached.** Calls inside a comprehension, inside a loop cached as
+  one unit, inside `dict(...)` or a class call, with unpacked arguments, and an
+  expensive call handed to another call (`weights(fit(x, y), cap)` caches the `fit`
+  too). A call can be keyed on what it receives rather than on where its arguments
+  came from, so the same work reached from two places is computed once.
+- **A restore that would cost more than recomputing is not served as a hit.**
+
+### Upgrading
+
+Your cache is not invalidated: the on-disk format is unchanged. But several fixes
+change *which* key a statement gets — mutation classification, what counts as a
+file the statement read, and calls that are now cached separately — so the first
+run after upgrading recomputes some statements and writes new entries beside the
+old ones. `%cash_repair --full` (notebook) or `cash clear` settles it in one step
+if you would rather not carry both.
+
+Cash also keeps two small files of its own beside the cache
+(`_compute_baselines.json`, `_loop_split.json`). They are bookkeeping, not entries,
+and `cash clear` removes them with everything else.
+
 ## [0.10.0] - 2026-09-09
 
 Two independent testing rounds, five projects each, on the decorator and script
