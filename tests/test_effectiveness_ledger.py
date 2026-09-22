@@ -55,6 +55,20 @@ def test_one_slow_store_does_not_clear_the_key_of_blame():
     assert "register_hasher" in verdict[1], verdict
 
 
+def test_one_slow_first_miss_does_not_convict_cheap_hits():
+    """The verdict is judged on a hit too, not on an average one miss
+    inflated. windows-3.14: a 0.5s first call (analysis, first write) and two
+    12ms hits "cost 184ms per call" against a 103ms body -- and every hit
+    was saving 90ms."""
+    ledger = EffectivenessLedger(waste_threshold_seconds=0.01)
+    verdict = ledger.record("f", overhead_seconds=0.5, body_seconds=0.103, was_hit=False)
+    for _ in range(2):
+        verdict = verdict or ledger.record(
+            "f", overhead_seconds=0.012, body_seconds=0.103, was_hit=True)
+    assert verdict is None, verdict
+    assert ledger.final_verdicts() == []
+
+
 def test_a_slow_restore_still_is_not_blamed_on_the_key():
     """Control: when the hits themselves are slow, the key is still cleared."""
     ledger = EffectivenessLedger(waste_threshold_seconds=0.01)

@@ -164,7 +164,11 @@ class EffectivenessLedger:
         # The conservative comparison: typical overhead against the LARGEST
         # body time seen. If cash still costs more than the best case it could
         # ever save, the verdict does not depend on which call you look at.
-        per_call_overhead = led.overhead_seconds / led.calls
+        # Typical, not the mean: the first call carries once-per-process work
+        # (source analysis, the first write), and on windows-3.14 one 0.5s
+        # miss averaged over 3 calls convicted a 103ms body whose hits cost
+        # 12ms -- every one of them saving 90ms.
+        per_call_overhead = led.typical_overhead()
         best_case_saving = max(led.body_samples)
         if per_call_overhead <= best_case_saving:
             return None
@@ -190,7 +194,7 @@ class EffectivenessLedger:
             if led.warned or not led.calls or not led.body_samples:
                 continue
             waste = led.overhead_seconds - led.saved_seconds
-            per_call_overhead = led.overhead_seconds / led.calls
+            per_call_overhead = led.typical_overhead()  # as in `record`
             best_case_saving = max(led.body_samples)
             if per_call_overhead <= best_case_saving or waste <= 0:
                 continue

@@ -123,6 +123,45 @@ def test_it_stays_quiet_when_the_work_dominates(tmp_path):
     assert _run(dominant, Payload(7)) == [], "warned about a function worth caching"
 
 
+def test_a_slow_first_call_does_not_convict_a_function_worth_caching(tmp_path, monkeypatch):
+    """The control above, with the first call made slow on purpose.
+
+    windows-3.14 failed it with "184ms of overhead per call" against a 12ms
+    hasher: the one miss carried ~0.5s of once-per-process work -- source
+    analysis, the backend's first write -- and averaged over 3 calls that
+    outweighed a 103ms body whose hits cost ~12ms each. The delay stands in
+    for a slow disk; any one-time cost on the first call is the same shape.
+    It is sized off the body, so the mean clears the body on any host.
+    """
+    import time
+    cash = _cash(tmp_path)
+    cash.register_hasher(Payload, _costly_hash)
+    analyze = cash._analyze_dependencies
+
+    def work(n):
+        acc = 0
+        for i in range(120_000 * 8):        # ~8x the hasher, same bytecode
+            acc = (acc * 31 + i) & 0xFFFFFFFF
+        return acc + n
+
+    t0 = time.perf_counter()
+    work(0)
+    delay = 5 * (time.perf_counter() - t0)
+
+    def slow_analyze(func):
+        time.sleep(delay)
+        return analyze(func)
+
+    monkeypatch.setattr(cash, "_analyze_dependencies", slow_analyze)
+
+    @cash.cache
+    def dominant(payload):
+        return work(payload.n)
+
+    assert _run(dominant, Payload(7), calls=3) == [], "one slow first call convicted it"
+    assert cash._effectiveness.final_verdicts() == []
+
+
 def test_the_body_time_reaches_the_entry(tmp_path, frame):
     """``body_seconds`` must be stored, or a HIT cannot know what it saved.
 
