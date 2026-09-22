@@ -8253,7 +8253,7 @@ class Cash:
         return (id(mgr), blocks, id(obj.index), tuple(obj.index.names), obj.name)
 
     @staticmethod
-    def _frame_borrows_its_data(obj: Any) -> bool:
+    def _frame_borrows_its_data(obj: Any, held: Any = None) -> bool:
         """Whether *obj*'s blocks sit on memory something else may write.
 
         Copy-on-write is what makes the block identities an exact change
@@ -8262,8 +8262,15 @@ class Cash:
         straight past pandas: same blocks, changed data. The memo answered 10.0
         where the frame really summed to 109.0 (found attacking the decorator
         before round 26). Such a frame is re-hashed on every call.
+
+        *held* is the memo's own shallow copy of *obj*. Its blocks are views
+        whose ``base`` is *obj*'s array, one reference each. Those references
+        are cash's, not an outside writer's, so they are not counted against
+        the baseline; counting them made every memoised frame look borrowed,
+        and it was re-hashed on every call.
         """
         try:
+            ours = Cash._held_block_refs(held) if held is not None else {}
             for block in obj._mgr.blocks:
                 values = block.values
                 base = getattr(values, "base", None)
@@ -8274,11 +8281,27 @@ class Cash:
                 # extra reference the caller still holds tells them apart. A
                 # count above the baseline can only make cash re-hash a frame
                 # it could have memoised: slower, never wrong.
-                if sys.getrefcount(values) > Cash._BLOCK_REFCOUNT_BASELINE:
+                baseline = Cash._BLOCK_REFCOUNT_BASELINE + ours.get(id(values), 0)
+                if sys.getrefcount(values) > baseline:
                     return True
         except Exception:  # noqa: BLE001 - a pandas internals change: keep the memo
             return False
         return False
+
+    @staticmethod
+    def _held_block_refs(held: Any) -> dict[int, int]:
+        """``{id(array): n}``: the references *held*'s blocks keep to arrays.
+
+        A function of its own so that no loop variable outlives it: one left
+        pointing at an array would itself be a reference over the baseline.
+        """
+        refs: dict[int, int] = {}
+        for block in held._mgr.blocks:
+            values = block.values
+            for ref in (values, getattr(values, "base", None)):
+                if ref is not None:
+                    refs[id(ref)] = refs.get(id(ref), 0) + 1
+        return refs
 
     #: References a block's array has when only its block (and this call's own
     #: temporary) hold it. Anything above means something outside can write to
@@ -8290,10 +8313,10 @@ class Cash:
         entry = self._frame_memo.get(id(obj))
         if entry is None:
             return None
-        if self._frame_borrows_its_data(obj):
+        wref, held, signature, content_hash = entry
+        if self._frame_borrows_its_data(obj, held):
             self._frame_memo.pop(id(obj), None)
             return None
-        wref, _held, signature, content_hash = entry
         try:
             if wref() is obj and self._frame_signature(obj) == signature:
                 return content_hash

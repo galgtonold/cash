@@ -143,6 +143,29 @@ def test_an_unchanged_frame_is_not_re_hashed(c, monkeypatch):
 
 
 @needs_cow
+def test_an_unchanged_series_is_not_re_hashed(c, monkeypatch):
+    """The memo's own shallow copy references the series' array; that is not
+    an outside writer, so it must not send every call back to a full hash."""
+    calls = []
+    real = Cash._try_hash_pandas
+
+    def counting(value, type_name):
+        calls.append(type_name)
+        return real(value, type_name)
+
+    monkeypatch.setattr(Cash, "_try_hash_pandas", staticmethod(counting))
+
+    @c.cache
+    def total(s):
+        return float(s.sum())
+
+    s = pd.Series([1.0, 2.0, 3.0])
+    for _ in range(5):
+        total(s)
+    assert len(calls) == 1, calls
+
+
+@needs_cow
 def test_the_memo_lets_go_of_a_collected_frame(c):
     """It holds a shallow copy of each frame; that copy must not outlive the frame."""
     @c.cache
