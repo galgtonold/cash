@@ -670,9 +670,10 @@ The digest is **bytecode**, not source — a class defined in a notebook cell ha
 no retrievable source at all, because `inspect.getsource` resolves a class
 through `sys.modules[cls.__module__].__file__` and a kernel's `__main__` has
 none. Two consequences follow from that choice: reformatting or a comment-only
-edit does *not* invalidate (bytecode carries neither — though a docstring, class
-or method, does), and a Python-version upgrade re-keys every entry that passes
-code, once.
+edit does *not* invalidate (bytecode carries neither, and cash masks the
+docstrings it does carry, class and method alike — except a pydantic model's
+class docstring, which is its schema's `description`), and a Python-version
+upgrade re-keys every entry that passes code, once.
 
 Where cash is handed code of yours it cannot hash — a compiled wrapper such as
 `numpy.frompyfunc(my_fn, 1, 1)` — it says so once rather than silently keying on
@@ -751,13 +752,15 @@ The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
   a dict, an implementation assigned during execution — is still invisible.
   Declare those with `depends_on=[...]`.
   Every source hash in `state_hash` is taken over a **normalized** form of
-  the code, not its raw text: comments, blank lines, trailing whitespace and
-  the exact indentation width are dropped first. Adding a comment or running
-  a formatter therefore keeps your cache, while any change to what the code
-  actually does invalidates it. Two exceptions stay load-bearing on purpose —
-  `# @cash:` annotations (`no-cache`, `ttl`, `persist`, …), because they are
-  directives rather than prose, and docstrings, which are ordinary string
-  constants a function may well return.
+  the code, not its raw text: comments, docstrings, blank lines, trailing
+  whitespace and the exact indentation width are dropped first. Adding a
+  comment, rewording a docstring or running a formatter therefore keeps your
+  cache, while any change to what the code actually does invalidates it. One
+  exception stays load-bearing on purpose — `# @cash:` annotations
+  (`no-cache`, `ttl`, `persist`, …), because they are directives rather than
+  prose. The flip side of dropping docstrings: a function whose result
+  depends on reading `__doc__` at run time is not re-run when the text
+  changes.
 - `dynamic_hash` folds in `dynamic_depends_on` resolver outputs (when
   set).
 - `args_hash` is a SHA-256 over the pickled args (with custom hashers
