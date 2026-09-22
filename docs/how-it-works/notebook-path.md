@@ -21,7 +21,7 @@ The shape of every statement's journey is the same:
 
 ## What happens when you run a cell
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics._execute_cell @6944c822, cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @2fd4061d, cash/notebook/ipython/cell_executor.py:CellExecutor._execute_cell_pipeline @f2fa76c8 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics._execute_cell @6944c822, cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @db5faa5d, cash/notebook/ipython/cell_executor.py:CellExecutor._execute_cell_pipeline @f2fa76c8 -->
 `CashMagics` stands in front of IPython's `run_cell`, and hands the cell to
 `CellExecutor.execute_cell()`. Steps 2-7 below are that method's own
 seven phases (in `_execute_cell_pipeline`, inside one cell run); step 1 (interception) and step 8 (badge render) happen in
@@ -50,7 +50,7 @@ A few of these steps deserve a closer look:
   [Staying correct: invalidation](invalidation.md). This page and that one
   describe the same engine from two angles: here it's "how a cell runs," there
   it's "how a cell knows it's stale."
-<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @be2e3981, cash/notebook/statement/processor.py:StatementProcessor.process_statement @d0431f5b -->
+<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @be2e3981, cash/notebook/statement/processor.py:StatementProcessor.process_statement @98a5a61b -->
 - **Step 7 — the per-statement decision.** Each statement passes the detector
   pre-checks from [Safety](safety.md) — merged into one verdict by
   `decide_cacheability` — before the cache is consulted at all. If the verdict
@@ -242,7 +242,7 @@ counts as a change to the module, so after a restart a cell that uses the
 module runs the setting line again before it draws or prints. Before this, a
 chart drawn after a restart silently lost the notebook's style.
 
-<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writer_output_already_fresh @eff0744a, cash/notebook/write_observer.py:observe_writes @cb18a8f7, cash/notebook/carrier_history.py:carrier_history_fingerprint @b132b2c9 -->
+<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writer_output_already_fresh @7d9f7246, cash/notebook/write_observer.py:observe_writes @cb18a8f7, cash/notebook/carrier_history.py:carrier_history_fingerprint @b003c9ce -->
 A cell that writes files (`df.to_csv(...)`, a loop saving one chart per kind)
 is not re-run after a restart just because it ran in an earlier kernel. When it
 runs, Cash records the files it actually wrote, whether the path is in the code or
@@ -258,13 +258,16 @@ line of the chart, or an upstream edit to the data it writes. Writes a C
 extension makes without going through Python's `open` are not seen; such a
 writer is re-run as before.
 
-<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._find_stale_file_writer_indices @4434dea5, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._note_stale_exports @32f95ad2 -->
+<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._find_stale_file_writer_indices @707c07d8, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._note_stale_exports @32f95ad2 -->
 A writer whose file the cell you run does not read is left alone, as a plain
 kernel leaves a cell you did not run. If an upstream edit changed what that
 writer writes, its file on disk is now out of date, and the badge says so with
 a `STALE FILE: sweep.csv not rewritten ...` line naming the statement to
 re-run. It is not listed among the steps "not re-run" because what they built
-is still current.
+is still current. The check covers the writers **above** the cell you run: the
+repair looks no further down than that cell, so a file written by a cell below
+it is judged when you next run a cell at or below its writer. Before exporting,
+run the exporting cells themselves, or the last cell of the notebook.
 
 !!! tip "The other half of the story"
     Restoration is only safe because Cash can prove the cached value is still

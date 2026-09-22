@@ -145,9 +145,9 @@ A larger file is different. Cash hashes three regions of it rather than every by
 
 <iframe class="cash-badge" src="/_badges/miss_module_reloaded.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-**Why:** A tracked local module (one you `import` from a local `.py` file) was edited. Everything downstream of the import re-runs.
+**Why:** A tracked local module (one you `import` from a local `.py` file) was edited, and Cash **reloaded it in your kernel** -- which plain Jupyter does not do without `%autoreload`. Statements that use what changed re-run; a statement reading only functions you did not touch stays cached, because Cash keys it on the code those functions reach, not on the whole file (see [Invalidation](how-it-works/invalidation.md)).
 
-**Fix:** Expected when you edit the module. If you want a module *not* to invalidate caches, declare its functions `@cash.pure` so Cash only tracks the relevant function bodies rather than the whole module.
+**Fix:** Expected when you edit the module. If a statement re-runs although nothing it uses changed, its function reaches the module's namespace dynamically or something run at import time differs from run to run; the invalidation page lists what makes Cash fall back to the whole module. If you compare against a plain kernel, give that kernel `%load_ext autoreload` and `%autoreload 2`, or restart it after each edit.
 
 ## 4. Why wasn't this cached?
 

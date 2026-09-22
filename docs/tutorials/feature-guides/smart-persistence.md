@@ -148,7 +148,7 @@ so the two paths differ here.)
 
 ## Inspecting where a value actually landed
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @efb44278, cash/backends/tiered_backend.py:TieredBackend.get @d9642778 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @22fb5bae, cash/backends/tiered_backend.py:TieredBackend.get @d9642778 -->
 The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']`. This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (set in `TieredBackend.get`).
 
 When it went no further than RAM, `metadata['persist_skipped']` says why: `"size"` (a tier's size cap), `"bytes"` (the bytes-per-second-saved ceiling), `"compute"` (the notebook's compute floor or its cost model), or `"replaced_in_cell"` (a later statement of the same cell writes that name again, so the version the cell leaves is the one written). Only the first can happen to a `@cash.cache` result: decorating a function is the decision to cache it, so neither the floor nor the cost model is consulted on that path.
@@ -232,7 +232,7 @@ See [Choosing a Backend](choosing-a-backend.md) for how to wire `TieredBackend` 
 
 ## Built-in `_default_promotion_policy` fallback
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._default_promotion_policy @7c228c64, cash/backends/tiered_backend.py:TieredBackend.__init__ @60c234a9 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._default_promotion_policy @7c228c64, cash/backends/tiered_backend.py:TieredBackend.__init__ @7647a573 -->
 When `smart_persistence=False` (so the factory wires in no cost-model closure), or when a user constructs `TieredBackend(..., promotion_policy=None)` directly, the backend falls back to its own bound method `_default_promotion_policy`:
 
 ```python

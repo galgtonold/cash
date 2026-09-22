@@ -159,7 +159,7 @@ a draw on a live `Axes`/`Figure` (including one handed to a helper,
 
 ### A bare `model.fit(X, y)`
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._estimator_fit_receivers @8efc6b4a, cash/notebook/annotations.py:CacheAnnotation.cache_fit == False -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._estimator_fit_receivers @496800b3, cash/notebook/annotations.py:CacheAnnotation.cache_fit == False -->
 A bare fit is a method-call mutation of its receiver, so it takes the default
 path above: **skip-cache, re-execute every run**. That is net-neutral — a fit
 that would keep missing cannot cost more than it saves — and it avoids the
