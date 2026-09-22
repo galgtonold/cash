@@ -67,6 +67,17 @@ def _stamp_call_events_body_index(m: dict, body_idx: int) -> None:
             echain.insert(0, body_idx)
 
 
+
+def _is_pure_access(node: ast.AST) -> bool:
+    """A name followed only by attribute reads and constant subscripts
+    (``a.var["symbol"]``, ``df.x``): no calls, nothing that could run code but
+    a property or ``__getitem__``."""
+    if isinstance(node, ast.Attribute):
+        return _is_pure_access(node.value)
+    if isinstance(node, ast.Subscript):
+        return isinstance(node.slice, ast.Constant) and _is_pure_access(node.value)
+    return isinstance(node, ast.Name)
+
 class ForLoopHandler:
     """Per-iteration caching for ``for`` loops.
 
@@ -1125,6 +1136,18 @@ class ForLoopHandler:
                 try:
                     return len(value) if value is not None else None
                 except TypeError:
+                    return None
+            if _is_pure_access(node):
+                # `a.var["symbol"]` in `for gid, s in a.var["symbol"].items()`:
+                # attribute reads and constant subscripts on a name, read here
+                # to size the loop. Only a plain name was read, so r30s4's
+                # 200,000-iteration inner loop counted as unknown and went
+                # through the per-statement machinery: 243 s against 3.8 s.
+                try:
+                    value = eval(compile(ast.Expression(node), '<loop-size>', 'eval'),
+                                 {'__builtins__': {}}, dict(user_ns))
+                    return len(value)
+                except Exception:  # noqa: BLE001 - sizing is advisory; unknown is safe
                     return None
             if not isinstance(node, ast.Call):
                 return None
