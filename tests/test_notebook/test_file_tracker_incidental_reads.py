@@ -128,6 +128,18 @@ def test_an_installed_tool_reading_its_own_data_is_tracked_for_its_own_functions
     assert _has(_norm(tracker.get_accessed_files()), fake_site / "fakelib" / "res.txt")
 
 
+def test_another_packages_data_read_by_the_standard_library_is_not_tracked(fake_site):
+    """Round 30 (r30s1): ``zoneinfo`` loads ``tzdata/zoneinfo/UTC`` once per
+    process. The reader is not the package that owns the file."""
+    res = fake_site / "fakelib" / "res.txt"
+    tracker = _run(lambda: open(res, encoding="utf-8").read())
+    assert not _has(_norm(tracker.get_accessed_files()), res)
+    # ... but for the package's own cached functions it is still an input
+    tracker = _run(lambda: open(res, encoding="utf-8").read(),
+                   user_ns={"__name__": "fakelib.pipeline"})
+    assert _has(_norm(tracker.get_accessed_files()), res)
+
+
 def test_a_notebook_namespace_has_no_own_package():
     assert FileAccessTracker(user_ns={"__name__": "__main__"})._own_package is None
     assert FileAccessTracker(user_ns={"__name__": "tool.sub"})._own_package == "tool"

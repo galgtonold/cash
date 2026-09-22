@@ -280,6 +280,37 @@ def _under(path_nc: str, roots: tuple[str, ...]) -> bool:
     return any(path_nc.startswith(root) for root in roots)
 
 
+@functools.lru_cache(maxsize=1)
+def _tz_roots() -> tuple[str, ...]:
+    """The system time zone database directories ``zoneinfo`` searches."""
+    try:
+        import zoneinfo
+    except ImportError:
+        return ()
+    return tuple(sorted({_norm_dir(p) for p in zoneinfo.TZPATH if os.path.isdir(p)}))
+
+
+def _installed_data_file(path_nc: str, own_package: str | None) -> bool:
+    """Is *path_nc* a file of an installed package other than *own_package*,
+    or of the system time zone database?
+
+    Whoever reads it, it is library data, not the user's. Round 30 (r30s1):
+    ``zoneinfo`` -- the standard library, so not "a library reading its own
+    package" -- loaded ``tzdata/zoneinfo/UTC`` on the first load in a process
+    and kept the zone for the rest of it. The load's lineage carried that file
+    after a restart and not on a re-run in the same session, and everything
+    below it missed once.
+    """
+    if _under(path_nc, _tz_roots()):
+        return True
+    for root in _site_roots():
+        if path_nc.startswith(root):
+            top = path_nc[len(root):].split("/", 1)[0]
+            name = top.split(".", 1)[0].split("-", 1)[0]
+            return "/" in path_nc[len(root):] and name != own_package
+    return False
+
+
 def _module_package_dir(module_name: str) -> str | None:
     """The directory of *module_name*'s top-level package, or None."""
     top = sys.modules.get(module_name.split(".")[0])
@@ -313,6 +344,8 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
     path_nc = _nc(path)
     if _under(path_nc, _interpreter_roots()) and not _under(path_nc, _site_roots()):
         return "interpreter"
+    if _installed_data_file(path_nc, own_package):
+        return "installed package data"
     installed = _installed_roots()
     frame = sys._getframe(1)
     reader_seen = False
