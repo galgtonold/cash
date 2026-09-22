@@ -895,7 +895,12 @@ _CONDENSE_THRESHOLD = 3
 def _decorator_groups(metrics: list[dict[str, Any]]) -> tuple[DecoratorCallGroup, ...]:
     raw_calls: list[dict[str, Any]] = []
     for m in metrics:
-        raw_calls.extend(m.get("decorator_calls", []) or [])
+        # Not a call cash wrapped, found under the cost floor and did not keep:
+        # `join() [intercepted]: 0/1 cached` read as a cache that failed
+        # (round 29, r29s5). The sub-call lines count these as "not kept".
+        raw_calls.extend(c for c in (m.get("decorator_calls", []) or [])
+                         if not (c.get("intercepted") and not c.get("cache_hit")
+                                 and not c.get("ran_plain") and c.get("stored") is False))
     if not raw_calls:
         return ()
     by_func: dict[str, list[dict[str, Any]]] = {}
