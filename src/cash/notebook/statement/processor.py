@@ -551,6 +551,10 @@ def _plain_call_assignment(code: str) -> tuple[str, dict[str, int] | None] | Non
         return ast.unparse(node.value), positions
     return None
 
+
+#: Methods that fit an estimator in place, for `# @cash:cache-fit`.
+_FIT_METHODS = frozenset({'fit', 'partial_fit', 'fit_transform', 'fit_predict'})
+
 class StatementProcessor:
     """
     Processes and caches individual Python statements.
@@ -1318,6 +1322,7 @@ class StatementProcessor:
             metrics['uncacheable_reasons'].append(
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
                 "(receiver lineage bumped; statement re-executes)"
+                + self._cache_fit_hint(skip_pre_route)
             )
         # CAS-260, and deliberately the SAME treatment the inline spelling of
         # the identical mutation gets immediately above: the statement
@@ -1587,6 +1592,7 @@ class StatementProcessor:
             metrics['uncacheable_reasons'].append(
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
                 "(receiver lineage bumped; statement re-executes)"
+                + self._cache_fit_hint(skip_pre_route)
             )
         # CAS-260, and deliberately the SAME treatment the inline spelling of
         # the identical mutation gets immediately above: the statement
@@ -2880,6 +2886,7 @@ class StatementProcessor:
                     metrics.setdefault('uncacheable_reasons', []).append(
                         f"In-place mutation on: {', '.join(sorted(skip_observed))} "
                         "(observed; receiver lineage bumped; statement re-executes)"
+                        + self._cache_fit_hint(skip_observed)
                     )
             self.mutation_verdicts[source_hash] = set(mut_assumed) | newly_mutated
             self._persist_mutation_verdict(source_hash, self.mutation_verdicts[source_hash])
@@ -3591,12 +3598,15 @@ class StatementProcessor:
         an assignment (a fresh binding each run), so an in-place transfer onto a
         pre-existing object would be wrong for them.
         """
-        candidates = standalone_method_call_receivers(tree)
+        # The assignment form too: `X = vec.fit_transform(texts)` fits `vec`
+        # as it returns X, and the directive did not reach it (round 29,
+        # r29s2: TF-IDF was never cached, 11-17 s every pass).
+        candidates = standalone_method_call_receivers(tree) | assigned_method_call_receivers(tree)
         if not candidates:
             return set()
         receivers: set[str] = set()
         for base, method in candidates:
-            if method not in ('fit', 'partial_fit'):
+            if method not in _FIT_METHODS:
                 continue
             v = self.shell.user_ns.get(base)
             if isinstance(v, types.ModuleType):
@@ -3604,6 +3614,17 @@ class StatementProcessor:
             if callable(getattr(v, 'fit', None)) and callable(getattr(v, 'get_params', None)):
                 receivers.add(base)
         return receivers - outputs
+
+    def _cache_fit_hint(self, receivers) -> str:
+        """How to have a fitted estimator cached, when one of *receivers* is
+        one -- the refusal otherwise gave no way out (round 29, r29s2)."""
+        for base in receivers:
+            v = self.shell.user_ns.get(base)
+            if (not isinstance(v, types.ModuleType) and callable(getattr(v, 'fit', None))
+                    and callable(getattr(v, 'get_params', None))):
+                return (f" -- `{base}` is an estimator being fitted; add `# @cash:cache-fit` "
+                        "to cache the fit with it (see that directive's identity caveat)")
+        return ""
 
     def _receiver_observable(self, base: str) -> bool:
         """Return True if *base*'s value can be reliably content-hashed.

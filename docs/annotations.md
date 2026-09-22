@@ -10,7 +10,7 @@ Annotations are `#`-comment directives that tweak Cash's per-statement caching d
 | `# @cash:no-cache` | `nocache` | no | Never cache this statement. Wins over `persist`. |
 | `# @cash:ttl=N` | — | non-negative int (seconds) | Override the default TTL for this statement. |
 | `# @cash:allow-random` | `allowrandom` | no | Suppress the unseeded-randomness warning for this statement. Advisory only — see [below](#cashallow-random-alias-allowrandom). |
-| `# @cash:cache-fit` | `cachefit` | no | Opt a bare `estimator.fit(X, y)` in to caching. Off by default — see [below](#cashcache-fit-alias-cachefit). |
+| `# @cash:cache-fit` | `cachefit` | no | Opt an in-place estimator fit — `estimator.fit(X, y)`, or `X2 = estimator.fit_transform(X)` — in to caching. Off by default — see [below](#cashcache-fit-alias-cachefit). |
 | `# @cash:no-cache-calls` | `nocachecalls` | no | Turn off caching the expensive **call inside** a statement. **On by default** — see [below](#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls). |
 | `# @cash:cache-calls` | `cachecalls` | no | Legacy. Parses without error but does nothing — call-level caching no longer needs opting in. |
 
@@ -173,15 +173,20 @@ noise = np.random.rand(1000)   # no warning
 
 ### `# @cash:cache-fit` (alias: `cachefit`)
 
-Opts a bare, in-place `estimator.fit(X, y)` statement in to caching. **Without it,
-such a statement is not cached** — the badge reads `NOT CACHED` with an *In-place
-mutation* reason and the fit re-executes on every run:
+Opts a statement that fits an estimator in place in to caching: a bare
+`estimator.fit(X, y)`, and `X2 = estimator.fit_transform(X)` or
+`labels = estimator.fit_predict(X)`, which fit the estimator as they return
+something else. **Without it, such a statement is not cached** — the badge reads
+`NOT CACHED` with an *In-place mutation* reason, which names the directive when
+the receiver is an estimator, and the fit re-executes on every run. With it, a
+hit restores the returned value and the fitted estimator together:
 
 <!-- test:skip reason="illustrative: needs a real sklearn estimator and training data" -->
 ```python
 clf = RandomForestClassifier(n_estimators=100, random_state=42)
 
 clf.fit(X, y)                  # NOT cached — re-executes every run
+X = vec.fit_transform(texts)   # NOT cached either: it fits vec
 
 # @cash:cache-fit
 clf.fit(X, y)                  # cached; a hit restores the fitted estimator
@@ -195,8 +200,9 @@ The default is deliberate, and it is the *safe* default in both directions:
   receiver, so `model` is genuinely fitted and any alias of it (`backup = model`)
   sees the fit, exactly as plain Python behaves.
 
-Only the **bare-expression** form is affected. An assignment is an ordinary
-statement and caches with no directive:
+An assignment that binds the **estimator itself** is an ordinary statement and
+caches with no directive; one that binds something else, like
+`X2 = est.fit_transform(X)`, fits `est` in place and needs it:
 
 <!-- test:skip reason="illustrative: needs a real sklearn estimator and training data" -->
 ```python
@@ -204,7 +210,7 @@ clf = clf.fit(X, y)                                    # caches
 m = RandomForestClassifier(n_estimators=100).fit(X, y) # caches
 ```
 
-The gate is a duck-type — the method must be `fit`/`partial_fit` and the receiver
+The gate is a duck-type — the method must be `fit`, `partial_fit`, `fit_transform` or `fit_predict` and the receiver
 must expose a callable `fit` **and** a callable `get_params` — so `lst.append(x)`
 and an arbitrary object that merely happens to have a `fit` method are never
 swept in.
