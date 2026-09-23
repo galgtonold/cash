@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 import weakref
-from collections import Counter, OrderedDict, deque
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
@@ -32,10 +32,10 @@ from .decorator.arg_hashing import (
     CODE_VALUE_TYPES,
     ArgHashingMixin,
 )
+from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction
 from .decorator.call_state import (
     CACHE_MISS,
     CALL_ENTRY,
-    CallSpec,
     enter_cached_call,
     exit_cached_call,
 )
@@ -148,6 +148,16 @@ def _local_dir_of(ref: weakref.ref[Cash]) -> Callable[[], str | None]:
         return backend.local_dir if backend is not None else None
 
     return local_dir
+
+
+def _declared_files(file_depends_on: str | list[str] | None) -> tuple[tuple[str, str], ...]:
+    """``file_depends_on=`` as ``(as written, absolute)`` pairs. Each miss records
+    the absolute paths as if the body had read them (`_track_declared_files`);
+    the paths as written are in the key (`_fold_declared_files`)."""
+    if not file_depends_on:
+        return ()
+    paths = [file_depends_on] if isinstance(file_depends_on, str) else file_depends_on
+    return tuple((str(p), os.path.abspath(p)) for p in paths)
 
 
 #: How many call events `Cash._decorator_call_log` holds. The notebook drains it
@@ -270,13 +280,9 @@ class Cash(
 
         self.graph = DependencyGraph()
         self.functions: dict[str, Callable[..., Any]] = {}  # Registry of cached functions
+        # func_name -> its decoration's options and per-process state.
+        self._cached: dict[str, CachedFunction] = {}
         self.data_sources: dict[str, DataSource] = {}  # Registry of data sources
-        # func_name -> ``(as written, absolute)`` for each path its
-        # ``file_depends_on=`` names. Each miss records the absolute paths on
-        # the call's file tracker, as if the body had read them
-        # (`_track_declared_files`); the paths as written are in the key
-        # (`_fold_declared_files`).
-        self._declared_files: dict[str, tuple[tuple[str, str], ...]] = {}
         self.source_hashes: dict[str, str] = {}  # Current source hashes
         # Session-scoped memo: id(arg) -> (weakref, lineage_hash, content_hash).
         # Lets a repeated ``@cash.cache`` call with the SAME unmutated argument
@@ -286,8 +292,6 @@ class Cash(
         # id(frame) -> (weakref, shallow copy, signature, content hash): the
         # pandas copy-on-write memo, see `_frame_memo_store`.
         self._frame_memo: dict[int, tuple] = {}
-        # Functions decorated frozen=True, by key.
-        self._frozen_funcs: set[str] = set()
         # id(ndarray) -> [weakref, producer, content hash or None]: numpy
         # results of frozen functions, which cannot carry a tag.
         self._frozen_arrays: dict[int, list] = {}
@@ -298,9 +302,6 @@ class Cash(
         # weakref -- so the object is held here, while someone else holds it
         # too (`_remember_frozen_container`).
         self._frozen_containers: dict[int, list] = {}
-        # func_name -> (parameter, type, seconds, producer, pandas without
-        # copy-on-write): the costliest argument to hash, for CACHE-NET-LOSS.
-        self._arg_costs: dict[str, tuple] = {}
         # Running account of what caching cost vs what it saved, per function.
         # The decorator always caches by design -- this only ever informs.
         self._effectiveness = EffectivenessLedger()
@@ -340,7 +341,6 @@ class Cash(
         # complete a parent's state hash long before it is called directly and
         # surfaced). Keeps the cache key stable from the first call (finding #7).
         self._populated: set[str] = set()
-        self._func_ttls: dict[str, int | None] = {}  # func_name -> declared ttl
         self._effective_ttl_cache: dict[str, int | None] = {}
         self._deref_writes: dict = {}  # code object -> frozenset of reassigned freevars
         # id(func) -> decoration-pinned own-source identity. The
@@ -365,9 +365,6 @@ class Cash(
         self._mutating_globals: dict = {}
         # code object -> closure free vars folded only provisionally (CAS-270).
         self._provisional_capture_cache: dict = {}
-        # func_name -> RNG modules that function was OBSERVED drawing from.
-        # Learned on a miss; only these functions get a seed-epoch in their key.
-        self._rng_drawing_funcs: dict[str, set[str]] = {}
         # (module_global, attribute) read pairs per code object; see
         # _read_module_attr_pairs.
         self._module_attr_cache: dict = {}
@@ -393,18 +390,6 @@ class Cash(
         # is safe to memo; the NAMES those code objects reference are resolved
         # fresh per call, because what a name is bound to can change.
         self._code_refs_cache: dict = {}
-        # func_name -> (function the signature was read from, inspect.Signature
-        # or None if introspection failed). Used to bind call arguments to a
-        # canonical form so that logically-identical calls written differently
-        # (positional vs keyword, omitted vs explicit default, kwargs in
-        # different orders) share one cache key.
-        #
-        # The function is stored alongside so the memo can be invalidated when
-        # the name is REBOUND to a new function object (a notebook cell re-run).
-        # Keying by name alone pinned the first signature forever, so
-        # `apply_defaults()` kept folding a default the callee no longer has
-        # .
-        self._signatures: dict[str, tuple[Callable | None, inspect.Signature | None]] = {}
         # function object -> digest of its parameter defaults, for defaults that
         # are immutable and therefore cannot drift between calls.
         # Weak so the memo dies with the function instead of pinning it (and so
@@ -416,9 +401,6 @@ class Cash(
         # `_hash_helper_identity`. Holding the helper keeps its id from being
         # recycled while the entry lives.
         self._helper_defaults_memo: dict[int, tuple[Any, Any, Any, str]] = {}
-        # func_name -> {parameter: seeding call} for seeding calls fed by a
-        # parameter; checked per call by `_warn_if_seed_is_none`.
-        self._seed_params: dict[str, dict[str, tuple]] = {}
         # In-process async single-flight registry: cache_key ->
         # concurrent.futures.Future. When use_locking is set, concurrent awaits
         # of the same key coalesce - one coroutine computes, the rest wait and
@@ -441,10 +423,9 @@ class Cash(
             _log.enable(logging.DEBUG if debug else logging.INFO)
 
         # What a miss was, for the people asking "why did that recompute?".
-        # All three are in-process memory only, and bounded: they explain,
-        # they never decide anything.
-        #: func_name -> the last cache key it looked up.
-        self._last_key: dict[str, str] = {}
+        # Both are in-process memory only, and bounded: they explain, they
+        # never decide anything. (The last key per function is on its
+        # `CachedFunction`.)
         #: cache_key -> what happened when it was last computed here.
         self._store_outcomes: OrderedDict[str, dict[str, Any]] = OrderedDict()
         #: cache_key -> (kind, detail) for a lookup that just missed, taken
@@ -462,9 +443,6 @@ class Cash(
         # Custom type hasher registry: maps type -> (callable(value) -> str, source hash).
         # The source hash is embedded in the args_hash composition so that
         # changing a hasher's body invalidates dependent cache entries.
-        # func_name -> the live stats dict of its wrapper. Populated by
-        # ``_wrap_with_stats``; read by the end-of-run summary.
-        self._function_stats: dict[str, dict[str, Any]] = {}
         self._type_hashers: dict[type, tuple[Callable[[Any], str], str]] = {}
         # Same shape, but consulted BEFORE cash's own content hashers rather
         # than after them. Separate registry rather than a flag in the tuple
@@ -476,30 +454,10 @@ class Cash(
         # Guarded by _decorator_call_log_lock (already exists for thread safety).
         self._warning_keys_seen: set[tuple[type[Warning], str, str]] = set()
 
-        # Per-function rolling log of recent warning emissions, surfaced
-        # via ``f.cache_info()['warnings']``. Each entry is
-        # ``{'category': str, 'message': str, 'timestamp': float}``.
-        # Capped at ``_func_warnings_max`` entries per function so a
-        # noisy function can't grow this dict unboundedly. Guarded by
-        # ``_decorator_call_log_lock``.
-        self._func_warnings: dict[str, list[dict[str, Any]]] = {}
-        self._func_warnings_max = 20
-
-        # Registry of wrapped (stats) functions for clear_all() support.
-        # Maps func_name -> stats_wrapper (the object returned to the user).
-        self._wrapped_funcs: dict[str, Any] = {}
-
-        # Per-function purity mode set at decoration time:
-        # ``"warn"`` (default) | ``"silent"`` (assume_safe=True) |
-        # ``"strict"`` (raises). Read on first call.
-        self._purity_modes: dict[str, str] = {}
         # Functions the STATIC pass already reported on. The runtime effect
         # observer stays quiet for these: it would be a second warning about
         # the same function, and the user has already been told.
         self._purity_static_flagged: set[str] = set()
-        # Functions whose arguments cost too much to re-hash for the
-        # mutation check. Checked once, then left alone.
-        self._mutation_check_too_costly: set[str] = set()
         # Per-function purity report cache. Populated on first call.
         # Helper source hashes from this report fold into the cache
         # key state hash so cross-process helper edits invalidate.
@@ -623,8 +581,8 @@ class Cash(
         file_depends_on: str | list[str] | None = None,
         ttl: int | None = None,
         cache_if: Callable[[Any], bool] | None = None,
-        chunk_max_items: int = 1_000_000,
-        chunk_max_bytes: int = 1_000_000_000,
+        chunk_max_items: int = CHUNK_MAX_ITEMS,
+        chunk_max_bytes: int = CHUNK_MAX_BYTES,
         strict: bool = False,
         assume_safe: bool = False,
         allow_random: bool = False,
@@ -758,16 +716,23 @@ class Cash(
                 frozen=frozen,
             )
 
-        func_name = self._register_func(func, depends_on, file_depends_on)
+        cf = CachedFunction(
+            func,
+            self.get_func_key(func),
+            dynamic_depends_on=dynamic_depends_on,
+            ttl=ttl,
+            cache_if=cache_if,
+            chunk_max_items=chunk_max_items,
+            chunk_max_bytes=chunk_max_bytes,
+            purity="strict" if strict else "silent" if assume_safe else "warn",
+            frozen=frozen,
+            allow_random=allow_random,
+            declared_files=_declared_files(file_depends_on),
+        )
+        func_name = self._register_func(cf, depends_on)
         self._pin_own_source(func, self.source_hashes[func_name])
-        if frozen:
-            self._frozen_funcs.add(func_name)
-        else:
-            self._frozen_funcs.discard(func_name)
-        self._purity_modes[func_name] = "strict" if strict else "silent" if assume_safe else "warn"
-        # Record the declared TTL so a downstream that depends on this function
-        # can inherit it (effective TTL = min over the dependency closure).
-        self._func_ttls[func_name] = ttl
+        # A downstream that depends on this function inherits its TTL
+        # (effective TTL = min over the dependency closure).
         self._effective_ttl_cache.clear()
 
         # Async generators are not cached; warn once and return unwrapped.
@@ -803,32 +768,15 @@ class Cash(
             except Exception:  # noqa: BLE001 - the first miss installs them anyway
                 logger.debug("[CORE] could not install the read watch at decoration", exc_info=True)
 
-        wrapper = self._make_wrapper(
-            func,
-            func_name,
-            dynamic_depends_on,
-            ttl,
-            cache_if,
-            chunk_max_items,
-            chunk_max_bytes,
-        )
-        return self._wrap_with_stats(
-            func,
-            func_name,
-            wrapper,
-            dynamic_depends_on=dynamic_depends_on,
-            ttl=ttl,
-            allow_random=allow_random,
-        )
+        return self._wrap_with_stats(cf, self._make_wrapper(cf))
 
-    def _register_func(
-        self,
-        func: Callable,
-        depends_on: list[Callable[..., Any] | DataSource] | None,
-        file_depends_on: str | list[str] | None,
-    ) -> str:
-        """Register a function in the cache graph and return its key."""
-        func_name = self.get_func_key(func)
+    def _register_func(self, cf: CachedFunction, depends_on: list[Callable[..., Any] | DataSource] | None) -> str:
+        """Register *cf* in the cache graph and return its key."""
+        func, func_name = cf.func, cf.name
+        previous = self._cached.get(func_name)
+        if previous is not None:
+            cf.carry_over(previous)
+        self._cached[func_name] = cf
         self.functions[func_name] = func
         new_hash = callable_identity(func)
         old_hash = self.source_hashes.get(func_name)
@@ -838,11 +786,6 @@ class Cash(
         self.source_hashes[func_name] = new_hash
         self.graph.add_node(func_name)
         self._register_static_dependencies(func_name, depends_on)
-        if file_depends_on:
-            file_paths = [file_depends_on] if isinstance(file_depends_on, str) else file_depends_on
-            self._declared_files[func_name] = tuple((str(p), os.path.abspath(p)) for p in file_paths)
-        else:
-            self._declared_files.pop(func_name, None)
         return func_name
 
     # -- why a call missed ---------------------------------------------------
@@ -852,16 +795,7 @@ class Cash(
     # lookup saw plus what this process remembers about the key -- never by
     # re-deriving the key, which would cost every call to explain a few.
 
-    def _make_wrapper(
-        self,
-        func: Callable,
-        func_name: str,
-        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
-        ttl_decl: int | None,
-        cache_if: Callable[[Any], bool] | None = None,
-        chunk_max_items: int = 1_000_000,
-        chunk_max_bytes: int = 1_000_000_000,
-    ) -> Callable:
+    def _make_wrapper(self, spec: CachedFunction) -> Callable:
         """Build and return the caching wrapper for *func*, sync or async.
 
         One wrapper for both: everything before and after the body is the
@@ -869,7 +803,7 @@ class Cash(
         two variants differ only in whether they await the body. The sync and
         async wrappers used to be two ~150-line copies, and they had drifted.
         """
-        spec = CallSpec(func, func_name, dynamic_depends_on, ttl_decl, cache_if, chunk_max_items, chunk_max_bytes)
+        func = spec.func
 
         if inspect.iscoroutinefunction(func):
 
@@ -922,16 +856,7 @@ class Cash(
         except (OSError, RuntimeError, KeyError):
             logger.debug("Failed to clear cache entries for %s", func_name)
 
-    def _wrap_with_stats(
-        self,
-        func: Callable,
-        func_name: str,
-        wrapper: Callable,
-        *,
-        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None = None,
-        ttl: int | None = None,
-        allow_random: bool = False,
-    ) -> Callable:
+    def _wrap_with_stats(self, cf: CachedFunction, wrapper: Callable) -> Callable:
         """Wrap *wrapper* with hit/miss stat tracking and attach introspection API.
 
         Dispatches on whether *func* is a coroutine function so the stats
@@ -948,27 +873,10 @@ class Cash(
         * ``explain(*args, **kwargs)`` - return a `CacheExplanation`
           for that specific call (sync, even on async wrappers).
         """
-        _stats = {
-            "hits": 0,
-            "misses": 0,
-            "total_time_saved": 0.0,
-            "lookup_seconds": 0.0,
-            # What the misses cost besides their bodies: key, checks, store.
-            "miss_overhead_seconds": 0.0,
-            # What the misses were, and which results did not reach
-            # disk: the two things "1 miss" alone could not tell anyone.
-            "miss_reasons": Counter(),
-            "not_persisted": Counter(),
-            "not_stored": Counter(),
-            # For "code or state changed" misses: WHAT changed.
-            "changed": Counter(),
-            # Calls that went straight through because caching is off.
-            "bypassed": 0,
-        }
-        # Shared by reference with the end-of-run summary, which otherwise has
-        # no way to reach a per-wrapper closure. Last registration wins for a
-        # redefined function, which matches what `cache_info()` reports.
-        self._function_stats[func_name] = _stats
+        func, func_name, allow_random = cf.func, cf.name, cf.allow_random
+        # Read through `cf` by the end-of-run summary too. Not captured by
+        # `stats_wrapper` itself: see `_bypass`.
+        _stats = cf.stats
 
         def _count(slot: list) -> None:
             # The entry THIS call logged, if it logged one: a call that raised
@@ -1062,7 +970,7 @@ class Cash(
                 * ``warnings`` (list[dict]) - rolling log of recent warning
                   emissions for this function. Each entry has ``category``,
                   ``message``, ``timestamp``. Capped at the last
-                  ``_func_warnings_max`` (default 20) so it can't grow
+                  ``WARNINGS_MAX`` (20) so it can't grow
                   unboundedly. Useful for spotting silent misbehavior
                   (cache_if predicate raised, lock failure, etc.) when
                   ``warnings.simplefilter`` swallowed the stderr emission.
@@ -1070,7 +978,7 @@ class Cash(
             total = _stats["hits"] + _stats["misses"]
             hit_rate = _stats["hits"] / total if total > 0 else 0.0
             with self._decorator_call_log_lock:
-                warnings_log = list(self._func_warnings.get(func_name, []))
+                warnings_log = list(cf.warnings)
             return {
                 "hits": _stats["hits"],
                 "misses": _stats["misses"],
@@ -1096,7 +1004,7 @@ class Cash(
                 _stats[tally].clear()
             self._delete_backend_entries(func_name)
             with self._decorator_call_log_lock:
-                self._func_warnings.pop(func_name, None)
+                cf.warnings.clear()
                 # Drop dedup marks for this function so future misbehavior
                 # re-warns the user instead of staying silent.
                 self._warning_keys_seen = {k for k in self._warning_keys_seen if k[1] != func_name}
@@ -1111,14 +1019,7 @@ class Cash(
             """
             token = ACTIVE_CONFIG.set(self.config)
             try:
-                explanation = self._explain_call(
-                    func,
-                    func_name,
-                    dynamic_depends_on,
-                    ttl,
-                    args,
-                    kwargs,
-                )
+                explanation = self._explain_call(cf, args, kwargs)
             finally:
                 ACTIVE_CONFIG.reset(token)
             return dataclasses.replace(explanation, cache_dir=_backend_cache_dir(self.backend))
@@ -1136,9 +1037,9 @@ class Cash(
         # ``ttl=0`` function must recompute every call; without this the
         # statement ``x = f()`` gets cached with no TTL under %cash_on and
         # freezes the value the decorator promised to refresh.
-        stats_wrapper._cash_declared_ttl = ttl
+        stats_wrapper._cash_declared_ttl = cf.ttl
         expose_script_function(func, stats_wrapper)
-        self._wrapped_funcs[func_name] = stats_wrapper
+        cf.wrapper = stats_wrapper
         return stats_wrapper
 
     def drain_decorator_calls(self) -> list[dict[str, Any]]:
@@ -1315,8 +1216,9 @@ class Cash(
         Empty when no cached function was ever called, so a caller can print
         this unconditionally without emitting a header over nothing.
         """
-        rows = [(name, s) for name, s in self._function_stats.items() if s["hits"] or s["misses"]]
-        bypassed = sum(s.get("bypassed", 0) for s in self._function_stats.values())
+        stats = [(name, cf.stats) for name, cf in self._cached.items()]
+        rows = [(name, s) for name, s in stats if s["hits"] or s["misses"]]
+        bypassed = sum(s.get("bypassed", 0) for _, s in stats)
         disabled_line = (
             f"cash: caching disabled (disable=True / CASH_DISABLE) -- {bypassed} "
             f"call{'' if bypassed == 1 else 's'} ran uncached"
@@ -1503,8 +1405,9 @@ class Cash(
         Equivalent to calling ``f.cache_clear()`` on every ``@cash.cache``-decorated
         function. Resets hit/miss statistics and removes all backend entries.
         """
-        for wrapped in self._wrapped_funcs.values():
-            wrapped.cache_clear()
+        for cf in list(self._cached.values()):
+            if cf.wrapper is not None:
+                cf.wrapper.cache_clear()
 
     def register_file_handler(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]) -> None:
         """Register a custom file-dependency handler.

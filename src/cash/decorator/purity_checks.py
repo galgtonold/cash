@@ -146,7 +146,7 @@ class PurityChecksMixin:
         argument (identity), or the result being one of the function's module
         globals (identity).
         """
-        if self._purity_modes.get(func_name, "warn") == "silent":
+        if self._purity_mode(func_name) == "silent":
             return
         try:
             shared = self._shared_with(result, args, kwargs, func)
@@ -399,16 +399,17 @@ class PurityChecksMixin:
         argument that moved. None when the check has been retired as too
         costly for this function, or nothing could be hashed.
         """
-        if func_name in self._mutation_check_too_costly:
+        cf = self._cached.get(func_name)
+        if cf is None or cf.mutation_check_retired:
             return None
         # The key was hashed a moment ago, on this thread: if that already cost
         # more than the check may, the check is retired before it pays -- a
         # miss on two million rows hashed them three times, once for the key,
         # once here and once after the body (round 19). Read from what
         # `_note_arg_cost` kept: it has already taken `ARG_COST.last`.
-        cost = self._arg_costs.get(func_name)
+        cost = cf.arg_cost
         if cost is not None and cost[2] > self._MUTATION_CHECK_BUDGET_S:
-            self._mutation_check_too_costly.add(func_name)
+            cf.mutation_check_retired = True
             return None
         started = _perf_counter()
         try:
@@ -433,7 +434,7 @@ class PurityChecksMixin:
             except Exception:  # noqa: BLE001 - unhashable: the whole-args check still runs
                 continue
         if _perf_counter() - started > self._MUTATION_CHECK_BUDGET_S:
-            self._mutation_check_too_costly.add(func_name)
+            cf.mutation_check_retired = True
         return snapshot
 
     def _argument_identities(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, tuple[Any, list]]:
@@ -501,7 +502,8 @@ class PurityChecksMixin:
                     f"the result was not stored, so this call runs every time",
                 )
                 return
-        if func_name in self._mutation_check_too_costly:
+        cf = self._cached.get(func_name)
+        if cf is None or cf.mutation_check_retired:
             return
         started = _perf_counter()
         try:
@@ -512,7 +514,7 @@ class PurityChecksMixin:
             # of mutation, and must not be reported as such.
             return
         if _perf_counter() - started > self._MUTATION_CHECK_BUDGET_S:
-            self._mutation_check_too_costly.add(func_name)
+            cf.mutation_check_retired = True
         if after is None or after == args_hash:
             return
         names = self._mutated_argument_names(func_name, args, kwargs, observer)
@@ -564,7 +566,7 @@ class PurityChecksMixin:
         """
         if observer is None or not observer.effects:
             return
-        if self._purity_modes.get(func_name, "warn") == "silent":
+        if self._purity_mode(func_name) == "silent":
             return
         covered: set[str] = set()
         if func_name in self._purity_static_flagged:
@@ -682,7 +684,8 @@ class PurityChecksMixin:
             # Named statically, so the observer does not report the same read
             # as a connection -- whether or not the advisory below is shown.
             self._purity_static_flagged.add(func_name)
-            if self._effective_ttl(func_name, self._func_ttls.get(func_name)) is not None:
+            cf = self._cached.get(func_name)
+            if self._effective_ttl(func_name, cf.ttl if cf is not None else None) is not None:
                 # `ttl=` is the answer to "how old may a fetched answer be":
                 # once one is set, the question has been answered.
                 issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_NETWORK_READ]

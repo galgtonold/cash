@@ -307,7 +307,7 @@ def test_a_static_finding_is_shown_once_per_cache_not_every_run(tmp_path):
     first.shutdown()  # the end of that run
     later = Cash(cache_dir=str(tmp_path / "c"))  # the next run
     assert not _impure_shown(later, reports_to_stdout, 2)
-    logged = later._func_warnings.get(f"{__name__}.reports_to_stdout") or []
+    logged = later._cached[f"{__name__}.reports_to_stdout"].warnings
     assert any(e.get("code") == "IMPURE-SIDE-EFFECTS" for e in logged), logged
 
 

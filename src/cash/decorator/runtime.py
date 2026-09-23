@@ -17,6 +17,7 @@ from ..dependency_state import STATE_LEDGER, ledger_note
 from ..exceptions import CacheExpiredError, CashCacheIneffectiveWarning
 from ..tracking.file_tracker import FileAccessTracker
 from .arg_hashing import PLAIN_CENSUS
+from .cached_function import CachedFunction
 from .call_state import (
     CACHE_MISS,
     CAPTURE_WATCH,
@@ -25,7 +26,6 @@ from .call_state import (
     BodyRun,
     BuiltKey,
     Call,
-    CallSpec,
     KeyBuildFailed,
     UnhashableArgs,
     UnhashableDefault,
@@ -187,7 +187,7 @@ class RuntimeMixin:
             # parameter DEFAULT, so `build()` and `build(Schema)` -- the same
             # logical call -- produced two cache keys and two executions.
             normalized_args = self._normalize_call_args(func_name, args, kwargs)
-            if func_name in self._seed_params:
+            if self._cached[func_name].seed_params:
                 self._warn_if_seed_is_none(func, func_name, args, kwargs)
             state_hash = self._fold_code_args(*normalized_args, state_hash, func_name=func_name)
             chain.append(state_hash)
@@ -251,7 +251,7 @@ class RuntimeMixin:
             # auto_file_deps), both available here.
             self._attach_lineage(cached_data, cache_key, metadata.auto_file_deps, ttl=ttl, func_name=func_name)
             self._replay_rng_state(metadata)
-            self._last_key[func_name] = cache_key
+            self._cached[func_name].last_key = cache_key
             self._log_decorator_call(
                 func_name,
                 cache_hit=True,
@@ -350,14 +350,14 @@ class RuntimeMixin:
             return ChunkedCachedIterator(self, call.cache_key, n_chunks, call.recompute)
         return hit
 
-    def _lookup(self, spec: CallSpec, args: tuple, kwargs: dict, *, async_body: bool) -> Call:
+    def _lookup(self, spec: CachedFunction, args: tuple, kwargs: dict, *, async_body: bool) -> Call:
         """Everything a call does before the body: analysis, key, lookup.
 
         Returns the call's state. ``call.outcome`` is what the wrapper returns
         now -- a hit, or the result of a call that has no key -- or
         ``CACHE_MISS`` when the body has to run.
         """
-        func, func_name = spec.func, spec.func_name
+        func, func_name = spec.func, spec.name
         call = Call(args, kwargs)
         call.call_start = _perf_counter()
         if func_name not in self._analyzed:
@@ -369,7 +369,7 @@ class RuntimeMixin:
                     self._analyzed.add(func_name)
         # Inherit the shortest TTL of any TTL'd dependency (computed after
         # analysis populates the graph).
-        call.ttl = self._effective_ttl(func_name, spec.ttl_decl)
+        call.ttl = self._effective_ttl(func_name, spec.ttl)
         if async_body:
             call.recompute = lambda: run_to_completion(lambda: func(*args, **kwargs))
         else:
@@ -404,7 +404,7 @@ class RuntimeMixin:
             call.outcome = self._wrap_iterator_hit(call, call.metadata, hit)
         return call
 
-    def _reread(self, spec: CallSpec, call: Call) -> Any:
+    def _reread(self, spec: CachedFunction, call: Call) -> Any:
         """Look the key up again (another caller may have stored it meanwhile):
         the hit, wrapped like any other, or ``CACHE_MISS``.
 
@@ -420,14 +420,14 @@ class RuntimeMixin:
             return CACHE_MISS
         metadata = CacheMetadata.from_dict(raw_metadata)
         hit = self._try_get_cached(
-            call.cache_key, metadata, cached_data, call.call_start, call.args_hash, spec.func_name, call.ttl
+            call.cache_key, metadata, cached_data, call.call_start, call.args_hash, spec.name, call.ttl
         )
         if hit is CACHE_MISS:
             return CACHE_MISS
         return self._wrap_iterator_hit(call, metadata, hit)
 
     @contextlib.contextmanager
-    def _body_scope(self, spec: CallSpec, call: Call) -> Iterator[BodyRun]:
+    def _body_scope(self, spec: CachedFunction, call: Call) -> Iterator[BodyRun]:
         """Run the body inside this: file tracking, effect observation, RNG
         watch and timing, shared by the sync and async wrappers.
 
@@ -439,7 +439,7 @@ class RuntimeMixin:
         # Wrap the function call in FileAccessTracker so any auto-tracked
         # file reads (pandas/numpy/joblib/open/...) are recorded as implicit
         # cache dependencies - a later content change forces a recompute.
-        func, func_name, args, kwargs = spec.func, spec.func_name, call.args, call.kwargs
+        func, func_name, args, kwargs = spec.func, spec.name, call.args, call.kwargs
         run = BodyRun()
         run.tracker = FileAccessTracker(getattr(func, "__globals__", None), propagate_to_parent=True, hash_on_read=True)
         # Watch for side effects the STATIC analyzer cannot see, which is
@@ -472,9 +472,9 @@ class RuntimeMixin:
             run.saves_seconds = run.body_seconds / max(threads_at_start, THREADS_IN_CALLS[0], 1)
             run.rng_new = self._note_rng_draw(func_name, run.rng_pre)
 
-    def _finish_miss(self, spec: CallSpec, call: Call, run: BodyRun) -> Any:
+    def _finish_miss(self, spec: CachedFunction, call: Call, run: BodyRun) -> Any:
         """Everything a missed call does after its body: check, store, log."""
-        func, func_name, args, kwargs = spec.func, spec.func_name, call.args, call.kwargs
+        func, func_name, args, kwargs = spec.func, spec.name, call.args, call.kwargs
         res = run.res
         # A generator is handed straight back, wrapped, and cached only once
         # the caller has drained it. Draining it here instead meant a streamed
@@ -501,7 +501,7 @@ class RuntimeMixin:
                 self._stream_and_store(
                     res,
                     cache_key=call.cache_key,
-                    func_name=func_name,
+                    spec=spec,
                     tracker=run.tracker,
                     observer=run.observer,
                     rng_new=run.rng_new,
@@ -510,10 +510,6 @@ class RuntimeMixin:
                     args_hash=call.args_hash,
                     current_state_hash=call.state_hash,
                     ttl=call.ttl,
-                    cache_if=spec.cache_if,
-                    chunk_max_items=spec.chunk_max_items,
-                    chunk_max_bytes=spec.chunk_max_bytes,
-                    code_module=func.__module__,
                 )
             )
 
@@ -547,7 +543,7 @@ class RuntimeMixin:
                 auto_file_deps=auto_file_deps,
                 body_seconds=run.body_seconds,
                 saves_seconds=run.saves_seconds,
-                rng_replay=self._rng_replay_parts(bool(self._rng_drawing_funcs.get(func_name)), run.rng_pre),
+                rng_replay=self._rng_replay_parts(bool(self._cached[func_name].rng_modules), run.rng_pre),
             )
         # Everything that was not the body: the key and lookup before it, the
         # checks and the store after it.
@@ -564,7 +560,7 @@ class RuntimeMixin:
         self._note_effectiveness(func_name, miss_overhead, body_seconds=run.body_seconds, was_hit=False)
         return res
 
-    async def _single_flight(self, spec: CallSpec, call: Call, compute: Callable[[], Any]) -> Any:
+    async def _single_flight(self, spec: CachedFunction, call: Call, compute: Callable[[], Any]) -> Any:
         """Async single-flight for ``use_locking``: coalesce concurrent awaits
         of the same key in-process, so an expensive idempotent coroutine (a
         paid API call, say) under ``asyncio.gather`` computes once instead of
@@ -609,7 +605,7 @@ class RuntimeMixin:
             if not leader.done():
                 leader.set_result(None)
 
-    def _compute_with_lock(self, spec: CallSpec, call: Call, compute: Callable[[], Any]) -> Any:
+    def _compute_with_lock(self, spec: CachedFunction, call: Call, compute: Callable[[], Any]) -> Any:
         """Compute with double-checked locking; falls back to unlocked on error.
 
         Acquiring the lock is best-effort: if *any* backend raises while taking
@@ -624,7 +620,7 @@ class RuntimeMixin:
         try:
             lock_cm.__enter__()
         except Exception as e:  # noqa: BLE001 - any acquisition failure -> unlocked
-            self._warn_lock_failed(spec.func_name, e)
+            self._warn_lock_failed(spec.name, e)
             return compute()
         try:
             hit = self._reread(spec, call)
@@ -635,7 +631,7 @@ class RuntimeMixin:
             try:
                 lock_cm.__exit__(None, None, None)
             except Exception:  # noqa: BLE001 - releasing failed; compute already done
-                logger.debug("lock release failed for %s", spec.func_name)
+                logger.debug("lock release failed for %s", spec.name)
 
     def _compute_cache_key(self, func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
         return f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"

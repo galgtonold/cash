@@ -16,6 +16,7 @@ from ..data_source import DataSource
 from ..dependency_state import EXPLAINING as _EXPLAINING
 from ..tracking.file_dep_snapshot import dep_is_fresh, dep_path_for_this_process
 from .arg_hashing import unhashable_arg_fix
+from .cached_function import CachedFunction
 from .call_state import PROCESS_STARTED, KeyBuildFailed, UnhashableArgs, UnhashableDefault
 
 # Reason codes returned by `Cash._explain_call` / ``f.explain(...)``.
@@ -264,15 +265,7 @@ def entry_id_of(cache_key: str) -> str:
 class ExplainMixin:
     """``f.explain()`` and the reason recorded for each miss."""
 
-    def _explain_call(
-        self,
-        func: Callable,
-        func_name: str,
-        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
-        ttl: int | None,
-        args: tuple,
-        kwargs: dict,
-    ) -> CacheExplanation:
+    def _explain_call(self, cf: CachedFunction, args: tuple, kwargs: dict) -> CacheExplanation:
         """Return why a call with these args would hit or miss the cache.
 
         Pure introspection - does NOT call ``func``, does NOT touch
@@ -284,6 +277,7 @@ class ExplainMixin:
 
         See `CacheExplanation` for the return shape.
         """
+        func, func_name, dynamic_depends_on, ttl = cf.func, cf.name, cf.dynamic_depends_on, cf.ttl
         if self.config.disable:
             return CacheExplanation(
                 would_hit=False,
@@ -502,7 +496,9 @@ class ExplainMixin:
             # Only a call that raised leaves one behind; never let those pile up.
             self._pending_miss.clear()
         self._pending_miss[cache_key] = reason
-        self._last_key[func_name] = cache_key
+        cf = self._cached.get(func_name)
+        if cf is not None:
+            cf.last_key = cache_key
 
     def _absent_entry_reason(self, func_name: str, cache_key: str) -> tuple[str, str]:
         """Why there is no entry for *cache_key*. Reads state; changes none.
@@ -524,7 +520,8 @@ class ExplainMixin:
             if ttl_expired(outcome.get("stored_at", 0), written_ttl):
                 return MISS_TTL, f"written {age:.1f}s ago with ttl={written_ttl}s"
             return MISS_GONE, ("stored earlier in this process and since evicted or cleared")
-        previous = self._last_key.get(func_name)
+        cf = self._cached.get(func_name)
+        previous = cf.last_key if cf is not None else None
         since = "since the last call"
         doc = self._stored_keys.read(func_name)
         record = doc["keys"]

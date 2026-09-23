@@ -152,7 +152,7 @@ class RngMixin:
 
         Deliberately narrow on three axes:
 
-        * Only functions OBSERVED to draw (``_rng_drawing_funcs``), so seeding
+        * Only functions OBSERVED to draw (``CachedFunction.rng_modules``), so seeding
           the stream does not invalidate functions that never read it.
         * Only the *epoch*, never the raw RNG state -- the state advances on
           every draw, so keying on it would miss forever.
@@ -164,7 +164,8 @@ class RngMixin:
         draw has already been stored under an epoch-free key; the next call
         recomputes once and is stable from then on.
         """
-        modules = self._rng_drawing_funcs.get(func_name)
+        cf = self._cached.get(func_name)
+        modules = cf.rng_modules if cf is not None else None
         if modules is None:
             modules = self._load_rng_draw_marker(func_name)
         if not modules:
@@ -193,9 +194,9 @@ class RngMixin:
         need the key it is supposed to inform). One backend read per function per
         process; misses are remembered as empty so it is not retried.
         """
-        cached = self._rng_drawing_funcs.get(func_name)
-        if cached is not None:
-            return cached
+        cf = self._cached.get(func_name)
+        if cf is not None and cf.rng_modules is not None:
+            return cf.rng_modules
         modules: set[str] = set()
         try:
             stored = self.backend.get(self._rng_marker_key(func_name))
@@ -209,7 +210,8 @@ class RngMixin:
                 modules = {m for m in stored if isinstance(m, str)}
         except Exception:  # noqa: BLE001 - a marker miss must never break a call
             modules = set()
-        self._rng_drawing_funcs[func_name] = modules
+        if cf is not None:
+            cf.rng_modules = modules
         return modules
 
     def _store_rng_draw_marker(self, func_name: str, modules: set[str]) -> None:
@@ -232,7 +234,12 @@ class RngMixin:
         drew = {m for m in changed if m in pre_state}
         if not drew:
             return False
-        known = self._rng_drawing_funcs.setdefault(func_name, set())
+        cf = self._cached.get(func_name)
+        if cf is None:
+            return False
+        if cf.rng_modules is None:
+            cf.rng_modules = set()
+        known = cf.rng_modules
         newly = bool(drew - known)
         if newly:
             known.update(drew)
@@ -364,7 +371,9 @@ class RngMixin:
         # check their bound value per call.
         seed_params = seed_parameters(src)
         if seed_params:
-            self._seed_params[func_name] = seed_params
+            cf = self._cached.get(func_name)
+            if cf is not None:
+                cf.seed_params = seed_params
 
         try:
             unseeded, _messages, _has_seed = RandomnessDetector().analyze_code(src)
@@ -426,7 +435,9 @@ class RngMixin:
         """
         bound = None
         g = getattr(func, "__globals__", None) or {}
-        for expr, (call, root, is_param, path) in sorted(self._seed_params.get(func_name, {}).items()):
+        for expr, (call, root, is_param, path) in sorted(
+            getattr(self._cached.get(func_name), "seed_params", {}).items()
+        ):
             if is_param:
                 if bound is None:
                     try:

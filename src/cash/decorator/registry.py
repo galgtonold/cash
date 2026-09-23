@@ -13,6 +13,7 @@ from ..analysis.code_analyzer import CodeAnalyzer
 from ..data_source import DataSource, state_token_of
 from ..exceptions import CashCacheIneffectiveWarning
 from ..purity_analyzer import PurityReport, bindings_changed, get_analyzer, resolve_binding
+from .cached_function import PurityMode
 from .call_state import KeyBuildFailed
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,14 @@ logger = logging.getLogger(__name__)
 
 class RegistryMixin:
     """Dependencies between cached functions and their one-time analysis."""
+
+    def _purity_mode(self, func_name: str) -> PurityMode:
+        cf = self._cached.get(func_name)
+        return cf.purity if cf is not None else "warn"
+
+    def _is_frozen(self, func_name: str | None) -> bool:
+        cf = self._cached.get(func_name) if func_name is not None else None
+        return cf is not None and cf.frozen
 
     def _effective_ttl(self, func_name: str, own_ttl: int | None) -> int | None:
         """The TTL actually used for *func_name*: the minimum of its own TTL and
@@ -48,8 +57,9 @@ class RegistryMixin:
         visited.add(func_name)
         out: list[int | None] = []
         for dep in self.graph.get_dependencies(func_name):
-            if dep in self._func_ttls:
-                out.append(self._func_ttls[dep])
+            cf = self._cached.get(dep)
+            if cf is not None:
+                out.append(cf.ttl)
                 out.extend(self._collect_dep_ttls(dep, visited))
         return out
 
@@ -232,7 +242,7 @@ class RegistryMixin:
         self._ensure_closure_analyzed(func)
         func_name = self.get_func_key(func)
         report = self._purity_reports.get(func_name) or PurityReport()
-        mode = self._purity_modes.get(func_name, "warn")
+        mode = self._purity_mode(func_name)
         self._surface_purity(func_name, report, mode)
 
     def _ensure_closure_analyzed(self, func: Callable[..., Any]) -> None:

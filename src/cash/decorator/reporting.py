@@ -14,6 +14,7 @@ from .._clock import perf_counter as _perf_counter
 from ..dependency_state import EXPLAINING as _EXPLAINING
 from ..diagnostics import format_diagnostic, warn_diagnostic, warn_diagnostic_message
 from ..exceptions import CashCacheIneffectiveWarning
+from .cached_function import WARNINGS_MAX
 from .call_state import CALL_ENTRY, NESTED_CASH_SECONDS
 from .explain import MISS_FIRST, MISS_KEY_FAILED, MISS_MOCKED, MISS_RAISED, MISS_UNHASHABLE, entry_id_of, is_sampled_dep
 
@@ -321,10 +322,10 @@ class ReportingMixin:
                 "message": rendered,
                 "timestamp": time.time(),
             }
-            log = self._func_warnings.setdefault(func_name, [])
-            log.append(entry)
-            if len(log) > self._func_warnings_max:
-                del log[: len(log) - self._func_warnings_max]
+            cf = self._cached.get(func_name)
+            if cf is not None:
+                cf.warnings.append(entry)
+                del cf.warnings[:-WARNINGS_MAX]
         if once_per_version and not self._first_showing(func_name, rendered):
             entry["shown_by_an_earlier_run"] = True
             return
@@ -377,8 +378,10 @@ class ReportingMixin:
         every process that computes it, and a 2.5M-row parse cost 4x its body
         that way with nothing reporting it (round 20).
         """
-        culprit = self._arg_costs.get(func_name)
-        if culprit is not None and culprit[3] and culprit[3] in self._frozen_funcs:
+        cf = self._cached.get(func_name)
+        culprit = cf.arg_cost if cf is not None else None
+        producer = self._cached.get(culprit[3]) if culprit is not None and culprit[3] else None
+        if producer is not None and producer.frozen:
             # Already frozen: advising frozen=True on it (round 20) is noise.
             culprit = (*culprit[:3], None, *culprit[4:])
         try:

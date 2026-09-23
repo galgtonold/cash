@@ -190,33 +190,44 @@ def test_the_hit_line_and_the_summary_show_what_the_lookup_cost(tmp_path):
     # the bar once hashing a big list stopped walking it.
     from collections import Counter
 
-    c._function_stats["app.total"] = {
-        "hits": 2,
-        "misses": 0,
-        "total_time_saved": 0.02,
-        "lookup_seconds": 2.1,
-        "miss_reasons": Counter(),
-        "not_persisted": Counter(),
-        "not_stored": Counter(),
-        "bypassed": 0,
-    }
+    from cash.decorator.cached_function import CachedFunction
+
+    def account(name, stats):
+        c._cached[name] = CachedFunction(lambda: None, name, stats=stats)
+
+    account(
+        "app.total",
+        {
+            "hits": 2,
+            "misses": 0,
+            "total_time_saved": 0.02,
+            "lookup_seconds": 2.1,
+            "miss_reasons": Counter(),
+            "not_persisted": Counter(),
+            "not_stored": Counter(),
+            "bypassed": 0,
+        },
+    )
     summary = c.run_summary()
     assert "spent by cash on keys, lookups and stores, a net loss of 2.1s" in summary, summary
     assert "2.1s spent by cash" in summary, summary
 
     # A function that never hit cost its keys and stores on
     # every miss, and the summary said nothing about it.
-    c._function_stats["app.parse"] = {
-        "hits": 0,
-        "misses": 3,
-        "total_time_saved": 0.0,
-        "lookup_seconds": 0.0,
-        "miss_overhead_seconds": 3.0,
-        "miss_reasons": Counter({"no entry yet": 3}),
-        "not_persisted": Counter(),
-        "not_stored": Counter(),
-        "bypassed": 0,
-    }
+    account(
+        "app.parse",
+        {
+            "hits": 0,
+            "misses": 3,
+            "total_time_saved": 0.0,
+            "lookup_seconds": 0.0,
+            "miss_overhead_seconds": 3.0,
+            "miss_reasons": Counter({"no entry yet": 3}),
+            "not_persisted": Counter(),
+            "not_stored": Counter(),
+            "bypassed": 0,
+        },
+    )
     summary = c.run_summary()
     assert "a net loss of 5.1s" in summary, summary
     assert "3.0s spent by cash" in summary, summary

@@ -108,7 +108,7 @@ serve a value you meant to recompute, so fix those.
 
 ## CACHE-ASYNC-GENERATOR {#cache-async-generator}
 
-<!-- claim: cash/core.py:Cash.cache @56d9763d -->
+<!-- claim: cash/core.py:Cash.cache @75e545d3 -->
 **What happened.** You put `@cash.cache` on an async generator — an `async def`
 function that `yield`s. Cash does not cache those in this release, so the
 decorator handed your function straight back, unwrapped.
@@ -249,7 +249,7 @@ out of the cache is in the cache — which matters a great deal if the predicate
 was there to stop an incomplete or unwanted result being stored, and not at all
 if it was there to save space.
 
-<!-- claim: cash/decorator/store.py:StoreMixin._warn_cache_if_bypassed @e7967174 -->
+<!-- claim: cash/decorator/store.py:StoreMixin._warn_cache_if_bypassed @12524544 -->
 **What to do.** To get the predicate back, the result has to arrive in one
 piece. Either **raise** `chunk_max_items` / `chunk_max_bytes` above the size
 this result actually reaches, or return a list instead of an iterator — a
@@ -411,7 +411,7 @@ roomier volume.
 
 ## CACHE-RESULT-SHARED {#cache-result-shared}
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._warn_shared_result @209d97fe, cash/decorator/purity_checks.py:PurityChecksMixin._shared_with @26fa6105 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._warn_shared_result @0868a2a2, cash/decorator/purity_checks.py:PurityChecksMixin._shared_with @26fa6105 -->
 **What happened.** The result shares state with an object the caller still
 holds: it *is* an argument, holds one inside it, sits on the same memory as an
 ndarray argument, or is one of the function's module globals. On the run that
@@ -740,7 +740,7 @@ row posted to a service, the dict the caller inspects afterwards — the program
 is correct on the run that filled the cache and quietly different on every run
 after it.
 
-<!-- claim: cash/decorator/store.py:StoreMixin._store_refusal @4e1877c1, cash/decorator/purity_checks.py:PurityChecksMixin._argument_snapshot @929ba8ad -->
+<!-- claim: cash/decorator/store.py:StoreMixin._store_refusal @48b1ea5f, cash/decorator/purity_checks.py:PurityChecksMixin._argument_snapshot @9319e225 -->
 `argument mutation` is handled differently, because it is the one that caught
 people out: an object the caller still holds would stop being changed. A call
 seen changing an argument is **not stored** — the line names the argument, and
@@ -771,7 +771,7 @@ as the line inside your helper). It waives that effect and nothing else, so an
 effect added to the function later is still reported. `@cash.cache(assume_safe=True)`
 waives the whole function, including whatever is added to it later.
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._report_observed_effects @488c45ec -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._report_observed_effects @d7888ec4 -->
 One caveat worth knowing: only the path this particular call took was watched.
 An effect behind a branch that did not run was not seen, so silence here is not
 a proof of purity — this supplements the source scan behind
@@ -835,7 +835,7 @@ ways to mute it.
 
 ## IMPURE-SIDE-EFFECTS {#impure-side-effects}
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @6efa629c -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @9fe07f2d -->
 **What happened.** Before the first call, Cash reads the source of your function
 and of the helpers it calls, looking for shapes that make a cached result
 questionable. It found some. The message lists each one with its line number and
@@ -1279,7 +1279,7 @@ cache looks healthy and is silently doing nothing.
 
 ## KEY-NETWORK-READ {#key-network-read}
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @6efa629c, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @c6f9471b -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @9fe07f2d, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @c6f9471b -->
 **What happened.** Reading the source of the function you decorated found a
 call that fetches from a server: `requests.get(...)`, `requests.head(...)`,
 `requests.request("GET", ...)`, the same calls on `httpx`, or
@@ -1825,7 +1825,7 @@ Whichever you pick, pick it per statement or per function. Switching caching off
 across the board to "fix" this trades a known frozen value for a slow notebook
 and gains nothing.
 
-<!-- claim: cash/decorator/rng.py:RngMixin._warn_unseeded_randomness @68507ddb -->
+<!-- claim: cash/decorator/rng.py:RngMixin._warn_unseeded_randomness @2d41d2f7 -->
 The decorator form is checked when the decorator is applied rather than when the
 function runs, so it appears at import time, before the function has been called
 once, and once per decorated function. It reads that function's source alone: a
@@ -1967,7 +1967,7 @@ entry. Measured: three calls after the failure ran the body three times and each
 returned all ten items; the call after the write succeeded was the last one to
 run the body.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_with_lock @7c213409 -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_with_lock @3b0babd9 -->
 Both read paths run that probe, including the double-checked re-read taken
 inside the lock when `use_locking=True`. Until 2026-09-06 the locking path
 skipped it and served the broken entry as a *short* iterator — three of ten
@@ -2020,7 +2020,7 @@ not affected: the reloaded code is keyed afresh.
 result to the cache failed. The message names the backend and the exception.
 Nothing was stored.
 
-<!-- claim: cash/decorator/store.py:StoreMixin._store_in_cache @59457a8a -->
+<!-- claim: cash/decorator/store.py:StoreMixin._store_in_cache @e710d350 -->
 **Why it matters.** The result you received is correct — the failure is on the
 storage side only, and Cash deliberately reports it rather than raising it into
 your code. If this happens once, it costs one recompute. If it happens on every

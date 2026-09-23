@@ -41,7 +41,8 @@ class FileDepsMixin:
         As written rather than absolute, so a relative path keys the same on
         every machine.
         """
-        declared = self._declared_files.get(func_name)
+        cf = self._cached.get(func_name)
+        declared = cf.declared_files if cf is not None else ()
         if not declared:
             return state_hash
         names = json.dumps(sorted(raw for raw, _ in declared))
@@ -58,7 +59,8 @@ class FileDepsMixin:
         time with the tracker's other read hashes.
         """
 
-        for _, path in self._declared_files.get(func_name, ()):
+        cf = self._cached.get(func_name)
+        for _, path in cf.declared_files if cf is not None else ():
             if os.path.exists(path):
                 tracker.add_tracked(normalize_path(os.path.realpath(path)))
             else:

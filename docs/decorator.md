@@ -138,7 +138,7 @@ A notebook shows a badge on every statement. A script shows nothing by
 default, which makes it easy to assume caching is working when it isn't — so
 there are several ways to look.
 
-<!-- claim: cash/core.py:Cash.run_summary @5e2a67c4, cash/core.py:Cash._summary_reasons @0d5a6d85, cash/core.py:Cash._print_run_summary @f2a46f9f -->
+<!-- claim: cash/core.py:Cash.run_summary @8346c3db, cash/core.py:Cash._summary_reasons @0d5a6d85, cash/core.py:Cash._print_run_summary @f2a46f9f -->
 **What recomputed just now, and why?** Set `CASH_SUMMARY=1` and a
 per-function table prints to **stderr** when the process exits — stderr, so it
 never lands in a report, a pipe or a JSON response your program writes to
@@ -197,7 +197,7 @@ The id in brackets is the one `cash inspect --function` lists and
 `CASH_VERBOSE=1` or `verbose = true` give these lines without the other debug
 records.
 
-<!-- claim: cash/decorator/explain.py:ExplainMixin._absent_entry_reason @3da08492, cash/decorator/stored_keys.py:StoredKeyRecord.note_ram_only @39a4e46a -->
+<!-- claim: cash/decorator/explain.py:ExplainMixin._absent_entry_reason @3980b7f0, cash/decorator/stored_keys.py:StoredKeyRecord.note_ram_only @39a4e46a -->
 A reason is not limited to what this process saw: each function's recently
 stored keys are recorded beside the cache (in `.keys/`), so the first call of a
 new run can still say that the code changed, that the arguments are new, that
@@ -281,7 +281,7 @@ Worth understanding before any parameter. With a bare `@cash.cache` and nothing
 configured, a cached result is discarded and recomputed when **any** of these
 change:
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/registry.py:RegistryMixin._analyze_dependencies @9de1e072 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/registry.py:RegistryMixin._analyze_dependencies @0faafa3f -->
 | What changed | How it's detected |
 |---|---|
 | The **arguments** | Hashed by *content* — so DataFrames and arrays work, and two equal-but-distinct objects share one entry |
@@ -778,7 +778,7 @@ parameters below. And when a miss (or a suspicious hit) mystifies you,
 For the cases the automatic model above can't see — plus
 expiry, opt-outs, and the purity gates. All keyword-only and optional.
 
-<!-- claim: cash/core.py:Cash.cache @56d9763d -->
+<!-- claim: cash/core.py:Cash.cache @75e545d3 -->
 | Param | What it does |
 |---|---|
 | `depends_on=` | List of `Callable` or `DataSource` that contributes to the cache key |
@@ -829,7 +829,7 @@ After the TTL elapses, the next call recomputes and replaces the entry.
 Entries whose calls never come back stay on disk until you reclaim them —
 call `cash.cleanup()`, or run `python -m cash clear` from the CLI.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_ttl @4df547f6, cash/decorator/explain.py:ExplainMixin._absent_entry_reason @3da08492 -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_ttl @4df547f6, cash/decorator/explain.py:ExplainMixin._absent_entry_reason @3980b7f0 -->
 An entry remembers the `ttl` it was written with, and the decorator's
 current `ttl` applies too, so the **shorter** of the two wins. Lengthening
 `ttl=60` to `ttl=3600` does not rescue entries already written under 60 s:
@@ -859,7 +859,7 @@ def parse_config():
     return yaml.safe_load(open("config.yaml"))
 ```
 
-<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._track_declared_files @1a1a4d66 -->
+<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._track_declared_files @e10259dc -->
 Pass a list for multiple files. A declared file is recorded exactly as if the
 function had read it: its **content** fingerprint is stored with the entry and
 checked on every lookup, the same check automatic tracking uses. A `touch` that
@@ -958,7 +958,7 @@ business invariants — its job is purely "should this be cached".
 result fits in a single chunk. For multi-chunk results, the predicate
 is bypassed (warning fires) — see the iterator section below.
 
-<!-- claim: cash/decorator/store.py:StoreMixin._store_refusal @4e1877c1 -->
+<!-- claim: cash/decorator/store.py:StoreMixin._store_refusal @48b1ea5f -->
 **It decides what is written, not what is served.** `cache_if` is not part of
 the key, so adding it to a function that already has entries changes nothing
 about those entries: a `None` stored before you added
@@ -968,7 +968,7 @@ adding or tightening a predicate, drop what was stored under the old rule with
 
 ### `strict=` and `assume_safe=` — purity gates
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @6efa629c, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @9fe07f2d, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 By default, `@cash.cache` runs a static analyzer on the function body
 (and module-bounded helpers) on first call. What it does depends on what it finds:
 
@@ -1057,7 +1057,7 @@ on them.
 
 ### `allow_random=` — unseeded randomness
 
-<!-- claim: cash/decorator/rng.py:RngMixin._warn_unseeded_randomness @68507ddb -->
+<!-- claim: cash/decorator/rng.py:RngMixin._warn_unseeded_randomness @2d41d2f7 -->
 At decoration time, `@cash.cache` scans the function's source for draws
 from an unseeded RNG and emits a one-shot `CashRandomnessWarning`:
 
@@ -1193,7 +1193,7 @@ f.cache_info()
 #  'warnings': []}
 ```
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @4765fb6e -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @8bc573ba -->
 Keys:
 
 - **`hits`**, **`misses`**, **`hit_rate`** — counters since the wrapper
@@ -1233,14 +1233,14 @@ Keys:
 
 ### `func.cache_clear()`
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @4ef05293 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @b5ac9b37 -->
 Wipe backend entries whose key starts with this function's name. Also
 resets stats, drops the warnings log, and forgets the `_warn_once`
 dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/decorator/explain.py:ExplainMixin._explain_call @2a140859 -->
+<!-- claim: cash/decorator/explain.py:ExplainMixin._explain_call @85b77b70 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 
@@ -1558,7 +1558,7 @@ A network **read** is not in this group; see the next section.
 
 ### A cached GET goes stale
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @6efa629c, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._surface_purity @9fe07f2d, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03 -->
 `requests.get(url)` writes nothing, so it is not reported with the side
 effects. What the server returns is an **input**, and it is not in the key:
 the first answer is stored and served on every later call, in every later

@@ -83,9 +83,7 @@ def test_functions_are_ranked_by_time_saved(tmp_path):
 
     cheap(1)
     dear(1)
-    c._function_stats[
-        "__main__.dear" if "__main__.dear" in c._function_stats else next(k for k in c._function_stats if "dear" in k)
-    ]["total_time_saved"] = 99.0
+    c._cached[next(k for k in c._cached if "dear" in k)].stats["total_time_saved"] = 99.0
     text = c.run_summary()
     assert text.index("dear") < text.index("cheap")
 

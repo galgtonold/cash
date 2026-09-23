@@ -19,6 +19,7 @@ from ..exceptions import CacheBackendError, CashCacheIneffectiveWarning, CashCac
 from ..object_hashing import estimate_object_size
 from ..value_types import IMMUTABLE_PRIMS
 from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN
+from .cached_function import CachedFunction
 from .call_state import NO_WATCH
 
 logger = logging.getLogger(__name__)
@@ -92,7 +93,7 @@ class StoreMixin:
             # (round 20). Not waivable: no audit makes a fake the answer.
             refusal = "a unittest.mock object was called while it ran, so the result may be a test's fake"
         mutated = getattr(observer, "mutated_args", None)
-        if refusal is None and mutated and self._purity_modes.get(func_name, "warn") != "silent":
+        if refusal is None and mutated and self._purity_mode(func_name) != "silent":
             # A hit returns the stored value and leaves the caller's object as
             # it was, where this call changed it: downstream of the call, the
             # program then differs between a hit and a miss (round 19:
@@ -162,7 +163,7 @@ class StoreMixin:
             # CASH_DEBUG every int result logged "Cannot attach
             # _cash_lineage_hash to int" (round 19).
             return
-        frozen = func_name is not None and func_name in self._frozen_funcs
+        frozen = self._is_frozen(func_name)
         if frozen and type(result) in (list, tuple, dict):
             self._remember_frozen_container(result, func_name, self._lineage_hash(cache_key, auto_file_deps))
             return
@@ -325,7 +326,7 @@ class StoreMixin:
                 # copy at all. This used to ride on `decorator_entry`, which
                 # made `frozen=True` look undecorated to the rate ceiling and
                 # cost it disk persistence entirely.
-                copy_required=func_name not in self._frozen_funcs,
+                copy_required=not self._is_frozen(func_name),
             )
 
             # Kept, not a temporary: TieredBackend writes back where the value
@@ -366,9 +367,7 @@ class StoreMixin:
                 fix=STORE_FAILED_FIX,
             )
 
-    def _warn_cache_if_bypassed(
-        self, func_name: str, chunk_max_items: int, chunk_max_bytes: int, stacklevel: int | None = None
-    ) -> None:
+    def _warn_cache_if_bypassed(self, spec: CachedFunction, stacklevel: int | None = None) -> None:
         """One-shot: the result outgrew a single chunk, so cache_if cannot run.
 
         Applying it would mean materializing every chunk back into memory,
@@ -383,11 +382,11 @@ class StoreMixin:
         """
         self._warn_once(
             CashCacheIneffectiveWarning,
-            func_name,
+            spec.name,
             "",
-            f"@cash.cache on {func_name}: the result exceeded a single chunk "
-            f"(chunk_max_items={chunk_max_items}, "
-            f"chunk_max_bytes={chunk_max_bytes}), so it was cached without "
+            f"@cash.cache on {spec.name}: the result exceeded a single chunk "
+            f"(chunk_max_items={spec.chunk_max_items}, "
+            f"chunk_max_bytes={spec.chunk_max_bytes}), so it was cached without "
             f"cache_if ever being consulted.",
             code="CACHE-IF-BYPASSED",
             fix="raise chunk_max_items / chunk_max_bytes above the size this "
@@ -402,7 +401,7 @@ class StoreMixin:
         source,
         *,
         cache_key,
-        func_name,
+        spec,
         tracker,
         observer,
         rng_new,
@@ -411,10 +410,6 @@ class StoreMixin:
         args_hash,
         current_state_hash,
         ttl,
-        cache_if,
-        chunk_max_items,
-        chunk_max_bytes,
-        code_module=None,
     ):
         """Yield the producer's items as they come, and cache once it ends.
 
@@ -439,6 +434,8 @@ class StoreMixin:
         `next()` are summed, so a slow consumer cannot inflate the number the
         persistence decision reads.
         """
+        func_name, cache_if = spec.name, spec.cache_if
+        chunk_max_items, chunk_max_bytes = spec.chunk_max_items, spec.chunk_max_bytes
 
         buffer: list[Any] = []
         buffer_bytes = 0
@@ -467,7 +464,7 @@ class StoreMixin:
                     total_items += 1
                     if len(buffer) >= chunk_max_items or buffer_bytes >= chunk_max_bytes:
                         if chunk_index == 1 and cache_if is not None:
-                            self._warn_cache_if_bypassed(func_name, chunk_max_items, chunk_max_bytes)
+                            self._warn_cache_if_bypassed(spec)
                         self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl, execution_time=produced_seconds)
                         buffer = []
                         buffer_bytes = 0
@@ -485,7 +482,7 @@ class StoreMixin:
             self._check_argument_mutation(func_name, args, kwargs, args_hash, observer)
             self._report_observed_effects(func_name, observer)
             self._credit_remembered_reads(func_name, tracker, args, kwargs)
-            auto_file_deps = self._snapshot_tracked_deps(tracker, code_module)
+            auto_file_deps = self._snapshot_tracked_deps(tracker, spec.func.__module__)
 
             if chunk_index == 0:
                 # Everything fit in one chunk, so cache_if can still see the
@@ -512,7 +509,7 @@ class StoreMixin:
             else:
                 if buffer:
                     if chunk_index == 1 and cache_if is not None:
-                        self._warn_cache_if_bypassed(func_name, chunk_max_items, chunk_max_bytes)
+                        self._warn_cache_if_bypassed(spec)
                     self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl, execution_time=produced_seconds)
                     chunk_index += 1
                 self._store_chunked_manifest(

@@ -50,18 +50,6 @@ class BuiltKey(NamedTuple):
     normalized_args: tuple[tuple, dict]
 
 
-class CallSpec(NamedTuple):
-    """What a cached function was decorated with: fixed for all its calls."""
-
-    func: Callable
-    func_name: str
-    dynamic_depends_on: Any
-    ttl_decl: int | None
-    cache_if: Callable[[Any], bool] | None
-    chunk_max_items: int
-    chunk_max_bytes: int
-
-
 class Call:
     """One call's state, from the lookup (`Cash._lookup`) to the store
     (`Cash._finish_miss`), shared by the sync and async wrappers."""

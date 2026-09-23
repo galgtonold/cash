@@ -39,7 +39,7 @@ def _isolated_epochs():
 def inst(tmp_path):
     """An isolated Cash, not the process-wide ``cash.cache`` singleton.
 
-    The singleton persists ``_rng_drawing_funcs`` and its backend across every
+    The singleton persists its RNG verdicts and its backend across every
     test in the worker, so under xdist another test's markers and cached entries
     leak in -- exactly the cross-test contamination that made this file pass
     alone and fail at ``-n 16``. A private backend keeps each test's RNG state
@@ -147,7 +147,7 @@ def test_no_entry_is_left_under_the_epoch_free_key(_isolated_epochs, inst):
     key and matches it -- and a restart guarantees the rebuild, because the
     in-memory "this function draws" verdict is gone.
 
-    Clearing ``_rng_drawing_funcs`` below is precisely what a kernel restart
+    Forgetting ``rng_modules`` below is precisely what a kernel restart
     does. Without the fix the second phase HITS the epoch-free entry and
     returns the old seed's value.
     """
@@ -160,7 +160,8 @@ def test_no_entry_is_left_under_the_epoch_free_key(_isolated_epochs, inst):
 
     # Simulate a restart: the observed-draw verdict is forgotten, the cache
     # is not. Then change the seed, as a user would.
-    inst._rng_drawing_funcs.clear()
+    for cf in inst._cached.values():
+        cf.rng_modules = None
     _isolated_epochs["numpy.random"] = "epoch-B"
     np.random.seed(777)
     before = len(calls)

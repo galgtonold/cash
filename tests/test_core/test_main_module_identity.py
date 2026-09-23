@@ -164,7 +164,7 @@ def test_two_scripts_with_different_names_stay_apart(tmp_path):
 #
 # Renaming a function renames the key into the dependency graph, the purity
 # reports, ``helper_resolution_paths``, ``source_hashes`` and
-# ``_purity_modes``. The rest of the suite defines its functions inside test
+# its ``CachedFunction``. The rest of the suite defines its functions inside test
 # modules, so none of it exercises those lookups under ``__main__`` -- the
 # whole suite passed while this path was unchecked.
 #

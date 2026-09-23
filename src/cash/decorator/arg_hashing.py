@@ -246,19 +246,10 @@ class ArgHashingMixin:
         signature, ``*args`` calls that don't match, deliberately mismatched
         calls) returns the inputs unchanged, so behavior never regresses.
         """
-        func = self.functions.get(func_name)
-        cached = self._signatures.get(func_name)
-        # Re-read the signature when the name has been rebound to a different
-        # function object: a notebook cell re-run with an edited default keeps
-        # the qualname but changes what `apply_defaults()` must fold.
-        if cached is not None and cached[0] is func:
-            sig = cached[1]
-        else:
-            try:
-                sig = inspect.signature(func) if func is not None else None
-            except (ValueError, TypeError):
-                sig = None
-            self._signatures[func_name] = (func, sig)
+        # Read once per decoration: a notebook cell re-run with an edited
+        # default gets a new `CachedFunction`, and with it the new signature.
+        cf = self._cached.get(func_name)
+        sig = cf.signature if cf is not None else None
         if sig is None:
             return args, kwargs
         try:
@@ -720,9 +711,7 @@ class ArgHashingMixin:
         if cost is None:
             return
         label, seconds, type_name, producer, old_pandas = cost
-        known = self._arg_costs.get(func_name)
-        if known is not None and known[2] >= seconds:
+        cf = self._cached.get(func_name)
+        if cf is None or (cf.arg_cost is not None and cf.arg_cost[2] >= seconds):
             return
-        if known is None and len(self._arg_costs) >= 1024:
-            return
-        self._arg_costs[func_name] = (label, type_name, seconds, producer, old_pandas)
+        cf.arg_cost = (label, type_name, seconds, producer, old_pandas)
