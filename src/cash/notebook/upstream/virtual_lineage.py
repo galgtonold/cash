@@ -100,26 +100,42 @@ _FORWARD_PROBE_PLACEHOLDER = object()
 
 
 class _InputHashes(dict):
-    """A trace entry's input lineages, and those of its not-yet-defined callees' globals.
+    """A trace entry's input lineages, plus what only its cache key reads.
 
     ``input_hashes`` names the statement's own inputs, and other code copies
-    it as such (a restore records it as the variable's input lineages). The
-    globals a simulated-only callee reads (see ``VirtualCallable``) belong in
-    the key, at the statement's position, but nowhere else -- so they ride
-    alongside, read back only when the key is rebuilt from the trace.
+    it as such (a restore records it as the variable's input lineages). Two
+    more things belong in the key, at the statement's position, but nowhere
+    else, so they ride alongside and are read back only when the key is
+    rebuilt from the trace: the globals a simulated-only callee reads (see
+    ``VirtualCallable``), and the hidden RNG variables the statement reads
+    (``lineage_formula.key_hidden_reads``).
     """
 
-    __slots__ = ("callee_lineages",)
+    __slots__ = ("callee_lineages", "hidden_lineages")
 
-    def __init__(self, own: dict[str, str], callee_lineages: dict[str, str]) -> None:
+    def __init__(
+        self,
+        own: dict[str, str],
+        callee_lineages: dict[str, str] | None = None,
+        hidden_lineages: dict[str, str | None] | None = None,
+    ) -> None:
         super().__init__(own)
-        self.callee_lineages = callee_lineages
+        self.callee_lineages = callee_lineages or {}
+        self.hidden_lineages = hidden_lineages or {}
 
 
 def key_lineages(input_hashes: dict[str, str]) -> dict[str, str]:
-    """*input_hashes* plus any callee lineages riding on it (``_InputHashes``)."""
-    callee = getattr(input_hashes, "callee_lineages", None)
-    return {**callee, **input_hashes} if callee else input_hashes
+    """*input_hashes* plus the key-only lineages riding on it (``_InputHashes``)."""
+    callee = getattr(input_hashes, "callee_lineages", None) or {}
+    hidden = {k: v for k, v in (getattr(input_hashes, "hidden_lineages", None) or {}).items() if v is not None}
+    return {**callee, **hidden, **input_hashes} if callee or hidden else input_hashes
+
+
+def key_inputs(inputs: set[str], input_hashes: dict[str, str]) -> set[str]:
+    """The names a trace entry's cache key reads: its inputs plus the hidden
+    variables riding on *input_hashes*, as the runtime keys it."""
+    hidden = getattr(input_hashes, "hidden_lineages", None)
+    return set(inputs) | set(hidden) if hidden else set(inputs)
 
 
 #: Cache keys whose file dependencies were found fresh in the current cell run
@@ -846,7 +862,7 @@ class VirtualLineage:
         try:
             cache_key, _, _, _, _ = compute_cache_key(
                 stmt_code,
-                inputs,
+                key_inputs(inputs, input_hashes),
                 ctx=CacheKeyContext(
                     variable_lineage=self.variable_lineage,
                     user_ns=self.shell.user_ns,
@@ -1268,8 +1284,11 @@ class VirtualLineage:
             elif inp in self.variable_lineage:
                 input_hashes[inp] = self.variable_lineage[inp]
         callee_lineages = self._virtual_callee_lineages(inputs, virtual_lineage, virtual_modules)
-        if callee_lineages:
-            input_hashes = _InputHashes(input_hashes, callee_lineages)
+        hidden_lineages = {
+            var: virtual_lineage.get(var, self.variable_lineage.get(var)) for var in key_hidden_reads(stmt_code, self)
+        }
+        if callee_lineages or hidden_lineages:
+            input_hashes = _InputHashes(input_hashes, callee_lineages, hidden_lineages)
 
         outputs, lookup_time, files_stale, stmt_file_deps = self._update_virtual_lineage(
             stmt_code,
@@ -2963,7 +2982,7 @@ class VirtualLineage:
             # can look up lineages for inputs that aren't in variable_lineage yet.
             cache_key, _, _, _, _ = compute_cache_key(
                 stmt_code,
-                inputs,
+                key_inputs(inputs, input_hashes),
                 ctx=CacheKeyContext(
                     variable_lineage=self.variable_lineage,
                     user_ns=self.shell.user_ns,
