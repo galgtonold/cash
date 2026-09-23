@@ -268,11 +268,12 @@ class TestForwardProbePopulatesState:
 
     def test_placeholder_injected_into_user_ns(self):
         """When the forward probe resolves a broken var, a placeholder
-        must appear in user_ns so _check_input_lineage_skip passes."""
+        must appear in user_ns, or the statement's missing input would stop
+        its cache lookup (``cacheability_decision._has_missing_lineage``)."""
         checker, shell, backend, PLACEHOLDER = self._make_checker()
 
-        # Simulate a cache hit
-        backend.get.return_value = ({"file_dependencies": {}}, {"variables": {"df": "data"}})
+        # Simulate a cache hit: the probe reads metadata only
+        backend.get_metadata.return_value = {"file_dependencies": {}, "output_lineages": {"df": "lineage_hash_abc"}}
 
         broken = {"df"}
         virtual_lineage = {"df": "lineage_hash_abc"}
@@ -298,7 +299,7 @@ class TestForwardProbePopulatesState:
         checker, shell, backend, PLACEHOLDER = self._make_checker()
 
         # Simulate a cache miss
-        backend.get.return_value = (None, None)
+        backend.get_metadata.return_value = None
 
         broken = {"df"}
         virtual_lineage = {"df": "lineage_hash_abc"}
@@ -325,7 +326,7 @@ class TestForwardProbePopulatesState:
         existing_value = [1, 2, 3]
         shell.user_ns["df"] = existing_value
 
-        backend.get.return_value = ({"file_dependencies": {}}, {"variables": {"df": "data"}})
+        backend.get_metadata.return_value = {"file_dependencies": {}, "output_lineages": {"df": "lineage_hash_abc"}}
 
         broken = {"df"}
         virtual_lineage = {"df": "lineage_hash_abc"}

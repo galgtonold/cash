@@ -73,9 +73,10 @@ class TestForwardProbeUpstreamSkip:
 
     @pytest.mark.timeout(60)
     def test_no_nameerror_when_probe_resolves_var(self, nb_runner):
-        """Regression: forward probe must inject placeholder + lineage so
-        statement processor's _check_input_lineage_skip doesn't bail out,
-        preventing NameError when the broken var is used as input."""
+        """Regression: forward probe must inject placeholder + lineage so the
+        statement's missing input does not stop its cache lookup
+        (``cacheability_decision._has_missing_lineage``), preventing NameError
+        when the broken var is used as input."""
         nb_runner.create_notebook(
             [
                 "%cash_on",
