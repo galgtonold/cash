@@ -20,7 +20,7 @@ serialized, and laid out under `.cash/` — is an **implementation detail** and
 **may change between minor versions**. Cache entries written by one minor version
 are not guaranteed to be readable by another.
 
-**After upgrading cash, run `%cash_repair --full`** (or delete `.cash/`) to clear
+**After upgrading cash, run `cash clear --all`** (or delete `.cash/`) to clear
 any entries written by the previous version. A stale entry from an older format
 is discarded rather than misread — you never get a *wrong* value from a format
 change, only a recompute — but clearing avoids the wasted space and the

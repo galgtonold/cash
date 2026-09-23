@@ -733,12 +733,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 "  %cash_debug on      Enable debug output\n"
                 "  %cash_debug off     Disable debug output\n"
                 "  %cash_debug json    JSON-formatted debug output\n"
-                "  %cash_debug file p  Log debug output to file path p\n"
-                "  %cash_verify        Check cache integrity\n"
-                "  %cash_verify --fix  Check and remove corrupted entries\n"
-                "  %cash_repair        Remove corrupted cache entries\n"
-                "  %cash_repair --state  Reset tracking (keep cache)\n"
-                "  %cash_repair --full   Clear all cache and state"
+                "  %cash_debug file p  Log debug output to file path p"
             )
         elif topic in ("collab", "collaboration", "sharing"):
             print(
@@ -782,8 +777,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 "  %cash_debug on|off   Toggle debug output\n"
                 "\n"
                 "Cache Management:\n"
-                "  %cash_verify         Check cache integrity\n"
-                "  %cash_repair         Fix corrupted entries\n"
                 "  %cash_export file    Export cache to file\n"
                 "  %cash_import file    Import cache from file\n"
                 "  !cash inspect        Every entry: size, time it saves, uses\n"

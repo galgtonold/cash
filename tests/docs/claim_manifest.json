@@ -137,7 +137,7 @@
     "audited": "2026-07-27"
   },
   "docs/magics.md": {
-    "anchors": 20,
+    "anchors": 18,
     "audited": "2026-07-27"
   },
   "docs/migration_guide.md": {
@@ -177,7 +177,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/debugging-and-monitoring.md": {
-    "anchors": 14,
+    "anchors": 13,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/dynamic-dependencies.md": {

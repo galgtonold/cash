@@ -254,10 +254,10 @@ The output gives the entry count, the total size, and a **per-function table sor
     To stop recording, set `analytics = false` in the config, or
     `CASH_ANALYTICS=0`; no file is created then.
 
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_repair @95849d4b, cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_export @d9f6e534, cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_import @cde3d810 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_export @d9f6e534, cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_import @cde3d810 -->
 ## Cache management — export, import, clear
 
-When diagnosis is done and you need to *act*, four notebook magics and one CLI command cover the lifecycle:
+When diagnosis is done and you need to *act*, two notebook magics and one CLI command cover the lifecycle:
 
 ### Export
 
@@ -280,15 +280,9 @@ Use `--merge` when pulling in a teammate's cache without losing your own entries
 
 ### Clear
 
-From inside a notebook, `%cash_repair` covers the two flavors of reset:
-
-```python { .nb-cell }
-%cash_repair             # remove corrupted entries, keep healthy ones
-%cash_repair --state     # reset in-memory tracking, keep on-disk cache
-%cash_repair --full      # clear cache + reset state — start clean
-```
-
-From outside, the CLI:
+Clearing is the CLI's job. Run it from a terminal, or from a notebook cell
+with a leading `!`; restart the kernel afterwards so no in-memory lineage
+outlives the entries it pointed at:
 
 ```bash
 cash clear --all                      # delete the cache in use
@@ -330,7 +324,6 @@ For anything that needs to survive a version bump, stick to `f.explain()` and `%
 | `%cash_debug on/off/json/file <path>` | Notebook | line magic | Toggles DEBUG-level cash logging with five labelled prefixes. |
 | `%cash_export <file> [--vars X,Y] [--json]` | Notebook | line magic | Dump cache (or lineage) to a portable file. |
 | `%cash_import <file> [--merge]` | Notebook | line magic | Load cache from a file; `--merge` preserves existing entries. |
-| `%cash_repair [--state] [--full]` | Notebook | line magic | Clear corrupted entries (default), reset state only (`--state`), or full reset (`--full`). |
 | `cash inspect [path]` | CLI | shell command | Summarise a cache dir or notebook's sibling `.cash`. Read-only. |
 | `cash clear [path] [--all]` | CLI | shell command | Delete a cache directory. **No confirmation prompt.** |
 | `CacheExplanation` | Type | `from cash import CacheExplanation` | Frozen dataclass returned by `explain()`. Fields: `would_hit`, `reason`, `func_name`, `cache_key`, `details`, `cache_dir`. |

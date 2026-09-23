@@ -157,8 +157,7 @@ import cash
 %cash_provenance --time     # Timeline of all computations
 ```
 
-### Verify cache integrity
+### Clear the cache
 ```python
-%cash_verify       # Check for corruption
-%cash_repair       # Fix corrupted entries
+!cash clear --all  # Delete the cache in use, then restart the kernel
 ```

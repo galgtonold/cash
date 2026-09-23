@@ -104,7 +104,7 @@ workflow?" case, see [Why Cash?](why-cash.md); for the vocabulary, see the
     Three escape hatches: `@cash:no-cache` on one statement, `%cash_off` to
     disable auto-caching for the rest of the session (not just one cell -- run
     `%cash_on` to re-enable), or the `cash clear` CLI command. To wipe
-    everything, delete `.cash/` or run `%cash_repair --full`. See
+    everything, delete `.cash/` or run `cash clear --all`. See
     [Annotations](annotations.md) and [CLI reference](cli.md).
 
 ## Production readiness
@@ -123,7 +123,7 @@ workflow?" case, see [Why Cash?](why-cash.md); for the vocabulary, see the
     bug reports, and where cash knows it can be wrong it says so on
     [Known limitations](known-limitations.md). Treat it like any library you'd
     pin — this is a `0.x` release, so the API and cache format may change
-    between minor versions (run `%cash_repair --full` after upgrading). The
+    between minor versions (run `cash clear --all` after upgrading). The
     [CHANGELOG](https://github.com/galgtonold/cash/blob/main/CHANGELOG.md)
     documents breaking changes.
 

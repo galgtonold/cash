@@ -2,7 +2,7 @@
 
 Cash registers a suite of IPython magic commands that control caching, inspect
 session state, and move cache data between sessions. This page is the canonical
-reference for all **20** magics — each entry lists the exact signature, every
+reference for all **18** magics — each entry lists the exact signature, every
 parsed flag, and a working example. Behaviour is derived directly from
 `src/cash/notebook/ipython/magics.py` and `src/cash/notebook/ipython/admin.py`.
 
@@ -27,8 +27,6 @@ parsed flag, and a working example. Behaviour is derived directly from
 | [`%cash_stats`](#cash_stats) | Session-wide cache statistics. |
 | [`%cash_debug`](#cash_debug) | Toggle / configure debug logging. |
 | [`%%cash`](#cash-cell) | Cache a single cell explicitly. |
-| [`%cash_verify`](#cash_verify) | Audit cache integrity, optionally delete corrupted entries. |
-| [`%cash_repair`](#cash_repair) | Recover from corruption or reset tracking state. |
 | [`%cash_provenance`](#cash_provenance) | Variable computation history. |
 | [`%cash_track`](#cash_track) | Watch a local module for source changes. |
 | [`%cash_diff`](#cash_diff) | Diff current session against an exported cache file. |
@@ -129,7 +127,7 @@ trivial statements in normal use.
 ```
 
 ### `%cash_help`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_help @8807e732 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_help @6cf2d3d6 -->
 
 Print a quick-reference card. With no argument the main card is shown; pass a
 topic name to drill into a sub-card.
@@ -142,7 +140,7 @@ topic name to drill into a sub-card.
   module tracking, annotation syntax). See [Annotations](annotations.md) for the
   full `@cash:` directive reference.
 - `badge` / `badges` — Badge display modes and status icons.
-- `debug` / `debugging` — Debug logging and verification commands.
+- `debug` / `debugging` — Debug logging commands.
 - `collab` / `collaboration` / `sharing` — Export / import / diff commands.
 - `inspect` / `provenance` / `audit` — Status, stats, provenance, audit, log,
   and `!cash inspect` for every cache entry's size, time saved, and uses.
@@ -351,65 +349,6 @@ patches. Cash intercepts that entry point as well, so awaited cells get lineage
 tracking, upstream reset, and result caching — the async pipeline is the
 line-for-line twin of the sync one. A cache hit returns before the coroutine is
 built, so an unchanged re-run skips the `await` rather than re-issuing the call.
-
----
-
-## Admin and integrity
-
-### `%cash_verify`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_verify @3c454866 -->
-
-Audit cache integrity by reading every entry in the backend. Reports total,
-healthy, corrupted, and the first 20 issues. Also notes lineage entries whose
-variables are no longer in the namespace.
-
-**Signature:** `%cash_verify [--fix]`
-
-**Arguments:**
-
-- *(no argument)* — Read-only audit; suggests running `--fix` if issues are
-  found.
-- `--fix` — Call `backend.delete(key)` on every corrupted entry.
-
-**Note:** every built-in backend implements `list_entries`, so this works
-everywhere out of the box. A custom third-party backend that cannot list its
-entries makes the command print `[Error] Error accessing backend: ...` and
-return.
-
-**Example:**
-
-```python
-%cash_verify
-%cash_verify --fix
-```
-
-### `%cash_repair`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_repair @95849d4b -->
-
-Recover from corruption or reset tracking state. Three modes with different
-levels of aggression.
-
-**Signature:** `%cash_repair [--full|--state]`
-
-**Arguments:**
-
-- *(no argument)* — Default: run `%cash_verify --fix`, then prune lineage
-  entries whose variables are no longer in `shell.user_ns`.
-- `--state` — Clear all in-memory tracking state (variable lineage, executed
-  cell codes/hashes, file deps, mutation lineage, variable hashes/sources,
-  current-session hashes, raw cell codes). **Cache backend is preserved.**
-- `--full` — Clear the backend (`backend.clear()`) **and** all in-memory
-  state.
-
-After `--state` or `--full` you must re-run upstream cells to rebuild lineage.
-
-**Example:**
-
-```python
-%cash_repair
-%cash_repair --state
-%cash_repair --full
-```
 
 ---
 

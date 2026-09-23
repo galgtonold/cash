@@ -1,18 +1,15 @@
 """Argument parsing shared by every ``%cash_*`` line magic.
 
 A line magic receives its arguments as one raw string, comment and all: IPython
-hands ``%cash_repair --full  # comment`` to the magic as ``"--full  # comment"``.
+hands ``%cash_stats reset  # comment`` to the magic as ``"reset  # comment"``.
 Every magic here used to reach for ``line.strip().lower()`` and compare the
 result against a literal flag, so a trailing comment silently defeated the
 match and the magic fell through to its default branch — usually a *different*
 operation, reported as a success.
 
-That is a parsing bug with a blast radius: ``%cash_repair --full`` is the only
-documented recovery from a poisoned cache entry, so a comment turned "clear the
-cache" into "don't, and say it worked". The same shape sits under
-``%cash_persist on  # comment`` (falls through to a *toggle* — the opposite of
-what was asked) and ``%cash_stats reset  # comment`` (prints stats, resets
-nothing).
+``%cash_stats reset  # comment`` printed the stats and reset nothing, and
+``%cash_persist on  # comment`` fell through to a *toggle* — the opposite of
+what was asked.
 
 The two helpers below are the shared parse, so the gap is closed once rather
 than at each of the ~14 call sites:

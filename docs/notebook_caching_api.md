@@ -11,7 +11,7 @@ actually buys you, and the behaviors that are unique to running inside a live
 kernel.
 
 It's the notebook-side twin of the [decorator guide](decorator.md). For the
-full magic-command reference (all 20 magics, every flag) see
+full magic-command reference (all 18 magics, every flag) see
 [Magic commands](magics.md); for per-statement control comments see
 [Annotations](annotations.md); for the programmatic entry points (writing
 tooling around cash) see the [notebook API reference](api/notebook.md).
@@ -309,7 +309,6 @@ These are all magics — the full reference, with every flag, is in
 | Trace how a variable was computed | [`%cash_provenance`](magics.md#cash_provenance) |
 | Watch a local module for source changes | [`%cash_track`](magics.md#cash_track) |
 | Snapshot a cache to a file (bug report, archive) | [`%cash_export`](magics.md#cash_export) / [`%cash_import`](magics.md#cash_import) — for team sharing prefer a [shared backend](tutorials/feature-guides/sharing-caches.md) |
-| Audit or repair cache integrity | [`%cash_verify`](magics.md#cash_verify) / [`%cash_repair`](magics.md#cash_repair) |
 | Print the quick-reference card | [`%cash_help`](magics.md#cash_help) |
 
 For programmatic access — reading statement metrics or lineage from tooling

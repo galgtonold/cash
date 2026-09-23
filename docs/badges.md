@@ -152,7 +152,7 @@ A larger file is different. Cash hashes three regions of it rather than every by
 
 **Why:** A helper function called from this statement had its source change since the last run. The dedicated `FUNCTION_CHANGED` upstream row identifies which one (`score_rows` here).
 
-**Fix:** Expected when you edit a helper. If you didn't edit it, you may be re-importing across kernel sessions where the source bytes differ trivially — `%cash_track` and `%cash_verify` help diagnose this.
+**Fix:** Expected when you edit a helper. If you didn't edit it, you may be re-importing across kernel sessions where the source bytes differ trivially — `%cash_track` helps diagnose this.
 
 ### Module reloaded
 

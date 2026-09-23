@@ -1,19 +1,13 @@
 """A magic must do what it was asked, or say it didn't (CAS-181).
 
-``%cash_repair --full  # comment`` ran the NON-full repair, left the cache
-intact, and printed ``[OK] Repair complete.`` The trailing comment defeated an
-``== '--full'`` match, so the flag fell through to the default branch.
-
-Why this class is worth pinning rather than patching once: ``%cash_repair
---full`` is the only documented recovery from a poisoned cache entry. Cash
-poisons a value -> the user reaches for the escape hatch -> it silently no-ops
--> it reports success -> the user now trusts the poisoned number. A recovery
-tool that falsely reports success converts a recoverable state into a
-confidently wrong one.
+A trailing ``# comment`` used to defeat an ``== 'reset'``-style match, so the
+flag fell through to the magic's default branch: a *different* operation,
+reported as a success. ``%cash_stats reset  # comment`` printed the stats and
+reset nothing; ``%cash_persist on  # comment`` toggled persistence off.
 
 The same fall-through shape sits under every magic that compares a stripped arg
 string to a literal, so these tests cover the shared parse (``_args.py``) and
-each mutating magic, not just the reported call site.
+each mutating magic.
 """
 
 from __future__ import annotations
@@ -55,76 +49,17 @@ def test_parse_mode_distinguishes_default_from_unknown():
     Collapsing them is the bug: an unrecognised flag becomes "run the default"
     and then reports success.
     """
-    known = ("", "--full", "--state")
+    known = ("", "json", "reset")
     assert parse_mode("", known) == ""
-    assert parse_mode("--full  # c", known) == "--full"
-    assert parse_mode("--FULL", known) == "--full"
-    assert parse_mode("--ful", known) is None  # typo
-    assert parse_mode("--full --state", known) is None  # junk
+    assert parse_mode("reset  # c", known) == "reset"
+    assert parse_mode("RESET", known) == "reset"
+    assert parse_mode("rest", known) is None  # typo
+    assert parse_mode("reset json", known) is None  # junk
     assert parse_mode("nonsense", known) is None
 
 
 # ---------------------------------------------------------------------------
-# %cash_repair - the reported call site
-# ---------------------------------------------------------------------------
-
-
-def test_repair_full_with_trailing_comment_clears_the_cache(
-    cash_magics,
-    mock_shell,
-    cash_instance,
-    capsys,
-):
-    """The reported bug: a comment must not downgrade --full to a no-op."""
-    backend = cash_instance.backend
-    backend.set("poisoned", b"value", {"func_name": "t"})
-    cash_magics._tracking_state.variable_lineage["x"] = "hash1"
-
-    cash_magics.cash_repair("--full  # comment")
-    out = capsys.readouterr().out
-
-    assert backend.list_entries() == [], "the cache was NOT cleared"
-    assert len(cash_magics._tracking_state.variable_lineage) == 0
-    assert "Full repair" in out
-
-
-def test_repair_unknown_argument_refuses_loudly_and_repairs_nothing(
-    cash_magics,
-    mock_shell,
-    cash_instance,
-    capsys,
-):
-    """A typo'd flag must not silently run a different repair and claim success."""
-    backend = cash_instance.backend
-    backend.set("entry", b"value", {"func_name": "t"})
-    cash_magics._tracking_state.variable_lineage["ghost"] = "hash1"
-
-    cash_magics.cash_repair("--ful")  # typo for --full
-    out = capsys.readouterr().out
-
-    assert "Repair complete" not in out, "reported success for a repair it did not run"
-    assert "--ful" in out and "unrecognised" in out.lower()
-    # Nothing was touched: neither the repair the user asked for nor another one.
-    assert backend.list_entries() != []
-    assert "ghost" in cash_magics._tracking_state.variable_lineage
-
-
-def test_repair_default_names_the_repair_that_ran(
-    cash_magics,
-    mock_shell,
-    cash_instance,
-    capsys,
-):
-    """ "Repair complete." must not read as "your cache is clean now"."""
-    cash_magics.cash_repair("")
-    out = capsys.readouterr().out
-
-    assert "default mode" in out
-    assert "--full" in out, "should point at the command that DOES clear the cache"
-
-
-# ---------------------------------------------------------------------------
-# The same gap in the other mutating magics
+# The mutating magics
 # ---------------------------------------------------------------------------
 
 
