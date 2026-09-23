@@ -484,6 +484,7 @@ _NOTEBOOK_LABELS: dict[EffectKind, str] = {
     EffectKind.FILE_WRITE: "file_write",
     EffectKind.NETWORK_WRITE: "network",
     EffectKind.NETWORK: "network",
+    EffectKind.DB_WRITE: "database_write",
     EffectKind.SUBPROCESS: "system",
     EffectKind.DISPLAY: "display",
 }
@@ -505,12 +506,6 @@ _NOT_YET_REFUSED: frozenset[str] = frozenset(
         "upload_file",
         "upload_fileobj",
         "put_object",
-        # a database, through a cursor or connection
-        "execute",
-        "executemany",
-        "executescript",
-        "commit",
-        "rollback",
         # the clock: forms the decorator knew and the notebook did not
         "datetime.today",
         "datetime.datetime.today",
@@ -532,9 +527,6 @@ _NOT_YET_REFUSED: frozenset[str] = frozenset(
     }
 )
 
-#: Database writes the notebook refused as file writes before.
-_REFUSED_AS_FILE_WRITES: frozenset[str] = frozenset({"to_sql", "to_gbq"})
-
 
 def notebook_effect(call: ast.Call, namespace: Mapping[str, Any] | None = None) -> Effect | None:
     """The effect *call* has, as the notebook path judges it, or None.
@@ -544,8 +536,6 @@ def notebook_effect(call: ast.Call, namespace: Mapping[str, Any] | None = None) 
     effect = classify_call(call, namespace)
     if effect is None or effect.name in _NOT_YET_REFUSED:
         return None
-    if effect.method and effect.name in _REFUSED_AS_FILE_WRITES:
-        return effect._replace(kind=EffectKind.FILE_WRITE)
     return effect
 
 

@@ -198,13 +198,15 @@ request never gets sent). Cash's side-effect analysis flags these statements as
 | Filesystem changes | `os.remove()`, `shutil.move()`, `shutil.copyfile()`, `os.symlink()`, `os.chmod()`, `Path(p).mkdir()`, `Path(p).touch()`, `Path(p).unlink()` | The change to disk wouldn't happen |
 | System calls | `os.system()`, `os.popen()`, `subprocess.run()` | The process wouldn't run |
 | Network writes | `requests.post()`, `requests.put()`, `requests.delete()`, `requests.patch()`, `requests.request("POST", ...)`, `urlopen(url, data)` | The request wouldn't be sent |
-| Database writes | `df.to_sql()` | The rows wouldn't reach the database |
+| Database writes | `df.to_sql()`, `cur.execute(sql)`, `cur.executemany(...)`, `conn.commit()` | The rows wouldn't reach the database |
 
 Read-style calls are deliberately **not** treated as side effects:
 `requests.get()`, `requests.head()`, `urlopen(url)` without data, and `open(...)`
-in read mode are safe to cache, exactly like reading a CSV. Only the verbs that
-*change* the world are flagged; `requests.request(method, url)` counts as a
-read only when `method` is a literal `"GET"`, `"HEAD"` or `"OPTIONS"`.
+in read mode are safe to cache, exactly like reading a CSV, and so is a query
+written as a literal `SELECT` (`cur.execute("SELECT ...")`, `pd.read_sql(...)`).
+Only the verbs that *change* the world are flagged; `requests.request(method,
+url)` counts as a read only when `method` is a literal `"GET"`, `"HEAD"` or
+`"OPTIONS"`, and an `execute` whose SQL is built at run time counts as a write.
 
 Writing to the console is output, not a file: `os.write(2, ...)`, `sys.stderr.write(...)`
 and `sys.stdout.write(...)` count as a `print` does, so a step marker in a helper does

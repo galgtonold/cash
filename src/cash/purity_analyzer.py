@@ -171,9 +171,6 @@ _AMBIENT_KINDS = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT})
 #: on both paths.
 _NOT_YET_REPORTED: frozenset[str] = frozenset(
     {
-        # database writes through a frame
-        "to_sql",
-        "to_gbq",
         # the clock
         "time.process_time",
         # the person at the keyboard

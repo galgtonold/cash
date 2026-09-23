@@ -64,6 +64,14 @@ ROWS = [
     ("requests.request('GET', u)", "cache", "impure_call"),
     ("requests.request('POST', u)", "refuse", "impure_call"),
     ("urllib.request.urlopen(u, b'x=1')", "refuse", "impure_call"),
+    # A database: a notebook cache hit skipped `cur.execute("INSERT ...")` and
+    # `conn.commit()`, while `df.to_sql` ran every time (as a "file write") and
+    # was silent in a decorated function. A literal SELECT is a read.
+    ("cur.execute(sql)", "refuse", "impure_call"),
+    ("cur.executemany(sql, [])", "refuse", "impure_call"),
+    ("conn.commit()", "refuse", "impure_call"),
+    ("df.to_sql('t', conn)", "refuse", "impure_call"),
+    ("cur.execute('SELECT 1')", "cache", "silent"),
 ]
 
 
@@ -126,3 +134,9 @@ def test_rows_are_real_calls():
     for call, _nb, _dec in ROWS:
         node = ast.parse(textwrap.dedent(call), mode="eval").body
         assert isinstance(node, ast.Call), call
+
+
+def test_a_database_write_is_named_as_one(probe_module):
+    """`df.to_sql` used to be reported as a file write."""
+    _, reasons = notebook_verdict("r = df.to_sql('t', conn)", dict(vars(probe_module)))
+    assert reasons == ["Side effect: df.to_sql() (database_write)"]
