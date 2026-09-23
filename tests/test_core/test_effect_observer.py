@@ -200,14 +200,17 @@ def test_a_file_write_inside_an_unnamed_call_is_observed(tmp_path):
     source.write_text("effect")
     target = tmp_path / "written.txt"
 
-    # shutil.copyfile is a real write; it is stdlib (so not walked into) and it
-    # is NOT in IMPURE_MODULE_CALLS, which lists copy/copy2/move/rmtree but
-    # not copyfile. No name matches, the return value is used -- exactly the
-    # combination that was silent.
+    # A zip archive opened for writing is a real write (closing it writes the
+    # archive); it is stdlib (so not walked into), and `ZipFile` is no effect
+    # name. No name matches, the return value is used -- exactly the
+    # combination that was silent. (`shutil.copyfile` played this part until
+    # it got a name.)
     def uses_stdlib_writer():
-        import shutil
+        import zipfile
 
-        return str(shutil.copyfile(source, target))
+        with zipfile.ZipFile(target, "w") as archive:
+            members = archive.namelist()
+        return str(target) + source.read_text() + str(members)
 
     result, warned = _call_capturing(c, uses_stdlib_writer)
     assert target.exists() and str(target) in result

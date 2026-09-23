@@ -493,17 +493,6 @@ _NOTEBOOK_LABELS: dict[EffectKind, str] = {
 #: on its own, with a test of the new verdict on both paths.
 _NOT_YET_REFUSED: frozenset[str] = frozenset(
     {
-        # files and folders
-        "os.link",
-        "os.chmod",
-        "os.removedirs",
-        "os.renames",
-        "os.truncate",
-        "shutil.copyfile",
-        "touch",
-        "unlink",
-        "symlink_to",
-        "hardlink_to",
         # other programs
         "os.popen",
         "os.execv",
@@ -601,6 +590,8 @@ _WRITE_TEXT_MARKERS: tuple[str, ...] = (
     "os.",
     "shutil.",
     "mkdir",
+    "touch",
+    "link",
 )
 
 
@@ -796,6 +787,7 @@ _REPLACING_IO_FUNCTIONS: frozenset[str] = frozenset(
     {
         "shutil.copy",
         "shutil.copy2",
+        "shutil.copyfile",
     }
 )
 

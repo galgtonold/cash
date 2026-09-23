@@ -171,28 +171,6 @@ _AMBIENT_KINDS = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT})
 #: on both paths.
 _NOT_YET_REPORTED: frozenset[str] = frozenset(
     {
-        # files and folders
-        "os.symlink",
-        "os.link",
-        "os.chmod",
-        "os.removedirs",
-        "os.renames",
-        "os.truncate",
-        "shutil.copyfile",
-        "shutil.copytree",
-        "csv.writer",
-        "to_hdf",
-        "to_feather",
-        "to_stata",
-        "to_latex",
-        "to_html",
-        "to_clipboard",
-        "to_markdown",
-        "mkdir",
-        "touch",
-        "unlink",
-        "symlink_to",
-        "hardlink_to",
         # other programs
         "os.popen",
         "os.execv",

@@ -190,12 +190,12 @@ Replaying them from cache would skip the action (a file never gets written, a
 request never gets sent). Cash's side-effect analysis flags these statements as
 **uncacheable** so they always run:
 
-<!-- claim: cash/effects.py:MODULE_CALLS @c6f9471b, cash/analysis/cacheability.py:NOTEBOOK_POLICY @86811d37, cash/analysis/cacheability.py:_SideEffectVisitor @007fedd1 broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
+<!-- claim: cash/effects.py:MODULE_CALLS @c6f9471b, cash/analysis/cacheability.py:NOTEBOOK_POLICY @86811d37, cash/analysis/cacheability.py:_SideEffectVisitor @490e81ae broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
 | Pattern | Examples | Why it's unsafe to replay |
 |---------|----------|---------------------------|
 | File writes | `open('f', 'w')`, `df.to_csv()`, `df.to_parquet()`, `Path(p).write_text()` | The file wouldn't be written on a cache hit |
 | Serializing writers | `json.dump()`, `pickle.dump()`, `np.save()`, `fig.savefig()` | The artifact wouldn't be produced |
-| Filesystem changes | `os.remove()`, `shutil.move()`, `os.mkdir()`, `Path(p).mkdir()` | The change to disk wouldn't happen |
+| Filesystem changes | `os.remove()`, `shutil.move()`, `shutil.copyfile()`, `os.symlink()`, `os.chmod()`, `Path(p).mkdir()`, `Path(p).touch()`, `Path(p).unlink()` | The change to disk wouldn't happen |
 | System calls | `os.system()`, `subprocess.run()` | The process wouldn't run |
 | Network writes | `requests.post()`, `requests.put()`, `requests.delete()`, `requests.patch()` | The request wouldn't be sent |
 | Database writes | `df.to_sql()` | The rows wouldn't reach the database |
@@ -218,10 +218,12 @@ what `mode` holds. And the write-method names are a **fixed list** matched on
 any receiver — not a `to_*` / `write_*` wildcard. `obj.save(x)` is flagged even
 on a receiver Cash knows nothing about, while `obj.write_thing(x)` and
 `obj.to_widget(x)` are not flagged at all. The list stops where names start
-colliding: `rename`, `replace` and `touch` are deliberately absent, because
-`str.replace` would otherwise flag half a notebook. `mkdir` is on it: every type
-that has one writes to a filesystem, and an `OUT.mkdir(exist_ok=True)` restored
-instead of run leaves an emptied output folder missing.
+colliding: `rename` and `replace` are deliberately absent, because
+`str.replace` would otherwise flag half a notebook. `mkdir`, `touch` and `unlink`
+are on it: every type that has one writes to a filesystem, and an
+`OUT.mkdir(exist_ok=True)` restored instead of run leaves an emptied output
+folder missing. The same list is what a `@cash.cache` function is checked
+against, so a call that runs every time in a notebook is reported there too.
 
 <!-- claim: cash/analysis/cacheability.py:statement_write_repeatability @3790def9, cash/analysis/cacheability.py:_REPLACING_WRITE_METHODS @b3158e08, cash/analysis/cacheability.py:_is_append_mode_call @d7aef5f5 -->
 Being uncacheable is not the end of the story for a writer. Because a file
