@@ -9,7 +9,6 @@ an import would.
 
 from __future__ import annotations
 
-import functools
 import os
 import re
 import time
@@ -69,43 +68,23 @@ def _basename_candidates(stored_path: str) -> list[str]:
 
 
 def resolve_file_dep_path(stored_path: str) -> str | None:
-    """Resolve a stored file dependency path, trying fallbacks if it doesn't exist.
+    """Find a recorded file dependency, also after the project moved.
 
-    When a project is moved (e.g. Google Drive path changes), the absolute path
-    stored in cache metadata may no longer be valid.  This function tries to
-    locate the file at alternative paths:
+    Tries the stored path, then its basename in the current directory, then
+    ever longer suffixes of it (``examples/data.csv``) under the current
+    directory. Returns the path found, or ``None``.
 
-    1. The stored path as-is.
-    2. The basename resolved relative to the current working directory.
-    3. Progressively longer path suffixes relative to the current working directory
-       (handles subdirectory structure like ``examples/data.csv``).
-
-    Returns the resolved path if found, or ``None`` if the file cannot be located.
-
-    A **remote URL is returned unchanged**. There is nothing on this filesystem
-    to locate, and the fallbacks below would mangle it into a bogus local path,
-    fail, and report the dependency as missing — a permanent miss for every
-    statement that reads object storage. Handling it here rather than at each
-    call site is deliberate: there are nine of them across restore, freshness,
-    re-execution planning and virtual lineage, and a rule that nine callers must
-    remember is a rule that will be forgotten. This makes them all correct by
-    construction.
+    A remote URL is returned unchanged: there is nothing local to find, and
+    the fallbacks would turn it into a local path that does not exist, which
+    reads as a missing dependency. Every caller relies on this.
     """
     if is_remote_url(stored_path):
         return stored_path
     if os.path.exists(stored_path):
         return stored_path
 
-    # Fallback 1: basename in CWD.
-    #
-    # ``os.path.basename`` only understands the HOST separator, so on POSIX a
-    # path stored on Windows ("C:\\proj\\data.csv") has no recognisable
-    # basename at all and this fallback silently resolves nothing — the exact
-    # cross-platform case this function exists to survive. Fallback 2 below
-    # already normalises separators; this one has to as well.
-    #
-    # Try the host interpretation first: on POSIX a filename may legitimately
-    # contain a backslash, and that reading must keep winning.
+    # The basename in the current directory, read with either separator: a
+    # path stored on Windows has no basename to `os.path.basename` on POSIX.
     for basename in _basename_candidates(stored_path):
         cwd_candidate = os.path.join(os.getcwd(), basename)
         if os.path.exists(cwd_candidate):
@@ -126,31 +105,17 @@ def resolve_file_dep_path(stored_path: str) -> str | None:
 
 
 # Windows denies a replace whose destination is open; POSIX never does.
-# Escalating 5/10/20/40/80/160ms -- ~315ms of total patience. Measured
-# holders released on the first 10ms retry, so this is mostly headroom for a
-# scanner that grabbed the file a moment longer.
+# Escalating waits, about 0.3 s in all.
 REPLACE_RETRY_DELAYS = (0.005, 0.01, 0.02, 0.04, 0.08, 0.16)
 
 
 def replace_with_retry(tmp_path: str, path: str, delays: tuple[float, ...] = REPLACE_RETRY_DELAYS) -> None:
-    """``os.replace``, but tolerant of a destination that is briefly locked.
+    """``os.replace`` that waits out a destination another process briefly holds.
 
-    The replace is atomic on both platforms, but on Windows it is not always
-    *permitted*: if any handle currently has the destination open, the call
-    fails with ``ERROR_ACCESS_DENIED`` rather than waiting. POSIX just swaps
-    the directory entry and lets the reader finish on the old inode.
-
-    Shared rather than duplicated because two call sites need it and they sit
-    on opposite sides of the backend/notebook boundary -- the file backend
-    (where it was first measured: a WinError 5 on effectively every Windows CI
-    job and 10 of 12 consecutive local runs of one test, each silently
-    discarding a cache entry) and ``notebook.loop_split.LoopSplitStore``,
-    which had the same tmp-then-replace shape and swallowed the failure at
-    debug level.
-
-    A persistent denial (a read-only file, a genuinely stuck handle) still
-    raises once the budget is spent: this waits out contention, it does not
-    paper over a real permission problem.
+    On Windows a replace fails with ``PermissionError`` while any handle has
+    the destination open (a reader, a virus scanner). This retries with
+    *delays*, then makes a last attempt that raises: a destination that stays
+    locked is a real permission problem.
     """
     for delay in delays:
         try:
@@ -161,64 +126,33 @@ def replace_with_retry(tmp_path: str, path: str, delays: tuple[float, ...] = REP
     os.replace(tmp_path, path)  # out of patience; let it raise
 
 
-@functools.lru_cache(maxsize=8)
-def _module_stem(path: str) -> str:
-    """The module name a file would have if it were imported."""
-    return os.path.splitext(os.path.basename(path))[0]
-
-
 #: The names a script's own module goes by. ``__mp_main__`` is the script
 #: re-imported in a multiprocessing child under the spawn start method (the
-#: default on Windows and macOS). Left as it was, a pool worker keyed
-#: ``work`` as ``__mp_main__.work`` while the parent keyed it ``model.work``:
-#: the workers shared their entries with each other and never with the
-#: process that started them (round 18 docs sweep, measured).
+#: default on Windows and macOS), which must key its functions like the parent.
 MAIN_MODULE_NAMES = frozenset({"__main__", "__mp_main__"})
 
 
 def resolve_main_module(func: Any) -> str:
     """What to call ``__main__`` when qualifying *func* for a cache key.
 
-    A function defined in the script you ran belongs to module ``__main__``,
-    so ``python model.py`` keyed it as ``__main__.work`` while ``import model``
-    keyed the same function, same source, same arguments as ``model.work``.
-    Two entries, one computation -- and the common shape is exactly that:
-    develop a script behind an ``if __name__ == "__main__"`` block, run it
-    while testing, then import it from a driver and recompute everything.
+    A function in the script you run belongs to ``__main__``, while the same
+    function reached by ``import model`` belongs to ``model``. Naming the
+    script's module as an import would name it makes both runs share entries.
+    Read from the function's own globals, not ``sys.modules["__main__"]``:
+    under ``runpy`` or ``exec`` those are different modules.
 
-    Resolving through ``__file__`` to the name the module would have on import
-    makes those two agree, and it strictly REDUCES collisions on the other
-    axis: today every script alike is ``__main__``, so two unrelated scripts
-    with a same-named function meet; afterwards only two scripts with the same
-    FILENAME do. (They still separate on source, helpers and read globals --
-    the module name is a coarse guard on top of the state hash, not the thing
-    doing the work.)
-
-    Read from the FUNCTION's own globals, not ``sys.modules['__main__']``.
-    Those are the same file for an ordinary ``python model.py``, and they are
-    not under ``runpy`` or ``exec``, where the entry point is one file and the
-    module claiming ``__main__`` is another -- taking the entry point there
-    names the function after a file it was not defined in.
-
-    Shared by ``Cash.get_func_key`` and the purity analyzer's
-    ``_qualname_of``. Both feed the same cache key from different directions,
-    and normalising only one of them leaves the state hash disagreeing between
-    a direct run and an import while the function name agrees -- which is
-    exactly the half-fixed state this function exists to prevent.
-
-    Returns ``__main__`` unchanged when there is no ``__file__``: a REPL,
-    ``python -c``, a frozen app, and a Jupyter kernel, where ``__main__`` is
-    the user namespace rather than a file and there is no import to agree with.
+    ``Cash.get_func_key`` and the purity analyzer both use this, so the
+    function name and the state hash agree between a direct run and an
+    import. Returns ``__main__`` when there is no ``__file__`` (a REPL,
+    ``python -c``, a notebook kernel).
     """
     g = getattr(func, "__globals__", None) or {}
-    # `python -m pkg.mod` runs pkg/mod.py as `__main__`, and the file stem
-    # alone called it `mod` while `import pkg.mod` called it `pkg.mod`: two
-    # caches for one function, and `cash clear --function f` ambiguous between
-    # them (round 18). The module spec carries the dotted name the import uses.
+    # `python -m pkg.mod` runs as `__main__`; its spec carries the dotted name
+    # the import uses.
     spec_name = getattr(g.get("__spec__"), "name", None)
     if isinstance(spec_name, str) and spec_name and spec_name not in MAIN_MODULE_NAMES:
         return spec_name
     path = g.get("__file__")
     if not isinstance(path, str) or not path:
         return "__main__"
-    return _module_stem(path) or "__main__"
+    return os.path.splitext(os.path.basename(path))[0] or "__main__"
