@@ -199,3 +199,6 @@ covrun/
 
 # Re-run benchmark sweeps (multi-GB, timestamped)
 benchmarks/results_*/
+
+# Integration test selection baseline output
+/.testsel/
