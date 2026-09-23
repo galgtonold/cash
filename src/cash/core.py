@@ -205,6 +205,15 @@ def _summary_at_exit(ref: weakref.ref[Cash]) -> None:
 _CALL_LOG_MAX = 10_000
 
 
+def _in_kernel() -> bool:
+    """Whether this runs inside a Jupyter kernel, where widgets can be drawn."""
+    try:
+        from IPython import get_ipython
+    except ImportError:
+        return False
+    return getattr(get_ipython(), "kernel", None) is not None
+
+
 class Cash(
     CodeIdentityMixin,
     CodeArgsMixin,
@@ -1412,7 +1421,9 @@ class Cash(
         # catching. It prints "ipywidgets is required" and returns normally, so
         # the except-ImportError fallback this replaces was unreachable: the
         # documented script behaviour never once happened.
-        if HAS_WIDGETS:
+        # And whether anything can draw it: outside a kernel, displaying the
+        # widgets only prints their repr.
+        if HAS_WIDGETS and _in_kernel():
             try:
                 show_analytics_dashboard()
                 return
