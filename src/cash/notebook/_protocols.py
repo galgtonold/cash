@@ -95,7 +95,6 @@ class TrackingState:
     | executed_cell_hashes         | —               | W (after exec)    | R (rarely)        |
     | variable_lineage             | R (badge)       | W (after exec)    | R+W (reset/sync)  |
     | executed_file_deps           | —               | W (after exec)    | R (stale check)   |
-    | executed_file_mtimes         | —               | W (after exec)    | —                 |
     | simulated_lineage            | —               | R (ControlStruct) | W (after pass 1)  |
     | rerun_bindings           | —               | R/W (classifier)  | W (after pass 1)  |
     | module_generation            | —               | W (module inv.)   | R (incremental)   |
@@ -274,11 +273,6 @@ class TrackingState:
     # Written by StatementProcessor; read by UpstreamChecker (Pass 1 lineage check).
     # Stores the lineage snapshot of each input at the time of execution.
     executed_input_lineages: dict[str, dict[str, str]] = field(default_factory=dict)
-
-    # Written by StatementFileDeps (via StatementProcessor) after each execution.
-    # Per-variable mtime snapshots of accessed files; used together with
-    # ``executed_file_deps`` for fast direct-file staleness detection.
-    executed_file_mtimes: dict[str, dict[str, float]] = field(default_factory=dict)
 
     # Written by StatementLineageBuilder; read by VirtualLineage. Maps a
     # statement's cache key -> (files, object-storage URLs) that statement ITSELF

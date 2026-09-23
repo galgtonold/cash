@@ -523,21 +523,6 @@ class TestSkipWithoutRestore:
         assert new_value != first_value, "File changed, statement should have re-executed"
         assert "5,6" in new_value
 
-    def test_file_mtimes_tracked(self, cash_magics, mock_shell, tmp_path):
-        """File modification times should be tracked per variable."""
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("hello")
-        file_path = str(test_file).replace("\\", "/")
-
-        code = f"content = open('{file_path}').read()"
-        cash_magics.cash("", code)
-
-        # Check that file mtimes are tracked
-        sp = cash_magics._statement_processor
-        if "content" in sp._tracking_state.executed_file_mtimes:
-            mtimes = sp._tracking_state.executed_file_mtimes["content"]
-            assert len(mtimes) > 0, "File mtimes should be tracked"
-
 
 class TestLoopTargetVarFalsePositive:
     """

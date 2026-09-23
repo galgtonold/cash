@@ -76,7 +76,7 @@ def test_register_cell_source_distinguishes_statements():
     "name,expected",
     [
         ("<cash-6f20c37e324f>", True),
-        ("<cash>", True),  # historical bare form still recognised
+        ("<cash>", False),  # a warning label, never a compiled statement
         ("/home/u/real_module.py", False),
         ("<string>", False),
         ("", False),

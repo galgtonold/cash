@@ -397,7 +397,6 @@ class TestNarrowFileDependencyPropagation:
         magics.cash("", f"import pandas as pd; df = pd.read_csv('{csv_path_str}')")
         # Manually set file deps as if FileAccessTracker tracked it
         sp.executed_file_deps["df"] = {csv_path_str}
-        sp._tracking_state.executed_file_mtimes["df"] = {csv_path_str: os.path.getmtime(csv_path)}
 
         # Cell 2: Compute scalar from DataFrame
         magics.cash("", "n_rows = len(df)")
@@ -418,7 +417,6 @@ class TestNarrowFileDependencyPropagation:
 
         magics.cash("", f"import pandas as pd; df = pd.read_csv('{csv_path_str}')")
         sp.executed_file_deps["df"] = {csv_path_str}
-        sp._tracking_state.executed_file_mtimes["df"] = {csv_path_str: os.path.getmtime(csv_path)}
 
         # Cell 2: Transform DataFrame
         magics.cash("", "df2 = df[df['a'] > 1]")

@@ -150,9 +150,9 @@ def tag_control_metrics(result: Any, ctx_hash: str, ctx_label: str, all_metrics:
 def extract_cash_frame_lineno(exc: Exception) -> int | None:
     """Extract the line number from the cash-compiled frame in the traceback.
 
-    Returns None if no cash frame is found. Matches on the ``<cash`` prefix, not
-    a bare ``<cash>``: each statement now compiles under its own
-    ``<cash-{digest}>`` name so its source resolves in linecache.
+    Returns None if no cash frame is found. Matches on the ``<cash-`` prefix:
+    each statement compiles under its own ``<cash-{digest}>`` name so its
+    source resolves in linecache.
     """
     tb = getattr(exc, "__traceback__", None)
     while tb is not None:

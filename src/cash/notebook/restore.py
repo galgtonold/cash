@@ -160,18 +160,13 @@ class Restorer:
                 value=self.shell.user_ns.get(var_name),
             )
 
-        stored_code = metadata.get("code", metadata.get("cell_code"))
+        stored_code = metadata.get("code")
         if stored_code:
             self._tracking_state.executed_cell_codes[var_name] = stored_code
 
-        stored_hash = metadata.get("source_hash", metadata.get("cell_hash"))
+        stored_hash = metadata.get("source_hash")
         if stored_hash:
-            cell_hashes = self._tracking_state.executed_cell_hashes
-            if var_name not in cell_hashes:
-                cell_hashes[var_name] = set()
-            elif isinstance(cell_hashes[var_name], str):
-                cell_hashes[var_name] = {cell_hashes[var_name]}
-            cell_hashes[var_name].add(stored_hash)
+            self._tracking_state.executed_cell_hashes.setdefault(var_name, set()).add(stored_hash)
 
         file_deps = metadata.get("file_dependencies", {})
         if file_deps:

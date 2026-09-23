@@ -71,11 +71,6 @@ class TestRngReplayGate:
         r = self._restorer({"numpy.random": "stmt:bbb"})
         assert r._rng_replay_is_current({"rng_epochs": {"numpy.random": "stmt:aaa"}}) is False
 
-    def test_legacy_entry_without_epochs_still_replays(self):
-        """Entries cached before CAS-223 keep their previous behaviour."""
-        r = self._restorer({"numpy.random": "stmt:bbb"})
-        assert r._rng_replay_is_current({"rng_state": {"x": 1}}) is True
-
     def test_unknown_module_does_not_suppress(self):
         """No epoch for a module means nothing is known to have changed."""
         r = self._restorer({})

@@ -1284,8 +1284,8 @@ def check_and_warn_randomness(
     under a literal ``<cash>`` filename. That is a LABEL these warnings pass to
     ``warn_explicit``, not the name a statement is compiled under: since
     ``notebook/compiled_source.py`` landed, each statement compiles as
-    ``<cash-{digest}>`` so a traceback can resolve its source. Both share the
-    ``CASH_FILENAME_PREFIX`` (``"<cash"``) that frame filters match on.
+    ``<cash-{digest}>`` so a traceback can resolve its source, and frame
+    filters match only that ``<cash-`` prefix.
 
     Two things make that the right call rather than a plain ``warnings.warn``:
 

@@ -114,14 +114,9 @@ class StatementRestorer:
         other half.
 
         So an entry may replay its RNG state only while the epochs it was
-        written under still hold. Older entries carry no
-        epochs, and are replayed as before -- their regime is unknown, and the
-        pre-existing behaviour is the safer default for them.
+        written under still hold.
         """
-        written = payload.get("rng_epochs")
-        if not written:
-            return True
-        for module, epoch in written.items():
+        for module, epoch in payload["rng_epochs"].items():
             if self._rng_seed_epochs.get(module, epoch) != epoch:
                 if self.debug:
                     logger.debug(
@@ -258,8 +253,7 @@ class StatementRestorer:
             # "built on an input that has been rebuilt since" compares an empty
             # dict and passes -- which is how a model table restored before an
             # upstream fix survived the repair that rebuilt its own inputs and
-            # was exported (round 26, r26s4). Entries written before the field
-            # existed carry None and keep the old behaviour.
+            # was exported (round 26, r26s4).
             if metadata.input_lineages:
                 tracking_state.executed_input_lineages[var_name] = dict(metadata.input_lineages)
 

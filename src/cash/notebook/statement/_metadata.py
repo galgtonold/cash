@@ -14,9 +14,8 @@ cycle.
 Wire contract (mirrors :class:`CacheMetadata`):
     * ``to_dict()`` omits ``None`` fields, preserving the historical
       "only-set-keys" dict shape so backend presence-checks keep working.
-    * ``from_dict()`` is lenient: unknown keys (legacy aliases like
-      ``cell_code``, backend-private keys) are ignored, missing keys
-      default to ``None``.
+    * ``from_dict()`` is lenient: unknown keys (backend-private keys) are
+      ignored, missing keys default to ``None``.
 """
 
 from __future__ import annotations
@@ -49,8 +48,6 @@ class StatementCacheMetadata:
     #: ``executed_input_lineages``, written on execution alone, so every
     #: restored value had an empty record and the check silently passed. That
     #: is how round 26 exported a model table built before an upstream fix.
-    #: Absent on entries written before this field existed; those keep the old
-    #: behaviour rather than guessing.
     input_lineages: dict[str, str] | None = None
     storage: list[str] | None = None
     source: str | None = None

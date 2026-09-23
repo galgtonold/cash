@@ -96,7 +96,7 @@ flowchart TD
 ```
 
 ??? warning "Keys survive a restart, not a move to another machine"
-    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @892e39d5 -->
+    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @08702b7b -->
     Keys carry no wall-clock value *of their own*, so re-running the same notebook in a
     fresh kernel recomputes the same key and hits. But a statement that reads a file folds
     that file's **mtime and size** into its lineage (`compute_file_hash_component` in

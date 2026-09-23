@@ -26,7 +26,7 @@ from cash.notebook.statement.file_deps import StatementFileDeps
 
 
 def _state():
-    return types.SimpleNamespace(executed_file_deps={}, executed_file_mtimes={})
+    return types.SimpleNamespace(executed_file_deps={})
 
 
 def _aged(tmp_path, name, body=b"x" * 2048):

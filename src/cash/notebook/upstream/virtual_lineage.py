@@ -3086,8 +3086,8 @@ class VirtualLineage:
         executed_file_deps, and variable_lineage.
         """
         output_lineages = metadata.get("output_lineages", {}) if "output_lineages" in metadata else {}
-        stored_code = metadata.get("code", metadata.get("cell_code"))
-        stored_hash = metadata.get("source_hash", metadata.get("cell_hash"))
+        stored_code = metadata.get("code")
+        stored_hash = metadata.get("source_hash")
 
         # Resolve file deps once.
         resolved_paths: set[str] = set()

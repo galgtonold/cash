@@ -18,11 +18,9 @@ import hashlib
 import linecache
 import re
 
-# Every cash-compiled unit's filename starts with this. Frame filters match the
-# PREFIX rather than the old exact ``<cash>`` literal, so they keep recognising
-# cash frames now that each name carries a per-statement digest — and still
-# recognise a bare ``<cash>`` from any older cached code object.
-CASH_FILENAME_PREFIX = "<cash"
+# Every cash-compiled unit's filename starts with this; frame filters match the
+# prefix because each name carries a per-statement digest.
+CASH_FILENAME_PREFIX = "<cash-"
 
 
 #: ``call_interception.HELPER_NAME``, spelled here: that module imports this one's
@@ -38,7 +36,7 @@ def register_cell_source(code: str) -> str:
     filename, so any frame raised from the compiled unit can show its source.
     """
     digest = hashlib.sha1(code.encode("utf-8", "replace")).hexdigest()[:12]
-    name = f"{CASH_FILENAME_PREFIX}-{digest}>"
+    name = f"{CASH_FILENAME_PREFIX}{digest}>"
     # linecache entry: (size, mtime, lines, fullname). ``mtime=None`` marks it a
     # synthetic in-memory file so ``linecache.checkcache()`` never evicts it by
     # comparing against a real stat() — there is no file on disk to compare to.
@@ -56,7 +54,6 @@ def register_cell_source(code: str) -> str:
 def is_cash_filename(filename: str | None) -> bool:
     """True for any filename cash compiled a user statement under.
 
-    Prefix-based so it covers both the per-statement ``<cash-abc123…>`` names and
-    the historical bare ``<cash>``.
+    Prefix-based so it covers every per-statement ``<cash-abc123…>`` name.
     """
     return bool(filename) and filename.startswith(CASH_FILENAME_PREFIX)

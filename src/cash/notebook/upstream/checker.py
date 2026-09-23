@@ -1286,7 +1286,6 @@ class UpstreamChecker:
             "executed_cell_codes",
             "executed_cell_hashes",
             "executed_file_deps",
-            "executed_file_mtimes",
             "granular_preserved_vars",
             "module_attribute_deps",
             "from_import_sources",

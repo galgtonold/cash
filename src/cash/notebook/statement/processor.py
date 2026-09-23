@@ -746,8 +746,7 @@ class StatementProcessor:
         self._miss_guard = MissGuard(_guard_dir)
 
         # Statement-level file-dep tracker. Stateless w.r.t. tracking state —
-        # receives it per call. ``executed_file_deps`` and ``executed_file_mtimes``
-        # live on TrackingState.
+        # receives it per call. ``executed_file_deps`` lives on TrackingState.
         self._file_deps = StatementFileDeps(debug=debug)
 
         # Statement-level cache restorer. Hydrates outputs from a cached
