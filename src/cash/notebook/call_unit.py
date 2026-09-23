@@ -2058,7 +2058,7 @@ class CallUnit:
         # CAS-269. `TieredBackend` reads exactly this key to bypass the ~0.1s
         # persistence floor, so threading the statement's resolved annotation
         # here is the whole fix -- the statement path writes the same field
-        # from the same `force_persist` (`processor._save_to_cache`).
+        # from the same `force_persist` (`StatementStore.save`).
         #
         # Written only when True, keeping the sparse-entry shape every other
         # optional channel here follows, and it is a plain `bool`: metadata is

@@ -52,7 +52,7 @@ from ..statement import ProcessResult, StatementProcessor
 # split in %cash_stats is only honest if "worth caching" means exactly what the
 # cache meant by it, so this deliberately shares the reader rather than
 # re-deriving the threshold here.
-from ..statement.processor import config_float
+from ..statement.store import config_float
 from ..upstream import UpstreamChecker
 from ._args import strip_inline_comment
 from ._help import help_text

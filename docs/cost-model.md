@@ -385,7 +385,7 @@ The `CashConfig` fields that drive all of the above are in the
 
 ??? note "Source map for divers"
     - Cost model + coefficients: [`src/cash/cost_model.py`](https://github.com/galgtonold/cash/blob/main/src/cash/cost_model.py), refit offline by [`benchmarks/fit_cost_model.py`](https://github.com/galgtonold/cash/blob/main/benchmarks/fit_cost_model.py).
-    - Filter 1 (the gate, skip-reason, cheap-floor): [`src/cash/notebook/statement/processor.py`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py).
+    - Filter 1 (the gate, skip-reason, cheap-floor): [`src/cash/notebook/statement/store.py`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/store.py).
     - Filter 2 (promotion policy + application): [`src/cash/backends/factory.py`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/factory.py), [`src/cash/backends/tiered_backend.py`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/tiered_backend.py).
     - Filter 3 (the rate ceiling): [`src/cash/backends/value_policy.py`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/value_policy.py).
     - `# @cash:persist` parsing: [`src/cash/analysis/annotations.py`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py).

@@ -729,7 +729,7 @@ def _set_written_later(executor: Any, names: frozenset[str]) -> None:
     """Tell the statement processor which names the rest of the cell writes."""
     processor = getattr(executor, "_statement_processor", None)
     if processor is not None:
-        processor.written_later_in_cell = names
+        processor.set_written_later_in_cell(names)
 
 
 def _written_later_in_cell(body: list[ast.stmt]) -> list[frozenset[str]]:

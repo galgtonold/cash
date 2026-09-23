@@ -13,9 +13,9 @@ from tests._cell_driver import run_cash_cell
 
 
 def _waivers(cash_magics, tmp_path):
-    from cash.notebook.statement.processor import StatementProcessor
+    from cash.notebook.statement.store import StatementStore
 
-    orig = StatementProcessor._should_skip_large_object_caching
+    orig = StatementStore.should_skip_large_object_caching
     seen = {}
 
     def spy(self, captured_vars, execution_time, force_persist, has_file_dependencies=False):
@@ -23,7 +23,7 @@ def _waivers(cash_magics, tmp_path):
             seen[name] = has_file_dependencies
         return orig(self, captured_vars, execution_time, force_persist, has_file_dependencies=has_file_dependencies)
 
-    StatementProcessor._should_skip_large_object_caching = spy
+    StatementStore.should_skip_large_object_caching = spy
     try:
         path = tmp_path / "data.csv"
         path.write_text("a,b\n" + "\n".join(f"{i},{i * 2}" for i in range(2000)), encoding="utf-8")
@@ -33,7 +33,7 @@ def _waivers(cash_magics, tmp_path):
             cash_magics, "big = pd.concat([df] * 50, ignore_index=True).assign(w=sum(i * i for i in range(400_000)))"
         )
     finally:
-        StatementProcessor._should_skip_large_object_caching = orig
+        StatementStore.should_skip_large_object_caching = orig
     return seen
 
 

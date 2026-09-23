@@ -294,7 +294,7 @@ class _Session:
         # (macOS, 3.10 and 3.12). A share of zero makes no write cheap. The
         # exemption itself is tested end to end in
         # test_a_slow_result_stays_saved_through_edits.py.
-        self.magics._statement_processor._CHEAP_WRITE_SHARE = 0.0
+        self.magics._statement_processor._store.CHEAP_WRITE_SHARE = 0.0
         self.magics._auto_cache_enabled = True
         self.metrics: list[dict] = []
         self.magics.render_interactive_badge = lambda metrics, **kw: self.metrics.extend(metrics)

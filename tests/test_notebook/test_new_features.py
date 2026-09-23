@@ -60,7 +60,7 @@ class TestSizeAwareCaching:
         sp.cash_instance.config = mock_config
 
         large_var = np.zeros(50_000_000, dtype=np.float64)  # 400 MB
-        result, reason, _ = sp._should_skip_large_object_caching(
+        result, reason, _ = sp._store.should_skip_large_object_caching(
             {"big_var": large_var},
             execution_time=0.1,  # ratio budget = 80 ms; restore predicted ~265 ms
         )
@@ -79,7 +79,7 @@ class TestSizeAwareCaching:
         mock_config.min_execution_time_to_cache_seconds = 0.0
         sp.cash_instance.config = mock_config
 
-        result, reason, _ = sp._should_skip_large_object_caching(
+        result, reason, _ = sp._store.should_skip_large_object_caching(
             {"small_var": 42},
             execution_time=0.05,  # above the 10 ms floor; only size policy matters here
         )
@@ -100,7 +100,7 @@ class TestSizeAwareCaching:
         sp.cash_instance.config = mock_config
 
         large_var = np.zeros(12_500_000, dtype=np.float64)  # 100 MB
-        result, reason, _ = sp._should_skip_large_object_caching(
+        result, reason, _ = sp._store.should_skip_large_object_caching(
             {"big_var": large_var},
             execution_time=100.0,
         )
@@ -118,7 +118,7 @@ class TestSizeAwareCaching:
         sp.cash_instance.config = mock_config
 
         large_var = np.zeros(12_500_000, dtype=np.float64)  # 100 MB
-        result, reason, _ = sp._should_skip_large_object_caching(
+        result, reason, _ = sp._store.should_skip_large_object_caching(
             {"big_var": large_var},
             execution_time=0.1,
             force_persist=True,
@@ -132,7 +132,7 @@ class TestSizeAwareCaching:
         sp = self._make_processor()
         sp.cash_instance.config = None
 
-        result, reason, _ = sp._should_skip_large_object_caching(
+        result, reason, _ = sp._store.should_skip_large_object_caching(
             {"x": 42},
             execution_time=0.01,
         )

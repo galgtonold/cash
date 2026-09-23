@@ -22,7 +22,7 @@ Churn alone over-reaches in one direction, though: five upstream edits in a
 row churn a key too, and that is an ordinary morning of model tuning (r23s1
 lost its cross-validation to the guard and re-ran it after a restart). So the
 processor applies the verdict only to a statement whose write is not cheap
-next to its compute (``StatementProcessor._write_is_cheap``): a small, slow
+next to its compute (``StatementStore.write_is_cheap``): a small, slow
 value keeps being written, since its wasted writes cost next to nothing.
 
 **What the guard does and does not stop.**

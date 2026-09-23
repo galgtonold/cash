@@ -76,7 +76,7 @@ def test_coeffs_table_covers_all_known_families_and_backends():
 
 
 def test_cost_model_is_called_from_statement_processor_decision(monkeypatch, tmp_path):
-    """End-to-end: when _should_skip_large_object_caching evaluates a
+    """End-to-end: when StatementStore.should_skip_large_object_caching evaluates a
     decision, it routes through cost_model.estimated_restore_time."""
     from unittest.mock import MagicMock
 
@@ -105,9 +105,9 @@ def test_cost_model_is_called_from_statement_processor_decision(monkeypatch, tmp
     # We don't assert skip=True (depends on fitted constants); the
     # crucial assertion is that the policy routed through cost_model.
     medium_obj = b"x" * 1_000_000  # 1 MB
-    # _should_skip_large_object_caching(captured_vars, execution_time,
+    # should_skip_large_object_caching(captured_vars, execution_time,
     #                                   force_persist, has_file_dependencies)
-    proc._should_skip_large_object_caching(
+    proc._store.should_skip_large_object_caching(
         captured_vars={"medium": medium_obj},
         execution_time=0.1,
         force_persist=False,
