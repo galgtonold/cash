@@ -101,7 +101,7 @@ cash = Cash(cache_dir="/tmp/scratch", debug=True)
 configure(debug=True, min_cache_savings_pct=0.30)
 ```
 
-<!-- claim: cash/config.py:CashConfig @4fb99f5c broad="the field table is a claim about every field of the dataclass" -->
+<!-- claim: cash/config.py:CashConfig @bbd3b3a7 broad="the field table is a claim about every field of the dataclass" -->
 ## All `CashConfig` fields
 
 Every field below is settable via every layer. The env-var column shows
@@ -316,7 +316,10 @@ debug = true
 redis_host = "redis.example.com"
 ```
 
-Generate a documented template with `cash.create_default_config()`.
+Generate a documented template with `cash.create_default_config()`. It lists
+every setting commented out at its default, with that setting's documentation
+above it, and it will not overwrite an existing file unless you pass
+`force=True`.
 
 > The `.cash/` directory next to your notebook is the **disk cache**, not
 > config — user config lives at the XDG path above.

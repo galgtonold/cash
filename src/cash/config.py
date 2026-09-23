@@ -23,6 +23,7 @@ import os
 import re
 import site
 import sys
+import textwrap
 import typing
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -177,8 +178,9 @@ class CashConfig:
     and a modest fraction of system RAM for the memory tier (see
     ``cash.backends.adaptive_caps``). Set an integer to pin the disk
     cap explicitly; the memory tier keeps its own auto/modest cap.
-    When the file backend exceeds the resolved cap it evicts
-    least-recently-accessed entries until it fits."""
+    When the file backend exceeds the resolved cap it evicts the
+    entries least worth keeping until it fits: those that are cheapest
+    to recompute per byte, weighted by how often they are hit (GDSF)."""
 
     max_memory_entries: int | None = None
     """LRU entry cap for the in-memory tier. ``None`` (default)
@@ -1573,73 +1575,108 @@ def _build_config(merged: dict[str, Any], source: str) -> CashConfig:
 # ---------------------------------------------------------------------------
 
 
-def create_default_config(path: str | None = None) -> str:
-    """Write a documented default config TOML to *path* (or to the user
-    config location if *path* is None) and return the path written."""
-    if path is None:
-        path = str(_default_user_config_path())
+_CONFIG_DOCS_URL = "https://cash-lib.readthedocs.io/en/stable/getting-started/configuration/"
 
-    content = """# Cash configuration — see https://github.com/your-repo/cash
-#
-# Resolution priority (highest wins):
-#   1. Cash(**kwargs)
-#   2. CASH_* environment variables
-#   3. ./pyproject.toml [tool.cash]
-#   4. This file
-#   5. Built-in defaults
+#: The ``[[cash.tiers]]`` example in the template: a RAM tier in front of Redis.
+_TIER_EXAMPLE = """\
+[[cash.tiers]]
+type = "memory"
+max_entries = 10000
 
-[cash]
-# Where the disk cache lives. Add this dir to .gitignore.
-cache_dir = ".cash"
+[[cash.tiers]]
+type = "redis"
+host = "redis.internal"
+port = 6379"""
 
-# Verbose logging for cache decisions.
-debug = false
 
-# gzip data files on disk.
-compress = false
+def _field_docs(cls: type) -> dict[str, str]:
+    """The docstring under each field of dataclass *cls*, read from its source.
 
-# Max disk cache size (bytes). LRU eviction kicks in above this.
-# Leave unset (the default) to auto-scale the cap to the machine — a
-# fraction of free disk for the disk tier, a fraction of RAM for the
-# memory tier. Uncomment to pin the disk cap explicitly, e.g. 5 GiB:
-# max_cache_size = 5368709120
+    Python drops attribute docstrings at compile time, so the only copy is
+    the source. Empty when the source is not available (a frozen app).
+    """
+    import ast
+    import inspect
 
-# Persist every notebook statement, bypassing the cost-aware floors
-# (same as putting # @cash:persist on each statement). Off by default;
-# also flippable at runtime via the %cash_persist magic.
-persist_all = false
+    try:
+        body = ast.parse(textwrap.dedent(inspect.getsource(cls))).body[0].body
+    except (OSError, TypeError):
+        return {}
+    docs = {}
+    for node, nxt in zip(body, body[1:]):
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and isinstance(nxt, ast.Expr)
+            and isinstance(nxt.value, ast.Constant)
+            and isinstance(nxt.value.value, str)
+        ):
+            docs[node.target.id] = inspect.cleandoc(nxt.value.value)
+    return docs
 
-# Smart persistence — only promote past RAM when the compute was slow
-# enough to be worth disk/network I/O for.
-smart_persistence = true
 
-# Backend selection. One of: tiered (default, builds [memory, file]),
-# memory, file, sqlite, redis, s3.
-# backend = "tiered"
+def _toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return repr(value)
 
-# Redis (used when backend = "redis" or a redis tier is declared).
-# redis_host = "localhost"
-# redis_port = 6379
-# redis_prefix = "cash:"
 
-# S3 (used when backend = "s3" or an s3 tier is declared).
-# s3_bucket = ""
-# s3_region = ""
-# s3_prefix = "cash/"
+def _comment(text: str) -> list[str]:
+    return [f"# {line}".rstrip() for line in text.splitlines()]
 
-# Advanced: declare an explicit tier stack instead of the simple
-# `backend = "..."` form. Each tier is one [[cash.tiers]] table.
-# [[cash.tiers]]
-# type = "memory"
-# max_entries = 10000
-#
-# [[cash.tiers]]
-# type = "redis"
-# host = "redis.internal"
-# port = 6379
-"""
 
-    out_path = Path(path)
+def _default_config_text() -> str:
+    """The template `create_default_config` writes, built from `CashConfig`.
+
+    Every setting is commented out at its default, under its field docstring,
+    so the file changes nothing until a line is uncommented and a new default
+    in cash still reaches a user who never touched that line.
+    """
+    # The layer list in this module's docstring, so the two cannot disagree.
+    precedence = (__doc__ or "").partition("highest priority wins):")[2].strip("\n").split("\n\n")[0]
+    lines = [
+        f"# Cash configuration -- see {_CONFIG_DOCS_URL}",
+        "#",
+        "# Resolution order (highest wins):",
+        *_comment(textwrap.dedent(precedence).strip("\n")),
+        "#",
+        "# Every setting below is commented out at its default. Uncomment a line",
+        "# to change it. A setting marked (unset) has no default value.",
+        "",
+        "[cash]",
+    ]
+    docs = _field_docs(CashConfig)
+    defaults = CashConfig()
+    for f in fields(CashConfig):
+        if f.name.startswith("_") or f.name == "tiers":
+            continue
+        value = getattr(defaults, f.name)
+        lines += ["", *_comment(docs.get(f.name, ""))]
+        lines.append(f"# {f.name} = " + ("(unset)" if value is None else _toml_value(value)))
+
+    tier_docs = _field_docs(TierConfig)
+    lines += ["", *_comment(docs.get("tiers", "")), "#", "# Keys of a [[cash.tiers]] table:"]
+    for f in fields(TierConfig):
+        first = " ".join(tier_docs.get(f.name, "").split("\n\n")[0].split())
+        lines += _comment(textwrap.fill(f"{f.name}: {first}", 72, initial_indent="  ", subsequent_indent="      "))
+    lines += ["#", *_comment(_TIER_EXAMPLE)]
+    return "\n".join(lines) + "\n"
+
+
+def create_default_config(path: str | None = None, *, force: bool = False) -> str:
+    """Write a documented config template to *path* and return the path.
+
+    *path* defaults to the user config file (``~/.config/cash/config.toml``,
+    or ``%APPDATA%\\cash\\config.toml`` on Windows). Every setting is listed
+    commented out at its default, with its documentation above it.
+
+    Raises ``FileExistsError`` if the file exists, unless ``force=True``.
+    """
+    out_path = Path(path) if path is not None else _default_user_config_path()
+    if out_path.exists() and not force:
+        raise FileExistsError(f"{out_path} already exists; pass force=True to overwrite it")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(content, encoding="utf-8")
+    out_path.write_text(_default_config_text(), encoding="utf-8")
     return str(out_path)
