@@ -8,7 +8,7 @@ for ``members.loc[...] = True``, each a full 2.4 MB snapshot of ``members``
 a re-run deep-copied every snapshot back.
 
 The statements take ~0.1 ms, below the "too cheap to cache" floor. They got
-past it through ``_final_over_costly_inputs``, which gives a cheap FINAL value
+past it through ``RebuildCostLedger.final_over_costly_inputs``, which gives a cheap FINAL value
 over costly inputs an entry. Inside a loop nothing is final
 -- the next iteration overwrites it -- and the inputs' unsaved cost only grows
 with every iteration, so every iteration qualified.

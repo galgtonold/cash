@@ -145,7 +145,7 @@ class TrackingState:
     # The names the cells below the running one read: what a restart may need
     # restored from this cell. None when there is no notebook to read, and
     # then nothing is persisted ahead of need.
-    # W: UpstreamChecker (per cell). R: StatementProcessor.end_cell_persistence.
+    # W: UpstreamChecker (per cell). R: StatementProcessor.end_cell_persistence (RebuildCostLedger).
     read_by_later_cells: frozenset[str] | None = None
 
     # The simulation's lineage for every name as of just before the current

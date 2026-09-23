@@ -26,7 +26,6 @@ from cash.exceptions import (
     CacheBackendError,
     CacheKeyComputationError,
     CacheSerializationError,
-    CashCacheIneffectiveWarning,
 )
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from cash.notebook.cache_key import (
@@ -37,6 +36,7 @@ from cash.notebook.cache_key import (
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.statement._metadata import StatementCacheMetadata
+from cash.notebook.statement.amplification import AmplificationGuard
 from cash.notebook.statement.capture import display_execution_output, make_capture_ctx
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
@@ -47,6 +47,7 @@ from cash.notebook.statement.miss_guard import (
     resolve_cache_dir,
 )
 from cash.notebook.statement.randomness import StatementRandomness
+from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.notebook.statement.restore import StatementRestorer
 from cash.notebook.statement.results import DecoratorCallMetric, ProcessResult
 from cash.notebook.statement.run import CodeRunner, StatementExecution, StatementRun
@@ -56,8 +57,6 @@ from cash.tracking.file_dep_snapshot import snapshot_dependencies, snapshot_file
 
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.namespace_effects import statement_calls_user_writer, statement_written_paths
-from ...backends.adaptive_caps import human_bytes
-from ...diagnostics import warn_diagnostic
 from ...tracking import file_dep_snapshot
 from ...tracking.file_tracker import tracking_seconds
 from ..cache_key import called_function_dependencies, called_function_globals, import_bindings_key, mutation_verdict_key
@@ -84,39 +83,6 @@ _LOG_CACHE_DEBUG = "[CACHE DEBUG]"
 _LOG_OPTIMIZATION = "[OPTIMIZATION]"
 _LOG_FORBIDDEN = "[FORBIDDEN]"
 _LOG_ANNOTATION = "[ANNOTATION]"
-
-# --- Loop-persist amplification guard ----------------------------
-# ``# @cash:persist`` inside (or on) a loop makes EVERY iteration a persist
-# target. When the loop grows one object -- the classic "add a column per
-# iteration" frame build -- each iteration snapshots the whole object at its
-# current width, so a 40 MB final frame costs sum(widths) on disk: 13x for 25
-# columns, and quadratic in the iteration count thereafter. The tier caps are
-# structurally blind to this: its per-object refusal compares ONE value against
-# half the tier cap (40 MB vs >=4 GiB -> fine) and its evict-after-write warning
-# needs the total to exceed the cap (520 MB vs >=8 GiB -> never evicts). Neither
-# looks at *cumulative writes for one statement*, which is the dimension that
-# actually blows up.
-#
-# So track that dimension directly. Once one statement's cumulative persisted
-# bytes exceed both an absolute floor and a multiple of the value's CURRENT
-# size, stop value-persisting it (metadata-only, exactly like the size-aware
-# skip) and warn once. Skipping beats evict-after-write here: it also stops
-# paying the rising per-iteration serialisation cost, which is the "re-runs got
-# slower" half of the symptom.
-#
-# The floor keeps the guard off small loops entirely (nobody's disk is at risk
-# from a few MB), and the accounting is only ever done for statements carrying
-# an iteration/branch context marker, so an ordinary single-statement
-# ``# @cash:persist`` can never trip it -- it writes once, and is not in a loop.
-_PERSIST_AMPLIFICATION_FLOOR_BYTES = 64 * 1024 * 1024
-_PERSIST_AMPLIFICATION_LIMIT = 4
-
-# Badge/metadata reason for a write refused by the guard above. A constant so
-# consumers compare identity rather than pattern-matching the wording.
-AMPLIFICATION_SKIP_REASON = (
-    "loop caching a growing object would store every intermediate state; "
-    "further iterations kept metadata-only (see the emitted warning)"
-)
 
 _COST_MODEL_KEYS = (
     "cost_model_size_bytes",
@@ -322,15 +288,11 @@ class StatementProcessor:
         except (AttributeError, TypeError):
             self.persist_all = False
         self.compute_hash: Callable[[Any], str] | None = compute_hash_fn
+        #: Names a later top-level statement of the running cell writes; set by
+        #: the cell executor before each statement (``_written_later_in_cell``).
+        self.written_later_in_cell: frozenset[str] = frozenset()
 
-        # Loop-persist amplification guard. Cumulative value-persisted
-        # bytes per loop-body statement (keyed on the body's real source, with
-        # the per-iteration discriminator comment stripped, so all iterations of
-        # one statement share a counter), plus the set of statements already
-        # warned about so a 1000-iteration loop warns once, not 1000 times.
-        self._persist_bytes_by_stmt: dict[str, int] = {}
-        self._persist_last_size_by_stmt: dict[str, int] = {}
-        self._warned_persist_amplification: set[str] = set()
+        self._amplification = AmplificationGuard()
 
         # Sub-expression caching (CAS-243), built on first use. Interception
         # is the default; ``# @cash:no-cache-calls`` is the escape hatch. Held
@@ -389,20 +351,12 @@ class StatementProcessor:
         # This cell's statements so far, each with the lineages it read, for a
         # chart writer's provenance (``carrier_history``).
         self._cell_stmt_log: list[tuple[str, dict[str, str]]] = []
-        # What rebuilding a variable after a restart would re-run: the entries
-        # not on disk it was computed through, ``{cache key: seconds}``; and the
-        # key that last produced each variable in this cell (``end_cell_persistence``).
-        self._unsaved_ancestry: dict[str, dict[str, float]] = {}
-        self._cell_last_key: dict[str, str] = {}
-        # One per control structure running: the entries not on disk its body
-        # produced, and the names they were produced for.
-        self._structure_costs: list[tuple[dict[str, float], set[str]]] = []
-        self._collapsed = 0  # ancestries summed into one (``_capped``)
 
         # The one shared record of lineage and dependency state (see
         # TrackingState); the processor never aliases its fields.
         self.tracking_state: TrackingState = tracking_state or TrackingState()
         self._randomness = StatementRandomness(shell, self.tracking_state)
+        self._rebuild_cost = RebuildCostLedger(shell, self.tracking_state, cash_instance)
         # Pre-execution fingerprints of a bare call's arguments, by statement
         # source hash -- see _classify_method_mutations.
         self._arg_snapshots: dict[str, dict[str, str]] = {}
@@ -722,6 +676,19 @@ class StatementProcessor:
         self.tracking_state.current_session_hashes.pop(name, None)
         self.tracking_state.from_import_components.pop(name, None)
         self.tracking_state.module_attribute_deps.pop(name, None)
+
+    def begin_structure_cost(self) -> None:
+        """A control structure starts (see :meth:`RebuildCostLedger.begin_structure`)."""
+        self._rebuild_cost.begin_structure()
+
+    def end_structure_cost(self, reads, changed, success: bool) -> None:
+        """A control structure ended (see :meth:`RebuildCostLedger.end_structure`)."""
+        self._rebuild_cost.end_structure(reads, changed, success)
+
+    def end_cell_persistence(self) -> None:
+        """Write to disk what this cell left that would be costly to rebuild
+        (see :meth:`RebuildCostLedger.end_cell_persistence`)."""
+        self._rebuild_cost.end_cell_persistence()
 
     def begin_cell_rng_observation(self) -> None:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""
@@ -1272,142 +1239,9 @@ class StatementProcessor:
     def begin_cell_statement_log(self) -> None:
         """Start this cell's statement log, before its statements run."""
         self._cell_stmt_log = []
-        self._cell_last_key = {}
+        self._rebuild_cost.begin_cell()
         if self._call_cache is not None:
             self._call_cache.begin_cell()
-
-    #: Ancestry entries kept per variable; past this they are summed into one,
-    #: which may count a shared ancestor twice -- too much persisted, never too little.
-    _MAX_UNSAVED_ANCESTRY = 256
-
-    def _note_rebuild_cost(self, cache_key: str, inputs, outputs, seconds: float, on_disk: bool) -> None:
-        """Record what rebuilding *outputs* after a restart would re-run.
-
-        Nothing, when their entry is on disk. Otherwise this statement and the
-        entries not on disk its inputs came through -- by key, so an ancestor
-        reached twice (``vs_plan = wk_store.merge(plan)``, both from ``sales``)
-        is counted once.
-        """
-        ancestry: dict[str, float] = {}
-        if not on_disk:
-            for name in inputs:
-                ancestry.update(self._unsaved_ancestry.get(name, {}))
-            ancestry[cache_key] = seconds
-            ancestry = self._capped(ancestry)
-        for name in outputs:
-            self._unsaved_ancestry[name] = ancestry
-            self._cell_last_key[name] = cache_key
-        for spent, names in self._structure_costs:
-            spent.update(ancestry)
-            names.update(outputs)
-
-    def _capped(self, ancestry: dict[str, float]) -> dict[str, float]:
-        if len(ancestry) <= self._MAX_UNSAVED_ANCESTRY:
-            return ancestry
-        self._collapsed += 1
-        return {f"collapsed:{self._collapsed}": sum(ancestry.values())}
-
-    def begin_structure_cost(self) -> None:
-        """A control structure starts: collect what its body leaves unsaved."""
-        self._structure_costs.append(({}, set()))
-
-    def end_structure_cost(self, reads, changed, success: bool) -> None:
-        """A control structure ended. A name it *changed* that no body statement
-        produced -- ``parts`` in ``for f in files: ... parts.append(d)``, which
-        the loop owns -- costs what the whole body left unsaved to rebuild, and
-        what the structure read."""
-        spent, names = self._structure_costs.pop() if self._structure_costs else ({}, set())
-        if not success:
-            return
-        ancestry = dict(spent)
-        for name in reads:
-            ancestry.update(self._unsaved_ancestry.get(name, {}))
-        ancestry = self._capped(ancestry)
-        for name in set(changed) - names:
-            self._unsaved_ancestry[name] = ancestry
-            # No entry holds its final value: the one that bound it (``parts =
-            # []``) holds what it was before the loop.
-            self._cell_last_key.pop(name, None)
-        for outer, outer_names in self._structure_costs:
-            outer.update(ancestry)
-            outer_names.update(changed)
-
-    #: Unsaved compute behind a cheap statement's inputs past which its final
-    #: value gets an entry anyway (see :meth:`_final_over_costly_inputs`).
-    _COSTLY_INPUTS_S = 0.1
-
-    def _final_over_costly_inputs(self, inputs, outputs) -> bool:
-        """Whether a statement too cheap to cache leaves a final value over
-        inputs that would be costly to rebuild.
-
-        ``is_refund = sales["qty"] < 0`` takes a millisecond, over a ``sales``
-        that took seconds and is not on disk. With no entry, the end-of-cell
-        pass had nothing to persist, and after a restart the cell rebuilt
-        ``sales`` to get ``is_refund`` back (round 25, r25s2). An intermediate
-        -- a name the cell writes again -- still gets none.
-        """
-        try:
-            if self._call_unit_loop_vars:
-                # Inside a loop iteration nothing is final: the next iteration
-                # overwrites it, and the inputs' unsaved cost only grows as the
-                # loop runs, so EVERY iteration qualified. r28s3's 631-iteration
-                # loop wrote an entry per iteration for a ~0.1 ms statement --
-                # each a full snapshot of the 2.4 MB frame it changes, 1.5 GiB
-                # in all -- and a re-run copied every one back: 0.05 s plain,
-                # 11-23 s cached. What the loop leaves is judged when it ends.
-                return False
-            later = getattr(self, "written_later_in_cell", frozenset())
-            if not outputs or set(outputs) & set(later):
-                return False
-            cost = sum(sum(self._unsaved_ancestry.get(name, {}).values()) for name in inputs)
-            return cost >= self._COSTLY_INPUTS_S
-        except Exception:  # noqa: BLE001 - the floor is the safe answer
-            return False
-
-    def end_cell_persistence(self) -> None:
-        """Write to disk what this cell left that would be costly to rebuild.
-
-        A statement is persisted by its own compute time, so a cheap statement
-        over a costly input stays in RAM, and after a restart the next cell that
-        needs it rebuilds the whole chain behind it (round 23, r23s2: 49
-        statements and a 1,200-file folder re-read to restore a table cell's
-        inputs). Here each variable's final value, as the cell leaves it, is
-        judged by what rebuilding it would cost -- the entries not on disk it
-        came through -- by the same cost-model rule. The final value only: the
-        ten versions ``sales`` goes through in one cell are not worth ten copies.
-
-        Every final value, not only one a cell below reads: running this cell
-        again after a restart restores its last versions rather than rebuilding
-        them (``UpstreamChecker.plan_cell_run``), and ``is_refund`` beside the
-        final ``sales`` is one of them (round 25, r25s2). Still only in a
-        notebook, where a restart re-runs cells by their source.
-        """
-        backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
-        last, self._cell_last_key = self._cell_last_key, {}
-        later = self.tracking_state.read_by_later_cells
-        self.tracking_state.read_by_later_cells = None
-        if backend is None or later is None:
-            return
-        persist = backend.persist_from_memory
-        costs: dict[str, float] = {}
-        for name, key in last.items():
-            if name not in self.shell.user_ns:
-                continue
-            if self.tracking_state.variable_sources.get(name) != key:
-                continue
-            cost = sum(self._unsaved_ancestry.get(name, {}).values())
-            if cost > 0:
-                costs[key] = max(costs.get(key, 0.0), cost)
-        for key, cost in costs.items():
-            try:
-                written = persist(key, cost)
-            except Exception:  # noqa: BLE001 - persisting ahead of need must never break a cell
-                logger.debug("%s end-of-cell persistence failed for %s", _LOG_PROCESSOR, key, exc_info=True)
-                continue
-            if written:
-                for name, k in last.items():
-                    if k == key:
-                        self._unsaved_ancestry[name] = {}
 
     def _log_statement_reads(self, code: str, inputs: set[str]) -> None:
         """Record *code* with the lineages it reads, as the simulation keys them:
@@ -1992,7 +1826,7 @@ class StatementProcessor:
                 if value is not None:
                     metrics[k] = value
         storage = (saved_metadata.storage if saved_metadata else None) or ()
-        self._note_rebuild_cost(cache_key, inputs, outputs, execution.cost, on_disk=any(s != "RAM" for s in storage))
+        self._rebuild_cost.note(cache_key, inputs, outputs, execution.cost, on_disk=any(s != "RAM" for s in storage))
 
         metrics["total_time"] = time.time() - run.process_start
         self.analytics_manager.record_event(
@@ -2486,7 +2320,7 @@ class StatementProcessor:
                     if value is not None:
                         metrics[k] = value
                 where = [metadata.source, *(metadata.storage or ())]
-                self._note_rebuild_cost(
+                self._rebuild_cost.note(
                     cache_key,
                     inputs,
                     metadata.outputs or (),
@@ -2912,153 +2746,6 @@ class StatementProcessor:
                 logger.debug("[CACHE DEBUG] Variable '%s' cannot be pickled (%s), skipping cache storage.", k, e)
         return safe
 
-    @staticmethod
-    def _amplification_size(prediction: dict[str, Any] | None) -> int:
-        """Size of the largest output var, or 0 when it isn't usable.
-
-        Reads the estimate ``_should_skip_large_object_caching`` already
-        computed, so the guard adds no sizing work to the write path.
-        """
-        if prediction is None:
-            return 0
-        try:
-            size = int(prediction.get("size_bytes") or 0)
-        except (TypeError, ValueError):
-            return 0
-        return max(size, 0)
-
-    def _amplification_stmt_id(self, code: str) -> str | None:
-        """Per-statement accounting key, or ``None`` if it cannot amplify.
-
-        Only a statement replayed under a control structure writes more than
-        once per run, so only those are accounted. Stripping the per-iteration
-        discriminator comment makes every iteration of one loop body share a
-        counter; an ordinary ``# @cash:persist`` on a single statement has no
-        marker, gets ``None`` here, and is untouched by the whole mechanism.
-        """
-        if not has_marker(code):
-            return None
-        return strip_markers(code).strip()
-
-    def _check_persist_amplification(
-        self,
-        code: str,
-        prediction: dict[str, Any] | None,
-        annotated: bool = False,
-    ) -> tuple[bool, str | None]:
-        """Return ``(skip, reason)`` for the loop-persist guard.
-
-        Consulted immediately before a value-persist: refuse once this
-        statement's cumulative *durably stored* bytes are out of all proportion
-        to the value being stored. The counter is fed by
-        :meth:`_account_persisted_bytes` after the write actually lands.
-
-        Two thresholds must BOTH be crossed, which is what keeps the guard off
-        healthy notebooks: an absolute floor
-        (``_PERSIST_AMPLIFICATION_FLOOR_BYTES``), so small loops never engage at
-        all, and a ratio against the current value, so a loop that legitimately
-        stores a lot of *distinct* results is judged on proportion rather than
-        volume.
-
-        The verdict LATCHES per statement: once a statement has demonstrated
-        amplification, later iterations stay metadata-only. Without the latch the
-        guard would disengage exactly when it matters -- the running total
-        freezes while the object keeps growing, so ``LIMIT x size`` would
-        eventually overtake it and the writes would resume mid-loop.
-        """
-        size = self._amplification_size(prediction)
-        if size <= 0:
-            return False, None
-        stmt_id = self._amplification_stmt_id(code)
-        if stmt_id is None:
-            return False, None
-
-        if stmt_id in self._warned_persist_amplification:
-            return True, AMPLIFICATION_SKIP_REASON
-
-        cumulative = self._persist_bytes_by_stmt.get(stmt_id, 0)
-        if cumulative > _PERSIST_AMPLIFICATION_FLOOR_BYTES and cumulative > _PERSIST_AMPLIFICATION_LIMIT * size:
-            self._warned_persist_amplification.add(stmt_id)
-            self._warn_persist_amplification(stmt_id, cumulative, size, annotated=annotated)
-            return True, AMPLIFICATION_SKIP_REASON
-        return False, None
-
-    def _account_persisted_bytes(
-        self,
-        code: str,
-        prediction: dict[str, Any] | None,
-        wire: dict[str, Any],
-    ) -> None:
-        """Add a completed write to its statement's running total.
-
-        Counts a write only when it reached a **persistent** tier. The backend
-        reports the resolved destinations back on the metadata dict, so this is
-        a read of information the write already produced.
-
-        Excluding RAM-only writes is what makes the guard track the resource the
-        user is actually losing. A loop body that misses the promotion floor is
-        cached in RAM and never touches the disk at all; counting those would
-        warn about "filling your disk" for a notebook whose disk cache is a few
-        KB, which is both false and noisy.
-        """
-        stmt_id = self._amplification_stmt_id(code)
-        if stmt_id is None:
-            return
-        size = self._amplification_size(prediction)
-        if size <= 0:
-            return
-        destinations = wire.get("storage") or ()
-        if not isinstance(destinations, (list, tuple)):
-            return
-        if not any(d != "RAM" for d in destinations):
-            return
-        # Growth only: a loop that REBINDS a same-sized value each pass stores a
-        # different result every time, and nothing in it grows. Summing those
-        # warned about a sweep's per-window dict (round 25, r25s3).
-        last = self._persist_last_size_by_stmt.get(stmt_id)
-        self._persist_last_size_by_stmt[stmt_id] = size
-        if last is not None and size <= last:
-            return
-        self._persist_bytes_by_stmt[stmt_id] = self._persist_bytes_by_stmt.get(stmt_id, 0) + size
-
-    def _warn_persist_amplification(
-        self,
-        stmt_id: str,
-        cumulative: int,
-        size: int,
-        annotated: bool = False,
-    ) -> None:
-        """Warn once that a looped persist is snapshotting a growing object.
-
-        Names the amplification in the user's own terms -- what it has already
-        written versus how big the value actually is -- and points at the fix,
-        which is to persist the finished object once instead of every
-        intermediate state of it.
-        """
-
-        first_line = (stmt_id.splitlines() or [""])[0].strip()
-        if len(first_line) > 60:
-            first_line = first_line[:57] + "..."
-        warn_diagnostic(
-            CashCacheIneffectiveWarning,
-            "CACHE-LOOP-GROWTH",
-            f"`{first_line}` runs in a loop and has already cached "
-            f"{human_bytes(cumulative)} of intermediate snapshots for a value "
-            f"that is currently only {human_bytes(size)} -- caching a growing "
-            f"object every iteration costs the SUM of every intermediate size, "
-            f"not the final one. Further iterations are not being stored.",
-            # The annotation advice only for a statement that carries it: r25s3
-            # was told to move a `# @cash:persist` they never wrote.
-            (
-                "move `# @cash:persist` off the loop and onto a statement that "
-                "produces the finished object, so it is stored once."
-                if annotated
-                else "build the finished object in one statement -- a comprehension, "
-                "or a function the loop's work moves into -- so it is stored once; "
-                "calls inside the loop are still cached."
-            ),
-        )
-
     def _store_in_cache(
         self,
         run: StatementRun,
@@ -3119,7 +2806,9 @@ class StatementProcessor:
             # legitimately clear the floor, so nothing may assume this branch is
             # taken for a given statement (see the floor-exit test, which pins
             # the threshold rather than trusting the machine to be fast).
-            if execution_time < min_exec_time and not self._final_over_costly_inputs(inputs, outputs):
+            if execution_time < min_exec_time and not self._rebuild_cost.final_over_costly_inputs(
+                inputs, outputs, in_loop=bool(self._call_unit_loop_vars), written_later=self.written_later_in_cell
+            ):
                 logger.debug(
                     "[SIZE_AWARE] Compute took only %.1fms, below %.0fms floor — not writing cache entry",
                     execution_time * 1000,
@@ -3182,7 +2871,7 @@ class StatementProcessor:
         # intermediate state of it written to their disk. It is the last word
         # because it is a disk-safety guard, not a cost heuristic.
         if not should_skip:
-            amplified, amplified_reason = self._check_persist_amplification(
+            amplified, amplified_reason = self._amplification.check(
                 code,
                 prediction,
                 annotated=force_persist,
@@ -3287,7 +2976,7 @@ class StatementProcessor:
             wire[REF_BYTES_FIELD] = sum(referenced.values())
         # An intermediate of this cell (``cell_executor._written_later_in_cell``)
         # stays in RAM; the cell's final version is persisted at its end.
-        later = getattr(self, "written_later_in_cell", frozenset())
+        later = self.written_later_in_cell
         if not force_persist and outputs and later and set(outputs) <= later:
             wire["defer_persist"] = True
 
@@ -3299,7 +2988,7 @@ class StatementProcessor:
             # Charge this write to its statement's amplification budget, now
             # that the backend has reported which tiers actually took it
             # . Only durable destinations count.
-            self._account_persisted_bytes(code, prediction, wire)
+            self._amplification.account(code, prediction, wire)
 
         # The metadata-only record keeps a RAM-only value's lineage across a
         # restart. A value written to a persistent tier carries its metadata

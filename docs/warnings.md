@@ -292,7 +292,7 @@ on one of those results pays full compute, every time.
 
 ## CACHE-LOOP-GROWTH {#cache-loop-growth}
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_persist_amplification @3b856f10 -->
+<!-- claim: cash/notebook/statement/amplification.py:AmplificationGuard._warn @5193540b -->
 **What happened.** A statement inside a loop stores a value that grows on each
 pass — a list being appended to, a frame being concatenated. Cash wrote a fresh
 copy of the whole thing on every pass that grew it, noticed the copies now add up
