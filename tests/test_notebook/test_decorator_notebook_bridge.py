@@ -814,21 +814,22 @@ class TestDecoratorFileDependencies:
         calls = c.drain_decorator_calls()
         assert calls[1]["cache_hit"] is True
 
-    def test_file_depends_on_registers_datasource(self, tmp_path):
-        """file_depends_on should register FileDataSource in the graph."""
+    def test_file_depends_on_records_the_file_with_the_entry(self, tmp_path):
+        """file_depends_on records the file the way a tracked read would."""
         data_file = tmp_path / "test.txt"
         data_file.write_text("hello")
 
-        c = Cash()
+        c = Cash(cache_dir=str(tmp_path / "cache"))
 
         @c.cache(file_depends_on=str(data_file))
         def read_file():
-            return data_file.read_text()
+            return "constant"
 
-        # Check that the file data source is registered
-        assert len(c.data_sources) == 1
-        ds_key = list(c.data_sources.keys())[0]
-        assert ds_key.startswith("file:")
+        read_file()
+        calls = c.drain_decorator_calls()
+        raw_metadata, _ = c.backend.get(calls[0]["cache_key"])
+        assert str(data_file.resolve()).replace("\\", "/") in raw_metadata["auto_file_deps"]
+        assert not c.data_sources
 
     def test_file_depends_on_with_ttl(self, tmp_path):
         """file_depends_on should work together with ttl."""

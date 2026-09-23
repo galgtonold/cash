@@ -92,12 +92,13 @@ to close the window that memo leaves (a Windows `np.memmap` edit seen up to five
 seconds late in a running process) and reverted it: a loop over a 200 MB input
 paid about 0.14 s per iteration. The window is documented in known-limitations.
 
-**Still timestamp-based, deliberately:** the explicit `file_depends_on=` /
-`FileDataSource` escape hatch folds the file's mtime into the cache key
-(`state_token()` → `_get_mtime()`, `src/cash/data_source.py`). It is a
-user-declared dependency on a *file*, not an observed read, and users can
-subclass `DataSource` to return a digest instead. This ADR's reasoning applies to
-the automatic path; the escape hatch keeps mtime for cost and predictability.
+**Declared files follow the same rule:** `file_depends_on=` records its paths
+on the call's file tracker as if the body had read them, so they are
+snapshotted and checked by content like any tracked read. Only the
+`FileDataSource` class, a `DataSource` for `depends_on=` and
+`dynamic_depends_on=`, still folds the file's mtime into the cache key
+(`state_token()`, `src/cash/data_source.py`); users can subclass `DataSource`
+to return a digest instead.
 
 ---
 

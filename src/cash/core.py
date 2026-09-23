@@ -1753,6 +1753,12 @@ class Cash:
         self.graph = DependencyGraph()
         self.functions: dict[str, Callable[..., Any]] = {}  # Registry of cached functions
         self.data_sources: dict[str, DataSource] = {}  # Registry of data sources
+        # func_name -> ``(as written, absolute)`` for each path its
+        # ``file_depends_on=`` names. Each miss records the absolute paths on
+        # the call's file tracker, as if the body had read them
+        # (`_track_declared_files`); the paths as written are in the key
+        # (`_fold_declared_files`).
+        self._declared_files: dict[str, tuple[tuple[str, str], ...]] = {}
         self.source_hashes: dict[str, str] = {}  # Current source hashes
         # Session-scoped memo: id(arg) -> (weakref, lineage_hash, content_hash).
         # Lets a repeated ``@cash.cache`` call with the SAME unmutated argument
@@ -2819,9 +2825,10 @@ class Cash:
                 in the cache key.
             dynamic_depends_on: Callable(s) that receive the same args as the
                 decorated function and return DataSource(s) for cache key.
-            file_depends_on: File path(s) to track as dependencies. The cache
-                is automatically invalidated when any tracked file changes.
-                Shorthand for ``depends_on=[FileDataSource("path")]``.
+            file_depends_on: File path(s) to track as dependencies, as if the
+                function had read them: their content is recorded with the
+                entry and checked on every lookup, the way an automatically
+                tracked read is, so an edit recomputes and a ``touch`` does not.
             ttl: Time-to-live in seconds. ``None`` means never expires.
             cache_if: Optional predicate ``callable(result) -> bool``. When
                 provided, called with the function's return value after
@@ -3020,12 +3027,45 @@ class Cash:
         self.graph.add_node(func_name)
         self._register_static_dependencies(func_name, depends_on)
         if file_depends_on:
-            from .data_source import FileDataSource
-
             file_paths = [file_depends_on] if isinstance(file_depends_on, str) else file_depends_on
-            file_deps = [FileDataSource(p) for p in file_paths]
-            self._register_static_dependencies(func_name, file_deps)
+            self._declared_files[func_name] = tuple((str(p), os.path.abspath(p)) for p in file_paths)
+        else:
+            self._declared_files.pop(func_name, None)
         return func_name
+
+    def _fold_declared_files(self, func_name: str, state_hash: str) -> str:
+        """Fold which files ``file_depends_on=`` names, as written, into the key.
+
+        Their content is checked against the entry on lookup
+        (`_track_declared_files`); this is what makes adding, removing or
+        re-pointing one a different key, since an entry that recorded file A
+        would otherwise keep hitting after the declaration moved to file B.
+        As written rather than absolute, so a relative path keys the same on
+        every machine.
+        """
+        declared = self._declared_files.get(func_name)
+        if not declared:
+            return state_hash
+        names = json.dumps(sorted(raw for raw, _ in declared))
+        return hashlib.sha256(f"{state_hash}:files:{names}".encode()).hexdigest()
+
+    def _track_declared_files(self, tracker: Any, func_name: str) -> None:
+        """Record *func_name*'s ``file_depends_on=`` paths on *tracker*.
+
+        As reads, so the entry snapshots their content and every lookup checks
+        it with ``file_dep_is_fresh``, exactly like a file the body opened. They
+        used to become a ``FileDataSource`` in the key, keyed on the mtime
+        alone: a ``touch`` recomputed, and an edit that kept the mtime hit.
+        Called inside the timed body, so the content hash is taken off the body
+        time with the tracker's other read hashes.
+        """
+        from cash.utils import normalize_path
+
+        for _, path in self._declared_files.get(func_name, ()):
+            if os.path.exists(path):
+                tracker._add_tracked(normalize_path(os.path.realpath(path)))
+            else:
+                tracker._add_tracked_absent(normalize_path(path))
 
     def _pin_own_source(self, func: Callable, source_hash: str | None = None) -> str:
         """Identity of *func* itself, pinned per function object.
@@ -3316,6 +3356,7 @@ class Cash:
                 own_source_override=self._pin_own_source(func),
                 note=True,
             )
+            current_state_hash = self._fold_declared_files(func_name, current_state_hash)
             chain.append(current_state_hash)
             current_state_hash = self._fold_closure(func, func_name, current_state_hash)
             chain.append(current_state_hash)
@@ -3482,6 +3523,7 @@ class Cash:
                 func_name,
                 own_source_override=self._pin_own_source(func),
             )
+            current_state_hash = self._fold_declared_files(func_name, current_state_hash)
             current_state_hash = self._fold_closure(func, func_name, current_state_hash)
             folded_defaults = self._fold_defaults(
                 func,
@@ -4873,6 +4915,7 @@ class Cash:
                     nested = [0.0]
                     nested_token = _NESTED_CASH_SECONDS.set(nested)
                     try:
+                        self._track_declared_files(tracker, func_name)
                         res = func(*args, **kwargs)
                     except Exception as exc:
                         self._log_raised(func_name, exc, call_start)
@@ -5127,6 +5170,7 @@ class Cash:
                     nested = [0.0]
                     nested_token = _NESTED_CASH_SECONDS.set(nested)
                     try:
+                        self._track_declared_files(tracker, func_name)
                         res = await func(*args, **kwargs)
                     except Exception as exc:
                         self._log_raised(func_name, exc, call_start)

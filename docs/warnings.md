@@ -108,7 +108,7 @@ serve a value you meant to recompute, so fix those.
 
 ## CACHE-ASYNC-GENERATOR {#cache-async-generator}
 
-<!-- claim: cash/core.py:Cash.cache @11310b71 -->
+<!-- claim: cash/core.py:Cash.cache @5f39ebf4 -->
 **What happened.** You put `@cash.cache` on an async generator — an `async def`
 function that `yield`s. Cash does not cache those in this release, so the
 decorator handed your function straight back, unwrapped.

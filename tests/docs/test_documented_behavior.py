@@ -130,15 +130,15 @@ def test_datasource_bool_has_changed_warns(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# File tracking: file_depends_on = mtime, auto = content  (docs/decorator.md)  #
+# File tracking: file_depends_on and auto both = content  (docs/decorator.md)  #
 # --------------------------------------------------------------------------- #
 
 
-def test_file_depends_on_tracks_mtime_not_content(tmp_path):
-    """``file_depends_on=`` keys on the file **mtime**, not its content: a
-    content edit that leaves the mtime unchanged stays cached; bumping the
-    mtime recomputes. (The function must NOT read the file, or auto content
-    tracking would mask the mtime-only behavior.)"""
+def test_file_depends_on_tracks_content_not_mtime(tmp_path):
+    """``file_depends_on=`` checks the file's **content**, like an automatically
+    tracked read: a content edit that leaves the mtime unchanged recomputes;
+    bumping the mtime alone does not. (The function must NOT read the file, or
+    auto content tracking would be what is tested.)"""
     c = _cash(tmp_path)
     p = tmp_path / "cfg.bin"
     p.write_text("aaaa")
@@ -157,12 +157,12 @@ def test_file_depends_on_tracks_mtime_not_content(tmp_path):
     p.write_text("bbbb")  # same size, new content
     os.utime(p, (st.st_atime, st.st_mtime))  # reset mtime to original
     g()
-    assert n["c"] == 1, "content changed but mtime reset -> still cached (mtime-only)"
+    assert n["c"] == 2, "content changed (mtime reset) -> recomputed"
 
     time.sleep(0.02)
     os.utime(p, None)  # bump mtime only
     g()
-    assert n["c"] == 2, "mtime changed -> recomputed"
+    assert n["c"] == 2, "mtime changed, content did not -> still cached"
 
 
 def test_auto_file_tracking_is_content_hash(tmp_path):

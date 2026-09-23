@@ -191,7 +191,7 @@ Two things to watch:
 
 - **Non-`DataSource` returns are silent.** As noted above, anything that's not a `DataSource` instance is dropped from the key without a warning. If you suspect your resolver isn't being applied, check `f.explain()` — a key that doesn't reflect your dependency tells you the resolver returned something the `isinstance` gate rejected.
 - **Resolver errors fail open, not closed.** A transient failure widens the cache. If correctness matters more than availability, validate the resolver's output yourself or call `f.cache_clear()` when you suspect drift.
-- **`FileDataSource.__init__` snapshots mtime eagerly.** Each call constructs a fresh source, so the snapshot is the *current* mtime at the moment the resolver runs — exactly what you want for dynamic tracking. (This is the opposite of `file_depends_on=`, where the snapshot is taken once at decoration time. See [Custom File Sources](custom-file-sources.md).)
+- **`FileDataSource.__init__` snapshots mtime eagerly.** Each call constructs a fresh source, so the snapshot is the *current* mtime at the moment the resolver runs — exactly what you want for dynamic tracking. (`file_depends_on=` works differently: it checks the file's content, the way an automatically tracked read is checked. See [Custom File Sources](custom-file-sources.md).)
 - **Closures over mutable state are a footgun.** See the example above — if a closure changes which `DataSource` you return without changing the function arguments, the cache may not notice. Encode anything that varies across calls into the arguments.
 
 ## API reference

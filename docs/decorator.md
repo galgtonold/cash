@@ -778,12 +778,12 @@ parameters below. And when a miss (or a suspicious hit) mystifies you,
 For the cases the automatic model above can't see — plus
 expiry, opt-outs, and the purity gates. All keyword-only and optional.
 
-<!-- claim: cash/core.py:Cash.cache @11310b71 -->
+<!-- claim: cash/core.py:Cash.cache @5f39ebf4 -->
 | Param | What it does |
 |---|---|
 | `depends_on=` | List of `Callable` or `DataSource` that contributes to the cache key |
 | `dynamic_depends_on=` | Callable(s) that receive the function's args and return `DataSource`(s) — for deps that depend on the call |
-| `file_depends_on=` | Shorthand: file path(s) tracked as `FileDataSource` |
+| `file_depends_on=` | File path(s) tracked by content, as if the function read them |
 | `ttl=` | Time-to-live in seconds; `None` (default) = never expires |
 | `cache_if=` | Predicate `(result) -> bool`; falsy result → don't cache (still returns to caller) |
 | `chunk_max_items=` / `chunk_max_bytes=` | For iterator returns, chunk thresholds (1M items / 1 GB default) |
@@ -859,13 +859,13 @@ def parse_config():
     return yaml.safe_load(open("config.yaml"))
 ```
 
-<!-- claim: cash/data_source.py:FileDataSource @4099fc64 broad="the claim is that this whole source type keys on mtime, which is the class's design" -->
-Pass a list for multiple files. The two mechanisms use deliberately different
-signals: **automatic** tracking fingerprints file **content** (a sha256), while
-`file_depends_on=` keys on the file **mtime** — cheaper, but it re-triggers on a
-content-preserving `touch` and can miss an edit that leaves the mtime unchanged.
-For richer dependencies (database tables, API endpoints, remote URLs), write a
-`DataSource` subclass and pass it via `depends_on=`.
+<!-- claim: cash/core.py:Cash._track_declared_files @c730b5e1 -->
+Pass a list for multiple files. A declared file is recorded exactly as if the
+function had read it: its **content** fingerprint is stored with the entry and
+checked on every lookup, the same check automatic tracking uses. A `touch` that
+leaves the bytes alone still hits, and an edit that keeps the mtime still
+recomputes. For richer dependencies (database tables, API endpoints, remote
+URLs), write a `DataSource` subclass and pass it via `depends_on=`.
 
 ### `depends_on=` — explicit dependency graph
 
@@ -1229,7 +1229,7 @@ dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/core.py:Cash._explain_call @53d8e7d6 -->
+<!-- claim: cash/core.py:Cash._explain_call @59088f69 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 

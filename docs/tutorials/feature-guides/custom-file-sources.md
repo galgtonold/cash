@@ -2,7 +2,7 @@
 
 Cash automatically tracks file dependencies. When you call `pd.read_csv('data.csv')` inside a cached function, the file's size and a content hash get recorded; the next time you call the function, the cache invalidates if the file's *contents* changed. This guide covers what's tracked, what isn't, and how to add tracking for non-standard access patterns.
 
-> **Two mechanisms, two different signals.** This page covers both, and they do not work the same way. **Auto-tracking** (`pd.read_csv`, `open`, … — everything Cash intercepts for you) is **content-authoritative**: it records a content hash and ignores the mtime. The **`file_depends_on=` / `FileDataSource` escape hatch** (below) is **mtime-based**: it folds the file's modification time into the cache key. So a touch that doesn't change any bytes leaves an auto-tracked dependency valid but *does* invalidate a `file_depends_on=` one. Keep the distinction in mind as you read.
+> **Two ways in, one signal.** **Auto-tracking** (`pd.read_csv`, `open`, … — everything Cash intercepts for you) and the **`file_depends_on=` escape hatch** (below) are both **content-authoritative**: each records a content hash and ignores the mtime, so a touch that doesn't change any bytes leaves either dependency valid. The exception is **`FileDataSource`**, the bundled `DataSource` for `depends_on=` / `dynamic_depends_on=`: it folds the file's modification time into the cache key.
 
 ## Why this exists
 
@@ -255,10 +255,10 @@ def load_model():
     return MyModel.from_disk("models/embeddings.bin", "models/vocab.json")
 ```
 
-<!-- claim: cash/data_source.py:FileDataSource @4099fc64 broad="the mtime-at-init behaviour is a property of the whole class" -->
-Under the hood, `_register_func` wraps each path in a `FileDataSource` and folds it into the function's static dependency list. `FileDataSource.state_token()` re-reads the file's mtime on every lookup; a change propagates into the cache key and forces a miss.
+<!-- claim: cash/core.py:Cash._track_declared_files @c730b5e1 -->
+Under the hood, `_register_func` records each path (made absolute at decoration time), and every miss adds them to the call's file tracker as if the body had read them. The entry therefore stores their content fingerprint beside anything the body read itself, every lookup checks it the way it checks an auto-tracked read, and a cached function that calls this one inherits the files on a hit too.
 
-A subtle behavior worth knowing: `FileDataSource.__init__` snapshots the mtime *at decoration time*. If the file doesn't exist yet when the decorator runs, the snapshot is `0.0` (the `OSError` fallback in `_get_mtime`). That's fine — the next stat sees the real mtime and triggers a miss for the first real run. But it means `file_depends_on` on a not-yet-created file does *not* fail loudly; you have to remember it's there.
+A declared file that does not exist yet is recorded as *absent*, like a lookup for a missing file: creating it later forces a miss. It does *not* fail loudly; you have to remember it's there.
 
 ## Escape hatch 2: registering a custom file source for auto-tracking
 
@@ -376,7 +376,7 @@ NFS, SMB, and similar network mounts often have coarse mtime resolution (1-secon
 
 Three things on network mounts do still deserve care:
 
-- **`file_depends_on=` remains mtime-based**, so the coarse-resolution problem applies to it in full. On a network mount, prefer auto-tracking for critical files, or write a `DataSource` subclass whose `state_token()` returns a content hash.
+- **`FileDataSource` remains mtime-based**, so the coarse-resolution problem applies to it in full. On a network mount, prefer auto-tracking or `file_depends_on=` for critical files, or write a `DataSource` subclass whose `state_token()` returns a content hash.
 - **Directory dependencies are mtime-based too.** A directory has no content to hash, so the [directory tracking](#directory-enumeration-tracks-the-directory) added for `glob` / `listdir` / `scandir` falls back to the mtime path. It relies on the filesystem bumping a directory's mtime when an entry is added or removed — true on local filesystems, not guaranteed on every network mount. If a new file appearing in a globbed directory must invalidate on such a mount, list the files explicitly via `file_depends_on=`.
 - **Content hashing costs a network read.** On a slow mount the hash is I/O over the wire whenever the size matches. The size check short-circuits the common "file was replaced wholesale" case first, and files over 256 MiB only pull 768 KiB of samples, but a large directory of same-size files re-hashed on every lookup is worth measuring.
 
@@ -392,7 +392,7 @@ The tracker records full absolute paths and stats them on every lookup. There's 
 
 | Symbol | Surface | Effect |
 |---|---|---|
-| `file_depends_on=path` | `@cash.cache` kwarg | Wraps *path* in `FileDataSource` and adds it to the function's static dependencies. Accepts `str` or `list[str]`. |
+| `file_depends_on=path` | `@cash.cache` kwarg | Records *path* on every miss as if the function read it, so its content is checked on each lookup. Accepts `str` or `list[str]`. |
 | `c.register_file_handler(module, func, factory)` | `Cash` method | Register a wrapper factory for an additional reader. Catches every subsequent call to `module.func` from cached code. Glob wildcard supported in *func*. |
 | `cash.FileDataSource(path)` | Public class | mtime-based change detection for a single file. Use in `depends_on=[...]` for advanced cases or subclass for content-hashing. |
 | `f.explain(*args).reason == 'file_changed'` | Diagnostic | Explanation reason emitted when one or more recorded files changed. `details['changed_files']` maps each path to `'content changed'`, `'size changed'`, or `'file missing'`. |
