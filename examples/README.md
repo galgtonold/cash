@@ -118,6 +118,11 @@ python examples/script_caching_demo.py
 
 ---
 
+### [`large_scale_projects/`](large_scale_projects/) - Large Real-World Workloads
+Ten analysis notebooks over datasets of hundreds of MB to several GB (NYC taxi trips, Wikipedia pageviews, census microdata, and others). Each downloads or generates its data on first run, so expect that run to take a while and use real disk space. Notebooks 02–07 expect the repository root as working directory and write to `examples/large_scale_projects/data/` (gitignored); the others write to `data/` under the working directory. Three of them are reference workloads for the benchmarks (`benchmarks/ref_notebooks.txt`).
+
+---
+
 ## Common Patterns
 
 ### Enable auto-caching
