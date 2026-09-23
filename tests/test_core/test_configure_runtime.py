@@ -271,12 +271,18 @@ class TestSameAsTheConstructor:
         assert c.backend is mine
         mine.shutdown()
 
-    def test_debug_off_stops_the_debug_output(self, tmp_path):
+    def test_debug_off_stops_the_debug_output(self, tmp_path, monkeypatch, request):
         import logging
 
-        from cash import Cash
+        from cash import Cash, _log
 
         cash_logger = logging.getLogger("cash")
+        # From cash's logger as a fresh process has it, whatever earlier tests
+        # in this worker set.
+        monkeypatch.setattr(_log, "_LEVEL_SET", None)
+        level = cash_logger.level
+        cash_logger.setLevel(logging.NOTSET)
+        request.addfinalizer(lambda: cash_logger.setLevel(level))
         c = Cash(cache_dir=str(tmp_path / "c"), register_magic=False)
         c.reconfigure(debug=True)
         assert cash_logger.isEnabledFor(logging.DEBUG)
