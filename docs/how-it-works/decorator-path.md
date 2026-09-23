@@ -144,7 +144,7 @@ flowchart TD
     STMT --> SP --> WRAP --> DRAIN --> MERGE
 ```
 
-<!-- claim: cash/decorator/reporting.py:ReportingMixin._log_decorator_call @1746a43f -->
+<!-- claim: cash/decorator/reporting.py:ReportingMixin._log_decorator_call @f23b179b -->
 Every `@cash.cache` call appends an entry to `Cash._decorator_call_log`, which
 keeps the most recent 10,000 (nothing drains it outside a notebook, so it must
 not keep every call of a long-running process). `cache_info()` counts each call
@@ -162,7 +162,7 @@ from its own entry, not from this log:
     'cache_key': 'my_module.process:...', # full four-segment key
     'timestamp': 1718000000.0,
     # on a miss only:
-    'miss_reason': ('new arguments', 'called with arguments not seen ...'),
+    'miss_reason': MissReason(kind=MissKind.ARGS, detail='called with arguments not seen ...', changed=None),
     'not_stored': None,                   # why the result was not stored
     'not_persisted': None,                # why it was kept in RAM only
 }

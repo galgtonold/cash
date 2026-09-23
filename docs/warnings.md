@@ -1072,7 +1072,7 @@ returned its real result; only the caching was skipped. Cash never builds the
 key without the part that failed, because that key could not see a change to
 it.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._resolve_cache_key @d2ca567a -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._resolve_cache_key @ec66ad8d -->
 **Why it matters.** That call did not cache. Correctness is not at risk — with
 no key, nothing is written and nothing is read, so this cannot produce a stale
 answer — but you are paying full compute every time it happens.
@@ -1442,7 +1442,7 @@ type when it can identify one; when the offending value is nested inside a
 container it says so instead, because it cannot see which element is to blame.
 The call ran and returned normally.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._resolve_cache_key @d2ca567a -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._resolve_cache_key @ec66ad8d -->
 **Why it matters.** That call did not cache, and calls like it will not cache
 either — this is not first-call warm-up. Every call passing that argument pays
 full compute. Nothing can go stale, because nothing is being stored.

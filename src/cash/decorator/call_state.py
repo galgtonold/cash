@@ -21,7 +21,7 @@ class KeyBuildFailed(Exception):
     """Building a key met something it cannot key, and says what to tell the user.
 
     Raised from inside a key build; `_resolve_cache_key` warns once with
-    *code*, *message* and *fix*, and runs the call uncached -- never keys it
+    *code*, *message* and *fix*, and the call runs uncached -- never keyed
     without the part that failed, which would serve a stale result silently.
     """
 

@@ -8,13 +8,13 @@ import contextlib
 import logging
 import time
 from collections.abc import Callable, Iterator
-from typing import Any
+from typing import Any, NamedTuple
 
 from .._clock import perf_counter as _perf_counter
 from ..backends import CacheMetadata
 from ..backends._base import ttl_expired
 from ..dependency_state import STATE_LEDGER, ledger_note
-from ..exceptions import CacheExpiredError, CashCacheIneffectiveWarning
+from ..exceptions import CashCacheIneffectiveWarning
 from ..tracking.file_tracker import FileAccessTracker
 from .arg_hashing import PLAIN_CENSUS
 from .cached_function import CachedFunction
@@ -31,10 +31,20 @@ from .call_state import (
     UnhashableDefault,
     run_to_completion,
 )
-from .explain import MISS_FILE, MISS_INCOMPLETE, MISS_TTL
+from .explain import MissKind, MissReason
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, is_one_shot_iterator
 
 logger = logging.getLogger(__name__)
+
+
+class Unkeyable(NamedTuple):
+    """A call that gets no key, and the miss it is logged as."""
+
+    reason: MissReason
+
+
+_UNHASHABLE = MissReason(MissKind.UNHASHABLE, "an argument could not be hashed, so there is no key to look up")
+_KEY_FAILED = MissReason(MissKind.KEY_FAILED, "building the key raised")
 
 
 class RuntimeMixin:
@@ -47,82 +57,60 @@ class RuntimeMixin:
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
         args: tuple,
         kwargs: dict,
-        call_start: float,
-    ) -> Any:
-        """The key for a real call, or the call's result when it has none.
+    ) -> tuple[BuiltKey | Unkeyable, dict]:
+        """The key for a real call, or why it has none; and its `CAPTURE_WATCH`.
 
         `_build_key`, with a ledger of what the state segment is made of
-        (`STATE_LEDGER`) and this key's `CAPTURE_WATCH`. Returns
-        ``(resolved, capture_watch)``, where *resolved* is one of:
-
-          - ``(cache_key, state_hash, args_hash)`` - the key was built
-          - ``(CACHE_MISS, result, 'unkeyable')`` - a mocked helper, no code to key
-          - ``(CACHE_MISS, result, 'unhashable')`` - an argument or default could not be hashed
-          - ``(CACHE_MISS, result, 'error')`` - building the key raised
-
-        In the last three, *result* is what ``func(*args, **kwargs)`` returned:
-        the call already ran, uncached, was warned about once and logged. The
-        body's own exceptions propagate.
+        (`STATE_LEDGER`). A call with no key -- a mocked helper, an argument
+        or default that cannot be hashed, a key build that raised -- has
+        been warned about once; the caller runs it uncached.
         """
-        # Outside the key build below, which turns any exception into "no
-        # key": an exception from the user's own body must not be caught there
-        # and the body run a second time.
-        unkeyable = self._refresh_helper_bindings(func, func_name)
-        if unkeyable is not None:
-            return self._run_uncached(func, func_name, args, kwargs, call_start, "unkeyable", unkeyable), {}
+        mocked = self._refresh_helper_bindings(func, func_name)
+        if mocked is not None:
+            return Unkeyable(
+                MissReason(MissKind.MOCKED, f"{mocked}, which has no code to key, so the call ran uncached")
+            ), {}
         ledger: dict = {}
         ledger_token = STATE_LEDGER.set(ledger)
         watch: dict = {}
         watch_token = CAPTURE_WATCH.set(watch)
-        failure: tuple[str, str] | None = None
         try:
             built = self._build_key(func, func_name, dynamic_depends_on, args, kwargs)
         except UnhashableDefault:
             # `_fold_defaults` has warned: an unhashable default means cash
             # cannot tell whether it changed, so caching at all risks a stale
             # result.
-            failure = ("unhashable", "")
+            return Unkeyable(_UNHASHABLE), watch
         except UnhashableArgs:
             self._warn_unhashable_args(func_name, args, kwargs)
-            failure = ("unhashable", "")
+            return Unkeyable(_UNHASHABLE), watch
         except KeyBuildFailed as e:
             self._warn_once(CashCacheIneffectiveWarning, func_name, e.code, e.message, code=e.code, fix=e.fix)
-            failure = ("error", "")
+            return Unkeyable(_KEY_FAILED), watch
         except Exception as e:  # noqa: BLE001 - any failure building the key means no key
             self._warn_key_build_failed(func_name, args, kwargs, e)
-            failure = ("error", "")
+            return Unkeyable(_KEY_FAILED), watch
         finally:
             CAPTURE_WATCH.reset(watch_token)
             STATE_LEDGER.reset(ledger_token)
-        if failure is not None:
-            return self._run_uncached(func, func_name, args, kwargs, call_start, *failure), watch
         if ledger:
             slot = (func_name, built.state_hash)
             if slot not in self._state_ledgers:
                 self._keep_state_ledger(slot, ledger)
-        return (built.cache_key, built.state_hash, built.args_hash), watch
+        return built, watch
 
-    def _run_uncached(
-        self,
-        func: Callable,
-        func_name: str,
-        args: tuple,
-        kwargs: dict,
-        call_start: float,
-        why: str,
-        detail: str,
-    ) -> tuple:
+    def _run_uncached(self, spec: CachedFunction, call: Call, why: MissReason) -> Any:
         """Run a call that has no key, log it as a miss, and hand back its result."""
-        result = func(*args, **kwargs)
+        result = spec.func(*call.args, **call.kwargs)
         self._log_decorator_call(
-            func_name,
+            spec.name,
             cache_hit=False,
-            execution_time=_perf_counter() - call_start,
-            args_hash=why,
+            execution_time=_perf_counter() - call.call_start,
+            args_hash="",
             cache_key="",
-            miss_detail=detail,
+            miss=why,
         )
-        return (CACHE_MISS, result, why)
+        return result
 
     def _build_key(
         self,
@@ -228,12 +216,19 @@ class RuntimeMixin:
             return CACHE_MISS
         ttl = self._entry_ttl(ttl, metadata)
         try:
-            self._validate_ttl(metadata, ttl)
+            if self._entry_expired(metadata, ttl):
+                age = time.time() - (metadata.timestamp or 0)
+                self._note_miss(
+                    func_name, cache_key, MissReason(MissKind.TTL, f"the entry is {age:.1f}s old and ttl={ttl}s")
+                )
+                return CACHE_MISS
             if not self._auto_file_deps_fresh(metadata):
-                self._note_miss(func_name, cache_key, (MISS_FILE, self._describe_stale_files(metadata)))
+                self._note_miss(func_name, cache_key, MissReason(MissKind.FILE, self._describe_stale_files(metadata)))
                 return CACHE_MISS
             if not self._chunks_are_intact(cache_key, metadata):
-                self._note_miss(func_name, cache_key, (MISS_INCOMPLETE, "a chunk of the stored result is missing"))
+                self._note_miss(
+                    func_name, cache_key, MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
+                )
                 return CACHE_MISS
             # If this hit happens *inside* another cached function's
             # computation, replay the files this entry depends on into the
@@ -263,12 +258,11 @@ class RuntimeMixin:
                 file_deps=metadata.auto_file_deps,
             )
             return cached_data
-        except CacheExpiredError:
-            age = time.time() - (metadata.timestamp or 0)
-            self._note_miss(func_name, cache_key, (MISS_TTL, f"the entry is {age:.1f}s old and ttl={ttl}s"))
         except (TypeError, KeyError) as e:
             self._warn_metadata_invalid(func_name, e)
-            self._note_miss(func_name, cache_key, (MISS_INCOMPLETE, "the stored entry's metadata did not validate"))
+            self._note_miss(
+                func_name, cache_key, MissReason(MissKind.INCOMPLETE, "the stored entry's metadata did not validate")
+            )
         return CACHE_MISS
 
     def _tier_default_ttl(self) -> int | None:
@@ -380,13 +374,14 @@ class RuntimeMixin:
         # against a 25.5us floor for the cheapest possible cached call --
         # 0.8%, so this is not gated behind a heuristic.
         overhead_t0 = _perf_counter()
-        key_result, call.capture_watch = self._resolve_cache_key(
-            func, func_name, spec.dynamic_depends_on, args, kwargs, call.call_start
-        )
-        if key_result[0] is CACHE_MISS:
-            call.outcome = key_result[1]
+        # Outside the key build, which turns any exception into "no key": an
+        # exception from the body of an uncached call must propagate, not run
+        # the body a second time.
+        built, call.capture_watch = self._resolve_cache_key(func, func_name, spec.dynamic_depends_on, args, kwargs)
+        if isinstance(built, Unkeyable):
+            call.outcome = self._run_uncached(spec, call, built.reason)
             return call
-        call.cache_key, call.state_hash, call.args_hash = key_result
+        call.cache_key, call.state_hash, call.args_hash = built.cache_key, built.state_hash, built.args_hash
 
         raw_metadata, cached_data = self.backend.get(call.cache_key)
         call.metadata = CacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
@@ -636,6 +631,8 @@ class RuntimeMixin:
     def _compute_cache_key(self, func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
         return f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"
 
-    def _validate_ttl(self, metadata: CacheMetadata | None, ttl: int | None) -> None:
-        if metadata and ttl_expired(metadata.timestamp, ttl):
-            raise CacheExpiredError("Cache expired")
+    @staticmethod
+    def _entry_expired(metadata: CacheMetadata, ttl: int | None) -> bool:
+        """Is the entry older than *ttl* (``ttl=0``: always)? The one TTL rule
+        every cache path shares, `ttl_expired`."""
+        return ttl_expired(metadata.timestamp, ttl)

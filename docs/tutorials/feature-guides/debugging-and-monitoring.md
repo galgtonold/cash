@@ -33,7 +33,7 @@ That's the decorator path. In a notebook the equivalents are `%cash_debug on`, `
 
 ## In a script: `CASH_SUMMARY` and `CASH_DEBUG`
 
-<!-- claim: cash/core.py:Cash._print_run_summary @f2a46f9f, cash/decorator/reporting.py:ReportingMixin._log_decorator_call @1746a43f -->
+<!-- claim: cash/core.py:Cash._print_run_summary @f2a46f9f, cash/decorator/reporting.py:ReportingMixin._log_decorator_call @f23b179b -->
 A script shows nothing about the cache by default. Two environment variables
 change that without touching the code:
 
@@ -87,7 +87,7 @@ fetch_user(42)                      # compute and store
 fetch_user.explain(42)              # hit
 ```
 
-<!-- claim: cash/decorator/explain.py:CacheExplanation @9f1db6f8 broad="the field list and reason set are a claim about the whole dataclass", cash/decorator/explain.py:ExplainMixin._explain_call @85b77b70 -->
+<!-- claim: cash/decorator/explain.py:CacheExplanation @9f1db6f8 broad="the field list and reason set are a claim about the whole dataclass", cash/decorator/explain.py:ExplainMixin._explain_call @bd141dbf -->
 The return value is a `CacheExplanation` dataclass (`would_hit`, `reason`, `func_name`, `cache_key`, `details`, `cache_dir`) with six fields and one of six reason codes. `cache_dir` is the directory the answer was read from, so an explain that reads a different cache from the one you expected (a nested `pyproject.toml`, say) shows it:
 
 | `reason` | Meaning | Key `details` |
@@ -213,7 +213,7 @@ cash clear ./notebooks/analysis.ipynb # delete the sibling .cash
 
 ### "Hit rate is low"
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @8bc573ba -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @905b7b2b -->
 Start with `cache_info()['warnings']` (decorator) or `%cash_stats` (notebook) — `cache_info()` returns a plain dict, so subscript it; `.warnings` raises `AttributeError`. Look for:
 
 - `CashRandomnessWarning` — unseeded RNG; pass `random_state=42` (or whatever) to make calls reproducible.

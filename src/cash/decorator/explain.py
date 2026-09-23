@@ -8,7 +8,8 @@ import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from enum import Enum
+from typing import Any, NamedTuple
 
 from ..backends import CacheMetadata
 from ..backends._base import ttl_expired
@@ -106,26 +107,48 @@ class CacheExplanation:
         return self.__str__()
 
 
-# Why a call missed. The KIND is what the summary counts; the detail goes to
-# the per-call debug line and to explain().
-MISS_FIRST = "no entry yet"
-MISS_ARGS = "new arguments"
-MISS_CODE = "code or state changed"
-MISS_DYNAMIC = "dynamic dependency changed"
-MISS_FILE = "file changed"
-MISS_TTL = "ttl expired"
-MISS_NOT_STORED = "not stored last time"
-MISS_GONE = "entry gone"
-MISS_INCOMPLETE = "entry incomplete"
-MISS_UNHASHABLE = "unhashable argument"
-MISS_KEY_FAILED = "key could not be built"
-MISS_MOCKED = "a helper is a mock"
-MISS_RAISED = "raised"
+class MissKind(str, Enum):
+    """Why a call missed: what the summary and ``cache_info()`` count.
+
+    A ``str`` so that it counts, compares and prints as the words below.
+    """
+
+    FIRST = "no entry yet"
+    ARGS = "new arguments"
+    CODE = "code or state changed"
+    DYNAMIC = "dynamic dependency changed"
+    FILE = "file changed"
+    TTL = "ttl expired"
+    NOT_STORED = "not stored last time"
+    GONE = "entry gone"
+    INCOMPLETE = "entry incomplete"
+    UNHASHABLE = "unhashable argument"
+    KEY_FAILED = "key could not be built"
+    MOCKED = "a helper is a mock"
+    RAISED = "raised"
+
+    __str__ = str.__str__
+    __format__ = str.__format__
+    __hash__ = str.__hash__
 
 
-#: Separates a "code or state changed" detail from WHAT changed, which the
-#: summary tallies on its own line.
-WHAT_CHANGED = " -- "
+_CODE_CHANGED = "the function's code, a helper it calls, or a value it reads changed"
+
+
+class MissReason(NamedTuple):
+    """One miss: its kind, the detail the per-call line and explain() give,
+    and for a code change, what changed (which the summary tallies)."""
+
+    kind: MissKind
+    detail: str = ""
+    changed: str | None = None
+
+    @property
+    def text(self) -> str:
+        return f"{self.detail} -- {self.changed}" if self.changed else self.detail
+
+    def __str__(self) -> str:
+        return f"{self.kind}: {self.text}" if self.text else str(self.kind)
 
 
 #: What each link of the state chain folds (`_build_key`), for a
@@ -300,7 +323,7 @@ class ExplainMixin:
                 reason=EXPLAIN_KEY_UNCOMPUTABLE,
                 func_name=func_name,
                 details={
-                    "error": MISS_MOCKED,
+                    "error": MissKind.MOCKED.value,
                     "hint": f"{unkeyable}, which has no code to key, so the call would run uncached.",
                 },
             )
@@ -387,17 +410,17 @@ class ExplainMixin:
             # or cleared": that it was never stored, why, or that it expired
             # under the ttl it was WRITTEN with -- which a backend drops on
             # read, so the entry looks absent (round 17).
-            kind, why = self._absent_entry_reason(func_name, cache_key)
-            if kind == MISS_TTL:
+            missed = self._absent_entry_reason(func_name, cache_key)
+            if missed.kind is MissKind.TTL:
                 return CacheExplanation(
                     would_hit=False,
                     reason=EXPLAIN_TTL_EXPIRED,
                     func_name=func_name,
                     cache_key=cache_key,
-                    details={"why": why},
+                    details={"why": missed.text},
                 )
-            details["why"] = f"{kind}: {why}"
-            if kind != MISS_FIRST and "dynamic_dependencies" not in details:
+            details["why"] = str(missed)
+            if missed.kind is not MissKind.FIRST and "dynamic_dependencies" not in details:
                 del details["hint"]  # the generic guess, now that we know
             if frozen_args:
                 details["frozen_args"] = frozen_args
@@ -490,7 +513,7 @@ class ExplainMixin:
                         ids.append(repr(ds))
         return ids
 
-    def _note_miss(self, func_name: str, cache_key: str, reason: tuple[str, str]) -> None:
+    def _note_miss(self, func_name: str, cache_key: str, reason: MissReason) -> None:
         """Hold *reason* for the `_log_decorator_call` that reports this miss."""
         if len(self._pending_miss) > STORE_OUTCOMES_MAX:
             # Only a call that raised leaves one behind; never let those pile up.
@@ -500,7 +523,7 @@ class ExplainMixin:
         if cf is not None:
             cf.last_key = cache_key
 
-    def _absent_entry_reason(self, func_name: str, cache_key: str) -> tuple[str, str]:
+    def _absent_entry_reason(self, func_name: str, cache_key: str) -> MissReason:
         """Why there is no entry for *cache_key*. Reads state; changes none.
 
         This process's own history first. With none -- the first call of a
@@ -508,18 +531,17 @@ class ExplainMixin:
         the keys earlier runs stored for this function, recorded beside the
         cache (`StoredKeyRecord`). Without them every such miss read "no
         earlier run left one on disk", including after a code edit and a TTL
-        expiry, whose entries were in fact on disk (round 18, all five
-        testers).
+        expiry, whose entries were in fact on disk.
         """
         outcome = self._store_outcomes.get(cache_key)
         if outcome is not None:
             if outcome.get("not_stored"):
-                return MISS_NOT_STORED, outcome["not_stored"]
+                return MissReason(MissKind.NOT_STORED, outcome["not_stored"])
             written_ttl = outcome.get("ttl")
             age = time.time() - outcome.get("stored_at", 0)
             if ttl_expired(outcome.get("stored_at", 0), written_ttl):
-                return MISS_TTL, f"written {age:.1f}s ago with ttl={written_ttl}s"
-            return MISS_GONE, ("stored earlier in this process and since evicted or cleared")
+                return MissReason(MissKind.TTL, f"written {age:.1f}s ago with ttl={written_ttl}s")
+            return MissReason(MissKind.GONE, "stored earlier in this process and since evicted or cleared")
         cf = self._cached.get(func_name)
         previous = cf.last_key if cf is not None else None
         since = "since the last call"
@@ -529,23 +551,24 @@ class ExplainMixin:
             stored_at, written_ttl = record[cache_key][:2]
             age = time.time() - stored_at
             if ttl_expired(stored_at, written_ttl):
-                return MISS_TTL, (f"stored {age:.0f}s ago by an earlier run, with ttl={written_ttl}s")
-            return MISS_GONE, ("an earlier run stored it; it has since been evicted or cleared")
+                return MissReason(MissKind.TTL, f"stored {age:.0f}s ago by an earlier run, with ttl={written_ttl}s")
+            return MissReason(MissKind.GONE, "an earlier run stored it; it has since been evicted or cleared")
         if cache_key in doc["ram_only"]:
             why = doc["ram_only"][cache_key][1]
-            return MISS_NOT_STORED, (
-                f"an earlier run computed it but kept it in RAM only ({why}), so this process recomputed it"
+            return MissReason(
+                MissKind.NOT_STORED,
+                f"an earlier run computed it but kept it in RAM only ({why}), so this process recomputed it",
             )
         # The same arguments stored under another state: the code or a value
         # it reads changed. Asked of the record BEFORE the call-to-call
         # comparison, which after a code edit blamed "new arguments" on every
-        # call of a loop but the first (round 19).
+        # call of a loop but the first.
         new_parts = cache_key.rsplit(":", 3)
         if len(new_parts) == 4:
             for key in reversed([*record, *doc["ram_only"]]):
                 old_parts = key.rsplit(":", 3)
                 if len(old_parts) == 4 and old_parts[2:] == new_parts[2:] and old_parts[1] != new_parts[1]:
-                    return MISS_CODE, self._code_changed_detail(
+                    return self._code_changed(
                         func_name, old_parts[1], new_parts[1], doc, "since an earlier run stored it"
                     )
             # Earlier runs stored entries, and none under the state this
@@ -553,7 +576,7 @@ class ExplainMixin:
             # arguments. A changed DEFAULT moves the arguments too (they are
             # keyed with defaults applied), so the match above cannot see it,
             # and the call-to-call comparison below called 3 of 4 such misses
-            # "new arguments" (round 20).
+            # "new arguments".
             earlier = {
                 key: value
                 for kind in ("keys", "ram_only")
@@ -563,7 +586,7 @@ class ExplainMixin:
             states = {key.rsplit(":", 3)[1] for key in earlier if key.count(":") >= 3}
             if states and new_parts[1] not in states:
                 newest = max(earlier, key=lambda key: earlier[key][0])
-                return MISS_CODE, self._code_changed_detail(
+                return self._code_changed(
                     func_name,
                     newest.rsplit(":", 3)[1],
                     new_parts[1],
@@ -576,39 +599,33 @@ class ExplainMixin:
                 previous = others[-1]
                 since = "since an earlier run stored it"
             if previous is None or previous == cache_key:
-                return MISS_FIRST, (
-                    "the first call with these arguments in this process, and no earlier run stored one"
+                return MissReason(
+                    MissKind.FIRST, "the first call with these arguments in this process, and no earlier run stored one"
                 )
         # Keys are `func:state:dynamic:args`; the parts that moved say why.
         old = previous.rsplit(":", 3)
         new = cache_key.rsplit(":", 3)
         if len(old) != 4 or len(new) != 4:
-            return MISS_FIRST, "no entry for this key"
-        moved = []
+            return MissReason(MissKind.FIRST, "no entry for this key")
+        moved: list[tuple[MissKind, str]] = []
         what = None
         if old[1] != new[1]:
-            moved.append((MISS_CODE, f"the function's code, a helper it calls, or a value it reads changed {since}"))
+            moved.append((MissKind.CODE, f"{_CODE_CHANGED} {since}"))
             what = self._what_changed(func_name, old[1], new[1], doc)
         if old[2] != new[2]:
-            moved.append((MISS_DYNAMIC, "a dynamic_depends_on source changed"))
+            moved.append((MissKind.DYNAMIC, "a dynamic_depends_on source changed"))
         if old[3] != new[3]:
-            moved.append(
-                (
-                    MISS_ARGS,
-                    "called with arguments not seen "
-                    + ("on the last call" if since == "since the last call" else "in the last run"),
-                )
-            )
+            last = "on the last call" if since == "since the last call" else "in the last run"
+            moved.append((MissKind.ARGS, f"called with arguments not seen {last}"))
         if not moved:
-            return MISS_FIRST, "no entry for this key"
-        detail = "; and ".join(detail for _, detail in moved)
-        return moved[0][0], detail + (f"{WHAT_CHANGED}{what}" if what else "")
+            return MissReason(MissKind.FIRST, "no entry for this key")
+        return MissReason(moved[0][0], "; and ".join(detail for _, detail in moved), what)
 
-    def _code_changed_detail(self, func_name: str, old_state: str, new_state: str, doc: dict, since: str) -> str:
-        """A "code or state changed" detail, naming what changed when known."""
-        detail = f"the function's code, a helper it calls, or a value it reads changed {since}"
-        what = self._what_changed(func_name, old_state, new_state, doc)
-        return detail + (f"{WHAT_CHANGED}{what}" if what else "")
+    def _code_changed(self, func_name: str, old_state: str, new_state: str, doc: dict, since: str) -> MissReason:
+        """A "code or state changed" reason, naming what changed when known."""
+        return MissReason(
+            MissKind.CODE, f"{_CODE_CHANGED} {since}", self._what_changed(func_name, old_state, new_state, doc)
+        )
 
     def _keep_state_ledger(self, slot: tuple[str, str], ledger: dict) -> None:
         """Keep the ledger of the first key build that produced this

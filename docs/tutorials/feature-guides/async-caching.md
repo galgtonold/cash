@@ -64,7 +64,7 @@ The pattern matches `test_async_function_caches` and `test_async_cache_info` in 
 <!-- claim: cash/core.py:Cash._make_wrapper @8d59b655 -->
 The async wrapper shares the sync wrapper's code around the body, so it matches it feature for feature:
 
-- **TTL and freshness.** `_validate_ttl` on the hit path is shared between wrappers; `ttl=` works identically.
+- **TTL and freshness.** `_entry_expired` on the hit path is shared between wrappers; `ttl=` works identically.
 - **Static and dynamic dependencies.** `depends_on=` and `dynamic_depends_on=` go through `_resolve_cache_key`, which is the same call the sync wrapper uses.
 - **File dependency auto-tracking.** The `FileAccessTracker` block wraps the `await func(*args, **kwargs)` call, so `pandas.read_*`, `numpy.load`, `joblib.load`, and bare `open()` calls inside the coroutine body are auto-tracked the same way they would be in a sync function. Test reference: `test_async_auto_track_open` in `tests/test_core/test_async_file_tracking.py`.
 - **Purity analysis.** `_analyze_dependencies` runs on the first call regardless of sync/async; the AST-level analyzer doesn't distinguish coroutine functions from regular ones, so impurity warnings, `@cash.pure`, `assume_safe`, and `strict` apply unchanged.
@@ -153,7 +153,7 @@ async def demo_ttl_expiry():
 asyncio.run(demo_ttl_expiry())
 ```
 
-The TTL check happens in `_validate_ttl` on the sync hit path before the wrapper returns; expired entries fall through to the recompute branch and the await runs again. Test reference: `test_async_ttl_expires` in `tests/test_core/test_async_ttl.py`.
+The TTL check happens in `_entry_expired` on the sync hit path before the wrapper returns; expired entries fall through to the recompute branch and the await runs again. Test reference: `test_async_ttl_expires` in `tests/test_core/test_async_ttl.py`.
 
 ### Parallel scatter-gather
 
@@ -232,7 +232,7 @@ The decorator surface is unchanged between sync and async — the same kwargs wo
 | Surface | Effect on async wrappers |
 |---|---|
 | `@cash.cache` (no args) | Works on any `async def` that doesn't `yield`. Returns the original async generator unwrapped if it does. |
-| `ttl=N` | Honored. `_validate_ttl` is shared between wrappers. |
+| `ttl=N` | Honored. `_entry_expired` is shared between wrappers. |
 | `depends_on=[...]` | Honored. Static dependency graph is wrapper-agnostic. |
 | `dynamic_depends_on=...` | Honored. Resolved by the same sync helper before the await. |
 | `file_depends_on=...` | Honored. The files are recorded on the miss as if the coroutine read them, and checked by content on every lookup. |

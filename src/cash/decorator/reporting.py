@@ -16,7 +16,7 @@ from ..diagnostics import format_diagnostic, warn_diagnostic, warn_diagnostic_me
 from ..exceptions import CashCacheIneffectiveWarning
 from .cached_function import WARNINGS_MAX
 from .call_state import CALL_ENTRY, NESTED_CASH_SECONDS
-from .explain import MISS_FIRST, MISS_KEY_FAILED, MISS_MOCKED, MISS_RAISED, MISS_UNHASHABLE, entry_id_of, is_sampled_dep
+from .explain import MissKind, MissReason, entry_id_of, is_sampled_dep
 
 #: One line per decorated call -- hit or miss, and why -- when `debug=True` /
 #: `CASH_DEBUG=1` or `verbose=True` asks for it.
@@ -34,7 +34,7 @@ class ReportingMixin:
         args_hash: str,
         cache_key: str,
         time_saved: float = 0.0,
-        miss_detail: str = "",
+        miss: MissReason | None = None,
         body_seconds: float | None = None,
         cash_seconds: float | None = None,
         file_deps: dict | None = None,
@@ -56,6 +56,9 @@ class ReportingMixin:
         compute it stood in for. ``cache_info()['total_time_saved']`` sums the
         latter - summing ``execution_time`` (the old behaviour) under-reported
         savings by orders of magnitude.
+
+        *miss* is the reason for a miss that had no lookup (no key, or the
+        body raised); a looked-up miss takes the one `_note_miss` held.
         """
         # What cash spent on this call rather than the body: the whole of a
         # hit, and what the miss path measured around a body. Added to the
@@ -79,17 +82,7 @@ class ReportingMixin:
         }
         outcome: dict[str, Any] = {}
         if not cache_hit:
-            if args_hash == "unhashable":
-                reason = (MISS_UNHASHABLE, "an argument could not be hashed, so there is no key to look up")
-            elif args_hash == "error":
-                reason = (MISS_KEY_FAILED, "building the key raised")
-            elif args_hash == "unkeyable":
-                reason = (MISS_MOCKED, f"{miss_detail}, which has no code to key, so the call ran uncached")
-            elif args_hash == "raised":
-                reason = (MISS_RAISED, miss_detail)
-            else:
-                reason = self._pending_miss.pop(cache_key, None) or (MISS_FIRST, "")
-            entry["miss_reason"] = reason
+            entry["miss_reason"] = miss or self._pending_miss.pop(cache_key, None) or MissReason(MissKind.FIRST)
             outcome = self._store_outcomes.get(cache_key) or {}
             # Only this call's own outcome. A streamed result is logged before
             # it is stored, and must not borrow the previous call's verdict.
@@ -143,10 +136,10 @@ class ReportingMixin:
                 more = f" and {len(sampled) - 3} more" if len(sampled) > 3 else ""
                 line += f"  -- trusts the timestamps of {shown}{more} (sampled: larger than file_hash_full_max_bytes)"
             return line
-        kind, detail = entry.get("miss_reason") or (MISS_FIRST, "")
-        if kind == MISS_RAISED:
-            return f"RAISE {name}  {detail}; nothing stored  (ran {entry['execution_time']:.2f}s)"
-        line = f"MISS {name}{tag}  {kind}" + (f": {detail}" if detail else "")
+        missed = entry.get("miss_reason") or MissReason(MissKind.FIRST)
+        if missed.kind is MissKind.RAISED:
+            return f"RAISE {name}  {missed.text}; nothing stored  (ran {entry['execution_time']:.2f}s)"
+        line = f"MISS {name}{tag}  {missed}"
         # The body's own time: the persistence floor named beside it is judged
         # on that, and the call's time -- key, analysis, lookup -- made "ran
         # 0.20s ... under the 0.1s floor" read as a contradiction (round 19).
@@ -168,9 +161,9 @@ class ReportingMixin:
             func_name,
             cache_hit=False,
             execution_time=_perf_counter() - call_start,
-            args_hash="raised",
+            args_hash="",
             cache_key="",
-            miss_detail=f"{type(exc).__name__}: {str(exc)[:80]}",
+            miss=MissReason(MissKind.RAISED, f"{type(exc).__name__}: {str(exc)[:80]}"),
         )
 
     def _warn_cache_if_raised(

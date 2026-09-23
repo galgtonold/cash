@@ -21,7 +21,7 @@ Net result: the computation ran twice instead of once. Both threads return the r
 When `use_locking=True`, the miss path routes through `Cash._compute_with_lock` instead of calling the compute closure directly. The helper does three things:
 
 1. **Acquire `self.backend.lock(cache_key)`** as a context manager.
-2. **Re-read the cache inside the lock.** If the entry now exists (because a concurrent caller wrote it while the current thread was waiting on the lock), return the cached value. The re-read is `Cash._reread`, which calls the *same helper the lock-free path uses*, `_try_get_cached` (the async single-flight follower re-reads through `_reread` too): `_chunks_are_intact` confirms a chunked manifest can still be fully resolved, `_validate_ttl` runs, then `_wrap_iterator_hit` reconstructs iterator chunks if needed. A manifest missing a chunk falls through to step 3 rather than being served short. Sharing the helper is deliberate — the locked re-read used to be a hand-written copy, and it fell behind: it served entries the unlocked path would have rejected.
+2. **Re-read the cache inside the lock.** If the entry now exists (because a concurrent caller wrote it while the current thread was waiting on the lock), return the cached value. The re-read is `Cash._reread`, which calls the *same helper the lock-free path uses*, `_try_get_cached` (the async single-flight follower re-reads through `_reread` too): `_chunks_are_intact` confirms a chunked manifest can still be fully resolved, `_entry_expired` runs, then `_wrap_iterator_hit` reconstructs iterator chunks if needed. A manifest missing a chunk falls through to step 3 rather than being served short. Sharing the helper is deliberate — the locked re-read used to be a hand-written copy, and it fell behind: it served entries the unlocked path would have rejected.
 3. **Otherwise compute and store inside the lock.**
 
 The "double check" is the read on step 2 — the first check was the lock-free read on the wrapper's hot path before `_compute_with_lock` was called. The second read is needed because the first one is racy with concurrent writers.
@@ -56,7 +56,7 @@ def expensive(x):
     ...
 ```
 
-<!-- claim: cash/core.py:Cash.__init__ @9092cdb6 -->
+<!-- claim: cash/core.py:Cash.__init__ @89e77d9f -->
 The flag is a `Cash`-instance option, not a per-decorator one. All functions registered through this instance go through the lock path on misses; switch instances if you want a mix.
 
 Lock acquisition uses **the cache backend itself** — `self.backend.lock(cache_key)` returns a context manager whose semantics are defined by the backend subclass. See the next section for what each backend implements.

@@ -138,7 +138,7 @@ A notebook shows a badge on every statement. A script shows nothing by
 default, which makes it easy to assume caching is working when it isn't — so
 there are several ways to look.
 
-<!-- claim: cash/core.py:Cash.run_summary @8346c3db, cash/core.py:Cash._summary_reasons @0d5a6d85, cash/core.py:Cash._print_run_summary @f2a46f9f -->
+<!-- claim: cash/core.py:Cash.run_summary @8346c3db, cash/core.py:Cash._summary_reasons @30c139d9, cash/core.py:Cash._print_run_summary @f2a46f9f -->
 **What recomputed just now, and why?** Set `CASH_SUMMARY=1` and a
 per-function table prints to **stderr** when the process exits — stderr, so it
 never lands in a report, a pipe or a JSON response your program writes to
@@ -197,7 +197,7 @@ The id in brackets is the one `cash inspect --function` lists and
 `CASH_VERBOSE=1` or `verbose = true` give these lines without the other debug
 records.
 
-<!-- claim: cash/decorator/explain.py:ExplainMixin._absent_entry_reason @3980b7f0, cash/decorator/stored_keys.py:StoredKeyRecord.note_ram_only @39a4e46a -->
+<!-- claim: cash/decorator/explain.py:ExplainMixin._absent_entry_reason @69e58ae2, cash/decorator/stored_keys.py:StoredKeyRecord.note_ram_only @39a4e46a -->
 A reason is not limited to what this process saw: each function's recently
 stored keys are recorded beside the cache (in `.keys/`), so the first call of a
 new run can still say that the code changed, that the arguments are new, that
@@ -824,12 +824,12 @@ def stock_price(symbol):
     return requests.get(f"https://api.example.com/{symbol}").json()
 ```
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._validate_ttl @95cdd62d, cash/core.py:Cash.cleanup @20df501f -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_expired @c72fd40d, cash/core.py:Cash.cleanup @20df501f -->
 After the TTL elapses, the next call recomputes and replaces the entry.
 Entries whose calls never come back stay on disk until you reclaim them —
 call `cash.cleanup()`, or run `python -m cash clear` from the CLI.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_ttl @4df547f6, cash/decorator/explain.py:ExplainMixin._absent_entry_reason @3980b7f0 -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_ttl @4df547f6, cash/decorator/explain.py:ExplainMixin._absent_entry_reason @69e58ae2 -->
 An entry remembers the `ttl` it was written with, and the decorator's
 current `ttl` applies too, so the **shorter** of the two wins. Lengthening
 `ttl=60` to `ttl=3600` does not rescue entries already written under 60 s:
@@ -1193,7 +1193,7 @@ f.cache_info()
 #  'warnings': []}
 ```
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @8bc573ba -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @905b7b2b -->
 Keys:
 
 - **`hits`**, **`misses`**, **`hit_rate`** — counters since the wrapper
@@ -1240,7 +1240,7 @@ dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/decorator/explain.py:ExplainMixin._explain_call @85b77b70 -->
+<!-- claim: cash/decorator/explain.py:ExplainMixin._explain_call @bd141dbf -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 

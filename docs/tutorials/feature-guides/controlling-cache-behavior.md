@@ -73,10 +73,10 @@ hourly_report = generate_summary(df)       # one hour
 daily_data = fetch_daily_metrics()         # one day
 ```
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd, cash/decorator/runtime.py:RuntimeMixin._validate_ttl @95cdd62d -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd, cash/decorator/runtime.py:RuntimeMixin._entry_expired @c72fd40d -->
 The annotation TTL overrides the global TTL set by `%cash_on ttl=N`. `_parse_annotation` does the merge: if `annotation.ttl is not None`, the effective TTL becomes that value; otherwise the global TTL applies.
 
-The check itself is in `Cash._validate_ttl`: on a lookup hit, `_validate_ttl` asks the one TTL rule every cache path shares (`ttl_expired`) and raises `CacheExpiredError` when the entry is stale: older than the TTL, or at once for `ttl=0`, which is never fresh. Stale entries fall through to recompute as if the cache had missed.
+The check itself is in `Cash._entry_expired`: on a lookup hit, it asks the one TTL rule every cache path shares (`ttl_expired`) whether the entry is stale: older than the TTL, or at once for `ttl=0`, which is never fresh. A stale entry is a miss (`ttl expired`) and recomputes.
 
 ### `@cash:persist` — force it onto disk
 
@@ -191,7 +191,7 @@ def critical_function(x):
     return ...
 ```
 
-`ttl` here works identically to the statement annotation — `_validate_ttl` is the same code path. `assume_safe` and `strict` are about purity, not freshness; see [Purity Decorators](purity-decorators.md) for the full breakdown. They're mutually exclusive at decoration time.
+`ttl` here works identically to the statement annotation — `_entry_expired` is the same code path. `assume_safe` and `strict` are about purity, not freshness; see [Purity Decorators](purity-decorators.md) for the full breakdown. They're mutually exclusive at decoration time.
 
 To waive one statement rather than the function, annotate it — `# @cash:assume-safe` on the audited line. It is honoured under `strict=True` too, and unlike the flag it does not cover code added afterwards.
 
@@ -250,7 +250,7 @@ For the annotations that *don't* skip caching:
 | Annotation | Triggers (regex `#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?`) | Effect |
 |---|---|---|
 | `# @cash:no-cache` | directive=`no-cache` | Sets `CacheAnnotation.no_cache=True`. Short-circuits `decide_cacheability` to return `(False, ['@cash:no-cache annotation'])`. |
-| `# @cash:ttl=N` | directive=`ttl`, value=`N` (captured wide, then required to be ASCII digits) | Sets `CacheAnnotation.ttl=N`. Overrides global `global_ttl` for this statement. Checked at lookup time by `_validate_ttl`. |
+| `# @cash:ttl=N` | directive=`ttl`, value=`N` (captured wide, then required to be ASCII digits) | Sets `CacheAnnotation.ttl=N`. Overrides global `global_ttl` for this statement. Checked at lookup time by `_entry_expired`. |
 | `# @cash:persist` | directive=`persist` | Sets `CacheAnnotation.persist=True`. Forces tiered-backend promotion to the persistent tier regardless of the smart-persistence policy. |
 | `# @cash:allow-random` | directive=`allow-random` | Sets `CacheAnnotation.allow_random=True`. `check_and_warn_randomness` suppresses `CashRandomnessWarning` for the statement. |
 | `%cash_on ttl=N` | line-magic flag | Sets `self.global_ttl` on the magic. Applies to every statement unless overridden by `@cash:ttl=...`. |

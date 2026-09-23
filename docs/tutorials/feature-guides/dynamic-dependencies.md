@@ -80,7 +80,7 @@ The list-of-resolvers form is handled in the same method: each resolver is calle
 `dynamic_depends_on=` is *additive*. The cache key is the digest of `(function source, static deps, dynamic deps, args)`. Anything else that already invalidates continues to invalidate:
 
 - **With `file_depends_on=`** — the static file list is folded into the dependency state hash (`_fold_declared_files`); the dynamic resolver is folded into the separate dynamic state hash. Both must hold for a hit; either drifting forces a miss.
-- **With `ttl=`** — TTL is checked *after* the key matches, in `_validate_ttl`. A dynamic dep change misses immediately; a TTL expiry misses on the next call after the timestamp passes. Whichever triggers first wins on any given lookup.
+- **With `ttl=`** — TTL is checked *after* the key matches, in `_entry_expired`. A dynamic dep change misses immediately; a TTL expiry misses on the next call after the timestamp passes. Whichever triggers first wins on any given lookup.
 - **With `depends_on=`** — the static `DataSource` and upstream-function entries contribute to `current_state_hash` (computed by `DependencyStateHasher.compute`, invoked as `self._state_hasher.compute(func_name)` in `_resolve_cache_key`), which is independent of the dynamic state hash.
 
 ## What you can return from the resolver
@@ -169,7 +169,7 @@ The warning text reads:
 
 A transiently failing resolver (e.g. a temporary `OSError`) therefore does not break your pipeline, and it never widens the cache either: without the dependency there is no key that could be trusted, so the call pays full compute until the resolver works again.
 
-<!-- claim: cash/decorator/explain.py:ExplainMixin._explain_call @85b77b70 -->
+<!-- claim: cash/decorator/explain.py:ExplainMixin._explain_call @bd141dbf -->
 `f.explain()` builds the key with the same code a real call uses (`Cash._build_key`), with its warnings held back, so introspection never emits warnings as a side effect. A resolver the real call would refuse gives a `CacheExplanation` with `reason='key_uncomputable'` and the reason in `details`.
 
 ## Performance

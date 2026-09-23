@@ -45,11 +45,10 @@ from .decorator.code_identity import (
     CodeIdentityMixin,
 )
 from .decorator.explain import (
-    MISS_CODE,
-    MISS_FIRST,
-    WHAT_CHANGED,
     CacheExplanation,
     ExplainMixin,
+    MissKind,
+    MissReason,
 )
 from .decorator.file_deps import FileDepsMixin
 from .decorator.frozen import FrozenMixin
@@ -430,7 +429,7 @@ class Cash(
         self._store_outcomes: OrderedDict[str, dict[str, Any]] = OrderedDict()
         #: cache_key -> (kind, detail) for a lookup that just missed, taken
         #: by the `_log_decorator_call` that reports it.
-        self._pending_miss: dict[str, tuple[str, str]] = {}
+        self._pending_miss: dict[str, MissReason] = {}
 
         # Decorator call log for notebook integration.
         # Each entry is a dict with: func_name, cache_hit (bool), execution_time,
@@ -891,10 +890,10 @@ class Cash(
             else:
                 _stats["misses"] += 1
                 _stats["miss_overhead_seconds"] += call.get("cash_seconds") or 0.0
-                kind, detail = call.get("miss_reason") or (MISS_FIRST, "")
-                _stats["miss_reasons"][kind] += 1
-                if kind == MISS_CODE and WHAT_CHANGED in detail:
-                    _stats["changed"][detail.split(WHAT_CHANGED, 1)[1]] += 1
+                missed = call["miss_reason"]
+                _stats["miss_reasons"][missed.kind] += 1
+                if missed.changed:
+                    _stats["changed"][missed.changed] += 1
                 if call.get("not_stored"):
                     _stats["not_stored"][call["not_stored"]] += 1
                 elif call.get("not_persisted"):
@@ -984,7 +983,7 @@ class Cash(
                 "misses": _stats["misses"],
                 "hit_rate": hit_rate,
                 "total_time_saved": _stats["total_time_saved"],
-                "miss_reasons": dict(_stats["miss_reasons"]),
+                "miss_reasons": {str(kind): n for kind, n in _stats["miss_reasons"].items()},
                 "warnings": warnings_log,
             }
 
@@ -1293,7 +1292,7 @@ class Cash(
                 "      missed: " + ", ".join(f"{n} {kind}" for kind, n in sorted(reasons.items(), key=lambda r: -r[1]))
             )
         for what, n in (stat.get("changed") or {}).items():
-            out.append(f"      {MISS_CODE} ({n}x): {what}")
+            out.append(f"      {MissKind.CODE} ({n}x): {what}")
         for why, n in (stat.get("not_stored") or {}).items():
             out.append(f"      not stored ({n}x): {why}")
         for why, n in (stat.get("not_persisted") or {}).items():
