@@ -155,12 +155,6 @@ def test_subplot_mosaic_dict_is_not_cached(nb_runner):
     deep-copy, and ``plt.savefig()`` would blank. Same crisp invariant as the
     single-Axes case: the drawn Axes must stay pyplot's current figure.
     """
-    import matplotlib
-
-    mpl_ver = tuple(int(x) for x in matplotlib.__version__.split(".")[:2])
-    if mpl_ver < (3, 3):
-        pytest.skip("subplot_mosaic added in matplotlib 3.3")
-
     nb_runner.create_notebook(
         [
             SETUP,
