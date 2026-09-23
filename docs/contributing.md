@@ -93,10 +93,15 @@ What it covers and what it doesn't is documented under
 
 ### Test Structure
 
-- `tests/test_notebook/` — Unit tests (mock IPython)
+- `tests/test_core/` — The decorator, keys, hashing, configuration and the rest of the core library
+- `tests/test_backends/` — Storage backends
+- `tests/test_notebook/` — Notebook unit tests (real IPython, mock shell)
+- `tests/test_ui/` — The dashboard, the cache explorer and the generated UI
+- `tests/test_cli/` — The `python -m cash` command line
+- `tests/test_tooling/` — CI workflows, test selection, repository hygiene and the test harness
 - `tests/test_notebook_integration/` — Integration tests (real notebooks and kernels)
+- `tests/test_wheel_gate/` — Installs the built wheel in a fresh venv and drives a real kernel (skipped unless switched on; see that file)
 - `tests/docs/` — Executes the documentation's examples and checks its claims
-- `tests/` — Core library tests
 - `benchmarks/tests/` — Tests for the benchmark tooling, run separately with
   `pytest benchmarks/tests`
 - `tools/test_selection/` — The integration core set CI runs on every push
@@ -147,9 +152,10 @@ a plain local `pytest` still includes them.
 
 #### Unit Tests
 
-Use the `cash_magics` and `mock_shell` fixtures from `tests/conftest.py` for
-testing notebook components, and `run_cash_cell` from `tests/_cell_driver.py`
-to run one cell through cash:
+Use the fixtures from `tests/conftest.py` for testing notebook components:
+`mock_shell`, `clean_backend`, `cash_instance`, `cash_magics` and
+`statement_processor`. Run one cell through cash with `run_cash_cell` from
+`tests/_cell_driver.py`:
 
 ```python
 from tests._cell_driver import run_cash_cell
@@ -159,6 +165,13 @@ def test_feature(cash_magics, mock_shell):
     run_cash_cell(cash_magics, "y = x * 2")
     assert mock_shell.user_ns["y"] == 20
 ```
+
+Pass `cells=[...]` to `run_cash_cell` when the test needs the notebook's other
+cells, as the upstream check reads them from the `.ipynb`. When a test needs
+different settings (a disk cache, `persist_all`, a restart), build that one
+difference on these fixtures rather than copying the shell, and read state
+through `cash_magics.tracking_state` or `cash_magics.cash_status("dict")`
+rather than private attributes.
 
 #### Integration Tests
 
@@ -177,6 +190,11 @@ def test_feature(nb_runner):
 ```
 
 ### Test Isolation
+
+The root `tests/conftest.py` points `CASH_CACHE_DIR` at a fresh directory under
+pytest's temporary directory for every unit test, and fails a test that leaves
+a `.cash/` directory in the checkout. A test of the default cache location sets
+or clears `CASH_CACHE_DIR` itself.
 
 `InteractiveShell.instance()` registers a process-wide IPython shell that
 outlives the test that created it. A test that calls it must call

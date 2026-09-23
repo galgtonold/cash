@@ -102,10 +102,24 @@ statement's occurrence index in the cell.
 
 - **Every feature and bug fix needs a unit test, and an integration test when it
   touches notebook behaviour.**
-- Unit tests (`tests/test_notebook/` and the rest of `tests/`) use a real IPython
-  with a `MockShell` (`tests/conftest.py`). Use the shared `cash_magics` and
-  `mock_shell` fixtures, and `tmp_path` for files. Never mock `IPython` in
-  `sys.modules`.
+- Unit tests live in feature folders: `tests/test_core/`, `test_backends/`,
+  `test_notebook/`, `test_ui/`, `test_cli/`, `test_tooling/` (CI, test selection,
+  hygiene), plus `tests/docs/`. Each is a package; put a new file in the folder
+  of the feature it pins, named after the behaviour, not at the top of `tests/`.
+- Notebook unit tests use a real IPython with the one `MockShell` in
+  `tests/conftest.py`, through its fixtures: `mock_shell`, `clean_backend`,
+  `cash_instance`, `cash_magics` (as `%load_ext cash` leaves it) and
+  `statement_processor`. Run a cell with `run_cash_cell(cash_magics, code)` from
+  `tests/_cell_driver.py`; pass `cells=[...]` when the upstream check needs the
+  notebook's cells. Do not copy the shell or build another `CashMagics` over an
+  in-memory Cash: a test that needs other settings (a disk cache, `persist_all`,
+  a second kernel over the same cache dir) builds that one difference on the
+  shared fixtures and says why. Read state through `magics.tracking_state` and
+  `%cash_status` (`cash_status("dict")`) where they have it, not private
+  attributes. Use `tmp_path` for files. Never mock `IPython` in `sys.modules`.
+- The root conftest points `CASH_CACHE_DIR` at a per-test directory under the
+  pytest base temp, and fails a test that leaves `.cash/` in the checkout. A test
+  of the default cache location must set or clear `CASH_CACHE_DIR` itself.
 - Integration tests (`tests/test_notebook_integration/`) use `nb_runner`, which
   drives a real kernel over a real `.ipynb`: `create_notebook`, `load`,
   `start_kernel`, `run_all` / `run_cells` (1-based), `set_cell_source`,
