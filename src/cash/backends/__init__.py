@@ -45,8 +45,8 @@ __all__ = [
     "FileBackend",
     "SQLiteBackend",
     "TieredBackend",
-    "RedisBackend",
-    "S3Backend",
+    "RedisBackend",  # noqa: F822 - served by the module __getattr__
+    "S3Backend",  # noqa: F822 - served by the module __getattr__
     "Serializer",
     "PickleSerializer",
     "ParquetSerializer",

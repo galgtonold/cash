@@ -14,7 +14,6 @@ import concurrent.futures.thread as cf_thread
 import contextvars
 import functools
 import glob as glob_module
-import importlib
 import importlib.abc
 import importlib.util
 import logging

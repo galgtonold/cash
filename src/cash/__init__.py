@@ -374,9 +374,9 @@ __all__ = [
     # Core API (stable)
     "Cash",
     "CacheExplanation",
-    "cache",
-    "show_stats",
-    "register_hasher",
+    "cache",  # noqa: F822 - served by the module __getattr__
+    "show_stats",  # noqa: F822 - served by the module __getattr__
+    "register_hasher",  # noqa: F822 - served by the module __getattr__
     "opaque",
     "help",
     "reset_session",

@@ -627,7 +627,8 @@ def _try_colab_notebook_cells(include_ids: bool) -> list | None:
         if now - ts < ttl:
             return val
     try:
-        from google.colab import _message  # type: ignore[import-not-found]
+        # Colab has no public call that returns the open notebook, so this uses its private messaging module.
+        from google.colab import _message  # type: ignore[import-not-found]  # noqa: PLC2701
 
         resp = _message.blocking_request("get_ipynb", timeout_sec=_COLAB_GET_IPYNB_TIMEOUT)
         nb = resp.get("ipynb") if isinstance(resp, dict) else None
