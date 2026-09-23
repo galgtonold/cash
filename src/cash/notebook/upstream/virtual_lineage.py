@@ -357,8 +357,8 @@ class VirtualLineage:
         """Simulation half of CAS-260: the globals a callee writes.
 
         Byte-for-byte the same derivation as
-        ``StatementProcessor._callee_mutated_globals`` â€” same
-        :func:`called_function_global_mutations` walk, same namespace filter â€”
+        ``StatementProcessor._callee_mutated_globals`` — same
+        :func:`called_function_global_mutations` walk, same namespace filter —
         differing only in how the callee's source is found
         (:meth:`_resolve_sim_function_source` reads stashed cell text, the
         runtime reads the live object). That pairing is the one this module
@@ -369,7 +369,7 @@ class VirtualLineage:
         key inputs; a simulation that did not would compute a DIFFERENT key for
         every statement calling a global-mutating helper, and ADR-007's whole
         point is that the two engines mint identical keys. The failure would
-        not look like a crash â€” the simulation would simply never find the
+        not look like a crash — the simulation would simply never find the
         entry the runtime wrote, and reschedule work that was already cached.
 
         Control-structure bodies are excluded on the runtime's own rule (see
@@ -398,7 +398,7 @@ class VirtualLineage:
         Statically-known mutators (``MUTATING_METHODS`` / ``inplace=True``) and
         known-pure methods are decided the same way as the runtime, without a
         verdict. For everything else this reads ``mutation_verdicts`` (keyed by
-        the statement's ``source_hash`` â€” the same SHA-256 of the code the
+        the statement's ``source_hash`` — the same SHA-256 of the code the
         runtime uses) so the simulation reproduces the runtime's observed
         decision; an unknown verdict (statement not yet executed) is treated as
         mutating (conservative).
@@ -498,7 +498,7 @@ class VirtualLineage:
                     receivers.add(base)
             else:
                 receivers.add(base)  # unknown -> conservative
-        # mirror the runtime â€” a captured-return draw
+        # mirror the runtime — a captured-return draw
         # (``counts, bins, _ = ax.hist(...)``) routes its receiver as a mutation
         # too, gated SOLELY by the identity-coupled check so the simulated lineage
         # bumps the same source-based receiver the runtime does (unified-key
@@ -642,7 +642,7 @@ class VirtualLineage:
                 # mismatch_classifier ``_handle_mismatch_prereqs``). But it must
                 # NOT set ``cache_had_hash_mismatch``: that flag becomes the global
                 # ``upstream_has_modifications``, which disables loop-derived TRUST
-                # for EVERY loop var in the notebook â€” so an unrelated loop chain
+                # for EVERY loop var in the notebook — so an unrelated loop chain
                 # (whose runtime folds a value-hash and whose sim folds input-
                 # lineages, structurally divergent) would be spuriously marked
                 # broken and re-executed. Break to re-simulate; leave the flag
@@ -831,7 +831,7 @@ class VirtualLineage:
         """Re-apply unsaved extension code for broken variables.
 
         If a broken variable's producing code is NOT in the notebook (unsaved
-        extension), schedule it for re-execution Ã¢â‚¬â€ unless the trace already
+        extension), schedule it for re-execution — unless the trace already
         updated that variable.
         """
         all_notebook_stmts = self._collect_notebook_statements(notebook_cells)
@@ -877,8 +877,8 @@ class VirtualLineage:
         A reassignment accumulator (``result = result + 1``) enters the loop-trust
         set so that a no-change re-run is not re-executed (which would re-drain a
         one-shot iterable). But when the accumulator ALSO has an external
-        dependency via a *non-loop* producing statement â€” typically an
-        initializer like ``result = np.zeros(N)`` â€” editing that external input
+        dependency via a *non-loop* producing statement — typically an
+        initializer like ``result = np.zeros(N)`` — editing that external input
         (``N``) and re-running the edited cell before the reader leaves
         ``upstream_has_modifications`` False, and every current-state input
         lineage is consistent, so the trust would serve a stale value. Only the
@@ -1290,9 +1290,9 @@ class VirtualLineage:
         virtual_lineage: dict[str, str],
         virtual_modules: set[str],
     ) -> dict[str, dict[str, str]]:
-        """Return a mapping of loop-derived variable Ã¢â€ â€™ its data-input virtual lineages.
+        """Return a mapping of loop-derived variable → its data-input virtual lineages.
 
-        Used to detect when loop inputs change (e.g., N=10Ã¢â€ â€™20) even when the
+        Used to detect when loop inputs change (e.g., N=10→20) even when the
         producing code is unchanged on disk.
         """
         loop_var_input_lineages: dict[str, dict[str, str]] = {}
@@ -1493,7 +1493,7 @@ class VirtualLineage:
             cell_stmt_occurrence_counts: dict = {}
 
             for node in tree.body:
-                # A top-level ``raise`` unconditionally aborts the cell â€” every
+                # A top-level ``raise`` unconditionally aborts the cell — every
                 # statement after it is dead code that never runs in a real
                 # from-start execution. Stop here so the simulation does not
                 # register a post-raise assignment (``z = 1; raise; z = 2``) as
@@ -1512,7 +1512,7 @@ class VirtualLineage:
         except SyntaxError:
             # a single unparseable upstream cell (a half-written cell
             # the user has SAVED but not run) must NOT abort the whole
-            # simulation and silently disable caching for every cell below it â€”
+            # simulation and silently disable caching for every cell below it —
             # a notebook with one mid-edit cell is the normal state of the
             # workflow cash exists to speed up. An unparseable cell cannot have
             # executed, so it contributes no runtime state: treat it as a no-op
@@ -1520,12 +1520,12 @@ class VirtualLineage:
             # falling through to the cache-entry append below, so cells that do
             # NOT depend on it keep their lineage and their cache. A cell that
             # DID depend on it then follows an ordinary lineage mismatch and
-            # recomputes from the current (last-valid) memory â€” never a wrong
+            # recomputes from the current (last-valid) memory — never a wrong
             # cache hit, because the broken cell never ran to change that
             # memory. The visible ``CashUpstreamSyntaxWarning`` naming the
             # offending cell is emitted by
             # ``UpstreamChecker._warn_broken_upstream_cells``; here we only keep
-            # the simulation alive. Non-syntax errors still propagate below â€”
+            # the simulation alive. Non-syntax errors still propagate below —
             # they signal a real bug, not a user typo. (Was: re-raise, which
             # poisoned every downstream cell silently.)
             logger.debug(
@@ -1949,7 +1949,7 @@ class VirtualLineage:
         """Return True if all historical file dependencies are still fresh.
 
         Each entry is ``{path: {'mtime': ..., 'size': ...}}``. When ``size``
-        is recorded it is checked too â€” that catches rewrites within a
+        is recorded it is checked too — that catches rewrites within a
         single mtime tick on coarse-resolution filesystems (HFS+/APFS,
         some ext4 configs).
 
@@ -2003,7 +2003,7 @@ class VirtualLineage:
     ) -> str | None:
         """Resolve the lineage hash for a single input variable.
 
-        Priority: virtual_lineage Ã¢â€ â€™ variable_lineage Ã¢â€ â€™ hash from user_ns.
+        Priority: virtual_lineage → variable_lineage → hash from user_ns.
         Returns ``None`` if the input cannot be resolved.
         """
         if inp in virtual_lineage:
@@ -2173,7 +2173,7 @@ class VirtualLineage:
         """Try to forward-propagate lineages from a cached entry.
 
         Returns (cache_lookup_time, files_stale, stmt_file_deps, file_deps_to_check)
-        on cache miss or failed validation, or None-wrapped early-return tuple isn't usedÃ¢â‚¬â€
+        on cache miss or failed validation, or None-wrapped early-return tuple isn't used—
         instead returns a special sentinel. On successful propagation, returns with
         file_deps_to_check as empty set (caller should return early).
 
@@ -2506,7 +2506,7 @@ class VirtualLineage:
 
         Called after computing the lineage hash for an import so that
         ``compute_cache_key`` can find the module in ``variable_lineage`` and
-        include it in the module component Ã¢â‚¬â€ preventing cache key mismatches.
+        include it in the module component — preventing cache key mismatches.
         """
         # Every name the import binds, not only modules: an import the runtime
         # SKIPPED leaves its names without a lineage otherwise, and a statement
@@ -2749,7 +2749,7 @@ class VirtualLineage:
     ) -> tuple[set, float, float] | None:
         """Validate file deps for a virtual restore.  Returns failure tuple or None.
 
-        Each entry is ``{'mtime': ..., 'size': ...}`` â€” see
+        Each entry is ``{'mtime': ..., 'size': ...}`` — see
         :meth:`_validate_file_freshness`.
         """
         for fpath, stored in file_deps.items():
@@ -2796,8 +2796,8 @@ class VirtualLineage:
 
         Only these may have an EMPTY cached value restored over a non-empty
         in-memory one. A confirmed lineage means the empty value is
-        the correct current result â€” a filter that legitimately matched nothing
-        â€” rather than a corrupt or truncated entry.
+        the correct current result — a filter that legitimately matched nothing
+        — rather than a corrupt or truncated entry.
 
         The guard condition mirrors ``_check_lineage_consistency`` exactly: when
         that check does not run (file deps present, or no expected lineages),
@@ -2906,7 +2906,7 @@ class VirtualLineage:
             lin = output_lineages.get(var) if output_lineages else None
             self._restores.record_restore(
                 var_name=var,
-                lineage_hash=lin,  # may be None â€” apply step skips lineage write if so
+                lineage_hash=lin,  # may be None — apply step skips lineage write if so
                 code=stored_code if stored_code else None,
                 code_hash=stored_hash if stored_hash else None,
                 input_lineages=dict(input_hashes) if input_hashes else None,
@@ -2929,7 +2929,7 @@ class VirtualLineage:
         and that statement would be a cache hit on DISK, then the cache
         restore will inject both the output variable and its data into
         memory.  In that case we do NOT need upstream re-execution to
-        produce the broken variable Ã¢â‚¬â€ the cache restore will provide it.
+        produce the broken variable — the cache restore will provide it.
 
         This avoids expensive upstream re-execution for scenarios like
         kernel restarts where heavy current-cell statements are on disk.
@@ -2967,7 +2967,7 @@ class VirtualLineage:
             # Check if this statement uses any broken variable
             uses_broken = inputs & (broken_vars - resolved_by_cache)
             if not uses_broken:
-                # Statement doesn't need any broken vars Ã¢â‚¬â€ skip probe
+                # Statement doesn't need any broken vars — skip probe
                 continue
 
             # Build input hashes from virtual lineage (same as simulation)
@@ -2978,7 +2978,7 @@ class VirtualLineage:
                 elif inp in self.variable_lineage:
                     input_hashes[inp] = self.variable_lineage[inp]
 
-            # Probe the cache (read-only Ã¢â‚¬â€ don't restore anything yet)
+            # Probe the cache (read-only — don't restore anything yet)
             try:
                 cache_key, _, _, _, _ = compute_cache_key(
                     stmt_code,
@@ -2999,7 +2999,7 @@ class VirtualLineage:
                 metadata, cached_data = self.cash_instance.backend.get(cache_key)
                 if metadata and cached_data is not None:
                     # Verify file deps are still valid (mtime + size, both
-                    # forms Ã¢â‚¬â€ see _validate_file_freshness for rationale).
+                    # forms — see _validate_file_freshness for rationale).
                     file_deps = metadata.get('file_dependencies', {})
                     deps_valid = self._validate_file_freshness(file_deps, self.debug, memo_key=cache_key)
 
@@ -3216,7 +3216,7 @@ class VirtualLineage:
            downstream dependents are also flagged as stale.
 
         The directly-mismatched variables themselves are NOT included in the
-        returned set Ã¢â‚¬â€ they are handled by the backward scan which has full
+        returned set — they are handled by the backward scan which has full
         unsaved-edit context.  Only their transitive dependents are returned.
         """
         directly_mismatched_vars = self._find_directly_mismatched_vars(

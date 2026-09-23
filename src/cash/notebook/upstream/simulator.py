@@ -1054,7 +1054,7 @@ class NotebookSimulator:
         # Detect whether any upstream cell was actually modified since last simulation.
         # This is True only when we had a prior simulation cache AND a cached cell's hash
         # changed (actual code modification).  NOT true when cells are simply not cached
-        # yet (e.g., first time cell 3 runs, cache only has cell 1 â€” cell 2 is new to the
+        # yet (e.g., first time cell 3 runs, cache only has cell 1 — cell 2 is new to the
         # cache but wasn't modified).
         upstream_has_modifications = had_prior_cache and cache_had_hash_mismatch
 
@@ -1188,7 +1188,7 @@ class NotebookSimulator:
 
         if not broken_vars and not has_stale_file_writers:
             if self.debug:
-                logger.debug("[UPSTREAM] All broken vars resolved by current cell cache hits â€” skipping upstream")
+                logger.debug("[UPSTREAM] All broken vars resolved by current cell cache hits — skipping upstream")
             self._apply_phase_mutations()
             return [], [], 0.0
 

@@ -1,5 +1,5 @@
 ﻿"""
-Batch 105 â€” File dependency + cell edit interactions.
+Batch 105 — File dependency + cell edit interactions.
 
 Tests the interaction between:
 - Editing cells that read files
@@ -38,7 +38,7 @@ class TestFileChangeWithCellEdit:
         assert "result = 200" in output
 
     def test_file_change_triggers_recomputation(self, nb_runner, tmp_path):
-        """Change file between runs, cell code unchanged â†’ detects stale file."""
+        """Change file between runs, cell code unchanged → detects stale file."""
         csv_path = tmp_path / "data.csv"
         csv_path_str = str(csv_path).replace('\\', '/')
         csv_path.write_text("x\n1\n2\n3\n")
@@ -84,7 +84,7 @@ class TestFileChangeWithRestart:
     """File changes combined with kernel restarts."""
 
     def test_file_change_after_restart(self, nb_runner, tmp_path):
-        """Change file after restart â€” should detect stale cache."""
+        """Change file after restart — should detect stale cache."""
         csv_path = tmp_path / "data.csv"
         csv_path_str = str(csv_path).replace('\\', '/')
         csv_path.write_text("val\n1\n2\n3\n")
@@ -106,7 +106,7 @@ class TestFileChangeWithRestart:
         assert "s = 60" in nb_runner.get_output(2)
 
     def test_file_change_and_code_edit_after_restart(self, nb_runner, tmp_path):
-        """File changes + code edit + kernel restart â€” triple stress."""
+        """File changes + code edit + kernel restart — triple stress."""
         csv_path = tmp_path / "data.csv"
         csv_path_str = str(csv_path).replace('\\', '/')
         csv_path.write_text("x\n5\n")

@@ -356,7 +356,7 @@ class MismatchClassifier:
                     overwritten_downstream = True
                     if self.debug:
                         logger.debug(
-                            "[UPSTREAM_DEBUG] NOT trusting loop-derived '%s' â€” "
+                            "[UPSTREAM_DEBUG] NOT trusting loop-derived '%s' — "
                             "executed code '%.40s' not in upstream simulation",
                             var_name, exec_code,
                         )
@@ -373,7 +373,7 @@ class MismatchClassifier:
                     return
                 if self.debug:
                     source = "directly mutated by loop" if var_name in vars_mutated_by_loops else "transitively derived from loop mutation"
-                    logger.debug("[UPSTREAM_DEBUG] NOT trusting '%s' (%s) â€” loop input lineage changed, will check lineage", var_name, source)
+                    logger.debug("[UPSTREAM_DEBUG] NOT trusting '%s' (%s) — loop input lineage changed, will check lineage", var_name, source)
 
         actual_lineage = self.variable_lineage[var_name]
         if var_name not in virtual_lineage:
@@ -430,7 +430,7 @@ class MismatchClassifier:
         """Check early-exit conditions for a lineage mismatch.
 
         Returns True if the caller should stop processing this variable
-        (it was already handled â€” marked broken, kept, or lineage reset).
+        (it was already handled — marked broken, kept, or lineage reset).
         """
         # a bare ``est.fit(X, y)`` receiver has a SELF-REFERENTIAL
         # key. cash adds it to the statement's OUTPUTS (so the fit bumps its
@@ -947,7 +947,7 @@ class MismatchClassifier:
                     logger.debug("[UPSTREAM] Input '%s' already valid in memory (lineage matches virtual). Skipping.", inp)
                 return True
             return False
-        # Lineage mismatch â€” check for unsaved edit
+        # Lineage mismatch — check for unsaved edit
         if upstream_has_modifications or inp not in self.shell.user_ns:
             return False
         inp_prod_code = self.executed_cell_codes.get(inp)

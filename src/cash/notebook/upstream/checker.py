@@ -266,8 +266,8 @@ class UpstreamChecker:
     def _find_current_cell_index(self, cell_code: str, notebook_cells: list[str], cell_id: str | None = None, cells_with_ids: list[tuple[str, str]] = None) -> int | None:
         """Find the index of the current cell in the notebook.
 
-        Uses a chain of matching strategies: ID match â†’ exact content â†’
-        normalized newlines â†’ stripped whitespace.  Returns the first
+        Uses a chain of matching strategies: ID match → exact content →
+        normalized newlines → stripped whitespace.  Returns the first
         unambiguous match, or raises ``AmbiguousCellError`` when multiple
         cells share the same content and no cell ID is available.
         """
@@ -307,7 +307,7 @@ class UpstreamChecker:
         if len(matches) == 1:
             return matches[0]
 
-        # Multiple matches with no resolvable cell ID â€” ambiguous
+        # Multiple matches with no resolvable cell ID — ambiguous
         if self.debug:
             logger.debug("[UPSTREAM_DEBUG] Ambiguous cell content (matches=%s). Unable to safely determine upstream context.", matches)
 
@@ -720,7 +720,7 @@ class UpstreamChecker:
             current_cell_stateful_funcs = set()
             nocache_vars = set()
 
-        # Phase 2 â€” Notebook-simulation-based staleness check (disk vs. memory).
+        # Phase 2 — Notebook-simulation-based staleness check (disk vs. memory).
         # Simulates the notebook statement-by-statement and compares the resulting
         # virtual lineage against the actual in-memory state to find changed code.
         all_metrics, total_restore_time, total_execution_time = self._check_notebook_based(
@@ -1841,7 +1841,7 @@ class UpstreamChecker:
         results).
 
         This method patches every cached ``virtual_lineage`` snapshot so that
-        variables get their lineage updated to the authoritative value â€” but
+        variables get their lineage updated to the authoritative value — but
         **only if the runtime lineage was produced by code within cells 0..idx**.
         Variables whose runtime lineage was produced by a *later* cell (beyond
         idx) are NOT synced.  This prevents downstream mutations from
@@ -1853,7 +1853,7 @@ class UpstreamChecker:
         scoping fix, syncing would update cell 2's cached virtual_lineage for
         ``df`` to the SMA-mutated lineage.  Then when cell 4 (a display cell)
         runs, reusing cache for cells 0-2 yields a virtual lineage that
-        already matches the mutated actual lineage â†’ no restoration â†’ bug.
+        already matches the mutated actual lineage → no restoration → bug.
 
         With scoping, we check ``executed_cell_codes['df']`` to see which
         statement last produced ``df``'s runtime lineage.  If that statement
