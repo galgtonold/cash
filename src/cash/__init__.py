@@ -5,8 +5,10 @@
 - **Public stable API** (decorator caching, backends, configuration):
   Import from ``cash`` directly, e.g. ``from cash import Cash, pure``.
 
-- **Notebook/Jupyter API** (IPython magics, cache status, statement processor):
-  Import from ``cash.notebook``, e.g. ``from cash.notebook import CacheStatus``.
+- **Notebook/Jupyter API** (cache status, upstream checks): import from
+  ``cash.notebook``, e.g. ``from cash.notebook import CacheStatus``. The magics
+  are in ``cash.notebook.ipython``, the statement processor in
+  ``cash.notebook.statement``.
 
 Purity decorators (``pure``, ``stateful``, ``is_pure``, ``is_stateful``) are
 part of the public API; import them from ``cash``, e.g. ``from cash import pure``.
