@@ -375,19 +375,15 @@ class InMemoryBackend(CacheBackend):
 
     def _check_and_evict(self) -> None:
         """Check memory usage and evict items if threshold is exceeded."""
-        if psutil is None:
+        mem = _memory_reading()
+        if mem is None:
             return
-
-        try:
-            mem = psutil.virtual_memory()
-            if mem.percent / 100.0 > self.max_memory_percent:
-                self._evict(mem)
-            else:
-                # The episode is over: the next one takes a fresh share.
-                self._pressure_floor = None
-                self._pressure_percent = None
-        except (OSError, AttributeError) as exc:
-            logger.debug("Memory check failed: %s", exc)
+        if mem.percent / 100.0 > self.max_memory_percent:
+            self._evict(mem)
+        else:
+            # The episode is over: the next one takes a fresh share.
+            self._pressure_floor = None
+            self._pressure_percent = None
 
     def _evict(self, mem: Any = None) -> None:
         """Give back this tier's SHARE of the machine's memory pressure.
@@ -437,10 +433,8 @@ class InMemoryBackend(CacheBackend):
                 self._gdsf_clock = max(self._gdsf_clock, priority)
                 evicted_count += 1
 
-                if psutil is None:
-                    break
-                mem = psutil.virtual_memory()
-                if mem.percent / 100.0 <= target_percent:
+                mem = _memory_reading()
+                if mem is None or mem.percent / 100.0 <= target_percent:
                     break
 
         if evicted_count > 0:
@@ -560,6 +554,41 @@ class InMemoryBackend(CacheBackend):
             except (OSError, AttributeError):
                 # Best-effort memory cleanup; safe to ignore on non-glibc systems
                 pass
+
+
+#: Whether a failed memory reading has been logged in this process.
+_READING_FAILURE_LOGGED: list[bool] = []
+
+
+def _memory_reading() -> Any | None:
+    """psutil's reading of the machine's memory, or None when there is none.
+
+    The pressure check is advice about memory, never part of a store: the
+    value is already in the tier when it runs, on every ``check_interval``-th
+    write. So a reading that fails -- whatever it raises -- skips the check
+    rather than failing that write. It raised only ``OSError`` and
+    ``AttributeError`` before, and a psutil left patched by a test, whose
+    stand-in read a name that was gone, made every tenth write raise
+    ``NameError``. Logged once per process: a check that cannot run stays
+    that way, and a line per ten writes would say nothing new.
+    """
+    if psutil is None:
+        return None
+    try:
+        mem = psutil.virtual_memory()
+        percent = mem.percent
+    except Exception as exc:  # noqa: BLE001 - see docstring: a probe never fails a write
+        if not _READING_FAILURE_LOGGED:
+            _READING_FAILURE_LOGGED.append(True)
+            logger.warning(
+                "cash: could not read the machine's memory (%s: %s); the RAM tier skips its memory-pressure check",
+                type(exc).__name__,
+                exc,
+            )
+        return None
+    if isinstance(percent, bool) or not isinstance(percent, (int, float)):
+        return None
+    return mem
 
 
 _COW: list[bool] = []

@@ -50,7 +50,8 @@ import pytest
 # kernel's reset between tests keeps cash's modules but clears the names the
 # patch's lambda reads. On a warm kernel every later test on the worker then
 # got a NameError out of the RAM tier's pressure check on every tenth write
-# (measured: the next test's `m.psutil.virtual_memory()` raised); a fresh
+# (measured: the next test's `m.psutil.virtual_memory()` raised; the check now
+# skips itself instead, which leaves later tests without one); a fresh
 # kernel takes the patch with it, and starts this test from nothing earlier
 # tests left behind.
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(600), pytest.mark.fresh_kernel]

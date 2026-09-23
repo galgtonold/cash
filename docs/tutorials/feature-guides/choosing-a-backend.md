@@ -45,12 +45,12 @@ c = Cash(backend=InMemoryBackend(max_entries=500))
 c.register_magic()
 ```
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.__init__ @a902d53c, cash/backends/memory_backend.py:InMemoryBackend._evict @869f8782, cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend._gdsf_priority @6ba0f19d -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.__init__ @a902d53c, cash/backends/memory_backend.py:InMemoryBackend._evict @2bbbead9, cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend._gdsf_priority @6ba0f19d -->
 A plain dict guarded by light bookkeeping. Reads and writes deep-copy by default so a downstream mutation can't poison the cache. Eviction has **three** triggers:
 
 1. `max_entries` — a hard LRU cap, evicting oldest-accessed first (`_evict_lru`).
 2. `max_size_bytes` — a soft byte cap (`_evict_to_byte_cap`), evicting down to 90% of it.
-3. A `psutil` memory-pressure check, run every `check_interval` writes, that fires when the system crosses `max_memory_percent` (`_evict`). It gives back the tier's *share* of the overshoot — the overshoot scaled by how much of the memory in use the tier holds. So a cache that is most of the pressure sheds nearly all of it, while one squeezed by a browser and an IDE sheds only its share and is not emptied. The share is taken once per episode; while the pressure holds steady, new entries displace the least valuable old ones, and the tier sheds again only if the pressure climbs.
+3. A `psutil` memory-pressure check, run every `check_interval` writes, that fires when the system crosses `max_memory_percent` (`_evict`). It gives back the tier's *share* of the overshoot — the overshoot scaled by how much of the memory in use the tier holds. So a cache that is most of the pressure sheds nearly all of it, while one squeezed by a browser and an IDE sheds only its share and is not emptied. The share is taken once per episode; while the pressure holds steady, new entries displace the least valuable old ones, and the tier sheds again only if the pressure climbs. A reading that fails skips the check, with one logged warning; the write it follows is never failed by it.
 
 The byte cap and the pressure check rank entries the same way: by value per byte, not by age (GreedyDual-Size-Frequency). Each entry has a priority `H = L + hits × execution_time / size`, and the lowest goes first, so a big cheap entry goes before a small expensive one, and a 30-second result outlives a newer 50 ms one of the same size. The clock `L` rises to each evicted entry's `H`. So an entry that stops being read eventually drops below newer ones and ages out, however valuable it was. The value term is rounded down to steps of about 4%, so entries of near-equal value tie and go in least-recently-used order, rather than by a few bytes' difference in size.
 
