@@ -1,66 +1,45 @@
 # Installation
 
-Cash has **zero required runtime dependencies** — `pip install cash-lib` pulls in
-nothing but cash itself, and every integration (pandas, Redis, S3, …) is an
-opt-in [extra](#optional-dependencies).
+!!! info "Applies to: both paths"
+    Everyone installing cash, for scripts or for notebooks.
 
 <!-- claim: cash/config.py:CashConfig @82e73a8f broad="the requires-python floor and zero-deps claim are properties of the package, checked against pyproject by test_documented_install_extras_exist" -->
-## Requirements
-
-- Python 3.10 or higher
-- IPython/Jupyter (for notebook caching)
-
-## Basic Installation
+cash needs Python 3.10 or newer and has no required dependencies:
 
 ```bash
 pip install cash-lib
 ```
 
-## Optional Dependencies
+The notebook path also needs IPython or Jupyter. In JupyterLab, the install
+adds a small extension (`cash-live-cells`) that sends your unsaved cells to
+the kernel, so cash sees your latest edits without a save.
 
-Cash ships with no required runtime dependencies — every integration is opt-in. Install only the extras you need:
+## Optional extras
 
-```bash
-pip install "cash-lib[pandas]"        # pandas + pyarrow (stable DataFrame hashing)
-pip install "cash-lib[polars]"        # polars support
-pip install "cash-lib[notebook]"      # IPython integration for %cash_on and friends
-pip install "cash-lib[memory]"        # psutil for memory-aware cache budgets
-pip install "cash-lib[redis]"         # Redis backend (shared/distributed caching)
-pip install "cash-lib[s3]"            # S3 backend (cloud storage, via boto3)
-pip install "cash-lib[ipynbname]"     # notebook-name detection helper
-pip install "cash-lib[viz]"           # matplotlib + ipywidgets for visualization helpers
-pip install "cash-lib[all]"           # every extra above, in one go
-```
-
-`[all]` is defined as the union of the individual extras above, so it always stays
-in step with them. It does **not** include the contributor-only `dev`, `docs` and
-`docs-test` extras — see *Development Installation* below for those.
-
-## Development Installation
-
-For contributing to Cash:
+Install only what you need:
 
 ```bash
-git clone https://github.com/galgtonold/cash.git
-cd cash
-pip install -e ".[dev]"
+pip install "cash-lib[pandas]"      # pandas + pyarrow, for stable DataFrame hashing
+pip install "cash-lib[polars]"      # polars support
+pip install "cash-lib[notebook]"    # IPython, for %cash_on and the other magics
+pip install "cash-lib[memory]"      # psutil, for memory-aware cache budgets
+pip install "cash-lib[redis]"       # Redis backend, for a cache shared between machines
+pip install "cash-lib[s3]"          # S3 backend (boto3)
+pip install "cash-lib[ipynbname]"   # one more way to find the running notebook's file
+pip install "cash-lib[viz]"         # matplotlib + ipywidgets, for the cash.show_stats() dashboard
+pip install "cash-lib[toml]"        # tomli, to read [tool.cash] in pyproject.toml on Python 3.10
+pip install "cash-lib[all]"         # all of the above
 ```
 
-## Verify Installation
+`[all]` is exactly the extras above. The contributor extras (`dev`, `docs`,
+`docs-test`) are not part of it; see [Contributing](../contributing.md).
+
+## Check the install
 
 ```python
 import cash
 print(cash.__version__)
 ```
 
-In a Jupyter notebook:
-
-```python
-import cash
-%cash_on
-print("Cash is working!")
-```
-
-Next: the [Quick Start](quickstart-notebook.md). If you're upgrading an existing install,
-see [Versioning & compatibility](../versioning.md) for what happens to caches
-written by an older version.
+Then follow the quick start for your path:
+[decorator](quickstart-script.md) or [notebook](quickstart-notebook.md).
