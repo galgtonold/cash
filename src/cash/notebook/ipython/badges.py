@@ -180,7 +180,7 @@ class BadgePresenter:
             timer = threading.Timer(self.MIN_RENDER_INTERVAL, fire)
             timer.daemon = True
             timer.start()
-        except Exception as e:  # noqa: BLE001 - a badge must never break a cell; degrade to none
+        except RuntimeError as e:  # no thread to spare; the cell goes without a progress badge
             logger.debug("[BADGE ARM ERROR] %s", e, exc_info=True)
             return
         self._progress_timer = timer
@@ -204,7 +204,7 @@ class BadgePresenter:
         """True if ``pub`` is IPython's capture-time stand-in publisher."""
         try:
             from IPython.core.displaypub import CapturingDisplayPublisher
-        except Exception:  # noqa: BLE001 - a badge must never break a cell
+        except ImportError:
             return False
         return isinstance(pub, CapturingDisplayPublisher)
 
@@ -396,8 +396,8 @@ class BadgePresenter:
         notebook_cells: list[str] = []
         try:
             notebook_cells = get_notebook_cells() or []
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 - reads a file or asks the notebook server
+            logger.debug("[BADGE] Could not read the notebook for the bug report: %s", e)
 
         return {
             "version": __version__,

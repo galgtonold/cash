@@ -1244,13 +1244,13 @@ class CallUnit:
         if stdout_text:
             try:
                 sys.stdout.write(stdout_text)
-            except Exception:  # noqa: BLE001
-                logger.debug("call unit: could not replay stdout")
+            except (OSError, ValueError, TypeError, AttributeError):  # a closed or foreign stream
+                logger.debug("call unit: could not replay stdout", exc_info=True)
         if stderr_text:
             try:
                 sys.stderr.write(stderr_text)
-            except Exception:  # noqa: BLE001
-                logger.debug("call unit: could not replay stderr")
+            except (OSError, ValueError, TypeError, AttributeError):  # a closed or foreign stream
+                logger.debug("call unit: could not replay stderr", exc_info=True)
 
     def _hash_args(self, args: tuple, kwargs: dict) -> tuple:
         """Content hashes of the live arguments, for mutation detection.

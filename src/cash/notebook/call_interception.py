@@ -541,7 +541,7 @@ def wrap_eligible_calls(
         # than aborting the whole rewrite.
         try:
             stmt_identity = ast.unparse(stmt)
-        except Exception:  # noqa: BLE001 - degrade, never let keying break the call
+        except (ValueError, TypeError, AttributeError, RecursionError):  # degrade, never let keying break the call
             stmt_identity = ""
         for call, local in calls:
             source = ast.unparse(call)
@@ -622,7 +622,7 @@ def _content_source(call: ast.Call, local: frozenset[str]) -> str:
         # of the arguments says nothing more.
         try:
             return f"{ast.unparse(call.func)}(*<received>)"
-        except Exception:  # noqa: BLE001 - no content key for this site
+        except (ValueError, TypeError, AttributeError, RecursionError):  # no content key for this site
             return ""
     computed = set(_computed_arg_positions(call, local))
     shape = copy.deepcopy(call)
@@ -635,7 +635,7 @@ def _content_source(call: ast.Call, local: frozenset[str]) -> str:
             kw.value = ast.Name(id=f"_arg{offset + i}", ctx=ast.Load())
     try:
         return ast.unparse(shape)
-    except Exception:  # noqa: BLE001 - degrade to the spelled source
+    except (ValueError, TypeError, AttributeError, RecursionError):  # degrade to the spelled source
         return ""
 
 

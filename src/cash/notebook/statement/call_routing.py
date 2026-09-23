@@ -302,8 +302,8 @@ class CallRouting:
                 self._calls_not_worth_wrapping.add(key)
             else:
                 self._calls_not_worth_wrapping.discard(key)
-        except Exception:  # noqa: BLE001 - wrapping stays on, which is always safe
-            pass
+        except (TypeError, AttributeError):  # wrapping stays on, which is always safe
+            logger.debug("Could not learn whether to route %r's calls", code, exc_info=True)
 
     def code_and_tree_for_execution(
         self, code: str, tree: ast.Module | None, annotation: Any | None

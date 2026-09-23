@@ -396,7 +396,7 @@ def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
             segment = lines[node.lineno - 1].encode()[node.col_offset : node.end_col_offset].decode()
         else:
             segment = ast.get_source_segment(raw_cell, node)
-    except Exception:  # noqa: BLE001 - display only, never break the cell
+    except (IndexError, ValueError, TypeError, AttributeError):  # display only
         return None
     if not segment:
         return None
