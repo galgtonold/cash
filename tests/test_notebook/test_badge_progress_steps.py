@@ -70,6 +70,7 @@ def executor():
     ex = CellExecutor.__new__(CellExecutor)
     ex._badges = _RecordingBadges()
     ex._statement_processor = _StubProcessor()
+    ex._upstream_checker = None
     return ex
 
 

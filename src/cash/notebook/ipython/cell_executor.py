@@ -1877,7 +1877,7 @@ class CellExecutor:
         total_steps_unified = upstream_step_count + len(tree.body)
         stmt_occurrence_counts: dict[str, int] = {}
         written_later = _written_later_in_cell(tree.body)
-        checker = getattr(self, "_upstream_checker", None)
+        checker = self._upstream_checker
         try:
             jump_runs = _jumpable_runs(tree.body, raw_cell, checker.cell_touches_rng) if checker is not None else {}
         except Exception:  # noqa: BLE001 - no jump is the ordinary run

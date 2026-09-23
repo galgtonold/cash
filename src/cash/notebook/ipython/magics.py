@@ -290,6 +290,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
     def _init_session_state(self, shell: ShellProtocol) -> None:
         """Initialise cell ID tracking, session stats, and event hooks."""
+        # Whether %cash_on has shown its save-the-notebook tip this session.
+        self._save_hint_shown = False
+        # How many discarded cache writes the badge has already reported.
+        self._discarded_writes_seen = 0
+
         # Cell ID tracking (available since IPython 8.3)
         self.current_cell_id = None
 
@@ -548,7 +553,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # store cannot distinguish absent from not-yet. See
         # ``labextension_installed`` for the one topology it answers wrongly
         # (a split install) and why suppressing-by-omission is the safe error.
-        if not getattr(self, "_save_hint_shown", False):
+        if not self._save_hint_shown:
             self._save_hint_shown = True
 
             if not in_colab() and not labextension_installed():
@@ -693,7 +698,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             print("   Valid forms: %cash_persist on | off | (no argument to toggle)")
             return
         else:
-            self._persist_all = not getattr(self, "_persist_all", False)
+            self._persist_all = not self._persist_all
         self._statement_processor.persist_all = self._persist_all
         print(f"Cash persist-everything mode: {'enabled' if self._persist_all else 'disabled'}.")
 
@@ -1160,7 +1165,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # Writes are asynchronous, so a failure can surface on the cell AFTER
         # the one that caused it. Reporting it late is strictly better than the
         # alternative, which was reporting it at kernel shutdown.
-        row, self._discarded_writes_seen = discarded_writes_notification(getattr(self, "_discarded_writes_seen", 0))
+        row, self._discarded_writes_seen = discarded_writes_notification(self._discarded_writes_seen)
         if row is not None:
             all_metrics = list(all_metrics) + [row]
 

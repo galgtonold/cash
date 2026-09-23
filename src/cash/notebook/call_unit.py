@@ -1116,7 +1116,7 @@ class CallUnit:
         LAST in this statement -- in ``x = f(g(y))``, ``f``'s -- or ``None``
         when it ran without the cache. The statement uses it to trust a
         reference without re-digesting the value (``call_refs.with_call_refs``)."""
-        found = getattr(self, "last_returned", None)
+        found = self.last_returned
         return found if found and found[0] else None
 
     def _entry_for(self, fn, site: CallSite, invoke):
