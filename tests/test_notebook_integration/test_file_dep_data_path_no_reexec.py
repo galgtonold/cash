@@ -12,6 +12,12 @@ import pytest
 pytestmark = pytest.mark.files
 
 
+def _schedules_the_assignment(line: str) -> bool:
+    """The planner's line names the statement it scheduled; ``df =
+    pd.read_csv(data_path)`` reading the name is expected to re-run."""
+    return line.split("Scheduled for execution:", 1)[-1].strip().startswith("data_path =")
+
+
 class TestDataPathNotReexecuted:
     @pytest.mark.timeout(60)
     def test_data_path_not_reexecuted_on_file_change(self, nb_runner, tmp_path):
@@ -48,7 +54,7 @@ class TestDataPathNotReexecuted:
         # Debug output from simulation mentioning data_path is expected and ok.
         # The actual re-execution scheduling uses "[UPSTREAM] Scheduled for execution:"
         scheduled_lines = [line for line in raw_output.split("\n") if "Scheduled for execution" in line]
-        data_path_scheduled = any("data_path" in line for line in scheduled_lines)
+        data_path_scheduled = any(_schedules_the_assignment(line) for line in scheduled_lines)
         assert not data_path_scheduled, f"data_path was scheduled for re-execution!\nScheduled lines: {scheduled_lines}"
 
         # Result should reflect new data
@@ -89,7 +95,7 @@ class TestDataPathNotReexecuted:
         raw_output = nb_runner.get_raw_output(5)
 
         scheduled_lines = [line for line in raw_output.split("\n") if "Scheduled for execution" in line]
-        data_path_scheduled = any("data_path" in line for line in scheduled_lines)
+        data_path_scheduled = any(_schedules_the_assignment(line) for line in scheduled_lines)
         assert not data_path_scheduled, f"data_path was scheduled for re-execution!\nScheduled lines: {scheduled_lines}"
 
         # Result should reflect new data
@@ -156,7 +162,7 @@ class TestDataPathNotReexecuted:
 
         # Check scheduled statements: data_path should NOT be scheduled
         scheduled_lines = [line for line in raw_output.split("\n") if "Scheduled for execution" in line]
-        data_path_scheduled = any("data_path" in line for line in scheduled_lines)
+        data_path_scheduled = any(_schedules_the_assignment(line) for line in scheduled_lines)
         assert not data_path_scheduled, f"data_path was scheduled for re-execution!\nScheduled lines: {scheduled_lines}"
 
         # Result should reflect new data
