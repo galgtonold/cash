@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import logging
-import pickle
 import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
@@ -13,9 +12,7 @@ from typing import Any
 import cash
 from cash.control_markers import has_marker
 from cash.exceptions import (
-    CacheBackendError,
     CacheKeyComputationError,
-    CacheSerializationError,
 )
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from cash.notebook.cache_key import (
@@ -29,6 +26,7 @@ from cash.notebook.statement.call_routing import CallRouting
 from cash.notebook.statement.capture import display_execution_output, make_capture_ctx
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
+from cash.notebook.statement.hit import CacheHitServer
 from cash.notebook.statement.imports import (
     import_bindings_hold,
     import_needs_reexecution,
@@ -46,7 +44,7 @@ from cash.notebook.statement.randomness import StatementRandomness
 from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.notebook.statement.records import StatementRecords
 from cash.notebook.statement.restore import StatementRestorer
-from cash.notebook.statement.results import DecoratorCallMetric, ProcessResult
+from cash.notebook.statement.results import COST_MODEL_KEYS, DecoratorCallMetric, ProcessResult
 from cash.notebook.statement.run import CodeRunner, StatementExecution, StatementRun, error_result
 from cash.notebook.statement.store import StatementStore
 from cash.purity import is_known_pure, is_stateful
@@ -89,13 +87,6 @@ _LOG_CACHE_DEBUG = "[CACHE DEBUG]"
 _LOG_OPTIMIZATION = "[OPTIMIZATION]"
 _LOG_FORBIDDEN = "[FORBIDDEN]"
 _LOG_ANNOTATION = "[ANNOTATION]"
-
-_COST_MODEL_KEYS = (
-    "cost_model_size_bytes",
-    "cost_model_restore_seconds",
-    "cost_model_type_name",
-    "cost_model_family",
-)
 
 
 logger = logging.getLogger(__name__)
@@ -239,6 +230,7 @@ class StatementProcessor:
             compute_hash=compute_hash_fn,
             debug=debug,
         )
+        self._hits = CacheHitServer(self.tracking_state, self._stmt_restorer, self._rebuild_cost)
         self._store = StatementStore(
             shell,
             self.tracking_state,
@@ -740,8 +732,14 @@ class StatementProcessor:
             )
 
         if cached_data and not import_needs_reexecution(tree, self.shell.user_ns):
-            hit_result = self._handle_cache_hit(run, cached_data, metadata)
+            hit_result = self._hits.serve(run, cached_data, metadata)
             if hit_result is not None:
+                self.analytics_manager.record_event(
+                    status="HIT",
+                    execution_time=hit_result["total_time"],
+                    saved_time=hit_result["saved_time"],
+                    code_hash=run.cache_key,
+                )
                 # The restore SUCCEEDED, so the value handed back is a replay.
                 self._randomness.warn_stale(code, run.unseeded_calls, run.allow_random)
                 self._randomness.warn_stale_estimator_fit(code, unseeded_fits, run.allow_random)
@@ -1199,7 +1197,7 @@ class StatementProcessor:
                 if cause:
                     metrics["guard_cause"] = cause
         if saved_metadata:
-            for k in _COST_MODEL_KEYS:
+            for k in COST_MODEL_KEYS:
                 value = getattr(saved_metadata, k)
                 if value is not None:
                     metrics[k] = value
@@ -1223,105 +1221,6 @@ class StatementProcessor:
             return False
         func_obj = self.shell.user_ns.get(name)
         return func_obj is not None and is_stateful(func_obj)
-
-    def _handle_cache_hit(
-        self,
-        run: StatementRun,
-        cached_data: Any,
-        metadata: StatementCacheMetadata | None,
-    ) -> ProcessResult | None:
-        """Restore from cache and populate *metrics* for a cache-hit path.
-
-        Returns the completed *metrics* dict on success, or ``None`` if
-        restoration fails (caller should fall through to execution).
-
-        ``run.est_fit`` names the estimator-fit receivers whose fitted state
-        must be transferred onto the EXISTING object rather than rebound, so
-        every alias observes the fit. It is recomputed each call from
-        the live namespace (never read from ``mutation_verdicts``, which is empty
-        right after a kernel restart).
-        """
-        cache_key, inputs, metrics, process_start = run.cache_key, run.inputs, run.metrics, run.process_start
-        try:
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug("%s Cache hit for key: %s...", _LOG_CACHE_HIT, cache_key[:20])
-                logger.debug(
-                    "%s Input lineages used: %s",
-                    _LOG_CACHE_HIT,
-                    [
-                        (v, self.tracking_state.variable_lineage.get(v, "NONE")[:16] + "...")
-                        for v in inputs
-                        if v not in ["get_ipython", "__builtins__", "print"]
-                    ],
-                )
-                if metadata:
-                    logger.debug(
-                        "%s Stored lineages in cache: %s",
-                        _LOG_CACHE_HIT,
-                        [(k, v[:16] + "...") for k, v in (metadata.output_lineages or {}).items()],
-                    )
-            self._stmt_restorer.restore_from_cache(
-                self.tracking_state, cached_data, metadata, run.silent, process_start, run.est_fit
-            )
-
-            metrics["status"] = CacheStatus.RESTORED
-            metrics["saved_time"] = (metadata.execution_time or 0.0) if metadata else 0.0
-            metrics["restored_vars"] = (metadata.outputs or []) if metadata else []
-            # Carry the stored input list through so provenance/audit can
-            # reconstruct the dependency graph on a cache hit, not just on
-            # a fresh compute.
-            metrics["inputs"] = list((metadata.inputs or []) if metadata else [])
-            metrics["total_time"] = time.time() - process_start
-
-            if metadata:
-                if metadata.source is not None:
-                    metrics["source"] = metadata.source
-                    metrics["storage"] = [metadata.source]
-                elif metadata.storage is not None:
-                    metrics["storage"] = metadata.storage
-                for k in _COST_MODEL_KEYS:
-                    value = getattr(metadata, k)
-                    if value is not None:
-                        metrics[k] = value
-                where = [metadata.source, *(metadata.storage or ())]
-                self._rebuild_cost.note(
-                    cache_key,
-                    inputs,
-                    metadata.outputs or (),
-                    metadata.execution_time or 0.0,
-                    on_disk=any(s not in (None, "RAM") for s in where),
-                )
-
-            self.analytics_manager.record_event(
-                status="HIT",
-                execution_time=metrics["total_time"],
-                saved_time=metrics["saved_time"],
-                code_hash=cache_key,
-            )
-
-            payload = cached_data
-            if isinstance(payload, dict) and "variables" in payload:
-                metrics["stdout"] = payload.get("stdout", "")
-                metrics["stderr"] = payload.get("stderr", "")
-                metrics["rich_outputs"] = payload.get("rich_outputs", [])
-            else:
-                metrics["stdout"] = ""
-                metrics["stderr"] = ""
-                metrics["rich_outputs"] = []
-
-            return metrics
-        except (
-            CacheBackendError,
-            CacheSerializationError,
-            KeyError,
-            TypeError,
-            ValueError,
-            AttributeError,
-            OSError,
-            pickle.UnpicklingError,
-        ) as e:
-            logger.warning("%s Restoration failed (%s), falling back to execution.", _LOG_CACHE, e, exc_info=True)
-            return None
 
     def _check_redundant_import(self, run: StatementRun) -> ProcessResult | None:
         """Detect redundant (already-imported) import statements.

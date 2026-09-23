@@ -6,7 +6,16 @@ from typing import Any, TypedDict
 
 from cash.notebook.cache_status import CacheStatus
 
-__all__ = ["DecoratorCallMetric", "ProcessResult", "ProcessResultRequired"]
+__all__ = ["COST_MODEL_KEYS", "DecoratorCallMetric", "ProcessResult", "ProcessResultRequired"]
+
+#: The cost-model prediction fields a stored entry carries, copied into the
+#: statement's metrics whether it was computed or served from the cache.
+COST_MODEL_KEYS = (
+    "cost_model_size_bytes",
+    "cost_model_restore_seconds",
+    "cost_model_type_name",
+    "cost_model_family",
+)
 
 
 class ProcessResultRequired(TypedDict):

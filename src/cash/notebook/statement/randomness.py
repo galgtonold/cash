@@ -227,7 +227,7 @@ class StatementRandomness:
         when the value is freshly computed and correct, and said nothing on the
         restores, when it is not.  This is the missing half.
 
-        Gated on a successful restore specifically: ``_handle_cache_hit``
+        Gated on a successful restore specifically: ``CacheHitServer.serve``
         returns None when restoration fails and the caller falls through to real
         execution, in which case the value is fresh and "replay" would be a lie.
 
@@ -540,7 +540,7 @@ class StatementRandomness:
         how :meth:`warn_stale` follows :meth:`warn_unseeded`:
         it makes the stronger claim only a successful restore licenses -- the
         fitted model on screen IS a replay, not merely "may differ". Called ONLY
-        after ``_handle_cache_hit`` reports a successful restore.
+        after ``CacheHitServer.serve`` reports a successful restore.
         """
         if allow_random or not unseeded_fits:
             return
