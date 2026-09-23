@@ -23,14 +23,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from cash.notebook.statement.file_deps import compute_file_hash_component
-from cash.remote_source import _reset_remote_warnings
+from cash.remote_source import REMOTE_LEDGER
 
 
 @pytest.fixture(autouse=True)
 def _fresh_ledgers():
-    _reset_remote_warnings()
+    REMOTE_LEDGER.reset()
     yield
-    _reset_remote_warnings()
+    REMOTE_LEDGER.reset()
 
 
 class _Origin:

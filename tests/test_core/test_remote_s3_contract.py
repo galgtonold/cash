@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 
 from cash import Cash, InMemoryBackend, RemoteFileDataSource
-from cash.remote_source import _reset_remote_warnings
+from cash.remote_source import REMOTE_LEDGER
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -74,11 +74,11 @@ def s3(_moto_server, monkeypatch):
     # later test would otherwise be served an earlier test's view of the bucket.
     s3fs.S3FileSystem.clear_instance_cache()
 
-    _reset_remote_warnings()
+    REMOTE_LEDGER.reset()
     try:
         yield client
     finally:
-        _reset_remote_warnings()
+        REMOTE_LEDGER.reset()
 
 
 class TestS3fsContract:

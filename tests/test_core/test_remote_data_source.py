@@ -27,15 +27,15 @@ import pytest
 
 from cash import Cash, CashCacheIneffectiveWarning, InMemoryBackend, RemoteFileDataSource
 from cash.exceptions import DependencyNotFoundError
-from cash.remote_source import _reset_remote_warnings, pinned_version
+from cash.remote_source import REMOTE_LEDGER, pinned_version
 
 
 @pytest.fixture(autouse=True)
 def _fresh_warning_ledgers():
     """Each test starts with an empty warn-once ledger, as a session would."""
-    _reset_remote_warnings()
+    REMOTE_LEDGER.reset()
     yield
-    _reset_remote_warnings()
+    REMOTE_LEDGER.reset()
 
 
 # ---------------------------------------------------------------------------

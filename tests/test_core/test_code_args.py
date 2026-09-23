@@ -236,16 +236,6 @@ def opaque_registry():
     CashCls._OPAQUE_TYPES.update(saved)
 
 
-@pytest.fixture()
-def warned_unhashable():
-    """Isolate the process-global advisory dedup set, for the same reason."""
-    saved = set(CashCls._WARNED_UNHASHABLE)
-    CashCls._WARNED_UNHASHABLE.clear()
-    yield
-    CashCls._WARNED_UNHASHABLE.clear()
-    CashCls._WARNED_UNHASHABLE.update(saved)
-
-
 def _counting(c, name="takes"):
     """A cached function plus a call counter, so ``len(calls)`` is the oracle
     for "did this recompute?".
@@ -492,7 +482,7 @@ class _OpaqueCallable:
     __call__ = staticmethod(abs)
 
 
-def test_an_opaque_callable_argument_warns_at_most_once_across_instances(c, warned_unhashable):
+def test_an_opaque_callable_argument_warns_at_most_once_across_instances(c):
     """``repr()`` of a callable object embeds a memory address, so keying the
     once-per-type dedup on ``repr()`` -- as the task brief's fallback did --
     warns for EVERY instance ever constructed and grows a class-global set
@@ -510,7 +500,7 @@ def test_an_opaque_callable_argument_warns_at_most_once_across_instances(c, warn
     assert "0x" not in advisories[0], "the advisory leaked an address"
 
 
-def test_distinct_partials_over_user_code_are_keyed_not_reported(c, warned_unhashable):
+def test_distinct_partials_over_user_code_are_keyed_not_reported(c):
     """What the test above used to pin with partials. A partial is its function
     plus arguments, and both reach the key now: three partials, three entries,
     no advisory -- and editing the wrapped function invalidates."""
@@ -680,7 +670,7 @@ def test_a_self_referential_container_argument_terminates(c):
     assert len(calls) == 0  # nothing above should have called the function
 
 
-def test_the_advisory_ignores_a_stdlib_callable_object(c, warned_unhashable):
+def test_the_advisory_ignores_a_stdlib_callable_object(c):
     """`_is_user_code_object` answers "could not confirm -> user code", which is
     the right direction for deciding whether to HASH and the wrong one for
     deciding whether to WARN: a `functools.partial` and a `weakref.ref` have no

@@ -204,16 +204,7 @@ def _applies(score, prep=None):
     return 1
 
 
-@pytest.fixture
-def warned_unhashable():
-    saved = set(Cash._WARNED_UNHASHABLE)
-    Cash._WARNED_UNHASHABLE.clear()
-    yield
-    Cash._WARNED_UNHASHABLE.clear()
-    Cash._WARNED_UNHASHABLE.update(saved)
-
-
-def test_an_opaque_callable_names_the_parameter_it_arrived_in(c, warned_unhashable):
+def test_an_opaque_callable_names_the_parameter_it_arrived_in(c):
     applies = c.cache(_applies, assume_safe=True)
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")

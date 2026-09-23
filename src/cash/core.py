@@ -159,6 +159,46 @@ def _declared_files(file_depends_on: str | list[str] | None) -> tuple[tuple[str,
     return tuple((str(p), os.path.abspath(p)) for p in paths)
 
 
+class _ExitWork:
+    """What a `Cash` must finish at exit: its stored-key record and its
+    backend's pending writes, plus the end-of-run CACHE-NET-LOSS verdicts.
+
+    Held apart from the instance, so that ``atexit`` keeps only this alive
+    and a discarded instance can be collected. Not run when the instance is
+    collected: a finalizer runs on whatever thread the collection happens
+    on -- a writer thread, which would wait on itself.
+    """
+
+    __slots__ = ("backend", "effectiveness", "stored_keys")
+
+    def __init__(self, stored_keys: StoredKeyRecord, effectiveness: EffectivenessLedger) -> None:
+        self.backend: CacheBackend | None = None
+        self.stored_keys = stored_keys
+        self.effectiveness = effectiveness
+
+    def run(self) -> None:
+        """Warn the run's verdicts, then drain. Never builds a backend: at exit
+        that would start threads the interpreter can no longer register."""
+        try:
+            found = self.effectiveness.final_verdicts()
+        except Exception:  # noqa: BLE001 - a notice must never block shutdown
+            found = []
+        for what, fix in found:
+            try:
+                warn_diagnostic(CashCacheIneffectiveWarning, "CACHE-NET-LOSS", what, fix)
+            except Exception:  # noqa: BLE001 - -W error at exit, or teardown
+                pass
+        if self.backend is not None:
+            self.stored_keys.close()
+            self.backend.shutdown()
+
+
+def _summary_at_exit(ref: weakref.ref[Cash]) -> None:
+    cash = ref()
+    if cash is not None:
+        cash._print_run_summary()
+
+
 #: How many call events `Cash._decorator_call_log` holds. The notebook drains it
 #: after every statement; nothing drains it in a script or a service, so it
 #: keeps only the most recent calls rather than one entry per call forever.
@@ -274,6 +314,8 @@ class Cash(
                 self._backend = build_tiered(backends, self.config)
             else:
                 self._backend = backends[0]
+        # Set with the stored-key record below; `_backend` is mirrored into it.
+        self._exit_work: _ExitWork | None = None
 
         self._backend_lock = threading.Lock()
 
@@ -305,13 +347,11 @@ class Cash(
         # The decorator always caches by design -- this only ever informs.
         self._effectiveness = EffectivenessLedger()
         if self.config.summary:
-            # Registered per instance rather than once per process: two Cash
-            # instances are two independent caches, and each should account for
-            # itself. ``run_summary`` returns "" when nothing was called, so an
-            # unused instance prints nothing. (``atexit`` is imported at module
-            # level; a local import here would shadow it for the whole method,
-            # including the ``atexit.register(self.shutdown)`` further down.)
-            atexit.register(self._print_run_summary)
+            # Per instance: two Cash instances are two independent caches, and
+            # each accounts for itself. Through a weakref, so the hook does
+            # not keep the instance alive; registered before the exit work,
+            # so it runs after it.
+            atexit.register(_summary_at_exit, weakref.ref(self))
         self._analyzed = set()  # Track which functions we've *surfaced* purity for
         # ONE lock for the one-time analysis, whatever function triggers it.
         #
@@ -369,10 +409,20 @@ class Cash(
         self._module_attr_cache: dict = {}
         self._local_binding_cache: dict[Any, tuple | None] = {}
         self._carrier_verdicts: dict[int, tuple[Any, bool]] = {}
+        # ``(class, is user code)`` per class id, for `_iter_attribute_carriers`:
+        # a list of 50k instances must not pay the verdict per element. The
+        # class is kept so a recycled id is never trusted. Bounded there.
+        self._attribute_walk_verdicts: dict[tuple[str, int], tuple[type, bool]] = {}
+        # Code carriers already reported (`_warn_unhashable_code_once`,
+        # `_warn_untrackable_in_carrier_once`): once per carrier and function.
+        self._warned_unhashable_code: set[tuple] = set()
+        self._warned_untrackable_carrier: set[tuple] = set()
         # (func_name, state segment) -> the ledger of the key build that first
         # produced it (`_keep_state_ledger`).
         self._state_ledgers: dict[tuple[str, str], dict] = {}
         self._stored_keys = StoredKeyRecord(_local_dir_of(weakref.ref(self)))
+        self._exit_work = _ExitWork(self._stored_keys, self._effectiveness)
+        self._exit_work.backend = self._backend
         # (first_param, self_attrs, uses_super) per code object; see
         # _analyze_method_self_deps.
         self._method_self_dep_cache: dict = {}
@@ -487,7 +537,7 @@ class Cash(
         # (`_data_callable_identity`).
         self._data_helper_resolver = SysModulesHelperResolver(self._hash_helper_identity)
 
-        atexit.register(self.shutdown)
+        atexit.register(self._exit_work.run)
 
         # register_magic=None (default) auto-detects: only register when an
         # active IPython session exists.  True forces registration; False skips.
@@ -508,12 +558,14 @@ class Cash(
             if self._backend is not None:
                 return self._backend
             self._backend = build_backend_from_config(self.config)
+            self._exit_work.backend = self._backend
             return self._backend
 
     @backend.setter
     def backend(self, value: CacheBackend) -> None:
         """Allow direct assignment (e.g. ``c.backend = MyBackend()``)."""
         self._backend = value
+        self._exit_work.backend = value
 
     @property
     def backend_if_built(self) -> CacheBackend | None:
@@ -1488,28 +1540,11 @@ class Cash(
         file_registry().register(module_name, func_name, handler_factory)
 
     def shutdown(self) -> None:
-        """Cleanup resources (e.g. wait for async writes).
+        """Finish up: warn the run's CACHE-NET-LOSS verdicts, flush the
+        stored-key record and wait for the backend's writes.
 
-        Guards on the *private* ``_backend`` rather than the ``backend``
-        property: this runs from an ``atexit`` handler, and touching the
-        lazy property during interpreter teardown would *build* a backend
-        (spawning a ThreadPoolExecutor that calls
-        ``threading._register_atexit``), raising "can't register atexit
-        after shutdown". If the backend was never materialised there is
-        nothing to drain, so we no-op.
+        Runs at exit on its own. Never builds a backend: at interpreter
+        teardown building one would start threads that can no longer
+        register, and an unbuilt backend has nothing to drain.
         """
-        backend = getattr(self, "_backend", None)
-        effectiveness = getattr(self, "_effectiveness", None)
-        if effectiveness is not None:
-            try:
-                verdicts = effectiveness.final_verdicts()
-            except Exception:  # noqa: BLE001 - a notice must never block shutdown
-                verdicts = []
-            for what, fix in verdicts:
-                try:
-                    warn_diagnostic(CashCacheIneffectiveWarning, "CACHE-NET-LOSS", what, fix)
-                except Exception:  # noqa: BLE001 - -W error at exit, or teardown
-                    pass
-        if backend is not None:
-            self._stored_keys.close()
-            backend.shutdown()
+        self._exit_work.run()

@@ -1151,7 +1151,7 @@ seriously only when the opaque target is code you compile yourself.
 
 ## KEY-DYNAMIC-DEPENDENCY {#key-dynamic-dependency}
 
-<!-- claim: cash/decorator/code_args.py:CodeArgsMixin._warn_untrackable_in_carrier_once @df4f04c0 -->
+<!-- claim: cash/decorator/code_args.py:CodeArgsMixin._warn_untrackable_in_carrier_once @477865a2 -->
 **What happened.** An object you passed to a cached function carries code — a
 method of its class, or the function itself — and that code picks what it calls
 from a value at runtime: `getattr(module, name)()` with `name` in a variable,
@@ -1888,7 +1888,7 @@ version id, no last-modified time. The only thing left to compare is the
 object's size in bytes, so that is what went into the cache key. The message
 names the URL and which validators were missing.
 
-<!-- claim: cash/remote_source.py:_warn_weak_token @bce362c5 -->
+<!-- claim: cash/remote_source.py:_warn_weak_token @d860c31b -->
 **Why it matters.** A size only catches edits that change the byte count.
 Correct a value in a fixed-width column, rewrite a row to the same length,
 replace the object with a different one that happens to be the same size, and
@@ -1923,7 +1923,7 @@ URL and the exception. Rather than serve a result whose freshness it could not
 check, Cash produced a token it has never seen before, which forces a recompute.
 The answer you received is a real one.
 
-<!-- claim: cash/remote_source.py:RemoteFileDataSource._warn_failure @ed90c553 -->
+<!-- claim: cash/remote_source.py:RemoteFileDataSource._warn_failure @bc945f69 -->
 **Why it matters.** This fails closed on purpose: an outage costs you the
 speedup, never the correctness. What it costs while it lasts is the cache
 itself. Every call to that function recomputes, and each failed check leaves

@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from cash import Cash, InMemoryBackend
-from cash.remote_source import _reset_remote_warnings
+from cash.remote_source import REMOTE_LEDGER
 from cash.tracking.file_dep_snapshot import (
     file_dep_is_fresh,
     snapshot_file_deps,
@@ -31,9 +31,9 @@ from cash.tracking.file_dep_snapshot import (
 
 @pytest.fixture(autouse=True)
 def _fresh_warning_ledgers():
-    _reset_remote_warnings()
+    REMOTE_LEDGER.reset()
     yield
-    _reset_remote_warnings()
+    REMOTE_LEDGER.reset()
 
 
 class _Origin:

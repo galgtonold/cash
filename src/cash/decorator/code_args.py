@@ -24,10 +24,6 @@ logger = logging.getLogger(__name__)
 class CodeArgsMixin:
     """The code an argument carries, folded into the state segment."""
 
-    #: Types already reported as unhashable, so the advisory stays once-per-type
-    #: per session rather than once per call.
-    _WARNED_UNHASHABLE: set = set()
-
     @staticmethod
     def _carrier_name(carrier: Any) -> str:
         """A stable, address-free name for a code carrier.
@@ -36,7 +32,7 @@ class CodeArgsMixin:
         Otherwise the carrier's TYPE, deliberately not ``repr()``: a
         ``functools.partial`` reprs as ``functools.partial(<function f at
         0x...>, 3)``, and that address is unique per object, so a
-        ``repr()``-derived key would make ``_WARNED_UNHASHABLE`` dedup
+        ``repr()``-derived key would make ``_warned_unhashable_code`` dedup
         nothing (one warning per partial ever constructed, plus a global set
         that grows without bound) and would make a folded part label differ
         between two processes holding equal arguments.
@@ -72,8 +68,6 @@ class CodeArgsMixin:
             return CodeIdentityMixin._is_user_code_object(wrapped)
         return CodeIdentityMixin._is_user_code_object(type(carrier))
 
-    _WARNED_UNTRACKABLE_CARRIER: set = set()
-
     def _warn_untrackable_in_carrier_once(self, carrier: Any, func_name: str = "?", param: str | None = None) -> None:
         """Say once that code reached through an argument resolves a dependency
         at runtime, so an edit behind it will NOT invalidate.
@@ -92,9 +86,9 @@ class CodeArgsMixin:
             if not isinstance(fn, types.FunctionType):
                 continue
             mark = (id(fn.__code__), func_name)
-            if mark in CodeArgsMixin._WARNED_UNTRACKABLE_CARRIER:
+            if mark in self._warned_untrackable_carrier:
                 continue
-            CodeArgsMixin._WARNED_UNTRACKABLE_CARRIER.add(mark)
+            self._warned_untrackable_carrier.add(mark)
             try:
                 issues = [i for i in get_analyzer().analyze(fn).issues if i.kind == ISSUE_UNTRACKABLE_DEP]
             except Exception:  # noqa: BLE001 - never break a call
@@ -137,9 +131,9 @@ class CodeArgsMixin:
             getattr(inner, "__qualname__", None) or getattr(inner, "__name__", None) if inner is not None else None
         )
         mark = (f"{name}:{inner_name}", func_name, param)
-        if mark in CodeArgsMixin._WARNED_UNHASHABLE:
+        if mark in self._warned_unhashable_code:
             return
-        CodeArgsMixin._WARNED_UNHASHABLE.add(mark)
+        self._warned_unhashable_code.add(mark)
         where = f"the argument `{param}` of {func_name}" if param else f"a call of {func_name}"
         wrapping = f", wrapping {inner_name}," if inner_name else ""
         what = (
@@ -283,12 +277,6 @@ class CodeArgsMixin:
             if cls is not None:
                 yield cls
             yield from self._iter_attribute_carriers(value, _depth, _seen)
-
-    #: ``(class, is user code)`` per class id, for ``_iter_attribute_carriers``:
-    #: the verdict is a ``sys.modules`` lookup and a qualname walk, and a list of
-    #: 50k instances must not pay it per element. The class is kept so a
-    #: recycled id is never trusted.
-    _attribute_walk_verdicts: dict = {}
 
     def _iter_attribute_carriers(self, value: Any, _depth: int, _seen: set):
         """Code carried by what an instance of the user's own class HOLDS.

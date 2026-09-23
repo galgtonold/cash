@@ -84,27 +84,52 @@ _PINNED_KEYS = frozenset({"versionid", "generation"})
 # than "not there", so we retry for a single byte and read the headers off that.
 _HEAD_REJECTED = frozenset({403, 405, 501})
 
-_warned_failures: set[str] = set()
-_warned_weak_tokens: set[str] = set()
 
-# Tokens held inside a revalidation window, keyed by URL rather than by source
-# instance. Auto-tracked reads build a fresh source per check, so a per-instance
-# memo would never survive to be used - and those are exactly the reads whose
-# owner has nowhere to put ``immutable=True``. Only written when a window is
-# actually configured, so the default (revalidate always) keeps no state.
-_token_memo: dict[str, tuple[float, str]] = {}
+class RemoteLedger:
+    """What this process remembers about remote objects, by URL.
+
+    Warnings already given (once per URL and kind, each set bounded) and the
+    tokens held inside a revalidation window. By URL rather than by source:
+    auto-tracked reads build a fresh source per check, so per-source state
+    would never survive to be used -- and those are exactly the reads whose
+    owner has nowhere to put ``immutable=True``. Tokens are only kept when a
+    window is configured, so the default (revalidate always) keeps none.
+    """
+
+    MAX = 1024
+
+    def __init__(self) -> None:
+        self.warned_failures: set[str] = set()
+        self.warned_weak_tokens: set[str] = set()
+        self.warned_validation_cost: set[str] = set()
+        self.tokens: dict[str, tuple[float, str]] = {}
+
+    def first_time(self, marks: set[str], mark: str) -> bool:
+        """Is *mark* new to *marks*? Records it, while the set has room."""
+        if mark in marks:
+            return False
+        if len(marks) < self.MAX:
+            marks.add(mark)
+        return True
+
+    def keep_token(self, url: str, token: str) -> None:
+        if len(self.tokens) >= self.MAX and url not in self.tokens:
+            self.tokens.clear()
+        self.tokens[url] = (time.monotonic(), token)
+
+    def reset(self) -> None:
+        """Forget everything, as a new session starts."""
+        self.warned_failures.clear()
+        self.warned_weak_tokens.clear()
+        self.warned_validation_cost.clear()
+        self.tokens.clear()
+
+
+REMOTE_LEDGER = RemoteLedger()
 
 # Distinguishes one failed resolution from the next so the key genuinely moves.
 # See ``_unresolved_token`` for why that is the failure behaviour.
 _failure_serial = itertools.count()
-
-
-def _reset_remote_warnings() -> None:
-    """Clear the warn-once ledgers (tests; a fresh session starts empty)."""
-    _warned_failures.clear()
-    _warned_weak_tokens.clear()
-    _warned_validation_cost.clear()
-    _token_memo.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -183,8 +208,6 @@ VALIDATION_WARN_RATIO = 0.5
 VALIDATION_WARN_FLOOR_SECONDS = 0.25
 VALIDATION_WARN_ABSOLUTE_SECONDS = 2.0
 
-_warned_validation_cost: set[str] = set()
-
 
 def validation_is_expensive(seconds: float, saved_seconds: float | None) -> bool:
     """Whether *seconds* of validation is a bad trade against *saved_seconds*."""
@@ -197,10 +220,8 @@ def validation_is_expensive(seconds: float, saved_seconds: float | None) -> bool
 
 def warn_validation_cost_once(label: str, count: int, seconds: float, saved_seconds: float | None) -> None:
     """Warn a single time per *label* that freshness checking is costing real time."""
-    if label in _warned_validation_cost:
+    if not REMOTE_LEDGER.first_time(REMOTE_LEDGER.warned_validation_cost, label):
         return
-    if len(_warned_validation_cost) < 1024:
-        _warned_validation_cost.add(label)
     saved = f", against {saved_seconds:.2f}s of compute it avoids" if saved_seconds and saved_seconds > 0 else ""
     warn_diagnostic(
         CashCacheIneffectiveWarning,
@@ -247,10 +268,8 @@ def _warn_weak_token(url: str, detail: str) -> None:
     value in a fixed-width column, a rewritten row - so the entry can go stale
     without the token moving.
     """
-    if url in _warned_weak_tokens:
+    if not REMOTE_LEDGER.first_time(REMOTE_LEDGER.warned_weak_tokens, url):
         return
-    if len(_warned_weak_tokens) < 1024:  # bound the ledger for long sessions
-        _warned_weak_tokens.add(url)
     warn_diagnostic(
         CashCacheIneffectiveWarning,
         "REMOTE-SIZE-ONLY",
@@ -393,7 +412,7 @@ class RemoteFileDataSource(DataSource):
             return self._cached_token
         max_age = self._effective_max_age()
         if max_age > 0:
-            entry = _token_memo.get(self.url)
+            entry = REMOTE_LEDGER.tokens.get(self.url)
             if entry is not None and (time.monotonic() - entry[0]) < max_age:
                 return entry[1]
         started = _perf_counter()
@@ -404,7 +423,7 @@ class RemoteFileDataSource(DataSource):
             _record_validation(_perf_counter() - started)
         self._cached_token = token
         if max_age > 0:
-            _token_memo[self.url] = (time.monotonic(), token)
+            REMOTE_LEDGER.keep_token(self.url, token)
         return token
 
     def _effective_max_age(self) -> float:
@@ -471,11 +490,9 @@ class RemoteFileDataSource(DataSource):
     def _warn_failure(self, exc: BaseException) -> None:
         """Warn once per URL and failure kind that freshness went unverified."""
         ledger_key = f"{self.url}|{type(exc).__name__}"
-        if ledger_key in _warned_failures:
+        if not REMOTE_LEDGER.first_time(REMOTE_LEDGER.warned_failures, ledger_key):
             logger.debug("[REMOTE] %s still unresolvable: %s", self.url, exc)
             return
-        if len(_warned_failures) < 1024:  # bound the ledger for long sessions
-            _warned_failures.add(ledger_key)
         warn_diagnostic(
             CashCacheIneffectiveWarning,
             "REMOTE-STATE-UNREADABLE",

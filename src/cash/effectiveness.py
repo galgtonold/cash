@@ -64,7 +64,7 @@ MIN_OBSERVATIONS = 3
 
 # Ceiling on tracked functions, so a long-lived process that decorates
 # programmatically cannot grow this without bound. Mirrors the cap on
-# ``remote_source._warned_validation_cost``. Past it, new functions are simply
+# ``RemoteLedger.warned_validation_cost``. Past it, new functions are simply
 # not tracked: losing a diagnostic is acceptable, leaking is not.
 MAX_TRACKED_FUNCTIONS = 1024
 
