@@ -12,70 +12,69 @@ import sys
 
 AGENT_GUIDE = """# Using cash — a guide for coding agents
 
-cash caches expensive Python results so slow notebooks and scripts iterate fast.
-Reach for it **only** on genuinely slow, deterministic work. This page is the
-minimal correct path; it is also what `cash.help()` returns.
+cash caches slow Python results so notebooks and scripts re-run fast. Use it
+**only** on slow, deterministic work. This page is also what `cash.help()`
+returns.
 
-## Two front-ends, one engine
+## Two paths
 
-- **Notebook** — first cell: `import cash` then `%cash_on` (imports, paths and
-  constants may share it; load data in the cells below). Every statement caches
-  by *(its code + upstream inputs + file deps)*. Editing a cell or any upstream
-  input auto-invalidates everything downstream.
-- **Script / module** — `@cash.cache` on an expensive function. Caches by
-  *(function source + arguments)* and persists to `./.cash` across processes.
+- **Script / module:** put `@cash.cache` on a slow function. A call is keyed
+  on its arguments, the function's source and the source of the helpers it
+  calls. Every result is written to disk (`.cash/` in the project), so a new
+  process gets it back.
+- **Notebook:** the first cell is exactly:
 
-## See what cash did — required for headless / agent runs
+  ```
+  import cash
+  %cash_on
+  %cash_badge print
+  ```
 
-Make the **second line** `%cash_badge print`. The default badge is an HTML widget
-that papermill / nbconvert / headless kernels **strip** — without this you are
-blind. The text badge prints under each cell:
+  Nothing else goes in it: statements in the `%cash_on` cell are never cached.
+  Put imports, paths and constants in the next cell. Each statement below is
+  keyed on its code, its input variables and the files it reads; editing a
+  cell or an input re-runs what depends on it.
+
+## Headless runs (papermill, nbconvert, CI)
+
+- The default badge is an HTML widget that headless runs strip.
+  `%cash_badge print` prints a text badge instead.
+- Cash cannot find the `.ipynb` in a headless run. It warns
+  `NOTEBOOK-NOT-FOUND` and turns off upstream tracking: a variable defined in
+  the `%cash_on` cell then makes every statement that reads it `NOT CACHED`.
+  That is why the first cell holds nothing else.
+
+The text badge, one line per statement:
 
 ```
-[Cash] EXECUTED (0.01s, saved 0.42s) - 1 not cached
-  CACHED: df = pd.read_csv('sales.csv')  (saved 0.42s)
-  EXECUTED: summary = df.groupby('region').sum()  (0.01s)
-  NOT CACHED: n = len(df)  (0.00s) - Too cheap to cache
+[Cash] CACHED (2 restored, 1 ran; 0.01s, saved 0.15s) - 1 not cached
+  CACHED: df = pd.read_csv('sales.csv')  (saved 0.07s)
+  CACHED: summary = df.groupby('region').sum()  (saved 0.08s)
+  NOT CACHED: summary.to_csv('summary.csv')  (0.00s) - Side effect: summary.to_csv() (file_write)
 ```
 
-**One line per statement**, two spaces of indent, the label first, then the
-code, then a timing — `(saved Ns)` on a restore, `(Ns)` on a run. A NOT CACHED
-row appends ` - <reason>`. The header line carries the cell total and, when any
-row was not cached, a ` - N not cached` suffix.
+`CACHED` = restored · `EXECUTED` = ran (a first run adds `-> RAM` or
+`-> RAM+DISK`, where it was stored) · `NOT CACHED` = ran, not stored, with the
+reason · `SKIPPED` = nothing to do. `%cash_stats` shows net time saved, and
+reports a loss when caching cost time. `cash inspect` in a terminal lists what
+is on disk.
 
-`CACHED` = served from cache · `EXECUTED` = ran · `NOT CACHED` = ran but not
-stored (too cheap, a side effect, or `# @cash:no-cache`; every reason is
-explained in the badge reference). Check the running total with `%cash_stats`
-("Net time saved" — honest, and it will report a **loss** if you cached
-something too cheap), and what the cache on disk holds with `cash inspect` in a
-terminal: every entry's size beside the time it saves.
+**Read the labels, not your prints.** A restored notebook statement replays
+the output it printed, so a print marker shows up either way. A cached
+`@cash.cache` call prints nothing: the body does not run.
 
-Two things to know when reading a captured notebook:
+## Rules
 
-- **Read the labels, not your prints, to tell what ran.** A hit replays the
-  stdout and stderr the code printed when it last ran -- a cached
-  `@cash.cache` call and a restored statement both do -- so a
-  `print("RUN load", file=sys.stderr)` marker shows up either way. What IS
-  suppressed is other cells' output while cash repairs upstream state for the
-  cell you ran, which is deliberate.
-- **If you only have the HTML badge's output**, its first few hundred
-  characters are CSS. Don't parse it; switch to `%cash_badge print` and re-run.
-
-## The six rules that keep you correct
-
-1. **Cache pure + expensive only.** Same code + same inputs → restored. Editing
-   the code or an upstream input invalidates automatically.
-2. **Cross-process persistence has a ~0.1 s floor.** A result whose compute was
-   faster than that (for `@cash.cache`, the function body's own time) stays in RAM only — instant on a repeat *in the same process*,
-   but recomputed after a kernel restart or a fresh `python run.py`. Force disk
-   with `# @cash:persist`.
-3. **Non-determinism is FROZEN, not blocked.** An unseeded random draw is cached
-   and replayed forever. **Seed it:** `np.random.seed(0)` for the global functions;
-   for a generator pass the seed — `np.random.default_rng(42)` — because seeding
-   the global does *not* affect a `default_rng()` draw. Use `# @cash:no-cache` for
-   a value that must be fresh every run (timestamps, IDs).
-4. **ML: wrap-and-return, never a bare `.fit()`.** `model.fit(X, y)` on its own
-   line isn't cached (it mutates in place and returns nothing). Do:
+1. **Cache pure, slow work only.** Same code and inputs give the stored result.
+2. **Notebook statements under 0.1 s stay in RAM**: gone after a kernel
+   restart. Under 10 ms they are not cached at all. Force disk with
+   `# @cash:persist`. Decorated results always go to disk.
+3. **Randomness is frozen, not blocked.** An unseeded draw is stored and
+   replayed. Seed it: `np.random.seed(0)`, or `np.random.default_rng(42)` for
+   a generator (seeding the global does not affect `default_rng()`). Use
+   `# @cash:no-cache` for values that must be fresh (timestamps, IDs).
+4. **ML: return the model, never a bare `.fit()`.** `model.fit(X, y)` alone
+   changes the model in place and returns nothing to cache. Do:
    ```python
    @cash.cache(assume_safe=True)   # fit()'s discarded return trips the purity check; safe here
    def train(X, y):
@@ -83,55 +82,41 @@ Two things to know when reading a captured notebook:
        m.fit(X, y)
        return m
    ```
-5. **Side effects run on the FIRST call only**, then the return value replays. A
-   purity warning on discarded calls (prints, logging, `.fit()`) is advisory — the
-   result is still correct. Put `# @cash:assume-safe` on the audited LINE;
-   `assume_safe=True` waives the whole function for good, including anything
-   added to it later.
-6. **Verify with `f.explain(*args)`** (→ `[HIT]` / `[MISS]` + reason) or
-   `%cash_stats` — both read through to the real cache. Prefer these over
-   `f.cache_info()` in a notebook: its hit/miss counters live on the wrapper
-   object, which is recreated every time you re-run the function's `@cash.cache`
-   definition cell, so they reset during iteration and mislead.
+5. **Side effects run on the first call only.** A purity warning is advisory.
+   Put `# @cash:assume-safe` on each audited line; `assume_safe=True` waives the
+   whole function, including anything added later.
+6. **Verify with `f.explain(*args)`** (`[HIT]` / `[MISS]` and why) or
+   `%cash_stats`. In a notebook, `f.cache_info()` resets whenever the defining
+   cell re-runs.
 
-## Statement annotations
+## Statement annotations (notebook)
 
-Put the comment **directly above** the statement, no blank line, lowercase `@cash:`:
+The comment goes directly above the statement, no blank line, lowercase:
 
 ```
-# @cash:no-cache        never cache (timestamps, side effects, values that must be fresh)
-# @cash:persist         force-cache a cheap value that must survive a kernel restart
-# @cash:ttl=300         expire after N seconds (integer only)
-# @cash:allow-random    acknowledge a frozen unseeded draw (silences the warning only)
-# @cash:no-cache-calls  stop caching the expensive CALL inside a statement (on by default)
-# @cash:cache-fit       opt a bare estimator.fit(X, y) in to caching (off by default)
+# @cash:no-cache        never cache (timestamps, side effects, fresh values)
+# @cash:persist         write a cheap value to disk so it survives a restart
+# @cash:ttl=300         expire after N seconds (integer)
+# @cash:allow-random    hide the unseeded-draw warning (the draw is still frozen)
+# @cash:no-cache-calls  stop caching the slow CALL inside a statement (on by default)
+# @cash:cache-fit       cache a bare estimator.fit(X, y) (off by default)
 ```
 
-`no-cache-calls` is the one to know about: cash caches the expensive call
-*inside* a statement by default, so a callee with side effects the analyzer
-cannot see will have them skipped on a hit **without you asking for it**. Reach
-for the opt-out the moment a callee's purity is something you are unsure of.
+Call-level caching is on by default, so a callee with side effects the
+analyzer cannot see skips them on a hit. Use `no-cache-calls` when unsure.
+Default: annotate nothing.
 
-Default: **annotate nothing** — the cost model decides what's worth caching.
+## Gotchas
 
-## Don't bother caching
-
-Sub-10 ms statements (cache overhead dominates — `%cash_stats` will say "cash cost
-you X ms"), pure I/O / network-polling scripts, and cells that are *meant* to
-differ each run.
-
-## Silent-failure gotchas (no error is raised)
-
-- **Unhashable argument** (a lock, socket, open file, or a bare `self`) → caching
-  silently does nothing. `f.explain(...)` shows the key couldn't be built; fix with
-  `cash.register_hasher(SomeType, lambda x: ...)` or pass a hashable identifier.
-- **Wrong case or a blank line above the statement** → the directive silently
-  no-ops (a misspelled name warns `ANNOT-UNKNOWN-DIRECTIVE`). Confirm the badge
-  actually changed.
-- **Write cache-safe cells:** rebind, don't mutate an object from an *earlier* cell
-  (`df = df.assign(c=...)`, not `df['c'] = ...`); seed RNG in the same cell as the
-  draw; pass state in and out of functions instead of mutating globals. Full list:
-  [Known limitations](https://cash-lib.readthedocs.io/en/stable/known-limitations/).
+- **Unhashable argument** (a lock, socket, open file): cash warns
+  `KEY-UNHASHABLE-ARG` and the call runs uncached. Register a hasher with
+  `cash.register_hasher(SomeType, lambda x: ...)` or pass a hashable ID.
+- **Wrong case or a blank line above an annotation**: it does nothing, with no
+  error (a misspelled name warns `ANNOT-UNKNOWN-DIRECTIVE`). Check the badge.
+- **Cache-safe cells:** rebind instead of changing an object from an earlier
+  cell (`df = df.assign(c=...)`, not `df['c'] = ...`); seed in the same cell
+  as the draw; pass state in and out of functions. Full list:
+  [Writing cache-safe cells](https://cash-lib.readthedocs.io/en/stable/known-limitations/).
 """
 
 
