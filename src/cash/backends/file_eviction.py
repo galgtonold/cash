@@ -21,6 +21,7 @@ from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
 from ._base import gdsf_value
 from .adaptive_caps import adaptive_disk_cap_for, free_bytes_on_volume, human_bytes
+from .cache_dir import entry_totals
 from .entry_format import ENTRY_SUFFIX
 from .rank_index import RankIndex
 
@@ -158,19 +159,12 @@ class FileEvictor:
 
     def scan_size_bytes(self) -> int:
         """Total the entries' bytes with ``scandir`` + ``stat``; no file is opened."""
-        total_size = 0
-        try:
-            with self._untracked(), os.scandir(self.cache_dir) as entries:
-                for entry in entries:
-                    if not entry.name.endswith(ENTRY_SUFFIX):
-                        continue
-                    try:
-                        total_size += entry.stat().st_size
-                    except OSError:
-                        continue  # vanished mid-walk: a slightly late eviction
-        except OSError:
-            logger.debug("Could not scan %s for size", self.cache_dir, exc_info=True)
-        return total_size
+        with self._untracked():
+            totals = entry_totals(self.cache_dir)
+        if totals is None:
+            logger.debug("Could not scan %s for size", self.cache_dir)
+            return 0
+        return totals[1]
 
     def ensure_size_scanned(self) -> None:
         """Establish the on-disk byte total, once, when the first write needs it.

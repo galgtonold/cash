@@ -27,6 +27,7 @@ __all__ = [
     "VERSION_FILENAME",
     "CacheDirStamp",
     "create_temp_file",
+    "entry_totals",
     "recreate_cache_dir",
     "warn_if_unwritable",
     "write_all",
@@ -50,6 +51,30 @@ GITIGNORE_TEXT = "# Created by cash: this directory is a cache.\n*\n"
 #: collide with a fresh 48-bit random one, so more than a handful means
 #: something retrying cannot fix.
 _TEMP_NAME_ATTEMPTS = 8
+
+
+def entry_totals(cache_dir: str) -> tuple[int, int] | None:
+    """``(entries, bytes)`` of the entry files in *cache_dir*, or None when the
+    directory cannot be listed.
+
+    One ``scandir`` and a ``stat`` per entry, no file opened. The eviction cap
+    and ``cash info`` both count with this, so the size a cap is compared with
+    is the size the CLI reports.
+    """
+    count = size = 0
+    try:
+        with os.scandir(cache_dir) as found:
+            for entry in found:
+                if not entry.name.endswith(ENTRY_SUFFIX):
+                    continue
+                try:
+                    size += entry.stat().st_size
+                except OSError:
+                    continue  # removed while we looked
+                count += 1
+    except OSError:
+        return None
+    return count, size
 
 
 def create_temp_file(directory: str, prefix: str = ".tmp-", suffix: str = ".part") -> tuple[int, str]:
@@ -195,6 +220,20 @@ class CacheDirStamp:
             return
         self.written = self.token()
         self.writes += 1
+
+    def bump(self) -> None:
+        """Give the stamp a new identity without changing what it says, so a
+        running process notices that entries were removed under it. A missing
+        stamp stays missing: the next write stamps the directory afresh."""
+        if not os.path.exists(self.path):
+            return
+        tmp = self.path + ".tmp"
+        try:
+            with open(self.path, encoding="utf-8") as src, open(tmp, "w", encoding="utf-8") as dst:
+                dst.write(src.read())
+            os.replace(tmp, self.path)
+        except OSError:
+            logger.debug("Could not refresh %s", self.path, exc_info=True)
 
     def ignore_in_git(self) -> None:
         """Write the ``.gitignore`` of a directory cash just created."""

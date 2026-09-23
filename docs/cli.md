@@ -216,7 +216,7 @@ cash info
   that is not a setting, or a value cash could not use, is left out of the
   list and reported as a warning.
 
-<!-- claim: cash/__main__.py:cmd_inspect @0975006f, cash/__main__.py:_inspect_cache_dir @de0a89d4, cash/__main__.py:_inspect_notebook @22209429 -->
+<!-- claim: cash/__main__.py:cmd_inspect @0975006f, cash/__main__.py:_inspect_cache_dir @7568ad2a, cash/__main__.py:_inspect_notebook @22209429 -->
 ### `cash inspect [path] [--function NAME]` { #cash-inspect-path }
 
 Summarise a cache directory, or report on a notebook and its sibling `.cash`
@@ -430,7 +430,7 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 - The no-op "nothing to clear" message paths (no resolved cache, no sibling
   cache) exit 0; they're treated as success, not failure.
 <!-- claim: cash/backends/cache_dir.py:CacheDirStamp.check @c89cf812, cash/backends/cache_dir.py:CacheDirStamp._entries_are_current @853438c9 -->
-<!-- claim: cash/backends/clear_watch.py:ClearWatcher.cleared @04551b75, cash/__main__.py:_bump_generation @9e2ac2be -->
+<!-- claim: cash/backends/clear_watch.py:ClearWatcher.cleared @04551b75, cash/backends/file_backend.py:FileBackend.bump_generation @9c482978 -->
 - **Clearing the cache of a process that is still running** reaches its memory
   too. A running process checks, at most once a second, whether its cache
   directory was cleared (`--all`, `--function`, `--entry`), and if so drops
@@ -458,7 +458,7 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 ---
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @5e5a1508 -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @f8794ec8 -->
 ## Exit codes
 
 | Code | When |

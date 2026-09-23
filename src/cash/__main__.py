@@ -6,7 +6,6 @@ import argparse
 import dataclasses
 import logging
 import os
-import pickle
 import shutil
 import sqlite3
 import sys
@@ -17,8 +16,11 @@ from pathlib import Path
 from cash import __version__
 from cash._location import per_user_cache_root
 from cash.backends.adaptive_caps import adaptive_disk_cap_for, human_bytes, resolve_ram_cap
-from cash.backends.entry_format import ENTRY_SUFFIX, read_entry
+from cash.backends.cache_dir import VERSION_FILENAME, entry_totals
+from cash.backends.entry_format import ENTRY_SUFFIX
+from cash.backends.file_backend import FileBackend, StoredEntry
 from cash.backends.persistence_policy import PersistencePolicy
+from cash.backends.sqlite_backend import DB_FILENAME
 from cash.config import (
     SIZE_FIELDS,
     TOML_MISSING,
@@ -76,10 +78,6 @@ def _target_dir(args: argparse.Namespace) -> str:
     return tool_cache_dir(tool) if tool else resolved_cache_dir()
 
 
-#: A single-file backend's database, inside the cache directory.
-_SQLITE_DB_NAME = "cache.db"
-
-
 def _sqlite_cache(cache_dir: str) -> tuple[int, int] | None:
     """``(entries, bytes)`` for a sqlite cache here, or ``None`` if there is none.
 
@@ -87,7 +85,7 @@ def _sqlite_cache(cache_dir: str) -> tuple[int, int] | None:
     command uses reports "nothing here" while the cache works fine -- which is
     how this was found, attacking the decorator before round 26.
     """
-    path = cache_dir if os.path.isfile(cache_dir) else os.path.join(cache_dir, _SQLITE_DB_NAME)
+    path = cache_dir if os.path.isfile(cache_dir) else os.path.join(cache_dir, DB_FILENAME)
     if not os.path.isfile(path):
         return None
     try:
@@ -96,25 +94,6 @@ def _sqlite_cache(cache_dir: str) -> tuple[int, int] | None:
         return int(rows[0]), os.path.getsize(path)
     except Exception:  # noqa: BLE001 - not a cash database, or unreadable
         return None
-
-
-def _entry_totals(cache_dir: str) -> tuple[int, int] | None:
-    """``(entries, bytes)`` for the entry files here, or ``None`` if unreadable.
-
-    The same set ``FileBackend._scan_size_bytes`` totals -- top-level
-    ``*.entry`` and nothing else -- because this number is now used to size
-    the cap as well as to report what the cache holds, and the two have to
-    count the same bytes to be comparable.
-    """
-    entries = size = 0
-    try:
-        for f in Path(cache_dir).iterdir():
-            if f.name.endswith(ENTRY_SUFFIX):
-                entries += 1
-                size += f.stat().st_size
-    except OSError:
-        return None
-    return entries, size
 
 
 def _per_user_tool_caches() -> list[tuple[str, str, int, int]]:
@@ -126,15 +105,9 @@ def _per_user_tool_caches() -> list[tuple[str, str, int, int]]:
         return []
     found = []
     for child in children:
-        entries = size = 0
-        try:
-            for f in child.iterdir():
-                if f.name.endswith(ENTRY_SUFFIX):
-                    entries += 1
-                    size += f.stat().st_size
-        except OSError:
-            continue
-        found.append((child.name, str(child), entries, size))
+        totals = entry_totals(str(child))
+        if totals is not None:
+            found.append((child.name, str(child), *totals))
     return found
 
 
@@ -156,7 +129,7 @@ def cmd_info(args: argparse.Namespace) -> None:
     # What it holds, next to where it is: the number a user asks for when
     # deciding whether to clear it (round 25 had to `du` the folder).
     database = _sqlite_cache(config.cache_dir)
-    held = database if database is not None else _entry_totals(config.cache_dir)
+    held = database if database is not None else entry_totals(config.cache_dir)
     if database is not None:
         print(f"  Holds:      {database[0]} entries, {human_bytes(database[1])} (one sqlite database)")
     elif held is None:
@@ -332,43 +305,56 @@ def _effective_ttl(metadata: dict, tier_default: int | None) -> int | None:
     return tier_default if written is None else min(written, tier_default)
 
 
-def _scan_entries(cache_path: Path) -> list[_Entry]:
-    """Read every entry's metadata in *cache_path*.
+def _store(cache_dir: str | os.PathLike) -> FileBackend:
+    """The cache directory, opened the way the library opens it.
 
-    Only the metadata region of each file is read, never the payload, so
-    listing a cache full of large frames costs the same as listing one full
-    of small ones.
+    Every change the CLI makes goes through it, so the backend's own
+    bookkeeping -- the byte total, the stamp -- is kept as a write would keep
+    it. No flusher: the command is over before one would run.
     """
-    entries: list[_Entry] = []
+    return FileBackend(str(cache_dir), flush_interval=0)
+
+
+def _scan_entries(cache_dir: str | os.PathLike) -> list[_Entry]:
+    """Every readable entry in *cache_dir*, from its metadata alone.
+
+    The payload is never read, so listing a cache full of large frames costs
+    the same as listing one full of small ones.
+    """
     tier_default = _tier_default_ttl()
-    for entry_file in cache_path.glob(f"*{ENTRY_SUFFIX}"):
-        try:
-            metadata, _ = read_entry(str(entry_file), with_payload=False)
-        except (OSError, pickle.UnpicklingError, EOFError, ValueError) as exc:
-            logger.debug("Failed to read cache metadata from %s: %s", entry_file, exc)
-            continue
-        key = metadata.get("key") or ""
-        stat = entry_file.stat()
-        outputs = metadata.get("outputs") or ()
-        entries.append(
-            _Entry(
-                stem=entry_file.stem,
-                function=_function_of(key, metadata),
-                key=key,
-                size=stat.st_size,
-                mtime=stat.st_mtime,
-                saves=float(metadata.get("execution_time") or 0.0),
-                uses=int(metadata.get("access_count") or 0),
-                outputs=tuple(str(o) for o in outputs),
-                reads=tuple(str(p) for p in (metadata.get("auto_file_deps") or {})),
-                expires=(
-                    float(metadata.get("created_at") or stat.st_mtime) + float(ttl)
-                    if (ttl := _effective_ttl(metadata, tier_default)) is not None
-                    else None
-                ),
-            )
-        )
-    return entries
+    return [_entry_of(stored, tier_default) for stored in _store(cache_dir).entries()]
+
+
+def _entry_of(stored: StoredEntry, tier_default: int | None) -> _Entry:
+    metadata = stored.metadata
+    ttl = _effective_ttl(metadata, tier_default)
+    return _Entry(
+        stem=stored.id,
+        function=_function_of(stored.key, metadata),
+        key=stored.key,
+        size=stored.size,
+        mtime=stored.mtime,
+        saves=float(metadata.get("execution_time") or 0.0),
+        uses=int(metadata.get("access_count") or 0),
+        outputs=tuple(str(o) for o in metadata.get("outputs") or ()),
+        reads=tuple(str(p) for p in (metadata.get("auto_file_deps") or {})),
+        expires=None if ttl is None else float(metadata.get("created_at") or stored.mtime) + float(ttl),
+    )
+
+
+def _drop(cache_dir: str | os.PathLike, entries: list[_Entry]) -> None:
+    """Delete *entries* through the backend, then tell running processes."""
+    if not entries:
+        return
+    store = _store(cache_dir)
+    for entry in entries:
+        store.delete(entry.key)
+        name = f"{entry.stem}{ENTRY_SUFFIX}"
+        if os.path.exists(os.path.join(store.cache_dir, name)):
+            # Antivirus or another process holding it. Partial progress still
+            # frees space, and saying so beats a traceback part way through.
+            print(f"  could not remove {name}")
+    store.bump_generation()
 
 
 def _expires(when: float | None) -> str:
@@ -539,7 +525,7 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
         # files and would report an empty cache over a working one.
         print(
             f"  Total size: {human_bytes(database[1])}    Entries: {database[0]}"
-            f"    (one sqlite database: {_SQLITE_DB_NAME})"
+            f"    (one sqlite database: {DB_FILENAME})"
         )
         print("\n  Per-function detail is not available for the sqlite backend.")
         return
@@ -619,27 +605,9 @@ def _clear_function(cache_dir: str, wanted: str) -> None:
         sys.exit(1)
 
     owned = [e for e in entries if e.function == resolved]
-    freed = sum(e.size for e in owned)
-    removed = 0
-    for entry in owned:
-        _remove_entry_files(cache_path, entry.stem)
-        removed += 1
-    _bump_generation(cache_path)
-    noun = "entry" if removed == 1 else "entries"
-    print(f"Cleared {removed} {noun} for {resolved} ({human_bytes(freed)} freed)")
-
-
-def _remove_entry_files(cache_path: Path, stem: str) -> None:
-    """Delete one entry's file, surviving a locked one."""
-    path = cache_path / f"{stem}{ENTRY_SUFFIX}"
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        # Antivirus or another process holding it. Partial progress still
-        # frees space, and saying so beats a traceback part way through.
-        print(f"  could not remove {path.name}: {exc}")
+    _drop(cache_path, owned)
+    noun = "entry" if len(owned) == 1 else "entries"
+    print(f"Cleared {len(owned)} {noun} for {resolved} ({human_bytes(sum(e.size for e in owned))} freed)")
 
 
 def _clear_entry(cache_dir: str, wanted: str) -> None:
@@ -651,8 +619,7 @@ def _clear_entry(cache_dir: str, wanted: str) -> None:
     entry = _resolve_entry(_scan_entries(cache_path), wanted)
     if entry is None:
         sys.exit(1)
-    _remove_entry_files(cache_path, entry.stem)
-    _bump_generation(cache_path)
+    _drop(cache_path, [entry])
     print(f"Cleared entry {entry.stem[:12]} from {entry.function} ({human_bytes(entry.size)} freed)")
 
 
@@ -669,33 +636,12 @@ def _clear_expired(cache_dir: str) -> None:
         sys.exit(1)
     now = time.time()
     expired = [e for e in _scan_entries(cache_path) if e.expires is not None and e.expires <= now]
-    for entry in expired:
-        _remove_entry_files(cache_path, entry.stem)
-    if expired:
-        _bump_generation(cache_path)
+    _drop(cache_path, expired)
     print(
         f"Cleared {len(expired)} expired "
         f"entr{'y' if len(expired) == 1 else 'ies'} from {cache_path} "
         f"({human_bytes(sum(e.size for e in expired))} freed)"
     )
-
-
-def _bump_generation(cache_path: Path) -> None:
-    """Tell running processes that entries were removed under them.
-
-    A process keeps results in RAM, and a clear of some entries left those
-    served (round 18). Replacing the format stamp gives it a new identity,
-    which a running `TieredBackend` notices within a second and drops its RAM
-    tier. (`--all` needs nothing: the stamp goes with the directory.)
-    """
-    stamp = cache_path / "CACHE_VERSION"
-    try:
-        if stamp.exists():
-            tmp = cache_path / "CACHE_VERSION.tmp"
-            tmp.write_text(stamp.read_text(encoding="utf-8"), encoding="utf-8")
-            os.replace(tmp, stamp)
-    except OSError:
-        logger.debug("Could not refresh %s", stamp, exc_info=True)
 
 
 def _looks_like_a_cache(cache_dir: str) -> bool:
@@ -706,7 +652,7 @@ def _looks_like_a_cache(cache_dir: str) -> bool:
     reason to look before recursively removing: a mistyped ``CASH_CACHE_DIR``
     used to cost the user nothing because the CLI ignored it.
     """
-    if os.path.exists(os.path.join(cache_dir, "CACHE_VERSION")):
+    if os.path.exists(os.path.join(cache_dir, VERSION_FILENAME)):
         return True
     try:
         entries = os.listdir(cache_dir)
@@ -749,7 +695,7 @@ def _rmtree_cache(cache_dir: str, force: bool = False) -> None:
     if not force and not _looks_like_a_cache(resolved):
         print(
             f"Refusing to clear {resolved}: it does not look like a cash "
-            f"cache (no CACHE_VERSION and no {ENTRY_SUFFIX} files)."
+            f"cache (no {VERSION_FILENAME} and no {ENTRY_SUFFIX} files)."
         )
         print(
             "Check the path, CASH_CACHE_DIR and [tool.cash] cache_dir. If it "
@@ -777,7 +723,7 @@ def _rmtree_cache(cache_dir: str, force: bool = False) -> None:
 
 #: Names a cash cache directory holds: an entry, the format stamp, the advisory
 #: indexes and their temp files, and a single-file backend's database.
-_CASH_CACHE_NAMES = frozenset({"CACHE_VERSION", "cache.db", ".gitignore"})
+_CASH_CACHE_NAMES = frozenset({VERSION_FILENAME, DB_FILENAME, ".gitignore"})
 _CASH_CACHE_SUFFIXES = (ENTRY_SUFFIX, ".data", ".meta", ".tmp", ".part", ".log")
 #: Directories cash writes inside its cache, with what they may hold.
 _CASH_CACHE_DIRS = {".keys": (".json",)}

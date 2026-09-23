@@ -185,7 +185,7 @@ def test_cash_info_prints_the_cap_the_backend_would_enforce(volume, capsys, monk
     # `cash info` counts top-level *.entry itself. 21 GiB of real files is not
     # sparse on NTFS, so the count is stubbed -- it has its own tests, and
     # here it is only the courier for a footprint.
-    monkeypatch.setattr(cli, "_entry_totals", lambda d: (908, state["own"]), raising=True)
+    monkeypatch.setattr(cli, "entry_totals", lambda d: (908, state["own"]), raising=True)
     config = get_config()
     monkeypatch.setattr(config, "cache_dir", str(cache))
     monkeypatch.setattr(config, "max_cache_size", None)

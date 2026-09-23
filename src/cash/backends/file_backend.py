@@ -16,7 +16,7 @@ import threading
 import time
 import weakref
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NamedTuple
 
 from cash.exceptions import CacheBackendError
 from cash.utils import replace_with_retry
@@ -41,7 +41,19 @@ from .versions import VersionIndex, superseded_to_drop
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["FileBackend", "CACHE_FORMAT_VERSION", "recreate_cache_dir"]
+__all__ = ["FileBackend", "CACHE_FORMAT_VERSION", "StoredEntry", "recreate_cache_dir"]
+
+
+class StoredEntry(NamedTuple):
+    """One entry file as `FileBackend.entries` finds it."""
+
+    #: The file name without its suffix: a SHA-256 of the key.
+    id: str
+    key: str
+    #: The whole file's size on disk.
+    size: int
+    mtime: float
+    metadata: dict[str, Any]
 
 
 # Every live write queue, grouped by the cache directory it writes into. Two
@@ -870,18 +882,37 @@ class FileBackend(CacheBackend):
         self._writes.wait_all()
         return len(self.stamp.entry_files())
 
+    def entries(self) -> list[StoredEntry]:
+        """Every readable entry, from its metadata region; no payload is read.
+
+        Unlike the other operations it neither creates nor stamps the
+        directory, so looking at a cache (``cash inspect``) never changes it.
+        """
+        self._writes.wait_all()
+        found = []
+        for path in self.stamp.entry_files():
+            try:
+                metadata, _ = read_entry(path, with_payload=False)
+                st = os.stat(path)
+            except (OSError, CorruptEntry):
+                logger.debug("Skipping unreadable entry %s", path, exc_info=True)
+                continue
+            stem = os.path.basename(path)[: -len(ENTRY_SUFFIX)]
+            found.append(StoredEntry(stem, metadata.get("key") or "", st.st_size, st.st_mtime, metadata))
+        return found
+
+    def bump_generation(self) -> None:
+        """Tell processes using this directory that entries were removed under
+        them: a running `TieredBackend` notices within a second and drops its
+        RAM tier, which may still hold them. `clear` needs no bump when the
+        whole directory goes, since the stamp goes with it."""
+        self.stamp.bump()
+
     def cleanup_expired(self, is_expired: Callable[[dict[str, Any]], bool]) -> int:
         self._ensure_initialized()
         if self._unusable:
             return 0
-        self._writes.wait_all()
-        count = 0
-        for path in self.stamp.entry_files():
-            try:
-                metadata, _ = read_entry(path, with_payload=False)
-                if is_expired(metadata):
-                    os.remove(path)
-                    count += 1
-            except (OSError, CorruptEntry):
-                logger.debug("Skipping unreadable entry %s during cleanup", path, exc_info=True)
-        return count
+        expired = [e.key for e in self.entries() if e.key and is_expired(e.metadata)]
+        for key in expired:
+            self.delete(key)
+        return len(expired)

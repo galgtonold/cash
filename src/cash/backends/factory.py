@@ -23,7 +23,7 @@ from .adaptive_caps import resolve_disk_cap, resolve_ram_cap
 from .file_backend import FileBackend
 from .memory_backend import InMemoryBackend
 from .persistence_policy import PersistencePolicy
-from .sqlite_backend import SQLiteBackend
+from .sqlite_backend import DB_FILENAME, SQLiteBackend
 from .tiered_backend import TieredBackend
 
 if TYPE_CHECKING:
@@ -152,13 +152,13 @@ def _build(kind: str, s: dict[str, Any]) -> CacheBackend:
 
 
 def _sqlite_db_path(cache_dir: str) -> str:
-    """``<cache_dir>/cache.db``, inside the directory so the CLI finds it.
+    """The database inside *cache_dir*, where the CLI looks for it.
     The directory is created here because SQLite will not make it."""
     try:
         os.makedirs(cache_dir, exist_ok=True)
     except OSError:
         logger.debug("[SQLITE] could not create %s", cache_dir)
-    return os.path.join(cache_dir, "cache.db")
+    return os.path.join(cache_dir, DB_FILENAME)
 
 
 # The remote backends are imported lazily, so a missing extra does not break

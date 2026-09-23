@@ -19,7 +19,11 @@ from .serialization import PickleSerializer, Serializer
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["SQLiteBackend"]
+__all__ = ["DB_FILENAME", "SQLiteBackend"]
+
+#: The database's name inside a cache directory, when no ``db_path`` is given.
+#: The CLI looks for it there.
+DB_FILENAME = "cache.db"
 
 
 class SQLiteBackend(CacheBackend):
