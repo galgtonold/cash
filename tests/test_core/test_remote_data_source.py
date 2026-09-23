@@ -370,3 +370,24 @@ class TestRevalidationWindow:
         RemoteFileDataSource(origin.url, immutable=True).state_token()
         RemoteFileDataSource(origin.url).state_token()
         assert origin.requests == ["HEAD", "HEAD"]
+
+
+class TestTheWindowFollowsTheCallingInstance:
+    """A source checked inside a call follows that ``Cash``'s settings.
+
+    The window was read off the global singleton, so a ``Cash(...)`` of your
+    own with ``remote_revalidate_max_age_seconds`` set revalidated on every
+    call anyway -- and one left at the default inherited the global's window.
+    """
+
+    def test_a_private_instance_window_applies_to_its_calls(self, origin):
+        c = Cash(backend=InMemoryBackend(), register_magic=False, remote_revalidate_max_age_seconds=300)
+
+        @c.cache(dynamic_depends_on=lambda: RemoteFileDataSource(origin.url))
+        def load():
+            return 1
+
+        load()
+        origin.etag = '"v2"'
+        load()
+        assert origin.requests == ["HEAD"], "the instance's own window was ignored"

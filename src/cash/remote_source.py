@@ -413,11 +413,13 @@ class RemoteFileDataSource(DataSource):
     def _effective_max_age(self) -> float:
         """This source's window, falling back to the cash-level default.
 
-        Read off the *already-resolved* config on the global singleton, not via
-        ``get_config()``: that re-merges env and TOML from disk on every call,
-        which is not something to do per freshness check. It also means
-        ``cash.configure(...)`` is honoured, since that is what ``configure``
-        mutates.
+        The default is read off the settings of the ``Cash`` instance whose
+        call is checking this source (``ACTIVE_CONFIG``), so a source used by a
+        ``Cash(...)`` of your own follows that instance, not the global one.
+        Outside a cached call it is the global singleton's already-resolved
+        config: ``get_config()`` would re-merge env and TOML from disk on every
+        call, which is not something to do per freshness check, while the
+        resolved config is what ``cash.configure(...)`` mutates.
 
         Before any singleton exists there is nothing resolved to read, so the
         env var is consulted directly - cheap, and it covers the CI case. A
@@ -427,10 +429,15 @@ class RemoteFileDataSource(DataSource):
         if self.max_age:
             return self.max_age
         try:
-            from . import _global_cash
+            from .notebook.file_dep_snapshot import ACTIVE_CONFIG
 
-            if _global_cash is not None:
-                return float(_global_cash.config.remote_revalidate_max_age_seconds)
+            config = ACTIVE_CONFIG.get()
+            if config is None:
+                from . import _global_cash
+
+                config = getattr(_global_cash, "config", None)
+            if config is not None:
+                return float(config.remote_revalidate_max_age_seconds)
             import os
 
             return float(os.environ.get("CASH_REMOTE_REVALIDATE_MAX_AGE_SECONDS", 0.0))

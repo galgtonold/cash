@@ -48,7 +48,7 @@ def test_global_singleton_hook_exists():
     import cash
 
     assert hasattr(cash, "_get_global_cash"), (
-        "RemoteFileDataSource._effective_max_age reads the resolved config off "
+        "RemoteFileDataSource._effective_max_age falls back to the resolved config of "
         "the global singleton; without this hook the revalidation window "
         "silently stops applying"
     )
