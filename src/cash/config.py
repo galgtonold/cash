@@ -68,77 +68,77 @@ def _check_choice(name: str, value: Any) -> None:
 
 @dataclass
 class TierConfig:
-    """One backend tier inside a tiered stack.
+    """One entry of the ``tiers`` setting: a backend in a tier stack.
 
-    Only the fields relevant to the chosen ``type`` are read by the
-    backend factory; the rest are left at their defaults so the same
-    ``TierConfig`` shape can carry every backend type without
-    forcing the user to wrap each one in a sum type.
-
-    Used inside ``CashConfig.tiers`` to describe a multi-backend
-    pipeline (e.g. ``[memory, redis, s3]``).
+    Only the keys for the tier's ``type`` are read. A key left unset
+    comes from the top-level setting of the same meaning (``cache_dir``,
+    ``max_cache_size``, ``redis_host``, ...). Set tiers in a config file
+    (``[[tool.cash.tiers]]``) or with ``CASH_TIER_<N>_<KEY>`` variables.
     """
 
     type: str
-    """Backend type. One of ``"memory"``, ``"file"``, ``"sqlite"``,
-    ``"redis"``, ``"s3"``. Raises ``ValueError`` on unknown values."""
+    """Backend type: ``"memory"``, ``"file"``, ``"sqlite"``, ``"redis"`` or
+    ``"s3"``."""
 
     # memory / file / sqlite shared:
     max_size_bytes: int | None = None
-    """Per-tier size cap in bytes. Also serves as the
-    *promotion hint* — values larger than this skip this tier when
-    used inside a tiered stack."""
+    """memory, file and sqlite tiers: size cap in bytes (or a size such as
+    ``"2GB"``). A value bigger than this skips the tier. Unset, a memory
+    tier is sized to the machine and a file or sqlite tier uses
+    ``max_cache_size``."""
 
     default_ttl: int | None = None
-    """Default TTL in seconds for entries in this tier. Overridden
-    per-call by ``@cash.cache(ttl=...)``."""
+    """file and sqlite tiers: TTL in seconds for entries stored without one.
+    A ``ttl=`` on the decorator takes precedence."""
 
     # memory:
     max_entries: int | None = None
-    """memory tier only — LRU entry cap."""
+    """memory tier: entry-count cap. Defaults to ``max_memory_entries``."""
 
     # file:
     cache_dir: str | None = None
-    """file tier only — directory for the cache files. Defaults to
-    ``CashConfig.cache_dir`` when omitted."""
+    """file and sqlite tiers: the cache directory. Defaults to ``cache_dir``."""
 
     compress: bool | None = None
-    """file tier only — gzip compression on/off. Defaults to
-    ``CashConfig.compress`` when omitted."""
+    """file tier: gzip each entry. Defaults to ``compress``."""
 
     flush_interval: int | None = None
-    """file tier only — metadata flush interval (seconds)."""
+    """file tier: seconds between metadata flushes. Defaults to
+    ``flush_interval``."""
 
     # sqlite:
     db_path: str | None = None
-    """sqlite tier only — path to the .db file."""
+    """sqlite tier: path to the database file. Defaults to a file inside
+    ``cache_dir``."""
 
     wal_mode: bool | None = None
-    """sqlite tier only — enable WAL journal mode for better
-    concurrency. Default True."""
+    """sqlite tier: accepted but not used; a tier built from configuration
+    always uses WAL journal mode."""
 
     # redis:
     host: str | None = None
-    """redis tier only — server hostname."""
+    """redis tier: server hostname. Defaults to ``redis_host``."""
 
     port: int | None = None
-    """redis tier only — server port."""
+    """redis tier: server port. Defaults to ``redis_port``."""
 
     db: int | None = None
-    """redis tier only — logical database number."""
+    """redis tier: database number. Defaults to ``redis_db``."""
 
     password: str | None = None
-    """redis tier only — AUTH password (if enabled)."""
+    """redis tier: password. Defaults to ``redis_password``."""
 
     prefix: str | None = None
-    """redis tier only — key prefix."""
+    """redis and s3 tiers: key prefix. Defaults to ``redis_prefix`` or
+    ``s3_prefix``."""
 
     # s3:
     bucket: str | None = None
-    """s3 tier only — bucket name."""
+    """s3 tier: bucket name. Defaults to ``s3_bucket``."""
 
     region: str | None = None
-    """s3 tier only — AWS region (e.g. ``"us-east-1"``)."""
+    """s3 tier: AWS region, such as ``"us-east-1"``. Defaults to
+    ``s3_region``."""
 
     def __post_init__(self) -> None:
         if self.type not in _SUPPORTED_TIER_TYPES:
@@ -147,203 +147,120 @@ class TierConfig:
 
 @dataclass
 class CashConfig:
-    """Cash configuration — single source of truth for every tunable.
+    """Every cash setting, as resolved from all configuration layers.
 
-    Every field below is also exposed as a `CASH_<UPPERCASE>` env var
-    (e.g. `CASH_CACHE_DIR`, `CASH_DEBUG=1`) and as a TOML key under
-    `[tool.cash]` (project) / `[cash]` (XDG user config). Resolution
-    precedence: kwargs > env vars > project TOML > user TOML >
-    defaults (see the module docstring above).
-
-    Fields are grouped below by purpose:
-
-    * **Cache location & file backend** — where to store, compress
-      vs raw, size cap, flush cadence.
-    * **Cost-aware policy** — which results are expensive enough to
-      cache, and to write past RAM.
-    * **Observability** — debug toggles.
-    * **Backend selection (simple mode)** — pick one backend with
-      connection details inline.
-    * **Advanced — tier stack** — define an explicit `[memory →
-      redis → s3]` (or any) pipeline.
+    Precedence, highest first: code (``Cash(...)``, ``cash.configure``),
+    ``CASH_<FIELD>`` environment variables, a file named with
+    ``Cash(config_path=...)``, ``[tool.cash]`` in the project's
+    ``pyproject.toml``, the user config file, then these defaults.
+    Every field, its variable and which path it affects are listed in
+    the Configuration guide.
     """
 
     # --- Cache location & file backend defaults ---
     cache_dir: str = ".cash"
-    """Directory for the on-disk cache. Resolved to an absolute
-    path at startup so ``os.chdir()`` won't break later writes."""
+    """Directory for the disk cache. A relative path is resolved once, so a
+    later ``os.chdir()`` does not move the cache."""
 
     compress: bool = False
-    """When True, the file backend gzip-compresses each entry.
-    Trades CPU for disk space; usually only worth it for plain-text
-    blobs (CSV, JSON). Already-compressed formats (Parquet, joblib)
-    don't shrink much."""
+    """gzip each entry on disk. Trades CPU for space; worth it mainly for
+    text-like values."""
 
     max_cache_size: int | None = None
-    """Maximum total **disk** cache size in bytes. ``None`` (default)
-    means **auto**: cash scales the cap to the machine — a generous
-    fraction of the free space on the cache volume for the disk tier,
-    and a modest fraction of system RAM for the memory tier (see
-    ``cash.backends.adaptive_caps``). Set an integer to pin the disk
-    cap explicitly; the memory tier keeps its own auto/modest cap.
-    When the file backend exceeds the resolved cap it evicts the
-    entries least worth keeping until it fits: those that are cheapest
-    to recompute per byte, weighted by how often they are hit (GDSF)."""
+    """Disk cache cap in bytes, or a size such as ``"5GB"``. ``None`` sizes it
+    to the machine: a quarter of the room on the cache volume (free space
+    plus what the cache holds), between 8 GiB and 100 GiB. The RAM tier has
+    its own cap either way. At the cap, the entries cheapest to recompute
+    per byte, weighted by their hits, are evicted first (GDSF)."""
 
     max_memory_entries: int | None = None
-    """LRU entry cap for the in-memory tier. ``None`` (default)
-    means unlimited — eviction is driven by ``psutil`` memory
-    pressure instead. Set an integer to force a hard count limit."""
+    """Entry-count cap for the RAM tier, evicting the least recently used.
+    ``None`` means no count limit; the RAM tier is still capped in bytes."""
 
     flush_interval: int = 5
-    """Seconds between metadata flushes for the file backend. Lower
-    values reduce data loss on crash but increase disk I/O. Set to
-    0 to flush after every write (slowest, safest)."""
+    """Seconds between the disk tier's metadata flushes. ``0`` flushes after
+    every write."""
 
     file_hash_full_max_bytes: int = 256 * 1024 * 1024
-    """Largest tracked file hashed IN FULL when checking freshness.
+    """Largest tracked file hashed in full to check freshness.
 
-    Above this, the content hash covers three deterministic head/middle/tail
-    regions plus the size, and the file's timestamps are used as a backstop —
-    which keeps a freshness check on a multi-GB parquet cheap, and leaves one
-    hole: a same-size edit *outside* the sampled regions that leaves the mtime
-    as it was is invisible. `cp -p`, `rsync -a` and `tar -x` restore the mtime;
-    a write through ``np.memmap(mode="r+")`` on Windows never moves it at all.
-    On Linux and macOS the inode change time closes that; on Windows nothing
-    does.
-
-    The default covers the ordinary CSV, parquet or ``.npy`` outright. A full
-    hash costs about 0.72 ms per MiB — about 0.2 s at 256 MiB — but only the
-    FIRST check of a file pays it: the digest is memoized per process, so
-    later checks of an unchanged file cost a ``stat``. Lower it if your inputs
-    are large, on a slow mount, and re-read by many short-lived processes."""
+    Larger files hash three sampled regions plus their size and timestamps,
+    which misses a same-size edit outside those regions that keeps the
+    modification time. Only the first check of a file in a process pays for
+    the hash; later checks of an unchanged file cost a ``stat``."""
 
     shutdown_write_timeout: float = 60.0
-    """Seconds a finishing process waits for its background cache
-    writes before exiting without them.
-
-    Generous, because dropping a large result still on its way to
-    disk wastes real compute — but FINITE, because a cache write
-    that cannot complete must never keep a finished process alive.
-    An unwritable cache directory once left a 24-second job still
-    running at 420 seconds, its answer already printed. Expiry is
-    reported as ``CACHE-WRITE-ABANDONED``; raise this only when the
-    storage really is that slow."""
+    """Seconds a finishing process waits for its background writes before
+    exiting without them, warning ``CACHE-WRITE-ABANDONED``. Bounded so a
+    write that cannot finish never keeps a finished process alive."""
 
     # --- Cost-aware caching policy ---
     persist_all: bool = False
-    """When True, cache **every** notebook statement, bypassing the
-    cost-aware floors (``min_execution_time_to_cache_seconds`` and the
-    size-aware skip) - equivalent to putting ``# @cash:persist`` on every
-    statement. Useful for deterministic benchmarks, reproducibility, and
-    debugging cache behavior where you want every statement to leave a
-    restorable entry. Wasteful for cheap-to-compute values in normal use.
-    Hot field - flippable at runtime via ``cash.configure(persist_all=True)``
-    or the ``%cash_persist on`` magic."""
+    """Notebook only: cache every statement, skipping the cost floors, as if
+    each had ``# @cash:persist``. ``%cash_persist on`` does the same for a
+    session."""
 
     summary: bool = False
-    """Print a per-function hit/miss summary when the process exits.
-
-    Off by default -- a library that prints uninvited is a library people
-    filter. On, it answers the question a script user cannot otherwise
-    answer: *which parts of my run recomputed just now?* A notebook shows
-    that per statement in the badge; a script showed nothing, and the user
-    who needed it resorted to adding ``print`` calls to each branch.
-
-    Reachable four ways from this one field, because the config layer maps
-    every field to an env var and a TOML key: ``cash.configure(summary=True)``,
-    ``Cash(summary=True)``, ``CASH_SUMMARY=1``, or ``summary = true`` in
-    ``cash.toml``. The env var matters most -- it is the only one that needs
-    no edit to the code you are already running."""
+    """At exit, print a per-function hit/miss table to stderr, with why each
+    function missed. ``CASH_SUMMARY=1 python script.py`` needs no code
+    change."""
 
     disable: bool = False
-    """Run every ``@cash.cache`` function uncached: no key, no lookup, no
-    store, no analysis -- the call goes straight through, and ``%cash_on``
-    declines to switch the notebook path on.
-
-    What a test suite needs to prove the code rather than the cache: a test
-    that calls a cached function twice and compares the results is comparing
-    one result with itself, and passes even when the function ignores its
-    seed. ``CASH_DISABLE=1 pytest`` is the run that catches that. Read per
-    call, so ``cash.configure(disable=True)`` takes effect immediately."""
+    """Run every ``@cash.cache`` call uncached (no key, lookup or store), and
+    make ``%cash_on`` decline. ``CASH_DISABLE=1 pytest`` checks that tests
+    pass without the cache. Read on every call."""
 
     min_execution_time_to_cache_seconds: float = 0.01
-    """Floor (seconds) a notebook statement must take to be cached at
-    all, even in RAM. Default 10 ms. Whether a cached value is also
-    written to disk is decided separately, by the cost model, which
-    persists nothing that took under 0.1 s."""
+    """Notebook only: a statement faster than this (seconds) is not cached
+    at all. Whether a cached value is written to disk is decided by the
+    cost model."""
 
     call_cost_floor_seconds: float = 0.003
-    """Floor (seconds) a single CALL's own execution must clear before its
-    result is stored. Below it, the ~2.2 ms of interception overhead is most
-    of what a hit would save, so caching cannot pay back. Default 3 ms."""
+    """Notebook only: a call inside a statement is cached only when it runs
+    at least this long (seconds)."""
 
     loop_split_max_iter_seconds: float = 0.006
-    """Ceiling (seconds) on measured per-iteration cost above which a loop is
-    NOT split. At or above it a call clears ``call_cost_floor_seconds`` once
-    decomposition overhead is subtracted, so per-call caching already covers
-    the loop — and covers it better, being incremental where a split's tail is
-    all-or-nothing. Default 6 ms."""
+    """Notebook only: a loop whose iterations each take less than this
+    (seconds) may be cached as one unit instead of per call."""
 
     loop_split_min_remaining_seconds: float = 0.1
-    """Projected cost (seconds) of a loop's remaining iterations below which a
-    split is not worth persisting a verdict for. Default 100 ms."""
+    """Notebook only: a loop is cached as one unit only when at least this
+    much work (seconds) remains in it."""
 
     min_cache_savings_pct: float = 0.20
-    """Fraction (0.0 – 1.0) of the compute time a restore must save for
-    a value to be written past RAM: restoring has to beat recomputing
-    by this much, as the cost model predicts. Default 0.20."""
+    """Notebook only: fraction (0.0 to 1.0) of the compute time a predicted
+    restore must save for a value to be written to disk."""
 
     min_cache_fixed_budget_seconds: float = 0.05
-    """Per-call I/O budget (seconds). If the predicted serialise +
-    write cost exceeds this fraction of the compute saved, skip
-    the write. Pairs with ``min_cache_savings_pct``."""
+    """Notebook only: a predicted restore time below this (seconds) is always
+    acceptable, however short the compute. Above it,
+    ``min_cache_savings_pct`` decides."""
 
     remote_revalidate_max_age_seconds: float = 0.0
-    """How long a remote object's state token may be reused before the
-    store is asked again (seconds). ``0`` (the default) revalidates on
-    every cache hit, which is the only setting that cannot serve stale
-    data.
-
-    Raising it trades correctness for latency, so raise it deliberately:
-    for the window's duration, a changed object goes unnoticed. It exists
-    for the case the per-source ``max_age`` can't reach — reads cash
-    tracked *automatically*, where you never construct the source and so
-    have nowhere to put ``immutable=True``. Strict in CI, relaxed in a
-    long exploratory session over a slow link.
-
-    A very large value is the effective "stop checking" switch; there is
-    deliberately no boolean for it, because "never revalidate" is a
-    window, not a different mode."""
+    """Seconds a remote file's state may be reused before the store is asked
+    again. ``0`` checks on every hit. A higher value lets a change go unseen
+    for that long."""
 
     # --- Observability ---
     debug: bool = False
-    """When True, every cache decision logs at INFO level with the
-    reason ('HIT', 'MISS — file changed', 'SKIPPED — too cheap').
-    Useful for diagnosing 'why didn't this hit?' mysteries. Hot
-    field — flippable at runtime via ``cash.configure(debug=True)``."""
+    """Log every cache decision with its reason, including one line per
+    decorated call. ``%cash_debug on`` sets it in a notebook."""
 
     verbose: bool = False
-    """When True, log one line per decorated call -- a hit, or a miss and
-    why -- to the ``cash.calls`` logger, without cash's other debug
-    records. ``debug`` implies it. Settable wherever ``debug`` is: the
-    constructor, ``cash.configure(verbose=True)``, ``CASH_VERBOSE=1``,
-    ``verbose = true`` under ``[tool.cash]``."""
+    """Log one line per decorated call (a hit, or a miss and why) to the
+    ``cash.calls`` logger, without the other debug records. ``debug``
+    implies it."""
 
     analytics: bool = True
-    """Record each notebook statement's hit, miss and timing in
-    ``analytics.db`` under the per-user cache root (``~/.cache/cash`` on
-    Linux), which the analytics dashboard (``cash.show_stats()``) reads.
-    Telemetry only: turning it off changes no cached result, and no file is
-    created. Read when a notebook session starts."""
+    """Notebook only: record each statement's hit, miss and timing in
+    ``analytics.db`` under the per-user cache root, for the
+    ``cash.show_stats()`` dashboard. Off, no file is created."""
 
     # --- Backend selection ---
     backend: str = "tiered"
-    """Backend selector. ``"tiered"`` (default) is a RAM tier in front
-    of a file tier. ``"memory"`` / ``"file"`` / ``"sqlite"`` /
-    ``"redis"`` / ``"s3"`` is a single backend of that type. Either
-    way the fields above and below configure it. Ignored when
-    ``tiers`` is non-empty."""
+    """``"tiered"`` is a RAM tier in front of a disk tier. ``"memory"``,
+    ``"file"``, ``"sqlite"``, ``"redis"`` or ``"s3"`` is that one backend.
+    Ignored when ``tiers`` is set."""
 
     # --- Redis connection details (simple mode) ---
     redis_host: str = "localhost"
@@ -354,35 +271,32 @@ class CashConfig:
     """Redis server port."""
 
     redis_db: int = 0
-    """Redis logical database number (0 – 15 in default config)."""
+    """Redis database number."""
 
     redis_password: str | None = None
     """Redis password if AUTH is enabled. Prefer the env var
     ``CASH_REDIS_PASSWORD`` over committing this to TOML."""
 
     redis_prefix: str = "cash:"
-    """Key prefix for every entry written to Redis. Lets multiple
-    apps share one Redis without collisions. Strip with
-    ``redis_prefix=""`` if you really want a flat namespace."""
+    """Key prefix for every entry written to Redis, so several apps can
+    share one server."""
 
     # --- S3 connection details (simple mode) ---
     s3_bucket: str = ""
     """S3 bucket name. Required when ``backend="s3"``."""
 
     s3_region: str = ""
-    """S3 region (e.g. ``"us-east-1"``). Optional if the bucket's
-    region is discoverable from the AWS config / IMDS."""
+    """S3 region, such as ``"us-east-1"``. Empty uses your AWS
+    configuration."""
 
     s3_prefix: str = "cash/"
-    """Object key prefix for every entry written to S3. Same role
-    as ``redis_prefix``."""
+    """Object key prefix for every entry written to S3."""
 
     # --- Advanced: explicit tier list ---
     tiers: list[TierConfig] = field(default_factory=list)
-    """Explicit tier stack, fastest first (e.g. ``[memory, redis,
-    s3]``), replacing the one ``backend`` names. A setting a tier
-    leaves unset comes from the top-level field of the same meaning
-    (``cache_dir``, ``max_cache_size``, ``redis_host``, ...)."""
+    """Your own tier stack, fastest first, replacing the one ``backend``
+    names; each entry is a `TierConfig`. Set it in a config file or with
+    ``CASH_TIER_<N>_<KEY>`` variables; there is no ``CASH_TIERS``."""
 
     # --- Internal: source tracking for `cash --info` ---
     _source: str = "defaults"
@@ -803,11 +717,16 @@ def get_config(
     project_config_path: Any = _USE_DEFAULT_PATH,
     overrides: dict[str, Any] | None = None,
 ) -> CashConfig:
-    """Resolve the merged Cash configuration -- see `_resolve_config`.
+    """Resolve the configuration from every layer and return it.
 
-    Never recorded as a file dependency: this can run inside a cached call
-    (a nested call's bookkeeping), and the files it reads are cash's, not the
-    function's.
+    Args:
+        config_path: A TOML file to read above the project and user files,
+            as ``Cash(config_path=...)`` does.
+        overrides: Settings that win over every layer, as keyword
+            arguments to ``Cash(...)`` do.
+
+    ``user_config_path`` and ``project_config_path`` replace the default
+    file locations; they exist for tests.
     """
 
     with untracked():

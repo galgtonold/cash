@@ -1,33 +1,16 @@
 # Configuration
 
-The dataclass and helpers that drive configuration. For the *how*
-(precedence rules, TOML / env / kwargs layering, simple-mode vs
-tier-stack mode, runtime mutation), see
-[Configuration](../getting-started/configuration.md).
-
-## Imports
+For both paths: the configuration objects. Every setting, its environment
+variable, its default and the path it affects are listed once, in the
+[Configuration guide](../getting-started/configuration.md).
 
 ```python
 from cash import CashConfig, get_config, create_default_config
 ```
 
-## Fields at a glance
-
-Every field below is also settable via:
-
-* `CASH_<UPPERCASE>` env var (e.g. `CASH_CACHE_DIR`, `CASH_DEBUG=1`)
-* `[tool.cash]` table in `pyproject.toml`
-* `~/.config/cash/config.toml` (or `%APPDATA%/cash/config.toml` on Windows)
-* `Cash(field_name=value, ...)` kwargs
-* `cash.configure(field_name=value)` at runtime
-
-Last-write-wins by precedence: kwargs > env vars > project TOML > user
-TOML > defaults.
-
 ::: cash.CashConfig
     options:
-      show_if_no_docstring: true
-      members: true
+      members: false
 
 ---
 
@@ -35,9 +18,12 @@ TOML > defaults.
     options:
       show_if_no_docstring: true
       members: true
+      filters: ["!^_"]
 
 ---
 
 ::: cash.get_config
+    options:
+      show_signature: false
 
 ::: cash.create_default_config

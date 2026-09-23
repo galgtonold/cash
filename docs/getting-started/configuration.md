@@ -1,233 +1,143 @@
 # Configuration
 
-Cash settles its configuration from six sources in priority order:
+!!! info "Applies to: both paths"
+    Every setting, environment variable and default, for scripts and notebooks. The *Path* column says which path each setting affects.
 
-1. **Constructor kwargs** — `Cash(redis_host="...", debug=True)` (or any
-   `CashConfig` field name).
-2. **Environment variables** — `CASH_*` (every `CashConfig` field has a
-   binding, plus `CASH_TIER_<N>_<FIELD>` for tier overrides).
-3. **A file named in code** — `Cash(config_path="...")`
-   ([below](#per-script-overrides-via-config_path)).
-4. **Project config** — `[tool.cash]` in the nearest `pyproject.toml`
-   (walks up from the *running script*, not from the current working
-   directory — see below).
-5. **User config** — `~/.config/cash/config.toml` on Linux/macOS, or
-   `%APPDATA%\cash\config.toml` on Windows. Honours `$XDG_CONFIG_HOME`.
-6. **Built-in defaults** from the `CashConfig` dataclass.
+## Where settings come from
 
-Each layer overrides the next. A single field can be set wherever is
-most convenient — explicit code for one-off scripts, `pyproject.toml`
-for team defaults, env vars for deployment overrides, the XDG file for
-personal cross-project defaults.
+Cash merges its settings from six layers. A higher layer wins:
+
+1. **Code**: `Cash(debug=True)` or `cash.configure(debug=True)`.
+2. **Environment variables**: `CASH_<FIELD>`, such as `CASH_CACHE_DIR`.
+3. **A file named in code**: `Cash(config_path="cash.toml")`
+   ([below](#a-config-file-named-in-code)).
+4. **Project file**: `[tool.cash]` in the project's `pyproject.toml`.
+5. **User file**: `~/.config/cash/config.toml` (`$XDG_CONFIG_HOME` is
+   honoured), or `%APPDATA%\cash\config.toml` on Windows.
+6. **Defaults**, listed in the tables below.
+
+```toml
+# pyproject.toml
+[tool.cash]
+cache_dir = ".cash"
+max_cache_size = "5GB"
+```
+
+`cash info` prints every setting in effect and the layer it came from
+([CLI](../cli.md#cash-info)).
 
 <!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config.py:_anchor_cache_dir @ae7a94f7 -->
 ### What paths are relative to
 
-Where a relative `cache_dir` points depends on who wrote it, and the rule is
-the same one you would guess for each:
+A relative `cache_dir` is resolved against whoever wrote it:
 
 | Written in | Resolved against |
 |---|---|
-| `Cash(cache_dir="…")` or `CASH_CACHE_DIR` | your current working directory — you typed it here, so it means here |
-| `pyproject.toml` / the XDG user config | that file's own directory, as paths in config files normally are |
-| nothing (the `.cash` default) | the **project anchor**: the first directory above the running script holding a `pyproject.toml`, `setup.py`, `setup.cfg` or `.git`. With no such directory above it, the script's own directory — for `python -m pkg`, the directory of `pkg/__main__.py` |
-| nothing, from **installed code** — `pytest`, `cash`, a `python -m` module in site-packages, your own installed tool — run **inside a project** | that project's root: the first directory above your current directory holding a project marker |
-| nothing, from an **installed console script — or `python -m` of an installed module — run outside any project** | a per-user directory named after the tool — `%LOCALAPPDATA%\cash\<tool>`, `~/Library/Caches/cash/<tool>`, or `$XDG_CACHE_HOME/cash/<tool>` |
+| `Cash(cache_dir=...)`, `cash.configure(...)` or `CASH_CACHE_DIR` | the current working directory |
+| a config file | that file's directory |
+| nowhere (the `.cash` default) | the project root: the first directory above the running script that holds a `pyproject.toml`, `setup.py`, `setup.cfg` or `.git`; without one, the script's own directory. In a notebook or REPL, the current directory. |
 
-The project anchor is also where `pyproject.toml` itself is looked for. Both
-used to be resolved from the current working directory, which made the cache a
-property of where a job was *launched* rather than of what it *runs*: the same
-script run from two directories built two caches, silently, and the documented
-fix (`[tool.cash] cache_dir`) was discovered the same way, so it was ignored in
-exactly that case.
+Installed programs such as `pytest` or a console script use the project
+root above the current directory, or a per-user cache directory per tool when
+run outside any project. The project `pyproject.toml` is looked for from the
+same root, so a script finds the same settings wherever it is started. See
+[Where your cache lives](../how-it-works/storage.md) for how the folder is
+chosen and capped.
 
-With no program to anchor to at all — an interactive interpreter, a Jupyter
-kernel, `python -c` — the current directory is still the answer, which is why a
-notebook's cache stays exactly where it was.
+<!-- claim: cash/_location.py:_marks_project @2991b315 -->
+A `pyproject.toml` marks a project only when it has a `[project]`,
+`[build-system]`, `[tool.poetry]` or `[tool.cash]` table.
 
-Without a project marker the CLI and a script can disagree. The script caches
-beside itself; `cash inspect` and `cash clear` run from somewhere else resolve
-from where they are run, and report on a different directory (or on none:
-`Nothing cleared: no cache at …`). Adding a `pyproject.toml` (or `git init`) at
-the top of the project makes them agree. Until then, pass the script's
-directory: `cash inspect path/to/.cash`. The first run after adding a marker
-caches in the new place and recomputes once; the cache beside the script is
-left where it was, unused. A *local* package run with
-`python -m pkg` is not in that group: its `__main__.py` is a file of yours, so
-it anchors to its project like any script.
+<!-- claim: cash/config.py:CashConfig @9e5fc345 broad="the field table is a claim about every field of the dataclass" -->
+## All settings
 
-**Installed code** is the case in between. When the program itself lives in
-the virtualenv — `pytest`, `cash`, `python -m` of an installed module, or a
-console script (`[project.scripts]`) you installed — there is no script of
-yours to anchor to, and anchoring inside the virtualenv would be worse: the
-cache would be shared by every project using that environment and wiped by a
-reinstall. So:
-
-* **Inside a project** it walks up from your current directory to the project
-  root. That is what puts a test suite's cache beside its project, however
-  `pytest` was typed and from whichever subdirectory, and what lets
-  `cash inspect` find the cache your code is using. pytest run from *above*
-  the project (`pytest proj/tests`) uses the project the tests belong to, and
-  so do its xdist workers.
-* **Outside any project** — your home directory, a scratch directory, a drive
-  root — an installed console script caches per user, per tool, in the
-  platform's cache location, and so does `python -m` of an installed module
-  (named after its top-level package, the way cron usually runs a tool). Left on the current directory it would drop a
-  fresh `.cash` wherever you happened to run it and never reuse one. `cash`
-  itself never does this; `cash info` lists these caches, and
-  `cash inspect --tool NAME` / `cash clear --tool NAME` reach one.
-
-Any explicit setting (`CASH_CACHE_DIR`, `cache_dir=`, the XDG user config, a
-`[tool.cash] cache_dir`) overrides all of this.
-
-## Quick reference
-
-```python
-from cash import Cash, configure
-
-# Layer 1: constructor kwargs
-cash = Cash(cache_dir="/tmp/scratch", debug=True)
-
-# Or set in pyproject.toml [tool.cash]:
-#   [tool.cash]
-#   cache_dir = ".cash"
-#   debug = true
-
-# Or set via environment:
-#   export CASH_CACHE_DIR=/var/cache
-#   export CASH_DEBUG=true
-
-# Or change at runtime on the default singleton:
-configure(debug=True, min_cache_savings_pct=0.30)
-```
-
-<!-- claim: cash/config.py:CashConfig @82e73a8f broad="the field table is a claim about every field of the dataclass" -->
-## All `CashConfig` fields
-
-Every field below is settable via every layer. The env-var column shows
-the `CASH_*` binding; the TOML key matches the field name.
+Every setting below has a `CASH_<FIELD>` environment variable, and its TOML key
+is the field name. **Path** says whether it affects `@cash.cache` (decorator),
+notebook caching (notebook), or both.
 
 <!-- claim: cash/config.py:validate_value @78aa44f0, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @84048bbe -->
-Every value is checked against the field's type — and, for `backend` and a
-tier's `type`, against the set of names cash has — whichever layer it comes
-from. A string is read the way an environment variable is — `"true"`, `"8"` —
-and the byte-size fields (`max_cache_size`, `file_hash_full_max_bytes`, a
-tier's `max_size_bytes`) also take a size: `"2GB"`, `"500MB"`, `"512MiB"`
-(KB/MB/GB/TB are powers of 1000, KiB/MiB/GiB/TiB powers of 1024). A bad value
-passed in code — `Cash(...)`, `cash.configure(...)` — raises `ValueError`
-naming the field. A bad value in a TOML file or an environment variable is
-reported once ([`CONFIG-INVALID`](../warnings.md#config-invalid)) and skipped,
-so the rest of the configuration still applies. A key in `[tool.cash]` or a
-cash config file that is not a setting is reported too
-([`CONFIG-UNKNOWN-KEY`](../warnings.md#config-unknown-key)), with the setting
-it most resembles. `cash info` lists every setting in effect and where each
-came from.
+Values are checked whichever layer they come from. Strings are read as an
+environment variable would be (`"true"`, `"8"`). Byte sizes also take units:
+`"2GB"`, `"500MB"`, `"512MiB"` (KB/MB/GB are powers of 1000, KiB/MiB/GiB of
+1024). A bad value in code raises `ValueError`. A bad value in a file or
+variable is skipped with [`CONFIG-INVALID`](../warnings.md#config-invalid), and
+an unknown key in a file warns
+[`CONFIG-UNKNOWN-KEY`](../warnings.md#config-unknown-key).
 
-### Cache location & file-backend tuning
+### Storage
 
-| Field | Env var | Default | Description |
-|---|---|---|---|
-| `cache_dir` | `CASH_CACHE_DIR` | `".cash"` | Where the default `FileBackend` writes. **Add to `.gitignore`** — this is the disk cache, not the config. |
-| `compress` | `CASH_COMPRESS` | `false` | gzip data files on disk. |
-| `max_cache_size` | `CASH_MAX_CACHE_SIZE` | `null` (**auto**) | Disk-tier eviction threshold, in bytes. A single value larger than the whole cap is skipped rather than written and evicted at once ([`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big) says so, and names both numbers); everything that fits is stored, and when the cap is reached the entries worth least per byte are evicted first: execution time divided by size, raised by each hit, with entries nobody reads aging out over time. A flood of quick entries therefore goes before one that took a minute to compute, and one huge cheap value before many small expensive ones. `null` scales the cap to the machine — a quarter of the disk tier's room, a fifth of RAM for the memory tier — instead of a flat 1 GiB that capped every tier and thrashed persist-heavy workloads. "Room" is free space **plus what this cache already holds**: sizing from free space alone makes the cap fall as the cache fills, so the cache ends up over a cap its own contents caused. The cap therefore describes the volume, not how full the cache happens to be, and `cash info` prints the same number the cache is enforcing. A long-lived process re-reads the volume about once a minute while it writes, so a kernel left open for days tracks a disk that other things are filling instead of keeping the figure it started with. Set a number of bytes, or a size such as `"5GB"`, to pin the disk cap. The cap is enforced by each process on its own writes, so several worker processes sharing one directory can together overshoot it before one of them evicts. |
-| `max_memory_entries` | `CASH_MAX_MEMORY_ENTRIES` | `null` (no COUNT limit) | Cap on `InMemoryBackend` **entries** — LRU eviction when exceeded. `null` does not mean the memory tier is unbounded: it is bounded by bytes, adaptively (see below). |
-| `flush_interval` | `CASH_FLUSH_INTERVAL` | `5` | Seconds between `FileBackend`'s background metadata-flush cycles. |
-| `file_hash_full_max_bytes` | `CASH_FILE_HASH_FULL_MAX_BYTES` | `268435456` (256 MiB) | Largest tracked file hashed IN FULL when checking freshness. Above it, three head/middle/tail regions plus the timestamps decide — cheap on a multi-GB parquet, and blind to a same-size interior edit that leaves the mtime as it was: one restored by `cp -p` or `rsync -a`, or a write through `np.memmap(mode="r+")` on Windows, which moves no timestamp at all. Linux and macOS catch that through the inode change time; Windows does not. The default sits above the ordinary CSV, parquet or `.npy` so that hole does not reach one (it used to be 64 MiB). A full hash costs about 0.72 ms per MiB, but only the FIRST check pays it: digests are memoized per process, so later looks at an unchanged file cost a `stat`. Lower it for large inputs on a slow mount read by many short-lived processes; [`CACHE-FRESHNESS-COST`](../warnings.md#cache-freshness-cost) reports when checking has become a bad trade. |
-| `shutdown_write_timeout` | `CASH_SHUTDOWN_WRITE_TIMEOUT` | `60.0` | Seconds a finishing process waits for background cache writes before exiting without them. Finite on purpose: a write that cannot complete (an unwritable directory, a stalled mount) must never keep a finished process alive. Expiry warns [`CACHE-WRITE-ABANDONED`](../warnings.md#cache-write-abandoned). |
+| Field | Env var | Default | Path | Description |
+|---|---|---|---|---|
+| `cache_dir` | `CASH_CACHE_DIR` | `".cash"` | both | Where the disk tier writes. Add it to `.gitignore`. |
+| `compress` | `CASH_COMPRESS` | `false` | both | gzip each entry on disk. Worth it mainly for text-like values. |
+| `max_cache_size` | `CASH_MAX_CACHE_SIZE` | `null` (auto) | both | Disk cap in bytes or a size such as `"5GB"`. At the cap, the entries worth least per byte (compute time per byte, raised by hits) are evicted first. A single value bigger than the cap is not written ([`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big)). Each process enforces the cap on its own writes. |
+| `max_memory_entries` | `CASH_MAX_MEMORY_ENTRIES` | `null` | both | Entry-count cap for the RAM tier, evicting least recently used. `null` means no count limit; the RAM tier is still capped in bytes. |
+| `flush_interval` | `CASH_FLUSH_INTERVAL` | `5` | both | Seconds between the disk tier's metadata flushes. `0` flushes after every write. |
+| `file_hash_full_max_bytes` | `CASH_FILE_HASH_FULL_MAX_BYTES` | `268435456` (256 MiB) | both | Tracked files up to this size are hashed in full to check freshness. Larger files hash three sampled regions plus the timestamps, which misses a same-size edit outside those regions that keeps the modification time. |
+| `shutdown_write_timeout` | `CASH_SHUTDOWN_WRITE_TIMEOUT` | `60.0` | both | Seconds a finishing process waits for its background writes before exiting without them ([`CACHE-WRITE-ABANDONED`](../warnings.md#cache-write-abandoned)). |
 
-<!-- claim: cash/backends/adaptive_caps.py:resolve_ram_cap @02a19f23, cash/backends/adaptive_caps.py:_cgroup_memory_limit @c42e9359 -->
-#### What "auto" resolves to
+<!-- claim: cash/backends/adaptive_caps.py:resolve_ram_cap @02a19f23, cash/backends/adaptive_caps.py:_cgroup_memory_limit @b30940d8 -->
+**What "auto" resolves to.** The disk cap is a quarter of the room on the cache
+volume (free space plus what the cache already holds), between 8 GiB and
+100 GiB and never above 80% of that room. The RAM cap is a fifth of the memory
+the process may use (the host's, or a container's cgroup limit when smaller),
+between 512 MiB and 4 GiB. `cash info` prints both.
 
-Both tiers are bounded by default, and neither number is one you set:
+### Notebook caching policy
 
-* **Disk** — a quarter of the *room* on the cache volume, clamped to
-  [8 GiB, 100 GiB] and never above 80% of that room. "Room" is the free space
-  **plus what this cache already holds**: sizing from free space alone makes the
-  cap fall as the cache fills, so the cache ends up over a cap its own contents
-  caused. The cap therefore describes the volume, not how full the cache happens
-  to be, and an empty cache gets the same answer either way.
-* **RAM** — a fifth of the memory this process may use, clamped to
-  [512 MiB, 4 GiB]. "May use" means the host's total, or a **cgroup limit**
-  when one binds the process, whichever is smaller — so a 2 GiB container on a
-  large host is sized from the 2 GiB, not from the host. Without that, a
-  long-lived worker in a container was handed a cache budget twice the memory
-  it was allowed.
+These decide which notebook statements are cached and written to disk. A
+`@cash.cache` result is always stored, whatever these say. See
+[Cost model](../cost-model.md).
 
-`cash info` prints both resolved numbers. Worth checking when a long-running
-process looks like it is leaking: the memory tier growing to its cap is the
-cache working as designed, and the entries filling it are the cheap ones the
-cost model declined to write to disk.
+| Field | Env var | Default | Path | Description |
+|---|---|---|---|---|
+| `persist_all` | `CASH_PERSIST_ALL` | `false` | notebook | Cache every statement, skipping the floors below, as if each had `# @cash:persist`. |
+| `min_execution_time_to_cache_seconds` | `CASH_MIN_EXECUTION_TIME_TO_CACHE_SECONDS` | `0.01` | notebook | A statement faster than this is not cached at all. |
+| `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | notebook | Fraction of the compute time a predicted restore must save for a value to be written to disk. |
+| `min_cache_fixed_budget_seconds` | `CASH_MIN_CACHE_FIXED_BUDGET_SECONDS` | `0.05` | notebook | A predicted restore time below this is always acceptable, however short the compute. |
+| `call_cost_floor_seconds` | `CASH_CALL_COST_FLOOR_SECONDS` | `0.003` | notebook | A call inside a statement is cached only when it runs at least this long. |
+| `loop_split_max_iter_seconds` | `CASH_LOOP_SPLIT_MAX_ITER_SECONDS` | `0.006` | notebook | A loop whose iterations each take less than this may be cached as one unit instead of per call. |
+| `loop_split_min_remaining_seconds` | `CASH_LOOP_SPLIT_MIN_REMAINING_SECONDS` | `0.1` | notebook | ...but only when at least this much work remains in the loop. |
 
-### Cost-aware caching policy
+### Remote files
 
-| Field | Env var | Default | Description |
-|---|---|---|---|
-| `persist_all` | `CASH_PERSIST_ALL` | `false` | Cache **every** notebook statement, bypassing the cost-aware floors (same as `%cash_persist on`). Flippable at runtime via `cash.configure(persist_all=True)`. Notebook only: it does not change what a `@cash.cache` function stores, which the other fields in this table decide. |
-| `min_execution_time_to_cache_seconds` | `CASH_MIN_EXECUTION_TIME_TO_CACHE_SECONDS` | `0.01` | **Notebook only.** "Too cheap to cache at all" floor — statements faster than this never get a cache entry. A `@cash.cache` function is cached because you decorated it: neither this floor, nor the disk-persistence floor, nor the cost model applies to it, and its result is written to disk however cheap the call was. |
-| `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | Required savings fraction for promotion — used by the notebook's Gate A and the tier promotion policy. Not consulted for a `@cash.cache` result, which is written regardless. |
-| `min_cache_fixed_budget_seconds` | `CASH_MIN_CACHE_FIXED_BUDGET_SECONDS` | `0.05` | Notebook path: always allow caching when predicted restore is below this. |
-| `call_cost_floor_seconds` | `CASH_CALL_COST_FLOOR_SECONDS` | `0.003` | The same "too cheap" floor, one level down: an individual **call inside** a statement is only cached when it costs at least this. Lower than the statement floor because a call entry is cheaper to store than a statement's. |
-| `loop_split_max_iter_seconds` | `CASH_LOOP_SPLIT_MAX_ITER_SECONDS` | `0.006` | A loop whose measured per-iteration cost is under this is a candidate for being cached as one whole unit rather than per iteration — per-statement bookkeeping stops paying for itself below it. |
-| `loop_split_min_remaining_seconds` | `CASH_LOOP_SPLIT_MIN_REMAINING_SECONDS` | `0.1` | …and only when at least this much work remains after the measured head, so a loop that is nearly finished is not reorganised for nothing. |
+| Field | Env var | Default | Path | Description |
+|---|---|---|---|---|
+| `remote_revalidate_max_age_seconds` | `CASH_REMOTE_REVALIDATE_MAX_AGE_SECONDS` | `0.0` | both | Seconds a remote file's state may be reused before the store is asked again. `0` checks on every hit. A higher value means a change can go unseen for that long; prefer `immutable=True` on a [`RemoteFileDataSource`](../api/data_sources.md) where you have one. |
 
-### Remote data
+### Output and switches
 
-| Field | Env var | Default | Description |
-|---|---|---|---|
-| `remote_revalidate_max_age_seconds` | `CASH_REMOTE_REVALIDATE_MAX_AGE_SECONDS` | `0.0` | How long a remote object's state token may be reused before the store is asked again. `0` revalidates on every hit. |
+| Field | Env var | Default | Path | Description |
+|---|---|---|---|---|
+| `debug` | `CASH_DEBUG` | `false` | both | Log every cache decision, including one line per decorated call. The lines go to stderr unless your program configures `logging`. `%cash_debug on` in a notebook sets this field and also shows the notebook's debug lines. |
+| `verbose` | `CASH_VERBOSE` | `false` | decorator | Only the one line per decorated call, without the other debug records. |
+| `disable` | `CASH_DISABLE` | `false` | both | Run every `@cash.cache` call uncached, and make `%cash_on` decline. `CASH_DISABLE=1 pytest` checks your tests pass without the cache ([Testing your code](../tutorials/feature-guides/testing-your-code.md)). |
+| `summary` | `CASH_SUMMARY` | `false` | decorator | At exit, print a per-function hit/miss table to stderr, with why each function missed: `CASH_SUMMARY=1 python model.py`. |
+| `analytics` | `CASH_ANALYTICS` | `true` | notebook | Record each statement's hit, miss and timing in `analytics.db` under the per-user cache root, for the `cash.show_stats()` dashboard. `false` creates no file. |
 
-Raising this is the one setting here that trades **correctness** for latency:
-for the window's duration, a changed object goes unnoticed. It exists for reads
-cash tracked automatically, where there is no source object on which to set
-`immutable=True`. Prefer per-source control where you have it — see
-[Remote objects](../tutorials/feature-guides/custom-file-sources.md#remote-objects-tracked-by-the-stores-own-validator).
+### Backend
 
-### Observability
+| Field | Env var | Default | Path | Description |
+|---|---|---|---|---|
+| `backend` | `CASH_BACKEND` | `"tiered"` | both | `"tiered"` is a RAM tier in front of a disk tier. `"memory"`, `"file"`, `"sqlite"`, `"redis"` or `"s3"` is that one backend. Ignored when `tiers` is set. |
+| `redis_host` | `CASH_REDIS_HOST` | `"localhost"` | both | Redis server, for `backend = "redis"` or a redis tier. |
+| `redis_port` | `CASH_REDIS_PORT` | `6379` | both | Redis port. |
+| `redis_db` | `CASH_REDIS_DB` | `0` | both | Redis database number. |
+| `redis_password` | `CASH_REDIS_PASSWORD` | `null` | both | Redis password. Prefer the environment variable to a committed file. |
+| `redis_prefix` | `CASH_REDIS_PREFIX` | `"cash:"` | both | Key prefix, so several apps can share one Redis. |
+| `s3_bucket` | `CASH_S3_BUCKET` | `""` | both | S3 bucket; required for `backend = "s3"`. |
+| `s3_region` | `CASH_S3_REGION` | `""` | both | S3 region, such as `"us-east-1"`. Empty uses your AWS configuration. |
+| `s3_prefix` | `CASH_S3_PREFIX` | `"cash/"` | both | Object key prefix. |
 
-| Field | Env var | Default | Description |
-|---|---|---|---|
-| `debug` | `CASH_DEBUG` | `false` | One log line per `@cash.cache` call — a hit, or a miss and why — plus cash's other debug records. They go to stderr unless your program configures `logging`, in which case they go to your handlers and nothing is added; a level you set on the `cash` logger is kept. pytest's own capture does not count as configured logging, so `pytest -s` shows them. (The notebook's `[UPSTREAM_DEBUG]`-style lines come from `%cash_on --debug`, not this field.) |
-| `verbose` | `CASH_VERBOSE` | `false` | The per-call lines alone, without cash's other debug records. `debug` implies it. |
-| `disable` | `CASH_DISABLE` | `false` | Run every `@cash.cache` call uncached — no key, no lookup, no store — and have `%cash_on` decline. For test suites: `CASH_DISABLE=1 pytest` proves the tests pass without the cache. See [testing your code](../tutorials/feature-guides/testing-your-code.md). |
-| `summary` | `CASH_SUMMARY` | `false` | Print a per-function hit/miss table to stderr when the process exits, with why each function missed and which results were kept in RAM only. The one spelling that needs no edit to the script you are running: `CASH_SUMMARY=1 python model.py`. A notebook shows this per statement in the badge; a script otherwise shows nothing. |
-| `analytics` | `CASH_ANALYTICS` | `true` | Record each notebook statement's hit, miss and timing in `analytics.db` under the per-user cache root, for the `cash.show_stats()` dashboard. Telemetry only; `false` creates no file and changes no cached result. |
+See [Choosing a backend](../tutorials/feature-guides/choosing-a-backend.md) for
+which to pick.
 
-### Backend selection — simple mode
+### Tiers
 
-The simplest way to pick a backend: set `backend` and the connection
-fields for that backend. Cash builds it for you.
-
-| Field | Env var | Default | Description |
-|---|---|---|---|
-| `backend` | `CASH_BACKEND` | `"tiered"` | One of `"tiered"`, `"memory"`, `"file"`, `"sqlite"`, `"redis"`, `"s3"`. `"tiered"` is a RAM tier in front of a file tier; any other is that one backend. The other fields configure it either way. |
-
-**Redis connection (used when `backend = "redis"`):**
-
-| Field | Env var | Default |
-|---|---|---|
-| `redis_host` | `CASH_REDIS_HOST` | `"localhost"` |
-| `redis_port` | `CASH_REDIS_PORT` | `6379` |
-| `redis_db` | `CASH_REDIS_DB` | `0` |
-| `redis_password` | `CASH_REDIS_PASSWORD` | `null` |
-| `redis_prefix` | `CASH_REDIS_PREFIX` | `"cash:"` |
-
-**S3 connection (used when `backend = "s3"`):**
-
-| Field | Env var | Default |
-|---|---|---|
-| `s3_bucket` | `CASH_S3_BUCKET` | `""` (required when `backend = "s3"`) |
-| `s3_region` | `CASH_S3_REGION` | `""` |
-| `s3_prefix` | `CASH_S3_PREFIX` | `"cash/"` |
-
-### Backend selection — advanced (declarative tier stack)
-
-For multi-tier setups (RAM + Redis + DISK + S3, say), set the `tiers`
-list, fastest first. When `tiers` is non-empty it replaces the stack
-`backend` names. A setting a tier leaves out comes from the top-level field
-of the same meaning -- a `file` tier with no `cache_dir` uses `cache_dir`, one
-with no `max_size_bytes` uses `max_cache_size` or, like the default stack's,
-a cap sized to the machine. A tier's `type` is one of `memory`, `file`,
-`sqlite`, `redis` or `s3`.
+`tiers` (path: both) replaces the stack `backend` names with your own list,
+fastest first. It is set in a config file, or field by field with
+`CASH_TIER_<N>_<FIELD>` variables (`<N>` counts from 0); there is no
+`CASH_TIERS` variable.
 
 ```toml
 [[tool.cash.tiers]]
@@ -237,8 +147,6 @@ max_entries = 10000
 [[tool.cash.tiers]]
 type = "redis"
 host = "redis.internal"
-port = 6379
-prefix = "myapp:"
 
 [[tool.cash.tiers]]
 type = "s3"
@@ -246,74 +154,27 @@ bucket = "my-cache"
 region = "us-east-1"
 ```
 
-Each tier's per-backend fields are documented at
-[Backends](../api/backends.md).
-
-Per-field env-var overrides for tier entries: `CASH_TIER_<N>_<FIELD>`
-where `<N>` is the zero-based index. For example, to override only the
-Redis tier's host without rewriting the TOML:
-
 ```bash
-export CASH_TIER_1_HOST=prod-redis.example.com
+export CASH_TIER_1_HOST=prod-redis.example.com   # override one tier's host
 ```
 
-### Per-tier size caps
-
-Each backend declares a `max_size_bytes` cap that `TieredBackend` uses as
-a *promotion hint*. A value larger than the cap quietly skips that tier but
-still writes to the unconstrained ones. Most caps are static class-level
-values; the file tier's is *dynamic* — its whole (machine-scaled) cap.
+A tier's `type` is `memory`, `file`, `sqlite`, `redis` or `s3`. Its other keys
+are listed under [`TierConfig`](../api/config.md#cash.config.TierConfig). A key
+a tier leaves out comes from the top-level setting of the same meaning: a
+`file` tier without `cache_dir` uses `cache_dir`, one without `max_size_bytes`
+uses `max_cache_size`.
 
 <!-- claim: cash/backends/store_notices.py:StoreNotices.too_big @0b79929c, cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/sqlite_backend.py:SQLiteBackend.max_size_bytes == 104857600 -->
-| Backend | `max_size_bytes` cap | Rationale |
-|---|---|---|
-| `InMemoryBackend` | unbounded | RAM eviction handles pressure separately. |
-| `FileBackend` | **its whole cap** | Refuses only a single object that cannot fit in the disk cap at all; anything that fits is stored and eviction does the rest. It was half the cap, which meant a 500 MB cap cached nothing for a 263 MB working set. Warns once ([`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big)); a real write-and-evict treadmill is caught by [`CACHE-THRASH`](../warnings.md#cache-thrash) instead. See `max_cache_size`. |
-| `RedisBackend` | **10 MiB** | Redis is in-memory server-side; protocol disfavours multi-MB values. |
-| `SQLiteBackend` | **100 MiB** | SQLite blobs degrade past this. |
-| `S3Backend` | unbounded | S3 is fine arbitrarily large. |
+In a stack, a value bigger than a tier's size cap skips that tier and goes to
+the others. The disk tier's cap is its whole `max_cache_size`; Redis tiers
+skip values over 10 MiB and SQLite tiers values over 100 MiB. Memory and S3
+tiers have no such cap.
 
-Caps apply only to the **tiered pipeline**. A bare `RedisBackend()`
-constructed directly accepts whatever you give it — the cap is an
-opt-in promotion hint, not a hard wall.
-
-## File locations
-
-### `pyproject.toml` (project, version-controlled)
-
-Most projects should put their config here so the team shares one
-default. Cash walks upward from the [project anchor](#what-paths-are-relative-to)
-— not from the current working directory — until it finds a
-`pyproject.toml`, so the same script picks up the same config wherever it
-is launched from. A relative `cache_dir` in that file is resolved against
-the file's own directory.
-
-```toml
-[tool.cash]
-cache_dir = ".cash"
-compress = true
-max_cache_size = 5368709120   # 5 GiB
-
-[[tool.cash.tiers]]
-type = "memory"
-
-[[tool.cash.tiers]]
-type = "redis"
-host = "redis.internal"
-```
+## Config files
 
 <!-- claim: cash/_location.py:default_user_config_path @5fbd345e, cash/_location.py:default_project_config_path @e3dafbf2 -->
-### `~/.config/cash/config.toml` (user, machine-private)
-
-For personal defaults spanning all projects on a machine — e.g. your
-personal Redis URL or a global `debug = true` while you're investigating
-an issue. Follows the [XDG Base Directory
-Spec](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html):
-
-- Linux/macOS: `~/.config/cash/config.toml` (or `$XDG_CONFIG_HOME/cash/config.toml`)
-- Windows: `%APPDATA%\cash\config.toml`
-
-The body is a TOML file with a `[cash]` section:
+The project file keeps settings under `[tool.cash]` in `pyproject.toml`. The
+user file (paths above) keeps them under `[cash]`:
 
 ```toml
 [cash]
@@ -321,176 +182,60 @@ debug = true
 redis_host = "redis.example.com"
 ```
 
-Generate a documented template with `cash.create_default_config()`. It lists
-every setting commented out at its default, with that setting's documentation
-above it, and it will not overwrite an existing file unless you pass
-`force=True`.
+`cash.create_default_config()` writes a user file with every setting
+commented out at its default. It will not overwrite an existing file unless
+you pass `force=True`.
 
-> The `.cash/` directory next to your notebook is the **disk cache**, not
-> config — user config lives at the XDG path above.
+On Python 3.10, reading TOML needs `tomli`: install `cash-lib[toml]`
+([`CONFIG-TOML-UNREADABLE`](../warnings.md#config-toml-unreadable)).
 
-### Environment variables
-
-Every field on `CashConfig` has a `CASH_<UPPERCASE_FIELD_NAME>` env-var
-binding. The full list is in the tables above. The tier-list field is
-additionally overridable element-by-element with `CASH_TIER_<N>_<FIELD>`.
-
-### Per-script overrides via `config_path`
+### A config file named in code
 
 <!-- test:expect-warning reason="the example names a file the docs harness does not create, so CONFIG-FILE-MISSING (described below) is exactly what cash should say" -->
 ```python
-cash = Cash(config_path="./my_special_config.toml")
+from cash import Cash
+
+app = Cash(config_path="./my_special_config.toml")
 ```
 
 <!-- claim: cash/config.py:_resolve_config @afb12473 -->
-Loads the named TOML above the user and project files — a file named in code
-outranks the `pyproject.toml` found by walking up from wherever the process
-started — and below environment variables and constructor kwargs. That is how
-an installed package can carry its own cash settings: a `pyproject.toml` is not
-installed with the package, so ship a TOML file inside it and name it here
-(`Path(__file__).with_name("cash.toml")`). The launching
-project's `pyproject.toml` used to override it.
-
-The file holds its settings under `[cash]` (or `[tool.cash]`); settings
-anywhere else are not read, and cash says so. A relative `cache_dir` in it is resolved against the file's
-own directory, and a leading `~` is your home directory — so a tool that wants
-its cache outside site-packages writes `cache_dir = "~/.cache/mytool"`.
+The named file ranks above the project and user files and below environment
+variables and code. That lets an installed package ship its own settings: put
+a TOML file inside the package and pass
+`Path(__file__).with_name("cash.toml")`. The file keeps its settings under
+`[cash]` or `[tool.cash]`. A relative `cache_dir` in it is relative to the
+file, and `~` is your home directory.
 
 <!-- claim: cash/config.py:_resolve_config @afb12473 -->
-A path that does not exist is not silently skipped: cash warns
-[`CONFIG-FILE-MISSING`](../warnings.md#config-file-missing) and runs on the
-other layers. The usual cause is a wheel that did not include the file — list
-it as package data. To see what a tool's file resolves to, without running the
-tool:
-
-```bash
-cash info --config path/to/cash.toml
-```
-
-On Python 3.10, reading any TOML file needs `tomli`; install
-`cash-lib[toml]` (or `[all]`) to get it.
-
-<!-- claim: cash/_location.py:_marks_project @2991b315 -->
-A `pyproject.toml` marks a project only when it has a `[project]`,
-`[build-system]`, `[tool.poetry]` or `[tool.cash]` table. One that only
-configures a tool — a `tests/pyproject.toml` holding `[tool.ruff]` — does not,
-so running from `tests/` still finds the repository's project and its
-`[tool.cash]`.
+A missing file warns [`CONFIG-FILE-MISSING`](../warnings.md#config-file-missing).
+`cash info --config path/to/cash.toml` shows what a file resolves to.
 
 <!-- claim: cash/__init__.py:configure @945b5c80 -->
-## Runtime mutation: `cash.configure()`
+## Changing settings at runtime
 
-Change the active configuration of the default singleton at runtime
-without restarting:
+`cash.configure(...)` changes the settings of the default instance used by
+`@cash.cache`; `Cash.reconfigure(...)` does the same for an instance of your
+own. Neither writes to a file.
 
 ```python
 import cash
 
-# Hot fields — just update the dataclass, no rebuild.
 cash.configure(debug=True)
-cash.configure(persist_all=True)
-
-# Backend-affecting fields — drain pending writes on the current
-# backend, build a fresh one from the updated config, swap it in.
-cash.configure(backend="redis", redis_host="prod-redis.internal")
-
-# Pre-set stale fields — stored silently, picked up later.
-cash.configure(redis_host="staging.example.com")
-# ... later ...
-cash.configure(backend="redis")   # uses the staging host you pre-set
+cash.configure(max_cache_size="10GB")
 ```
 
-**What it does not do**: write to `pyproject.toml` or the XDG config
-file. The function is in-memory only — persistence requires editing
-those files directly.
-
-**What gets rebuilt**: the backend, only when the change alters the tiers
-it is built from — `cache_dir`, `compress`, `max_cache_size`,
+Settings that shape the backend (`cache_dir`, `compress`, `max_cache_size`,
 `max_memory_entries`, `flush_interval`, `backend`, `tiers`, or a connection
-detail of a tier in use. Then the old backend drains its pending writes via
-`shutdown()`, and a fresh one is built from the new config. A connection
-detail of a backend not in use (`redis_host` on the RAM + disk stack) is
-stored for later and rebuilds nothing. `min_cache_savings_pct` is handed to
-the running backend's persistence policy in place. Every other setting —
-`debug`, `verbose`, `persist_all`, ... — is read by the next operation.
-`Cash.reconfigure(**settings)` does the same for an instance of your own.
+detail of a tier in use) make cash finish the old backend's pending writes and
+build a new one. All other settings take effect on the next operation. A
+connection detail for a backend not in use is kept for later.
 
-## Notebook-only knobs
+## Magics that set these fields
 
-Three settings apply only to the IPython integration and are toggled via
-magic commands, not the config layer:
+In a notebook, two magics change these settings for the session:
 
-### `%cash_debug` — debug output on/off
+- `%cash_debug on` / `off` sets `debug`.
+- `%cash_persist on` / `off` turns on the same behaviour as `persist_all`.
 
-```python
-%cash_debug on    # detailed `[CACHE]` / `[LINEAGE_DEBUG]` traces
-%cash_debug off
-```
-
-Equivalent to `cash.configure(debug=True/False)`.
-
-### `%cash_badge` — badge display mode
-
-```python
-%cash_badge html    # interactive HTML badges (default)
-%cash_badge print   # text summary after cell completes
-%cash_badge off     # no badge output
-```
-
-### `%cash_on ttl=N` — global TTL
-
-```python
-%cash_on              # enable auto-caching
-%cash_on ttl=3600     # 1-hour TTL on every cached entry
-```
-
-## Background writes
-
-Every backend except RAM serialises the value on the calling thread,
-then performs the actual storage write in a per-backend background
-thread. `set()` returns once the bytes are captured — the disk/network
-write happens asynchronously.
-
-This means:
-
-- `Cash` cells finish quickly even when promoting to slow tiers (S3).
-- A `get()` for the same key transparently waits for any in-flight
-  write — you never see stale-or-missing data.
-- `delete(key)` drains pending writes for that key before deleting.
-- Process exit triggers `atexit` → drains every backend's pending writes
-  before the interpreter terminates. (One exception: `os._exit()` or
-  `SIGKILL` skip `atexit`. Same caveat as any Python program.)
-- A bare backend instance — `RedisBackend(...)` not wrapped in a `Cash`
-  object — is your own to shut down. Call `backend.shutdown()` (or use
-  a `try`/`finally`) for durable writes outside `Cash`'s atexit chain.
-
-There's nothing to configure — it's the default behaviour.
-
-## File tracking
-
-Cash automatically tracks file reads through common libraries:
-
-<!-- test:skip reason="reads files (data.csv, array.npy, model.pkl, file.txt) that don't exist in test env" -->
-```python
-df = pd.read_csv('data.csv')        # pandas (all read_* functions)
-arr = np.load('array.npy')           # numpy
-pl_df = pl.read_csv('data.csv')      # polars (read_* and scan_*)
-data = joblib.load('model.pkl')      # joblib
-with open('file.txt') as f:          # built-in open
-    content = f.read()
-```
-
-File tracking is always on for these recognised patterns — there's no
-global toggle. To opt a single statement out of caching (and therefore
-out of file-dependency tracking for that statement), use the
-[`# @cash:no-cache`](../annotations.md#cashno-cache) annotation.
-
-## See also
-
-- [Choosing a backend](../tutorials/feature-guides/choosing-a-backend.md) —
-  decision guide for picking between RAM-only, tiered, Redis, S3, and
-  custom backend stacks for your workload.
-- [Smart persistence](../tutorials/feature-guides/smart-persistence.md) —
-  how the cost-model knobs (`min_execution_time_to_cache_seconds`,
-  `min_cache_savings_pct`, `persist_all`) decide what lands on disk, and when
-  to override them.
+`%cash_on ttl=N` gives every cached statement a TTL for the session; it is not
+a config field. See [Magic commands](../magics.md).
