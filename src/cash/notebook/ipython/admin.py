@@ -7,8 +7,11 @@ so that IPython recognises these commands automatically.
 
 from __future__ import annotations
 
+import importlib
+import json
 import logging
 import pickle
+import statistics
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +19,8 @@ from IPython.core.magic import line_magic
 
 from cash.utils import safe_text
 
+from ...backends._base import discarded_writes
+from ...logging import CashLogHandler
 from ._args import parse_mode, strip_inline_comment
 
 if TYPE_CHECKING:
@@ -74,8 +79,6 @@ def _load_cache_file_data(filepath: str) -> dict | None:
 
     Raises FileNotFoundError if the file does not exist.
     """
-    import json
-    import pickle as pkl
 
     try:
         with open(filepath) as f:
@@ -86,7 +89,7 @@ def _load_cache_file_data(filepath: str) -> dict | None:
         raise
     try:
         with open(filepath, "rb") as f:
-            return pkl.load(f)
+            return pickle.load(f)
     except (pickle.UnpicklingError, TypeError, ValueError):
         pass
     return None
@@ -127,6 +130,7 @@ class CashAdminMagicsMixin:
             # Rebuilt from the same definition a fresh session uses, so a new
             # counter can never be added to the stats and silently survive a
             # reset (it already happened once).
+            # Local: import cycle ipython.admin -> ipython.magics -> ipython.admin.
             from .magics import new_session_stats
 
             self._session.stats.update(new_session_stats())
@@ -202,13 +206,9 @@ class CashAdminMagicsMixin:
         # warning from ``_report_failed_writes`` at shutdown, which in a
         # notebook means at kernel death, i.e. never. This is the one place a
         # user asking "is caching working?" can actually be told that it isn't.
-        from cash.backends._base import discarded_writes
-
         discarded = discarded_writes()
 
         if mode == "json":
-            import json
-
             result = {
                 **stats,
                 "discarded_writes": len(discarded),
@@ -352,7 +352,6 @@ class CashAdminMagicsMixin:
 
     def _export_json(self: CashMagics, filepath: str, export_vars: set | None) -> None:
         """Export lineage metadata as JSON."""
-        import json
 
         export_data: dict[str, Any] = {"version": 1, "lineage": {}, "cell_codes": {}}
 
@@ -373,7 +372,6 @@ class CashAdminMagicsMixin:
 
     def _export_pickle(self: CashMagics, filepath: str, export_vars: set | None) -> None:
         """Export full cache entries as pickle."""
-        import pickle as pkl
 
         backend = self._cash_instance.backend
         entries = backend.list_entries()
@@ -407,7 +405,7 @@ class CashAdminMagicsMixin:
             export_data["cell_codes"] = dict(self._tracking_state.executed_cell_codes)
 
         with open(filepath, "wb") as f:
-            pkl.dump(export_data, f)
+            pickle.dump(export_data, f)
 
         print(f"[OK] Exported {exported_count} cache entries to '{filepath}'")
 
@@ -420,7 +418,6 @@ class CashAdminMagicsMixin:
             %cash_import results.cache           # Import all entries
             %cash_import results.cache --merge    # Merge with existing cache
         """
-        import pickle as pkl
 
         parts = strip_inline_comment(line).split()
         if not parts:
@@ -433,7 +430,7 @@ class CashAdminMagicsMixin:
 
         try:
             with open(filepath, "rb") as f:
-                import_data = pkl.load(f)
+                import_data = pickle.load(f)
 
             if import_data.get("version", 0) != 1:
                 print(f"[Warning] Unknown export format version: {import_data.get('version', 0)}")
@@ -573,9 +570,7 @@ class CashAdminMagicsMixin:
             return
 
         if as_json:
-            import json as _json
-
-            print(_json.dumps(events, indent=2, default=str))
+            print(json.dumps(events, indent=2, default=str))
         else:
             for evt in events:
                 print(_format_log_event(evt))
@@ -584,8 +579,6 @@ class CashAdminMagicsMixin:
         """Return the active CashLogHandler, or None if not found."""
         handler = getattr(self, "_log_handler", None)
         if handler is None:
-            from ...logging import CashLogHandler
-
             cash_logger = logging.getLogger("cash")
             for h in cash_logger.handlers:
                 if isinstance(h, CashLogHandler):
@@ -767,7 +760,6 @@ class CashAdminMagicsMixin:
 
     def _run_benchmark(self: CashMagics, cell_code: str, iterations: int, cold_start: bool, compare_mode: bool) -> None:
         """Execute a benchmark run and report results."""
-        import statistics
 
         # Use perf_counter, not time.time — the latter has ~16ms resolution
         # on Windows and produces zero-duration measurements for fast cells.
@@ -920,8 +912,6 @@ def _track_or_import_module(ft: Any, module_name: str, force_reload: bool) -> No
             else:
                 print(f"  Reload failed for: {module_name}")
         return
-
-    import importlib
 
     try:
         importlib.import_module(module_name)

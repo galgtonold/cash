@@ -123,7 +123,7 @@ The standard introspection surface works:
 
 ## Across processes: Pool, ProcessPoolExecutor, joblib { #across-processes-pool-processpoolexecutor-joblib }
 
-<!-- claim: cash/utils.py:resolve_main_module @4e43f809, cash/backends/_base.py:_in_multiprocessing_child @e87f049e, cash/core.py:Cash._print_run_summary @8e96e43d -->
+<!-- claim: cash/utils.py:resolve_main_module @4e43f809, cash/backends/_base.py:_in_multiprocessing_child @e87f049e, cash/core.py:Cash._print_run_summary @9b43a38c -->
 A `multiprocessing.Pool`, a `ProcessPoolExecutor` or joblib's process workers
 all use the cache directory of the process that started them, so what one
 worker computes is a hit for the others, for the parent afterwards, and for the
@@ -147,7 +147,7 @@ the next run is all hits. What differs is what each process keeps to itself:
   both compute it. `use_locking=True` with `RedisBackend` is the only lock that
   spans processes (see [which backends](#which-backends-implement-locking)).
 
-<!-- claim: cash/core.py:_expose_script_function @de09c381, cash/core.py:Cash.__reduce__ @26cd00dc -->
+<!-- claim: cash/core.py:_expose_script_function @9ed39dcd, cash/core.py:Cash.__reduce__ @26cd00dc -->
 For **joblib**, keep the script's work behind `if __name__ == "__main__":`.
 joblib's default process backend sends a function from the running script *by
 value*, and a cached function cannot travel that way. So cash sends one *by

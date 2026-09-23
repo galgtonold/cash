@@ -35,12 +35,16 @@ from __future__ import annotations
 import ast
 import functools
 import hashlib
+import importlib.util
 import io
+import os
 import re
 import sys
 import textwrap
 import tokenize
 import types
+
+from .analysis.annotations import ANNOTATION_PATTERN
 
 __all__ = [
     "bytecode_identity",
@@ -69,8 +73,6 @@ _SEP = "\x01"
 def _annotation_pattern() -> re.Pattern[str]:
     global _ANNOTATION_PATTERN
     if _ANNOTATION_PATTERN is None:
-        from .analysis.annotations import ANNOTATION_PATTERN
-
         _ANNOTATION_PATTERN = ANNOTATION_PATTERN
     return _ANNOTATION_PATTERN
 
@@ -639,8 +641,6 @@ def _process_start_time() -> float:
     global _PROCESS_START
     if _PROCESS_START is not None:
         return _PROCESS_START
-    import os
-    import sys
 
     started: float | None = None
     try:
@@ -651,6 +651,7 @@ def _process_start_time() -> float:
         started = None
     if started is None and sys.platform == "win32":
         try:
+            # Local: Windows only.
             import ctypes
             from ctypes import wintypes
 
@@ -709,7 +710,6 @@ def read_code_text(path: str) -> str:
 
 def _compiled_module(path: str) -> types.CodeType | None:
     """The whole file at *path*, compiled, cached per (path, mtime, size)."""
-    import os
 
     try:
         st = os.stat(path)
@@ -748,8 +748,6 @@ def _pyc_proves_unchanged(path: str, st: object) -> bool:
     a later import of a different file, and a missing one says nothing -- both
     fall back to compiling the file, once per (path, mtime, size).
     """
-    import importlib.util
-    import os
 
     started = _process_start_time()
     if st.st_mtime > started:
@@ -790,7 +788,6 @@ def loaded_code_matches_disk(fn: object) -> bool:
     `_pyc_proves_unchanged`), or a file whose compiled form still contains this
     function unchanged. Anything else is compiled, once per file version.
     """
-    import os
 
     if isinstance(fn, type):
         # A class has no code of its own; its methods do, and an edit to any

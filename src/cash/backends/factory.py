@@ -26,7 +26,11 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
+from cash import cost_model
+
+from ..exceptions import DependencyNotFoundError
 from ._base import CacheBackend
+from .adaptive_caps import resolve_disk_cap, resolve_ram_cap
 from .file_backend import FileBackend
 from .memory_backend import InMemoryBackend
 from .sqlite_backend import SQLiteBackend
@@ -82,7 +86,6 @@ def _resolve_disk_cap(config: "CashConfig") -> int | None:
     explicit = config.max_cache_size
     if explicit is not None:
         return explicit
-    from .adaptive_caps import resolve_disk_cap
 
     return resolve_disk_cap(config.cache_dir)
 
@@ -105,7 +108,6 @@ def _resolve_ram_cap() -> int:
     disk cap should not accidentally make the RAM tier unbounded, and the RAM
     tier should stay a small fraction of system memory regardless.
     """
-    from .adaptive_caps import resolve_ram_cap
 
     return resolve_ram_cap()
 
@@ -256,7 +258,6 @@ def _build_smart_persistence_policy(config: "CashConfig"):
     def policy(execution_time: float, size_bytes: int) -> bool:
         if execution_time < min_persist_compute_s:
             return False
-        from cash import cost_model
 
         est_restore = cost_model.estimated_restore_time("", size_bytes, "disk")
         return execution_time - est_restore > min_savings * execution_time
@@ -337,8 +338,6 @@ def _build_redis(**kwargs: Any) -> CacheBackend:
     try:
         from .redis_backend import RedisBackend
     except ImportError as exc:
-        from cash.exceptions import DependencyNotFoundError
-
         raise DependencyNotFoundError(
             "Redis backend requires `pip install cash-lib[redis]` (the `redis` package)."
         ) from exc
@@ -350,8 +349,6 @@ def _build_s3(*, bucket: str, region: str, prefix: str) -> CacheBackend:
     try:
         from .s3_backend import S3Backend
     except ImportError as exc:
-        from cash.exceptions import DependencyNotFoundError
-
         raise DependencyNotFoundError("S3 backend requires `pip install cash-lib[s3]` (the `boto3` package).") from exc
     if not bucket:
         raise ValueError("S3 backend requires a non-empty bucket name (set s3_bucket)")

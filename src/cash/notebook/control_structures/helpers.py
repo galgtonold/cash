@@ -23,6 +23,8 @@ from ...analysis.annotations import (
     get_statement_annotations,
     parse_annotations_in_range,
 )
+from ...analysis.cacheability import analyze_statement, selfref_reassignment_targets
+from ...analysis.code_analyzer import CodeAnalyzer
 from ..compiled_source import is_cash_filename
 
 logger = logging.getLogger(__name__)
@@ -190,6 +192,7 @@ def update_lineage_after_execution(
 
     # Exclude loop target variables — they are not mutations
     if isinstance(node, ast.For):
+        # Local: import cycle control_structures.helpers -> control_structures.processor -> ... -> control_structures.helpers.
         from .processor import extract_target_names
 
         target_names = set(extract_target_names(node.target))
@@ -201,6 +204,7 @@ def update_lineage_after_execution(
         target_names: set[str] = set()
         if isinstance(node, ast.For):
             iterable_lineage = get_iterable_lineage(shell, statement_processor, node.iter)
+            # Local: import cycle control_structures.helpers -> control_structures.processor -> ... -> control_structures.helpers.
             from .processor import extract_target_names
 
             target_names = set(extract_target_names(node.target))
@@ -305,7 +309,6 @@ def get_body_nodes(node: ast.AST) -> list[ast.AST]:
 
 def get_expression_iterable_lineage(shell, statement_processor, iter_node: ast.AST) -> str | None:
     """Compute lineage for a complex iterable expression by analyzing its inputs."""
-    from ...analysis.code_analyzer import CodeAnalyzer
 
     iter_code = ast.unparse(iter_node)
     try:
@@ -352,7 +355,7 @@ def find_potentially_mutated_variables(body_nodes: list) -> set[str]:
     (subscript assignment, method calls like ``.append()``, augmented
     assigns, attribute assignments).
     """
-    from ...analysis.cacheability import analyze_statement, selfref_reassignment_targets
+    # Local: import cycle control_structures.helpers -> control_structures.processor -> ... -> control_structures.helpers.
     from .processor import is_control_structure
 
     mutated_vars: set = set()

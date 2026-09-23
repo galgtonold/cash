@@ -132,7 +132,7 @@ model = train(features)              # badge reports the decorator hit
 Automation is usually the reason you're moving code out of the notebook in the
 first place, and a headless run needs a few different settings.
 
-<!-- claim: cash/notebook/badge_renderer/_text.py:print_text_badge @6739dc99 -->
+<!-- claim: cash/notebook/badge_renderer/_text.py:print_text_badge @caf580ba -->
 **Use the text badge.** The HTML badge is an interactive widget; in a headless
 run nothing renders it. `%cash_badge print` emits a plain-text summary after each
 cell instead — readable in CI logs, in an `nbconvert` artifact, and by a coding
@@ -153,7 +153,7 @@ which a top-to-bottom automated run doesn't need. The warning is expected under
 papermill, nbconvert, and CI — it's only worth investigating if you see it *in*
 JupyterLab or VS Code, where it means a stale runtime.
 
-<!-- claim: cash/core.py:Cash._surface_purity @a4fc3aae -->
+<!-- claim: cash/core.py:Cash._surface_purity @fde18ea3 -->
 **Fail the build on accidental impurity.** `@cash.cache(strict=True)` turns the
 purity analyzer's warnings into `CashImpureFunctionError` at first call, so a
 teammate caching a side-effecting function breaks CI instead of shipping a

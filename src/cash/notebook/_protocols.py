@@ -12,10 +12,9 @@ Using protocols instead of ``Any`` provides:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
-if TYPE_CHECKING:
-    from cash.notebook.lineage_store import LineageStore
+from cash.notebook.lineage_store import LineageStore
 
 
 @runtime_checkable
@@ -357,6 +356,4 @@ class TrackingState:
     lineage: "LineageStore" = field(init=False)
 
     def __post_init__(self) -> None:
-        from cash.notebook.lineage_store import LineageStore
-
         self.lineage = LineageStore(backing=self.variable_lineage)

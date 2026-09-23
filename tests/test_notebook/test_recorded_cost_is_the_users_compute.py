@@ -19,7 +19,6 @@ from traitlets.config import Configurable
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
-from cash.tracking import file_tracker
 
 
 class _Shell(Configurable):
@@ -76,7 +75,7 @@ def test_cash_tracking_time_is_not_counted_as_the_statements(magics_fixture, mon
         clock[0] += 0.45
         return clock[0]
 
-    monkeypatch.setattr(file_tracker, "tracking_seconds", tracked)
+    monkeypatch.setattr("cash.notebook.statement.processor.tracking_seconds", tracked)
     magics.cash("", "import time\nx = (time.sleep(0.5), 7)[1]")
     assert shell.user_ns["x"] == 7
     assert _cost_of(backend, "time.sleep(0.5)") < 0.4

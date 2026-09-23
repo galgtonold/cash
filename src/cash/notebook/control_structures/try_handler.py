@@ -70,6 +70,7 @@ class TryHandler:
         gets its own cache key, storage info, and timing — and ``print()``
         calls are never suppressed by the SKIPPED optimisation.
         """
+        # Local: import cycle control_structures.try_handler -> control_structures.processor -> ... -> control_structures.try_handler.
         from .processor import ControlStructureResult
 
         all_metrics: list[ProcessResult] = []
@@ -209,6 +210,7 @@ class TryHandler:
         Used for else and finally branches of try/except where no per-statement
         lineno tagging is needed.
         """
+        # Local: import cycle control_structures.try_handler -> control_structures.processor -> ... -> control_structures.try_handler.
         from .processor import is_control_structure
 
         cached = computed = 0
@@ -269,6 +271,7 @@ class TryHandler:
         branch_annotation=None,
     ) -> tuple[bool, Exception | None, int, int]:
         """Execute the try-body statements; return (succeeded, caught_exc, cached, computed)."""
+        # Local: import cycle control_structures.try_handler -> control_structures.processor -> ... -> control_structures.try_handler.
         from .processor import is_control_structure
 
         cached = computed = 0

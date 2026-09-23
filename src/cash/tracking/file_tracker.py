@@ -10,18 +10,23 @@ from __future__ import annotations
 
 import builtins
 import concurrent.futures
+import concurrent.futures.thread as cf_thread
 import contextvars
 import functools
+import glob as glob_module
 import importlib
 import importlib.abc
 import importlib.util
 import logging
 import os
 import pathlib
+import site
 import stat
 import sys
+import sysconfig
 import threading
 import time
+import zoneinfo
 from collections.abc import Callable
 from typing import Any, Optional
 
@@ -130,13 +135,12 @@ def _regular_file_stat(path: str) -> tuple[int, int, int] | None:
     time and adds nothing, which is the residual the NTFS change-time ticket
     (CAS-114) is about.
     """
-    import stat as _stat
 
     try:
         st = os.stat(path)
     except (OSError, ValueError):
         return None
-    if not _stat.S_ISREG(st.st_mode):
+    if not stat.S_ISREG(st.st_mode):
         return None
     return (st.st_size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0))
 
@@ -241,7 +245,6 @@ def _norm_dir(path: str) -> str:
 @functools.lru_cache(maxsize=1)
 def _interpreter_roots() -> tuple[str, ...]:
     """The standard library, its compiled extensions and zipped stdlib."""
-    import sysconfig
 
     roots: set[str] = set()
     paths = sysconfig.get_paths()
@@ -265,8 +268,6 @@ def _site_roots() -> tuple[str, ...]:
     test has to exclude these, or it would swallow every installed package --
     and with it the own-package exemption.
     """
-    import site
-    import sysconfig
 
     roots: set[str] = set()
     paths = sysconfig.get_paths()
@@ -302,10 +303,6 @@ def _under(path_nc: str, roots: tuple[str, ...]) -> bool:
 @functools.lru_cache(maxsize=1)
 def _tz_roots() -> tuple[str, ...]:
     """The system time zone database directories ``zoneinfo`` searches."""
-    try:
-        import zoneinfo
-    except ImportError:
-        return ()
     return tuple(sorted({_norm_dir(p) for p in zoneinfo.TZPATH if os.path.isdir(p)}))
 
 
@@ -513,8 +510,6 @@ def _is_user_file(filename: str) -> bool:
         return verdict
     global _LIBRARY_ROOTS
     if _LIBRARY_ROOTS is None:
-        import sysconfig
-
         roots = {
             os.path.normcase(os.path.abspath(p))
             for key, p in sysconfig.get_paths().items()
@@ -795,7 +790,6 @@ def _patch_pathlib_listing() -> None:
     a new month's file was never seen: the concat was served from the cache
     without it (round 22, 3/3).
     """
-    import glob as glob_module
 
     targets = [(getattr(pathlib, "_NormalAccessor", None), ("scandir", "listdir"))]
     targets += [(getattr(glob_module, name, None), ("scandir",)) for name in ("_Globber", "_StringGlobber")]
@@ -885,7 +879,6 @@ def _patch_thread_pool_submit() -> None:
     opt out with ``_cash_internal = True``. Threads started directly with
     ``threading.Thread`` still begin empty -- documented, not patched.
     """
-    import concurrent.futures.thread as cf_thread
 
     pool = cf_thread.ThreadPoolExecutor
     original = pool.__dict__.get("submit")
@@ -964,6 +957,7 @@ def _patch_process_pool_submit() -> None:
     call that waits on it is stored. ``multiprocessing.Pool`` and joblib are
     not wrapped: their reads stay unseen, and ``file_depends_on=`` names them.
     """
+    # Local: this loads multiprocessing, which `import cash` must not pay for.
     import concurrent.futures.process as cf_process
 
     pool = cf_process.ProcessPoolExecutor
@@ -1220,7 +1214,6 @@ class FileDependencyRegistry:
         ``gdir/*.num`` → ``gdir``; ``a/b*/c`` → ``a`` (deepest stable ancestor).
         The directory's mtime is what we track for membership changes.
         """
-        import glob as _glob
 
         try:
             parts = str(pattern).replace("\\", "/").split("/")
@@ -1228,7 +1221,7 @@ class FileDependencyRegistry:
             return None
         base: list[str] = []
         for p in parts[:-1]:  # exclude the filename component
-            if _glob.has_magic(p):
+            if glob_module.has_magic(p):
                 break
             base.append(p)
         return "/".join(base) or "."
@@ -1582,6 +1575,7 @@ class FileAccessTracker:
             # This resolves symlinks and normalizes the path, making it
             # stable across os.chdir() calls. Resolved once per cell run
             # (``realpath_this_run``): a loop reads the same files again.
+            # Local: import cycle tracking.file_tracker -> tracking.file_dep_snapshot -> ... -> tracking.file_tracker.
             from cash.tracking.file_dep_snapshot import realpath_of_read_this_run
 
             resolved, read_lstat = realpath_of_read_this_run(raw_path)
@@ -1686,6 +1680,7 @@ class FileAccessTracker:
 
     def _digest_now(self, abs_path: str, size: int) -> str | None:
         """The file's content hash as the body is about to read it."""
+        # Local: import cycle tracking.file_tracker -> tracking.file_dep_snapshot -> ... -> tracking.file_tracker.
         from cash.tracking.file_dep_snapshot import file_content_hash
 
         t0 = _perf_counter()

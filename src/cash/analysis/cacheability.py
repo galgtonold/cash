@@ -23,6 +23,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ..purity import is_pure
+from ..tracking.file_tracker import _installed_roots, _nc
+
 __all__ = [
     # Primary API
     "StatementAnalysis",
@@ -683,10 +686,6 @@ def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
     says nothing about what this call does with the user's files. ``@pure``
     is the user's word that the function has no effect; it is taken.
     """
-    import inspect
-
-    from ..purity import is_pure
-    from ..tracking.file_tracker import _installed_roots, _nc
 
     func = inspect.unwrap(func) if callable(func) else func
     if not isinstance(func, types.FunctionType) or is_pure(func) or _depth > 3:
@@ -4507,9 +4506,7 @@ def callee_mutated_globals_for_tree(tree, resolve_source, user_ns=None) -> froze
     # re-runs the statement -- measured, ``add(15)`` executed twice on a FIRST
     # run and `final` came out 55 where 40 is correct. A module is excluded for
     # the same reason it is everywhere else: never a value to serialise.
-    import types as _types
-
-    return frozenset(n for n in names if n in user_ns and not isinstance(user_ns[n], _types.ModuleType))
+    return frozenset(n for n in names if n in user_ns and not isinstance(user_ns[n], types.ModuleType))
 
 
 #: ``(code, the identifiers in it that name a module) -> StatementAnalysis``.

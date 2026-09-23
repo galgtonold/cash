@@ -53,7 +53,10 @@ import contextvars
 import linecache
 import logging
 import os
+import socket
+import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -96,8 +99,7 @@ def _is_library_file(filename: str) -> bool:
             if path.startswith(_OWN_DIR):
                 answer = True
             else:
-                from pathlib import Path
-
+                # Local: import cycle effect_observer -> config -> tracking.file_tracker -> effect_observer.
                 from .config import _is_installed_path
 
                 answer = _is_installed_path(Path(path).resolve())
@@ -109,6 +111,7 @@ def _is_library_file(filename: str) -> bool:
 
 def _line_waived(filename: str, lineno: int) -> bool:
     """Does ``# @cash:assume-safe`` cover *lineno* -- on it, or alone above it?"""
+    # Local: import cycle effect_observer -> purity_analyzer -> ... -> effect_observer.
     from .purity_analyzer import _ASSUME_SAFE_RE
 
     if _ASSUME_SAFE_RE.search(linecache.getline(filename, lineno)):
@@ -122,9 +125,6 @@ def _install_patches() -> None:
     if _PATCHED:
         return
     _PATCHED = True
-
-    import socket
-    import subprocess
 
     original_connect = socket.socket.connect
 

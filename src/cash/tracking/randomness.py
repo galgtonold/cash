@@ -7,8 +7,10 @@ import functools
 import hashlib
 import inspect
 import logging
+import random
 import re
 import secrets
+import sys
 import types
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -1451,14 +1453,11 @@ def capture_rng_state() -> dict:
         Dict mapping module name to its RNG state (picklable).
         Only includes modules that are currently imported.
     """
-    import sys
 
     state = {}
 
     # Standard library random
     if "random" in sys.modules:
-        import random
-
         try:
             state["random"] = random.getstate()
         except (TypeError, AttributeError) as e:
@@ -1497,15 +1496,12 @@ def restore_rng_state(state: dict) -> None:
     Args:
         state: Dict mapping module name to its RNG state.
     """
-    import sys
 
     if not state:
         return
 
     # Standard library random
     if "random" in state and "random" in sys.modules:
-        import random
-
         try:
             random.setstate(state["random"])
         except (TypeError, ValueError) as e:
@@ -1567,7 +1563,6 @@ def _classify_rng_carrier(obj: object) -> str | None:
     capturing them twice under a variable name would let a stale alias fight
     with the authoritative global state.
     """
-    import sys
 
     if "numpy" in sys.modules or "numpy.random" in sys.modules:
         try:
@@ -1584,17 +1579,11 @@ def _classify_rng_carrier(obj: object) -> str | None:
         except (ImportError, AttributeError):
             pass
 
-    if "random" in sys.modules:
-        try:
-            import random
-
-            if isinstance(obj, random.Random):
-                # ``random.*`` module functions delegate to this singleton.
-                if obj is not getattr(random, "_inst", None):
-                    return _KIND_PY_RANDOM
-                return None
-        except (ImportError, AttributeError):
-            pass
+    if isinstance(obj, random.Random):
+        # ``random.*`` module functions delegate to this singleton.
+        if obj is not getattr(random, "_inst", None):
+            return _KIND_PY_RANDOM
+        return None
 
     return None
 

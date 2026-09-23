@@ -112,7 +112,7 @@ def test_a_broken_backend_registry_cannot_break_the_cell(monkeypatch):
     def boom():
         raise RuntimeError("registry exploded")
 
-    monkeypatch.setattr(_backend_base, "discarded_writes", boom)
+    monkeypatch.setattr("cash.notebook.ipython.cell_executor.discarded_writes", boom)
     row, seen = discarded_writes_notification(7)
     assert row is None
     assert seen == 7, "watermark must survive a failed read unchanged"

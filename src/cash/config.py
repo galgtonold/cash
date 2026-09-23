@@ -17,7 +17,10 @@ env vars (``CASH_TIER_0_TYPE=redis``, ``CASH_TIER_0_HOST=...``).
 
 from __future__ import annotations
 
+import ast
+import difflib
 import functools
+import inspect
 import logging
 import os
 import re
@@ -28,6 +31,10 @@ import typing
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
+
+from .diagnostics import warn_diagnostic
+from .exceptions import CashCacheIneffectiveWarning
+from .tracking.file_tracker import untracked
 
 logger = logging.getLogger(__name__)
 
@@ -469,6 +476,7 @@ def format_size(n: int) -> str:
         unit = _SIZE_UNITS[name.lower()]
         if n >= unit and (n * 10) % unit == 0:
             return f"{n / unit:g} {name}"
+    # Local: import cycle config -> backends.adaptive_caps -> backends -> backends._base -> config.
     from .backends.adaptive_caps import human_bytes
 
     return human_bytes(n)
@@ -535,17 +543,12 @@ def _config_notice(code: str, what: str, fix: str) -> None:
         return
     _CONFIG_NOTICES.add((code, what))
     try:
-        from .diagnostics import warn_diagnostic
-        from .exceptions import CashCacheIneffectiveWarning
-
         warn_diagnostic(CashCacheIneffectiveWarning, code, what, fix)
     except Exception:  # noqa: BLE001 - a notice must never break a config load
         logger.debug("Could not emit %s", code, exc_info=True)
 
 
 def _did_you_mean(key: str, valid: Any) -> str:
-    import difflib
-
     match = difflib.get_close_matches(key, sorted(valid), n=1, cutoff=0.6)
     return f" Did you mean `{match[0]}`?" if match else ""
 
@@ -557,9 +560,6 @@ def _warn_toml_unreadable(path: Path) -> None:
         return
     _TOML_NOTICE_GIVEN = True
     try:
-        from .diagnostics import warn_diagnostic
-        from .exceptions import CashCacheIneffectiveWarning
-
         warn_diagnostic(
             CashCacheIneffectiveWarning,
             "CONFIG-TOML-UNREADABLE",
@@ -1250,7 +1250,6 @@ def get_config(
     (a nested call's bookkeeping), and the files it reads are cash's, not the
     function's.
     """
-    from .tracking.file_tracker import untracked
 
     with untracked():
         return _resolve_config(
@@ -1602,8 +1601,6 @@ def _field_docs(cls: type) -> dict[str, str]:
     Python drops attribute docstrings at compile time, so the only copy is
     the source. Empty when the source is not available (a frozen app).
     """
-    import ast
-    import inspect
 
     try:
         body = ast.parse(textwrap.dedent(inspect.getsource(cls))).body[0].body

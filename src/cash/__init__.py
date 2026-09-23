@@ -17,13 +17,18 @@ part of the public API; import them from ``cash``, e.g. ``from cash import pure`
 from __future__ import annotations
 
 import contextlib
+
+# Aliased: importing the ``cash.logging`` submodule rebinds ``cash.logging``.
+import logging as _stdlib_logging
 from collections.abc import Iterator
+from dataclasses import fields
 from typing import Any
 
 from .backends import FileBackend, InMemoryBackend, TieredBackend
+from .backends.factory import apply_persistence_settings, build_backend_from_config
 from .backends.sqlite_backend import SQLiteBackend
-from .config import CashConfig, create_default_config, get_config
-from .core import CacheExplanation, Cash
+from .config import CashConfig, create_default_config, get_config, validate_value
+from .core import CacheExplanation, Cash, _enable_cash_logging
 from .data_source import DataSource, FileDataSource
 from .exceptions import (
     AmbiguousCellError,
@@ -182,9 +187,6 @@ def configure(**overrides: Any) -> None:
     """
     if not overrides:
         return
-    from dataclasses import fields
-
-    from .config import CashConfig
 
     valid_fields = {f.name for f in fields(CashConfig) if not f.name.startswith("_")}
     unknown = set(overrides) - valid_fields
@@ -193,8 +195,6 @@ def configure(**overrides: Any) -> None:
 
     # Checked before anything is applied, so a bad value leaves the running
     # configuration exactly as it was -- see `config.validate_value`.
-    from .config import validate_value
-
     overrides = {key: (val if key == "tiers" else validate_value(key, val)) for key, val in overrides.items()}
 
     c = _get_global_cash()
@@ -238,36 +238,22 @@ def configure(**overrides: Any) -> None:
         c.debug = bool(overrides["debug"])
         if c.debug:
             # Same as the constructor: asking for debug output produces some.
-            import logging
-
-            from .core import _enable_cash_logging
-
-            _enable_cash_logging(logging.DEBUG)
+            _enable_cash_logging(_stdlib_logging.DEBUG)
     if "verbose" in overrides:
         c.verbose = bool(overrides["verbose"])
         if c.verbose:
-            import logging
-
-            from .core import _enable_cash_logging
-
-            _enable_cash_logging(logging.INFO)
+            _enable_cash_logging(_stdlib_logging.INFO)
 
     if not needs_rebuild and {"smart_persistence", "min_cache_savings_pct"} & set(overrides) and c._backend is not None:
-        from .backends.factory import apply_persistence_settings
-
         apply_persistence_settings(c._backend, c.config)
 
     if needs_rebuild:
-        from .backends.factory import build_backend_from_config
-
         old_backend = c._backend
         if old_backend is not None:
             try:
                 old_backend.shutdown()
             except Exception as e:  # noqa: BLE001 — best-effort drain
-                import logging
-
-                logging.getLogger(__name__).warning(
+                _stdlib_logging.getLogger(__name__).warning(
                     "Old backend shutdown failed during configure(): %s",
                     e,
                 )

@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from functools import cache
 
+from .notebook.ipython.magics import CashMagics
+
 try:
     from nbconvert.preprocessors import Preprocessor
     from traitlets import Bool
@@ -128,7 +130,6 @@ class CashStripPreprocessor(Preprocessor):
 @cache
 def _magic_line_pattern() -> re.Pattern[str]:
     """A source line that invokes a cash magic, built from the registered set."""
-    from .notebook.ipython.magics import CashMagics
 
     line = "|".join(sorted(map(re.escape, CashMagics.magics["line"]), key=len, reverse=True))
     cell = "|".join(sorted(map(re.escape, CashMagics.magics["cell"]), key=len, reverse=True))

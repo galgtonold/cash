@@ -25,11 +25,14 @@ import sys
 import types
 from typing import Any, Callable, Iterable
 
+from ..tracking.module_symbols import closure_digest, static_attribute_reads
+
 logger = logging.getLogger(__name__)
 
 
 def read_module_source_hash(mod_file: str, dep_files: set[str] | None = None) -> str | None:
     # Imported on use: the ``statement`` package imports this module.
+    # Local: import cycle lineage_formula -> statement.file_deps -> ... -> lineage_formula.
     from .statement.file_deps import read_module_source_hash as read
 
     return read(mod_file, dep_files)
@@ -73,7 +76,6 @@ def module_read_lineage(
     names = {real, var_name}
     if not (mod_file and os.path.isfile(mod_file) and names & _tracked(function_tracker)):
         return None
-    from ..tracking.module_symbols import static_attribute_reads
 
     attrs = static_attribute_reads(code, var_name)
     if not attrs:
@@ -121,7 +123,6 @@ def _closure_with_deps(
     (:func:`module_read_lineage`) and a name brought in by ``from ... import``
     (:func:`_from_module_hash`) -- so they bound a closure the same way.
     """
-    from ..tracking.module_symbols import closure_digest
 
     digest = closure_digest(mod_file, attrs)
     if digest is None:

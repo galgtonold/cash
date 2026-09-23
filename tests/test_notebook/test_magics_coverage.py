@@ -58,8 +58,8 @@ class TestSaveHintLiveReaderAware:
 
     @staticmethod
     def _gates(monkeypatch, *, colab: bool, labext: bool) -> None:
-        monkeypatch.setattr("cash.notebook.server_discovery._in_colab", lambda: colab)
-        monkeypatch.setattr("cash.notebook.server_discovery._labextension_installed", lambda: labext)
+        monkeypatch.setattr("cash.notebook.ipython.magics._in_colab", lambda: colab)
+        monkeypatch.setattr("cash.notebook.ipython.magics._labextension_installed", lambda: labext)
 
     def test_hint_shown_when_no_live_reader(self, magics_fixture, capsys, monkeypatch):
         magics, _shell, _backend = magics_fixture
@@ -99,7 +99,7 @@ class TestSaveHintLiveReaderAware:
             raise RuntimeError("no filesystem for you")
 
         magics, _shell, _backend = magics_fixture
-        monkeypatch.setattr("cash.notebook.server_discovery._in_colab", lambda: False)
+        monkeypatch.setattr("cash.notebook.ipython.magics._in_colab", lambda: False)
         monkeypatch.setattr("os.path.isdir", lambda *_a, **_k: _boom())
         magics._save_hint_shown = False
         magics.cash_on("")  # must not raise

@@ -15,7 +15,7 @@ This page lists every such case we know about, what you actually see, and what t
 
 The single most-often-misread behaviour, and it is working as designed.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @a4042c14, cash/tracking/randomness.py:restore_rng_state @3f0a03ee -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @a4042c14, cash/tracking/randomness.py:restore_rng_state @3e10fc77 -->
 An unseeded random draw that is expensive enough to cache **is** cached. Re-running the cell returns the *same* numbers, because you are seeing a restored value rather than a fresh draw:
 
 <!-- test:skip reason="illustrative: demonstrates replayed randomness across re-runs" -->
@@ -33,7 +33,7 @@ Cash warns the first time this happens:
 
 The cost floor decides whether a value is worth *persisting*. It does not decide whether you see the same number twice.
 
-<!-- claim: cash/core.py:Cash._rng_replay_parts @c45b579b, cash/core.py:Cash._replay_rng_state @1eba1994 -->
+<!-- claim: cash/core.py:Cash._rng_replay_parts @ab3f27d7, cash/core.py:Cash._replay_rng_state @597e8922 -->
 **What the caller draws next is not affected.** A hit does not run the body, so
 the stream it advanced would stay where it was and the caller's own next draw
 would repeat what the function drew — with `np.random.seed(0)`, exactly the
@@ -351,7 +351,7 @@ puts you on the content-hashed eager path, or name the file:
 
 Unlike the mutation cases above, this one is **not** isolated-re-run only — it can give a wrong answer on a fresh `Run All`, the first time the loop ever executes.
 
-<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @5390bd5c -->
+<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @ada78930 -->
 Cash decomposes a `for` loop per iteration and uses the loop variable's value — captured at the moment it is *bound*, before any body statement runs — as the per-iteration cache discriminator. That applies both to an ordinary cached statement in the body and to an intercepted (on by default) sub-call whose own arguments give the key nothing else to vary on. If the body **mutates the loop variable before it is used**, the discriminator was already captured before that mutation and cannot see it:
 
 <!-- test:skip reason="illustrative: pull() stands in for a slow call whose only per-iteration signal is the loop variable; call-level caching is on by default and needs no directive to make pull(handle) itself the cached, keyed unit" -->
@@ -560,7 +560,7 @@ the file is behind and says so on the badge — a warning row naming the time th
 file was last saved. That proof condemns the whole file, so the warning stands
 until you save.
 
-<!-- claim: cash/notebook/live_cells.py:handle_message @f101a60b, cash/notebook/server_discovery.py:_try_extension_cells @dbd46007 -->
+<!-- claim: cash/notebook/live_cells.py:handle_message @f101a60b, cash/notebook/server_discovery.py:_try_extension_cells @750c7c4a -->
 **On JupyterLab, cash's own extension pushes your unsaved edits to the kernel.**
 `pip install cash-lib` also drops a prebuilt JupyterLab extension
 (`cash-live-cells`) into your environment, which JupyterLab discovers at startup
@@ -627,7 +627,7 @@ jupyter labextension enable cash-live-cells
 That lock behaviour is JupyterLab's own and applies to any extension, not just
 this one.
 
-<!-- claim: cash/notebook/server_discovery.py:_labextension_installed @aeb830dd -->
+<!-- claim: cash/notebook/server_discovery.py:_labextension_installed @e4930904 -->
 Disabling does not remove the installed directory, and the proactive `Ctrl+S` tip
 `%cash_on` prints is gated on that directory being present — so a disabled
 extension, like a split install, keeps the tip suppressed. You are still told,

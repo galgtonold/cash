@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from .renderers.html import render_html
+from .view_builder import build_interactive_badge
+
 
 def render_interactive_badge(
     metrics_list: list[dict[str, Any]],
@@ -34,9 +37,6 @@ def render_interactive_badge(
     """
     if badge_mode != "html":
         return ""
-
-    from .renderers.html import render_html
-    from .view_builder import build_interactive_badge
 
     view = build_interactive_badge(
         metrics_list or [],

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import site
 import sys
 import time as _time
 import urllib.error
@@ -27,6 +28,10 @@ from urllib.parse import unquote
 
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashWarning
+from . import live_cells
+from .live_cells import latest_cells
+from .vscode_backup import find_backup
+from .vscode_backup import live_cells as vscode_live_cells
 
 logger = logging.getLogger(__name__)
 
@@ -111,8 +116,6 @@ def _a_live_reader_can_answer() -> bool:
     returned that path and this advisory was never on the table.
     """
     try:
-        from . import live_cells
-
         return live_cells.latest_cells() is not None or _in_colab()
     except Exception as e:  # noqa: BLE001 - an advisory gate must never break a cell
         logger.debug("[UTILS] live-reader probe failed: %s", e)
@@ -524,8 +527,6 @@ def _try_extension_cells(include_ids: bool) -> list | None:
     environment gate -- a push can only exist if the extension is running.
     """
     try:
-        from cash.notebook.live_cells import latest_cells
-
         cells = latest_cells()
     except Exception as e:  # noqa: BLE001
         logger.debug("[UTILS] extension cell read failed: %s", e)
@@ -576,8 +577,6 @@ def _labextension_installed() -> bool:
     instead of it being silently withdrawn from all of them.
     """
     try:
-        import site
-
         roots = [sys.prefix]
         user_base = site.getuserbase()
         if user_base:
@@ -723,9 +722,7 @@ def _try_vscode_backup_cells(notebook_path: str | None, include_ids: bool) -> li
             return cached_cells
 
     try:
-        from cash.notebook.vscode_backup import find_backup, live_cells
-
-        cells = live_cells(notebook_path)
+        cells = vscode_live_cells(notebook_path)
         if cells is None:
             _vscode_cells_cache.pop(cache_key, None)
             return None

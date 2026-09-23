@@ -27,6 +27,7 @@ from ..tracking.file_dep_snapshot import file_dep_is_fresh
 from ..utils import resolve_file_dep_path
 from ._protocols import ShellProtocol
 from .cache_status import CacheStatus
+from .call_refs import resolve_call_refs
 from .statement import ProcessResult
 
 if TYPE_CHECKING:
@@ -240,8 +241,6 @@ class Restorer:
         cache_key = self._tracking_state.variable_sources[var_name]
         metadata, cached_data = self._backend.get(cache_key)
         if cached_data:
-            from cash.notebook.call_refs import resolve_call_refs
-
             cached_data = resolve_call_refs(cached_data, self._backend)
         if not cached_data:
             if self._debug:

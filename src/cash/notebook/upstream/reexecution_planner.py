@@ -12,8 +12,13 @@ import types
 from typing import TYPE_CHECKING
 
 from ...analysis.cacheability import (
+    REPEATABILITY_ACCUMULATING,
+    REPEATABILITY_REPLACING,
+    _resolve_literal_path,
     consumed_input_names,
+    statement_calls_user_writer,
     statement_saves_current_pyplot_figure,
+    statement_write_repeatability,
     statement_writes_files,
     statement_written_paths,
 )
@@ -23,10 +28,11 @@ from ...exceptions import CashWarning
 from ...tracking.file_dep_snapshot import file_dep_is_fresh
 from ...utils import resolve_file_dep_path
 from .._trace import trace_event
-from ..cache_key import write_provenance_key
+from ..cache_key import called_function_globals, write_provenance_key
 from ..cache_status import CacheStatus
 from ..carrier_history import carrier_history_fingerprint
 from ..stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
+from .mismatch_classifier import import_only
 from .virtual_lineage import _key_lineages
 
 if TYPE_CHECKING:
@@ -103,7 +109,6 @@ def _literal_path_bindings(simulation_trace: list | None) -> dict[str, str]:
     ``OUT / 'chart.png'`` means when the kernel does not hold ``OUT`` yet.
     A name bound more than once, or by anything else, is left out.
     """
-    from ...analysis.cacheability import _resolve_literal_path
 
     bound: dict[str, str | None] = {}
     for entry in simulation_trace or ():
@@ -809,7 +814,6 @@ class ReexecutionPlanner:
         ``import bt`` re-ran the import without the insert above it and stopped
         on ``No module named 'bt'`` (round 29, r29s3, 2/2).
         """
-        from .mismatch_classifier import import_only
 
         scheduled = set(stmts_to_run_indices)
         added: set[int] = set()
@@ -1318,12 +1322,6 @@ class ReexecutionPlanner:
         function it calls (``save_png(kind, path)``, whose ``savefig`` sits in
         the helper). A replay that re-ran a cell's inline writes but not its
         helper's left the report folder half old, half new (round 23)."""
-        from ...analysis.cacheability import (
-            REPEATABILITY_ACCUMULATING,
-            statement_calls_user_writer,
-            statement_write_repeatability,
-            statement_writes_files,
-        )
 
         if _only_defines(stmt_code):
             # ``def save_page(...)`` writes nothing when it runs; its callers do,
@@ -1353,7 +1351,6 @@ class ReexecutionPlanner:
         """A writer's inputs plus the notebook globals its callees read: the
         helper that plots ``scores`` depends on ``scores`` though the call
         site never names it."""
-        from ..cache_key import called_function_globals
 
         user_ns = self._user_ns()
         names = set(inputs)
@@ -1570,11 +1567,6 @@ class ReexecutionPlanner:
         where everything but a provable append follows it, or ``PACK.mkdir()``
         stays behind and the next write finds no folder.
         """
-        from ...analysis.cacheability import (
-            REPEATABILITY_ACCUMULATING,
-            REPEATABILITY_REPLACING,
-            statement_write_repeatability,
-        )
 
         cells = {getattr(simulation_trace[w], "cell", -1) for w in writer_indices} - {-1}
         if not cells:
@@ -1648,11 +1640,6 @@ class ReexecutionPlanner:
         if executed_writes is None:
             return []
         runtime_lineage = getattr(tracking, "variable_lineage", None) or {}
-
-        from ...analysis.cacheability import (
-            REPEATABILITY_ACCUMULATING,
-            statement_write_repeatability,
-        )
 
         def _input_lineage_drifted(name: str) -> bool:
             # The writer's payload changed even though nothing in the variable

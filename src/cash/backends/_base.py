@@ -17,6 +17,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, fields
 from typing import Any
 
+from cash.diagnostics import warn_diagnostic
+from cash.exceptions import CashCacheStoreFailedWarning
+from cash.tracking.file_tracker import untracked
+
+from ..config import get_config
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["CacheMetadata", "MetadataDict", "CacheBackend", "PendingWrites"]
@@ -136,8 +142,6 @@ def _shutdown_write_timeout() -> float:
     default is still better than an unbounded one.
     """
     try:
-        from ..config import get_config
-
         value = float(get_config().shutdown_write_timeout)
     except Exception:  # noqa: BLE001 - teardown, or a config that cannot load
         return _DEFAULT_SHUTDOWN_WRITE_TIMEOUT
@@ -384,8 +388,6 @@ class PendingWrites:
             # what to evict) happened under the OUTER cached call's tracker,
             # and the cache directory became that entry's dependency -- one
             # recompute per pool worker per run (round 19).
-            from cash.tracking.file_tracker import untracked
-
             try:
                 with untracked():
                     future.set_result(self._run_task(key, fn, args, kwargs))
@@ -494,12 +496,6 @@ class PendingWrites:
                 # that one away would lose a live write.
                 if self._pending.get(key) is future:
                     del self._pending[key]
-            # Deferred import: cash.exceptions is a leaf, but importing it at
-            # module scope from a backend base has bitten this package before.
-            # ``cash.diagnostics`` is a leaf too (it imports only ``warnings``),
-            # and is deferred alongside it for the same reason.
-            from cash.diagnostics import warn_diagnostic
-            from cash.exceptions import CashCacheStoreFailedWarning
 
             warn_diagnostic(
                 CashCacheStoreFailedWarning,
@@ -652,8 +648,6 @@ class PendingWrites:
         """Say that the exit deadline expired with writes still running."""
         with self._lock:
             unfinished = sum(1 for f in self._pending.values() if not f.done())
-        from ..diagnostics import warn_diagnostic
-        from ..exceptions import CashCacheStoreFailedWarning
 
         try:
             warn_diagnostic(

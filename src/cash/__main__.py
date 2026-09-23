@@ -3,27 +3,36 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
 import os
 import pickle
 import shutil
+import sqlite3
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from cash import __version__
+from cash.backends.adaptive_caps import adaptive_disk_cap_for, human_bytes, resolve_ram_cap
 from cash.backends.entry_format import ENTRY_SUFFIX, read_entry
+from cash.config import (
+    _SIZE_FIELDS,
+    TOML_FLAT,
+    TOML_MISSING,
+    TOML_NOT_CASH,
+    TOML_SECTION,
+    _per_user_cache_root,
+    format_size,
+    get_config,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def get_version() -> str:
-    try:
-        from cash import __version__
-
-        return __version__
-    except (ImportError, AttributeError):
-        return "unknown"
+    return __version__
 
 
 def resolved_cache_dir() -> str:
@@ -43,8 +52,6 @@ def resolved_cache_dir() -> str:
     directory you are standing in.
     """
     try:
-        from cash.config import get_config
-
         return str(get_config().cache_dir)
     except Exception:  # noqa: BLE001 - a broken config must not break `clear`
         return ".cash"
@@ -58,7 +65,6 @@ def tool_cache_dir(name: str) -> str:
     tool you mean -- it is itself a different console script -- so ``--tool``
     names it.
     """
-    from cash.config import _per_user_cache_root
 
     return str(_per_user_cache_root() / name)
 
@@ -84,8 +90,6 @@ def _sqlite_cache(cache_dir: str) -> tuple[int, int] | None:
     if not os.path.isfile(path):
         return None
     try:
-        import sqlite3
-
         with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
             rows = conn.execute("SELECT COUNT(*) FROM cache_entries").fetchone()
         return int(rows[0]), os.path.getsize(path)
@@ -115,8 +119,6 @@ def _entry_totals(cache_dir: str) -> tuple[int, int] | None:
 def _per_user_tool_caches() -> list[tuple[str, str, int, int]]:
     """``(tool, path, entries, bytes)`` for every per-user tool cache."""
     try:
-        from cash.config import _per_user_cache_root
-
         root = _per_user_cache_root()
         children = sorted(p for p in root.iterdir() if p.is_dir())
     except (OSError, RuntimeError):
@@ -142,11 +144,8 @@ def cmd_version(args: argparse.Namespace) -> None:
 
 def cmd_info(args: argparse.Namespace) -> None:
     """Show cash configuration."""
-    from cash.config import get_config
 
     config = get_config(config_path=getattr(args, "config", None))
-
-    from cash.config import format_size
 
     origins = getattr(config, "_origins", {})
 
@@ -174,12 +173,6 @@ def cmd_info(args: argparse.Namespace) -> None:
     # numbers it actually resolves to, and the RAM one in particular appears
     # nowhere else -- a tester spent a round reading a growing RSS as a leak
     # when it was a 4 GiB cap doing exactly what it says.
-    from cash.backends.adaptive_caps import (
-        adaptive_disk_cap_for,
-        human_bytes,
-        resolve_ram_cap,
-    )
-
     if config.max_cache_size is None:
         # Sized the way the BACKEND sizes it: from free space plus what the
         # cache already holds. `resolve_disk_cap` uses free space alone, and
@@ -210,8 +203,6 @@ def cmd_info(args: argparse.Namespace) -> None:
     # pyproject.toml, a pytest launched from the directory above its project
     # and a `disable = true` were each invisible here -- a Source line names
     # the layers, not which file, nor which setting came from where.
-    from cash.config import TOML_FLAT, TOML_MISSING, TOML_NOT_CASH, TOML_SECTION
-
     outcome = {
         TOML_SECTION: "read",
         TOML_FLAT: "read",
@@ -247,9 +238,6 @@ def _tier_text(tier) -> str:
     Round 19: a tier's ``default_ttl`` decides when entries expire and was
     shown nowhere -- `Tiers: memory, file` said nothing about it.
     """
-    import dataclasses
-
-    from cash.config import format_size
 
     parts = []
     for f in dataclasses.fields(tier):
@@ -268,7 +256,6 @@ def _tier_text(tier) -> str:
 
 def _setting_text(config, key: str) -> str:
     """One setting's effective value, as `cash info` prints it."""
-    from cash.config import _SIZE_FIELDS, format_size
 
     value = getattr(config, key, None)
     if key == "tiers":
@@ -341,8 +328,6 @@ def _function_of(key: str, metadata: dict | None = None) -> str:
 def _tier_default_ttl() -> int | None:
     """The ``default_ttl`` of the first configured tier that has one, now."""
     try:
-        from cash.config import get_config
-
         for tier in get_config().tiers or ():
             if getattr(tier, "default_ttl", None) is not None:
                 return int(tier.default_ttl)

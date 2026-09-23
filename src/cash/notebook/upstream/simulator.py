@@ -14,16 +14,28 @@ orchestrator (``UpstreamChecker``) takes that plan and runs it via the real
 from __future__ import annotations
 
 import ast
+import builtins
 import collections
 import logging
+import os
 import re
+import sys
+import types
 from collections.abc import Callable
 from typing import Any
 
-from ...analysis.cacheability import analyze_statement, consumed_input_names
+from ...analysis.cacheability import (
+    _resolve_literal_path,
+    analyze_statement,
+    consumed_input_names,
+    resolve_path_list,
+    statement_read_paths,
+)
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...tracking.function_tracker import is_local_module
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .._trace import is_tracing, trace_event
+from ..cache_key import read_provenance_key
 from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
 from ._types import SimulationCacheEntry, apply_collected_mutations
 from .mismatch_classifier import MismatchClassifier
@@ -41,6 +53,7 @@ def _statement_codes(cell_source: str) -> list[str]:
         tree = ast.parse(clean)
     except (SyntaxError, ValueError, TypeError):
         return [cell_source]
+    # Local: import cycle upstream.simulator -> ipython.cell_executor -> ... -> upstream.simulator.
     from ..ipython.cell_executor import CellExecutor
 
     codes = []
@@ -58,7 +71,6 @@ def _bind_literal_paths(stmt: str, bound: dict, namespace) -> None:
     ``TF = [Path('other.csv')]`` binds ``TF``; any other binding of a name
     drops it, so a later statement never reads a stale value from here.
     """
-    from ...analysis.cacheability import _resolve_literal_path, resolve_path_list
 
     try:
         tree = ast.parse(CodeAnalyzer.strip_magics(stmt))
@@ -174,10 +186,6 @@ class NotebookSimulator:
         user_ns = getattr(self.shell, "user_ns", None)
         if ft is None or not user_ns:
             return
-        import sys
-        import types
-
-        from ...tracking.function_tracker import is_local_module
 
         names: set[str] = set()
         for value in list(user_ns.values()):
@@ -813,7 +821,6 @@ class NotebookSimulator:
         backend = getattr(cash, "backend", None) if cash is not None else None
         if backend is None or not hasattr(backend, "get_metadata"):
             return None
-        from ..cache_key import read_provenance_key
 
         try:
             record = backend.get_metadata(read_provenance_key(code))
@@ -919,7 +926,6 @@ class NotebookSimulator:
         path is in none of these paths is an unrelated / terminal side-effect and
         must not be re-fired for THIS cell.
         """
-        from ...analysis.cacheability import statement_read_paths
 
         paths: set[str] = set()
         fully_known = True
@@ -1304,7 +1310,6 @@ _PURE_PATH_FUNCS = frozenset(
 
 def _resolve_callee(func: ast.expr, user_ns: dict) -> Any:
     """The object *func* names in *user_ns*, or ``None`` if not a plain path."""
-    import builtins
 
     parts: list[str] = []
     while isinstance(func, ast.Attribute):
@@ -1336,9 +1341,6 @@ def _binds_without_reading(code: str, user_ns: dict) -> bool:
     pins a stale value, while one wrongly refused only costs the first
     reader's cache.
     """
-    import builtins
-    import os
-    import sys
 
     try:
         tree = ast.parse(code)

@@ -80,7 +80,7 @@ class TestCLIInfo:
             (cache_dir / f"e{i}{ENTRY_SUFFIX}").write_bytes(b"x" * 2048)
         config = get_config()
         monkeypatch.setattr(config, "cache_dir", str(cache_dir))
-        monkeypatch.setattr("cash.config.get_config", lambda **_: config)
+        monkeypatch.setattr("cash.__main__.get_config", lambda **_: config)
         cmd_info(SimpleNamespace())
         out = capsys.readouterr().out
         line = next(l for l in out.splitlines() if l.strip().startswith("Holds:"))

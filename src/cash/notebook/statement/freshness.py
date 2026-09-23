@@ -34,6 +34,7 @@ from ...tracking.file_dep_snapshot import (
     stats_from_listings,
 )
 from ...utils import resolve_file_dep_path
+from ..call_refs import resolve_call_refs
 from ._metadata import StatementCacheMetadata
 
 if TYPE_CHECKING:
@@ -139,8 +140,6 @@ class CacheFreshnessChecker:
                 cached_data = self._invalidate_if_input_file_changed(tracking_state, inputs, cached_data)
             if cached_data:
                 # Call results the entry refers to rather than copies (call_refs).
-                from cash.notebook.call_refs import resolve_call_refs
-
                 cached_data = resolve_call_refs(cached_data, self._backend)
 
         return metadata, cached_data, cache_check_time

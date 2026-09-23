@@ -37,18 +37,21 @@ from __future__ import annotations
 import contextvars
 import itertools
 import logging
+import os
 import time
-import urllib.parse
-from typing import Any
 
 # ``urllib.request`` drags in http.client, email and ssl - a real cost on every
 # ``import cash``, paid by everyone whether or not they touch a URL. It is
 # imported inside the HTTP path instead. ``urllib.parse`` is cheap and needed to
 # recognise a scheme, so it stays up here.
+import urllib.parse
+from typing import Any
+
 from ._clock import perf_counter as _perf_counter
 from .data_source import DataSource
 from .diagnostics import warn_diagnostic
 from .exceptions import CashCacheIneffectiveWarning, DependencyNotFoundError
+from .tracking.file_dep_snapshot import ACTIVE_CONFIG
 
 __all__ = ["RemoteFileDataSource"]
 
@@ -423,16 +426,14 @@ class RemoteFileDataSource(DataSource):
         if self.max_age:
             return self.max_age
         try:
-            from .tracking.file_dep_snapshot import ACTIVE_CONFIG
-
             config = ACTIVE_CONFIG.get()
             if config is None:
-                from . import _global_cash
+                # Local: import cycle cash -> remote_source -> cash.
+                import cash
 
-                config = getattr(_global_cash, "config", None)
+                config = getattr(cash._global_cash, "config", None)
             if config is not None:
                 return float(config.remote_revalidate_max_age_seconds)
-            import os
 
             return float(os.environ.get("CASH_REMOTE_REVALIDATE_MAX_AGE_SECONDS", 0.0))
         except Exception:  # noqa: BLE001 - a config problem must not break a read

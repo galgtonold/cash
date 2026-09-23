@@ -248,7 +248,7 @@ expensive_function(1, 2)   # second call: instant
 Results that cost more than ~0.1s persist to disk across processes and restarts;
 cheaper ones are kept in memory for the session (see the [cost model](../cost-model.md)).
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @9b2e47ef, cash/core.py:Cash._try_builtin_type_hash @964ede10 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @21c5b8c5, cash/core.py:Cash._try_builtin_type_hash @964ede10 -->
 ### Pass DataFrames and arrays — they just work
 
 Arguments don't need to be hashable. Cash hashes by **content**, so a DataFrame or
@@ -307,7 +307,7 @@ The answer changed *and* `misses` went up: cash threw the cached result away
 because a function `pipeline` calls indirectly changed. You don't have to
 remember which entries a helper edit reaches.
 
-<!-- claim: cash/core.py:Cash._is_user_module @1b6836eb -->
+<!-- claim: cash/core.py:Cash._is_user_module @ff83ba8c -->
 That holds across files: a helper imported from another module of your project
 is followed the same way, with nothing to declare. What cash stops at is
 installed code — `site-packages` and the standard library. If a third-party
@@ -337,7 +337,7 @@ purity analyzer, and `explain()` — is in the [decorator guide](../decorator.md
 
 ## Configuration (both paths)
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @d62ca7be -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @ca3f5fd2 -->
 `%cash_on` takes only an optional `ttl=N`; to pick a different backend or cache
 directory, call `cash.configure(...)` first — `cash.configure(cache_dir="./my_cache")`
 before `%cash_on` in a notebook, or before the first `@cash.cache` call in a script.

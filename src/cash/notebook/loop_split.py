@@ -44,7 +44,10 @@ import json
 import logging
 import os
 
+from cash.backends.file_backend import recreate_cache_dir
 from cash.utils import replace_with_retry
+
+from .statement.miss_guard import resolve_cache_dir
 
 logger = logging.getLogger(__name__)
 
@@ -176,8 +179,6 @@ class LoopSplitStore:
         doc = {"version": _STORE_VERSION, "splits": dict(sorted(self._splits.items()))}
         tmp_path = f"{self._path}.{os.getpid()}.tmp"
         try:
-            from cash.backends.file_backend import recreate_cache_dir
-
             recreate_cache_dir(os.path.dirname(self._path))
             with open(tmp_path, "w", encoding="utf-8") as fh:
                 json.dump(doc, fh)
@@ -224,8 +225,6 @@ def store_for_backend(backend) -> LoopSplitStore | None:
     an unresolvable store means "no loop is split".
     """
     try:
-        from .statement.miss_guard import resolve_cache_dir
-
         return get_store(resolve_cache_dir(backend))
     except Exception:  # noqa: BLE001 - splitting is an optimisation
         logger.debug("[LOOP_SPLIT] could not resolve a store", exc_info=True)

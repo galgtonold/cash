@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from importlib import import_module
+
 from ._base import CacheBackend, CacheMetadata, MetadataDict
 from .file_backend import FileBackend
 from .memory_backend import InMemoryBackend
@@ -25,7 +27,6 @@ def __getattr__(name: str):
     module_name = _OPTIONAL_BACKENDS.get(name)
     if module_name is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    from importlib import import_module
 
     value = getattr(import_module(module_name, __name__), name)
     globals()[name] = value  # resolve once; later reads skip this hook

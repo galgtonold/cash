@@ -41,7 +41,7 @@ def seen(monkeypatch):
         stored.append(out)
         return out
 
-    monkeypatch.setattr(call_refs, "with_call_refs", spy_refs)
+    monkeypatch.setattr("cash.notebook.statement.processor.with_call_refs", spy_refs)
     real_digest = call_refs.digest_of
     monkeypatch.setattr(call_refs, "digest_of", lambda v: digests.append(1) or real_digest(v))
     real_ds = call_unit.digest_and_size

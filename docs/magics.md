@@ -41,7 +41,7 @@ parsed flag, and a working example. Behaviour is derived directly from
 ## Enabling and configuring (user-facing)
 
 ### `%cash_on`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @d62ca7be -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @ca3f5fd2 -->
 
 Enable automatic caching for every subsequent cell.
 
@@ -169,7 +169,7 @@ Print bug-report and feedback URLs. Useful pointer for beta users.
 ```
 
 ### `%cash_status`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @c81ac8bd -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @2244b483 -->
 
 Report status of the last cell plus a snapshot of session state (lineage,
 executed-code map, auto-cache flag, backend stats).
@@ -216,7 +216,7 @@ Set the badge display mode for subsequent cached cells. See
 ```
 
 ### `%cash_stats`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @f3f94b42 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @58a2cb0d -->
 
 Show cache statistics for this kernel session (a restart resets them; what the
 cache on disk holds is `cash info`'s): counts, hit rate, compute time, and the
@@ -275,7 +275,7 @@ not, and the entries are still missing from disk afterwards.
 ```
 
 ### `%cash_debug`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @3a834f1c -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @1178ce8b -->
 
 Toggle or configure debug logging. Levels propagate to the global `cash` logger
 and to the statement processor, upstream checker, and core Cash instance.
@@ -435,7 +435,7 @@ only-other, changed, identical) and optionally per-variable detail.
 ```
 
 ### `%cash_log`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_log @00db19d9 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_log @211fa612 -->
 
 View the in-memory structured log buffer (CashLogHandler). Requires a JSON
 handler installed via [`%cash_debug json`](#cash_debug) (or
@@ -525,7 +525,7 @@ JSON file suitable for [`%cash_diff`](#cash_diff).
 ```
 
 ### `%cash_import`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_import @cde3d810 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_import @70b97111 -->
 
 Load cache entries from a file written by `%cash_export`. **Pickle only** —
 JSON exports are lineage-only and cannot be re-imported as cache entries.

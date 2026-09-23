@@ -22,6 +22,8 @@ from typing import Any, NamedTuple, Protocol, runtime_checkable
 from cash.notebook.lineage_store import LineageStore
 from cash.source_norm import unparse_without_docstrings
 
+from .lineage_formula import module_read_lineage
+
 __all__ = [
     "CacheKeyContext",
     "CacheKeyResult",
@@ -506,8 +508,6 @@ def _process_input_var(
         # Narrowed to the names the statement reads when that is safe; see
         # `lineage_formula.module_read_lineage`, which the output lineage on
         # both engines calls too, so all three agree.
-        from .lineage_formula import module_read_lineage
-
         narrowed = module_read_lineage(function_tracker, var_name, val, code)
         if narrowed is not None:
             module_source_hashes.append(f"{var_name}:{narrowed}")

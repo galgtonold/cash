@@ -19,14 +19,27 @@ and exercise it without going through ``ControlStructureProcessor.process()``.
 from __future__ import annotations
 
 import ast
+import builtins as _builtins
 import contextlib
 import logging
 import time as _time
 from typing import TYPE_CHECKING, Any
 
+from ...analysis.cacheability import accumulator_loop_body_shape, cacheable_accumulator_loop
+from ...lineage_tag import own_tag
+from ...object_hashing import compute_hash_full
 from ...tracking.file_tracker import FileAccessTracker
 from ..cache_status import CacheStatus
+from ..loop_split import is_split_half, loop_source_hash, split_nodes, store_for_backend
 from . import helpers as _helpers
+from .processor import (
+    ControlStructureResult,
+    bind_target_values,
+    build_iteration_context,
+    compute_context_hash,
+    extract_target_names,
+    is_control_structure,
+)
 
 if TYPE_CHECKING:
     from ..statement import ProcessResult
@@ -244,10 +257,6 @@ class ForLoopHandler:
         default so nested / direct callers with no notion of a preceding
         sibling are unaffected.
         """
-        from .processor import (
-            ControlStructureResult,
-            extract_target_names,
-        )
 
         all_metrics: list[ProcessResult] = []
         total_iterations = 0
@@ -355,8 +364,6 @@ class ForLoopHandler:
                 # leaked loop variable) so the chosen single-unit path is
                 # actually cacheable. ``None`` for every other single-unit
                 # loop, which keeps their behaviour unchanged.
-                from ...analysis.cacheability import cacheable_accumulator_loop
-
                 force_outputs = None
                 acc_loop = cacheable_accumulator_loop(node, prev_node)
                 if acc_loop is not None:
@@ -501,12 +508,6 @@ class ForLoopHandler:
         loop_annotation=None,
     ) -> bool:
         """Process a single loop iteration; return True if fully cached."""
-        from .processor import (
-            bind_target_values,
-            build_iteration_context,
-            compute_context_hash,
-            is_control_structure,
-        )
 
         bindings = bind_target_values(node.target, iteration_value, self.shell.user_ns)
         # `loop_var_digests` collects the SAME hash computed just below for
@@ -531,8 +532,6 @@ class ForLoopHandler:
                 # discriminator: a sampled hash keyed two iterations over
                 # arrays that agreed in the sample onto ONE entry - wrong
                 # result on the first run. Hash full content here.
-                from cash.object_hashing import compute_hash_full
-
                 full = compute_hash_full(val)
                 # `variable_lineage[name]` and `loop_var_digests[name]`
                 # WANT DIFFERENT THINGS and must not be conflated -- a lesson
@@ -569,8 +568,6 @@ class ForLoopHandler:
                 # multiplied by however many cached calls read this loop
                 # var), just no longer skippable via the attribute shortcut
                 # for THIS consumer specifically.
-                from ...lineage_tag import own_tag
-
                 tag = own_tag(val)
                 h = tag if tag is not None else full
                 self.statement_processor.variable_lineage[name] = h
@@ -694,7 +691,6 @@ class ForLoopHandler:
         from *code*: ``ast.unparse`` drops comments, so by the time a body
         statement gets here its directive is already gone from the text.
         """
-        from .processor import compute_context_hash
 
         context_hash = compute_context_hash(iteration_context)
         modified_code = f"# __iteration_context__: {context_hash}\n{code}"
@@ -825,7 +821,6 @@ class ForLoopHandler:
         """Shared split store, or ``None`` if unresolvable (means: learn nothing)."""
         if getattr(self, "_split_store_cache", "unset") != "unset":
             return self._split_store_cache
-        from ..loop_split import store_for_backend
 
         cash_instance = getattr(self.statement_processor, "cash_instance", None)
         self._split_store_cache = store_for_backend(getattr(cash_instance, "backend", None))
@@ -851,7 +846,6 @@ class ForLoopHandler:
           none.
         * **File I/O in the body** -- needs per-iteration dep tracking.
         """
-        from ..loop_split import is_split_half
 
         if node.orelse or is_split_half(node):
             return None
@@ -937,8 +931,6 @@ class ForLoopHandler:
         if store is None:
             return
         try:
-            from ..loop_split import loop_source_hash
-
             store.record(loop_source_hash(node), self._SPLIT_PROBE_ITERS)
             if self.debug:
                 logger.debug("[LOOP_SPLIT] recorded k=%d; splits from next run", self._SPLIT_PROBE_ITERS)
@@ -960,8 +952,6 @@ class ForLoopHandler:
         if self._split_eligible(node, iterable) is None:
             return None
         try:
-            from ..loop_split import loop_source_hash
-
             return store.get(loop_source_hash(node))
         except Exception:  # noqa: BLE001 - a lookup must never break the loop
             logger.debug("[LOOP_SPLIT] verdict lookup failed", exc_info=True)
@@ -975,9 +965,6 @@ class ForLoopHandler:
         recurses through :meth:`process` (and is itself unsplittable, being a
         half); the tail takes the ordinary single-unit path.
         """
-        from ...analysis.cacheability import accumulator_loop_body_shape
-        from ..loop_split import split_nodes
-        from .processor import ControlStructureResult
 
         try:
             head, tail = split_nodes(node, k)
@@ -1054,7 +1041,6 @@ class ForLoopHandler:
             pass
 
         user_ns = getattr(self.shell, "user_ns", None) or {}
-        import builtins as _builtins
 
         for sub in ast.walk(iter_node):
             # A one-shot iterator ANYWHERE in the header, not only as the

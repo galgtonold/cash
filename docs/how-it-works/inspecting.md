@@ -115,7 +115,7 @@ When a cache decision surprises you, turn on debug mode to see Cash's
 reasoning — key computations, lineage calculations, upstream detection, and
 restoration decisions:
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @3a834f1c, cash/logging.py:setup_logging @2ceff60e -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @1178ce8b, cash/logging.py:setup_logging @2ceff60e -->
 <!-- test:skip reason="IPython magic command — requires kernel context" -->
 ```python
 %cash_debug on            # human-readable (default)
@@ -130,7 +130,7 @@ the cell and keeps nothing, so `%cash_log` after it reports *"No log handler
 active"* (and unhelpfully suggests the `%cash_debug on` you just ran). Start
 from `%cash_debug json` if you want a buffer to query:
 
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_log @00db19d9, cash/notebook/ipython/admin.py:CashAdminMagicsMixin._find_cash_log_handler @a78d4336, cash/notebook/ipython/admin.py:_parse_log_args @0946bbba -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_log @211fa612, cash/notebook/ipython/admin.py:CashAdminMagicsMixin._find_cash_log_handler @a5b19adf, cash/notebook/ipython/admin.py:_parse_log_args @0946bbba -->
 <!-- test:skip reason="IPython magic command — requires kernel context" -->
 ```python
 %cash_debug json      # the buffer exists from here on
@@ -294,7 +294,7 @@ That is the intended direction of error: an overstatement would be the bug.
 There it prints a range ("at least … at best …") instead of picking the
 flattering end; and when even the gross reading is a loss, it says so plainly.
 
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @f3f94b42 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @58a2cb0d -->
 `%cash_stats` deliberately does not walk the backend — on a disk cache with
 thousands of entries that is an O(N) scan that opens every metadata file, and
 paying it every time you want a hit rate is not a trade worth making. For size
@@ -305,7 +305,7 @@ and entry counts it points you at `cash info` in a terminal.
 Anything that requires touching the cache directory itself lives in the CLI, not
 in a magic. These five subcommands are the whole surface:
 
-<!-- claim: cash/__main__.py:main @fc218b1b, cash/__main__.py:cmd_info @d6c3c39a, cash/__main__.py:_inspect_cache_dir @5372c14d -->
+<!-- claim: cash/__main__.py:main @fc218b1b, cash/__main__.py:cmd_info @66ffb646, cash/__main__.py:_inspect_cache_dir @5372c14d -->
 ```bash
 cash version            # installed version
 cash info               # resolved config, where it came from, what the cache holds
@@ -338,7 +338,7 @@ For the thresholds that actually drive persistence, see
 
 ## Programmatic inspection
 
-<!-- claim: cash/core.py:Cash.explorer @599913c8, cash/ui/explorer.py:CacheExplorer @29620f36 broad="the table is a claim about what the class offers" -->
+<!-- claim: cash/core.py:Cash.explorer @599913c8, cash/ui/explorer.py:CacheExplorer @b2133930 broad="the table is a claim about what the class offers" -->
 For everything you'd want to do from code rather than a magic, Cash ships a
 few inspection tools:
 

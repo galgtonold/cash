@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from ..cache_status import CacheStatus
 from . import helpers as _helpers
+from .processor import ControlStructureResult, is_control_structure
 
 if TYPE_CHECKING:
     from ..statement import ProcessResult
@@ -66,7 +67,6 @@ class IfHandler:
 
         Falls back to ``_execute_as_single_unit`` if condition evaluation fails.
         """
-        from .processor import ControlStructureResult
 
         all_metrics: list[ProcessResult] = []
         cached_count = 0
@@ -163,7 +163,6 @@ class IfHandler:
         Each branch statement is its own cache entry, so its ``@cash:`` directive
         is resolved per statement and must not leak onto its siblings.
         """
-        from .processor import is_control_structure
 
         if is_control_structure(body_node):
             result = self.dispatcher.process(

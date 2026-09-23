@@ -21,6 +21,8 @@ import logging
 from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
+from cash.lineage_tag import own_tag, taggable
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["LineageStore"]
@@ -58,8 +60,6 @@ class LineageStore:
         self._lineage[var] = hash_
         # Never a class, module or function: a tag on a class is inherited by
         # every instance, which then all key alike (cash.lineage_tag).
-        from cash.lineage_tag import taggable
-
         if value is not None and taggable(value):
             try:
                 value._cash_lineage_hash = hash_
@@ -104,8 +104,6 @@ class LineageStore:
         if value is None:
             return None
         try:
-            from cash.lineage_tag import own_tag
-
             attr = own_tag(value)
             if attr is not None:
                 return attr

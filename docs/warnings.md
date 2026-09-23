@@ -108,7 +108,7 @@ serve a value you meant to recompute, so fix those.
 
 ## CACHE-ASYNC-GENERATOR {#cache-async-generator}
 
-<!-- claim: cash/core.py:Cash.cache @efbc9f40 -->
+<!-- claim: cash/core.py:Cash.cache @56d9763d -->
 **What happened.** You put `@cash.cache` on an async generator — an `async def`
 function that `yield`s. Cash does not cache those in this release, so the
 decorator handed your function straight back, unwrapped.
@@ -131,7 +131,7 @@ not ignore it if this is the function you were trying to speed up.
 
 ## CACHE-IDENTITY-COUPLED {#cache-identity-coupled}
 
-<!-- claim: cash/core.py:Cash._refuses_identity_coupled @66978112 -->
+<!-- claim: cash/core.py:Cash._refuses_identity_coupled @0612aaac -->
 **What happened.** Your cached function returned a live matplotlib `Figure` or
 `Axes` — or a list, tuple, dict or array holding one — and Cash refused to
 store it. "Identity-coupled" is Cash's term for an object that a library keeps
@@ -156,7 +156,7 @@ the caching.
 
 ## CACHE-DIR-UNWRITABLE {#cache-dir-unwritable}
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._warn_if_unwritable @7d59a3ab -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._warn_if_unwritable @ed86e53d -->
 **What happened.** On its first cache operation, cash tried to create a file in
 its cache directory and could not: a read-only mount, a directory this account
 has no write permission on, a container volume, a path owned by another user
@@ -195,7 +195,7 @@ truth and there is nothing to fix.
 
 ## CACHE-FRESHNESS-COST {#cache-freshness-cost}
 
-<!-- claim: cash/core.py:Cash._warn_if_local_validation_is_expensive @66d0f651, cash/remote_source.py:validation_is_expensive @18292cc6 -->
+<!-- claim: cash/core.py:Cash._warn_if_local_validation_is_expensive @f15ec824, cash/remote_source.py:validation_is_expensive @18292cc6 -->
 **What happened.** Before serving a cached result, cash re-checks every file the
 call read, to be sure none of them changed. On this call that check cost a
 serious share of the compute it saved — more than half of it, or more than two
@@ -292,7 +292,7 @@ on one of those results pays full compute, every time.
 
 ## CACHE-LOOP-GROWTH {#cache-loop-growth}
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_persist_amplification @65939966 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_persist_amplification @3b856f10 -->
 **What happened.** A statement inside a loop stores a value that grows on each
 pass — a list being appended to, a frame being concatenated. Cash wrote a fresh
 copy of the whole thing on every pass that grew it, noticed the copies now add up
@@ -391,7 +391,7 @@ warning on this page most worth reading, and the last one to filter.
 
 ## CACHE-THRASH {#cache-thrash}
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._warn_evict_after_write @753d40dc -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._warn_evict_after_write @8907ef9b -->
 **What happened.** The cache reached its size cap and is evicting entries
 within a couple of writes of storing them, so it re-writes and re-evicts
 instead of caching durably. The message names the cap, how much room is left on
@@ -411,7 +411,7 @@ roomier volume.
 
 ## CACHE-RESULT-SHARED {#cache-result-shared}
 
-<!-- claim: cash/core.py:Cash._warn_shared_result @209d97fe, cash/core.py:Cash._shared_with @71005699 -->
+<!-- claim: cash/core.py:Cash._warn_shared_result @209d97fe, cash/core.py:Cash._shared_with @5bf1d361 -->
 **What happened.** The result shares state with an object the caller still
 holds: it *is* an argument, holds one inside it, sits on the same memory as an
 ndarray argument, or is one of the function's module globals. On the run that
@@ -508,7 +508,7 @@ rather than leaving it to chance.
 
 ## CACHE-VALUE-TOO-BIG {#cache-value-too-big}
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @67c1f69d, cash/backends/file_backend.py:FileBackend._promotion_size_cap @cc93a731 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @a641a652, cash/backends/file_backend.py:FileBackend._promotion_size_cap @cc93a731 -->
 **What happened.** A single value is larger than every persistent tier's whole
 cap, so there is nowhere durable to put it and Cash offered it to the RAM tier
 instead. The message names the value's size and the cap it was measured
@@ -612,7 +612,7 @@ though then the line is better deleted.
 
 ## CONFIG-TOML-UNREADABLE {#config-toml-unreadable}
 
-<!-- claim: cash/config.py:_load_toml_config @b8d9cdd1, cash/config.py:_warn_toml_unreadable @8336db9c -->
+<!-- claim: cash/config.py:_load_toml_config @b8d9cdd1, cash/config.py:_warn_toml_unreadable @b8ff032b -->
 **What happened.** Cash found a config file — `pyproject.toml` with a
 `[tool.cash]` section, or the XDG user config — and has nothing that can parse
 it. A TOML parser entered the standard library in **Python 3.11** (`tomllib`);
@@ -829,14 +829,14 @@ ways to mute it.
 
 ## IMPURE-SIDE-EFFECTS {#impure-side-effects}
 
-<!-- claim: cash/core.py:Cash._surface_purity @a4fc3aae -->
+<!-- claim: cash/core.py:Cash._surface_purity @fde18ea3 -->
 **What happened.** Before the first call, Cash reads the source of your function
 and of the helpers it calls, looking for shapes that make a cached result
 questionable. It found some. The message lists each one with its line number and
 a short label in square brackets, and the label is the part that tells you how
 much to care:
 
-<!-- claim: cash/core.py:Cash._mutable_global_is_keyed @0e737db3 -->
+<!-- claim: cash/core.py:Cash._mutable_global_is_keyed @3a7ccf15 -->
 - `impure_call` — a call whose job is a side effect: `print` to stdout,
   `input`, `open(..., "w")`, `os.remove`, `subprocess.run`, `requests.post`,
   `json.dump`, or a write-shaped method on a receiver the function did not
@@ -1026,7 +1026,7 @@ to it later.
 
 ## KEY-BOOL-STATE-TOKEN {#key-bool-state-token}
 
-<!-- claim: cash/data_source.py:state_token_of @6c008991 -->
+<!-- claim: cash/data_source.py:state_token_of @01fb9637 -->
 **What happened.** You wrote a `DataSource` subclass, and Cash asked its
 `state_token()` for the value to fold into the cache key — and yours returned
 `True` or `False`. What Cash needs there is a *token*, not a yes/no.
@@ -1133,7 +1133,7 @@ seriously only when the opaque target is code you compile yourself.
 
 ## KEY-DYNAMIC-DEPENDENCY {#key-dynamic-dependency}
 
-<!-- claim: cash/core.py:Cash._warn_untrackable_in_carrier_once @293ba0f4 -->
+<!-- claim: cash/core.py:Cash._warn_untrackable_in_carrier_once @88fa8a24 -->
 **What happened.** An object you passed to a cached function carries code — a
 method of its class, or the function itself — and that code picks what it calls
 from a value at runtime: `getattr(module, name)()` with `name` in a variable,
@@ -1261,7 +1261,7 @@ cache looks healthy and is silently doing nothing.
 
 ## KEY-OPAQUE-CALLABLE {#key-opaque-callable}
 
-<!-- claim: cash/core.py:Cash._is_user_code_carrier @a334d114, cash/core.py:Cash._is_user_module @1b6836eb -->
+<!-- claim: cash/core.py:Cash._is_user_code_carrier @a334d114, cash/core.py:Cash._is_user_module @ff83ba8c -->
 **What happened.** A function, a class, or an object whose class carries code
 reached a cached call — as an argument you passed, or
 as a parameter default you never typed — and Cash could not fingerprint its
@@ -1319,13 +1319,13 @@ is exactly backwards here: a library callable would not have warned.
 
 ## KEY-SOURCE-CHANGED {#key-source-changed}
 
-<!-- claim: cash/source_norm.py:loaded_code_matches_disk @58da8cda, cash/core.py:_warn_source_changed_since_load @02d3e452 -->
+<!-- claim: cash/source_norm.py:loaded_code_matches_disk @3d850578, cash/core.py:_warn_source_changed_since_load @fe9845a0 -->
 **What happened.** A file holding your cached function, or a helper it calls,
 was edited after this process imported it. The process is still running the
 *old* code; the file now holds the *new* code. cash noticed the difference the
 first time the function was called.
 
-<!-- claim: cash/source_norm.py:_pyc_proves_unchanged @2d94f6fe -->
+<!-- claim: cash/source_norm.py:_pyc_proves_unchanged @322af1ef -->
 That includes a replacement that keeps an older timestamp — `shutil.copy2`,
 `cp -p`, `rsync -a`, robocopy, a drag-and-drop copy in Explorer all do — which
 used to look untouched. cash no longer takes the file's time as proof on
@@ -1629,7 +1629,7 @@ answers a different question without saying so.
 
 ## RANDOM-SEED-NONE {#random-seed-none}
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_entropy_reseed @a794bb41 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_entropy_reseed @7a7aa0e3 -->
 **What happened.** A statement called `seed(None)` — `np.random.seed(None)`,
 `random.seed()` with no argument, or the same on another supported module. That
 asks for a different, entropy-derived random stream on every run, and Cash

@@ -9,7 +9,7 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from ...analysis.annotations import extract_annotations_for_statements, parse_annotation_line
+from ...analysis.annotations import extract_annotations_for_statements, get_statement_annotations, parse_annotation_line
 from ...analysis.cacheability import (
     _called_function_names,
     alias_mutation_sources,
@@ -42,7 +42,13 @@ from ...tracking.randomness import (
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..cache_status import CacheStatus
 from ..control_structures import is_control_structure
-from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
+from ..server_discovery import (
+    get_notebook_cells,
+    get_notebook_cells_with_ids,
+    get_notebook_path,
+    invalidate_notebook_path_cache,
+    warn_notebook_not_found_once,
+)
 from ..staleness import StalenessTracker
 from .simulator import NotebookSimulator
 from .virtual_lineage import _BUILTIN_NAMES
@@ -746,10 +752,6 @@ class UpstreamChecker:
         discovery fails, so a user knows cash's headline feature is off rather
         than inferring it from silently-stale results.
         """
-        from ..server_discovery import (
-            get_notebook_path,
-            warn_notebook_not_found_once,
-        )
 
         path = get_notebook_path()
         if path is None:
@@ -1043,8 +1045,6 @@ class UpstreamChecker:
 
         # DOWNSTREAM ADVANCEMENT FALLBACK (unsaved cell, no missing inputs)
         self._handle_downstream_advancement_fallback(cell_id, required_inputs, current_cell_outputs)
-
-        from ..server_discovery import invalidate_notebook_path_cache
 
         invalidate_notebook_path_cache()
         return None
@@ -2251,7 +2251,6 @@ class UpstreamChecker:
         statement's code, keyed as the simulator keys it; the directive is read
         from its cell as a direct run reads it. Only statements that carry one.
         """
-        from ...analysis.annotations import get_statement_annotations
 
         found: dict[str, Any] = {}
         for cell in notebook_cells or ():

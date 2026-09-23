@@ -209,7 +209,7 @@ def test_expensive_local_validation_is_reported(cash_instance, tmp_path, monkeyp
         time.sleep(0.4)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(file_dep_snapshot, "file_dep_is_fresh", slow)
+    monkeypatch.setattr("cash.core.file_dep_is_fresh", slow)
 
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")

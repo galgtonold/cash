@@ -30,6 +30,7 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from ...analysis.code_analyzer import CodeAnalyzer
 from ...tracking.randomness import hidden_lineage_reads
 from ..cache_key import is_cash_instrumentation, is_module_like, statement_source_hash
 from ..lineage_formula import (
@@ -361,7 +362,6 @@ class StatementLineageBuilder:
         name gets what a fresh kernel's import gives it (round 29, r29s1/r29s3:
         keyed with the reload's own hash, what the session computed after an
         edit was never restored the next morning)."""
-        from ...analysis.code_analyzer import CodeAnalyzer
 
         user_ns = self.shell.user_ns
         inputs, _outputs = CodeAnalyzer.analyze_code_block(code, user_ns=user_ns)

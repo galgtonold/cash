@@ -13,19 +13,28 @@ import concurrent.futures
 import contextlib
 import contextvars
 import dataclasses
+import datetime
+import decimal
+import dis
+import enum
+import fractions
 import functools
 import hashlib
+import importlib.util
 import inspect
 import io
 import json
 import logging
 import os
+import pathlib
 import pickle
 import sys
+import sysconfig
 import textwrap
 import threading
 import time
 import types
+import uuid
 import weakref
 from collections import Counter, OrderedDict, deque
 from collections.abc import Callable, Iterator, Sized
@@ -33,20 +42,15 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NamedTuple, ParamSpec, TypeVar, overload
 
 from . import _plain_data
-from .backends import CacheBackend, CacheMetadata, TieredBackend
-from .backends.factory import build_backend_from_config
-
-if TYPE_CHECKING:
-    from .ui.explorer import CacheExplorer
+from ._annotation_refs import annotation_referents
 from ._clock import perf_counter as _perf_counter
-
-# The decorator path reuses the notebook path's randomness detector verbatim
-# so the two cannot diverge on what counts as an unseeded draw.
-# Imported from the submodule directly, like CodeAnalyzer above, to sidestep
-# ``notebook/__init__``'s lazy circular-import chain; ``randomness`` itself only
-# depends on ``..exceptions``, so there is no cycle.
 from .analysis.annotations import parse_annotation_line
+from .analysis.cacheability_decision import identity_coupled_reason
 from .analysis.code_analyzer import CodeAnalyzer
+from .backends import CacheBackend, CacheMetadata, TieredBackend
+from .backends._base import _in_multiprocessing_child
+from .backends.factory import build_backend_from_config
+from .backends.file_backend import recreate_cache_dir
 from .backends.serialization import get_serializer
 from .config import CashConfig, get_config
 from .data_source import DataSource, state_token_of
@@ -65,6 +69,8 @@ from .diagnostics import (
     warn_diagnostic,
     warn_diagnostic_message,
 )
+from .effect_observer import EffectObserver, _line_waived
+from .effectiveness import EffectivenessLedger
 from .exceptions import (
     SOURCE_RETRIEVAL_ERRORS,
     CacheBackendError,
@@ -75,27 +81,65 @@ from .exceptions import (
     CashImpurityWarning,
 )
 from .graph import DependencyGraph
+from .lineage_tag import own_tag
+from .object_hashing import estimate_object_size
+from .purity import _WRITE_METHODS
 from .purity_analyzer import (
+    ISSUE_AMBIENT_READ,
+    ISSUE_IMPURE_CALL,
+    ISSUE_MUTABLE_GLOBAL,
+    ISSUE_UNTRACKABLE_DEP,
+    PurityIssue,
     PurityReport,
+    _local_import_map,
+    _own_code_is_user,
+    _resolve_local_import,
     bindings_changed,
+    callable_layers,
     get_analyzer,
     is_mock,
+    own_source,
     resolve_binding,
 )
+from .remote_source import measured_validation, validation_is_expensive, warn_validation_cost_once
 from .source_norm import (
+    _class_functions,
     bytecode_identity,
     code_consts_without_docstring,
     loaded_class_identity,
     loaded_code_matches_disk,
     source_identity_digest,
 )
-from .tracking.file_dep_snapshot import ACTIVE_CONFIG
+from .tracking.file_dep_snapshot import (
+    ACTIVE_CONFIG,
+    _full_hash_max_bytes,
+    attach_code_relative,
+    dep_path_for_this_process,
+    file_dep_is_fresh,
+    snapshot_dependencies,
+)
+from .tracking.file_tracker import (
+    FileAccessTracker,
+    FileDependencyRegistry,
+    _active_tracker,
+    credited_reads,
+    install_read_watch,
+    untracked,
+)
 from .tracking.randomness import (
     CashRandomnessWarning,
     RandomnessDetector,
+    capture_rng_state,
     describe_random_call,
+    restore_rng_state,
+    rng_modules_changed,
+    seed_epoch_component,
+    seed_epochs,
 )
-from .utils import MAIN_MODULE_NAMES, resolve_main_module
+from .utils import MAIN_MODULE_NAMES, normalize_path, resolve_main_module
+
+if TYPE_CHECKING:
+    from .ui.explorer import CacheExplorer
 
 # Configure Logging
 logger = logging.getLogger(__name__)
@@ -366,6 +410,7 @@ def _run_to_completion(make_coroutine: Callable[[], Any]) -> Any:
     where ``asyncio.run`` refuses. Used to recompute an async function's
     iterator when a stored chunk has gone.
     """
+    # Local: asyncio adds ~76ms to `import cash`, and only async callers need it.
     import asyncio
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
@@ -757,8 +802,6 @@ def _expose_script_function(func: Callable, wrapper: Callable) -> None:
         if present is None:
             if not _has_main_guard(path):
                 return
-            import importlib.util
-
             spec = importlib.util.find_spec(name)
             origin = getattr(spec, "origin", None)
             if not origin or not os.path.exists(origin) or not os.path.samefile(origin, path):
@@ -774,12 +817,6 @@ def _expose_script_function(func: Callable, wrapper: Callable) -> None:
 @functools.lru_cache(maxsize=1)
 def _IMMUTABLE_VALUE_TYPES() -> tuple[type, ...]:  # noqa: N802 - a constant, built once
     """Standard-library value types that cannot change once built."""
-    import datetime
-    import decimal
-    import enum
-    import fractions
-    import pathlib
-    import uuid
 
     return (
         datetime.date,
@@ -954,7 +991,6 @@ def _make_opaque_issue(func_name: str, opaque_list: str) -> Any:
     """Build a synthetic `PurityIssue` for opaque callees
     encountered in ``strict`` mode. Defined at module scope so the
     ``_surface_purity`` import stays local."""
-    from .purity_analyzer import ISSUE_IMPURE_CALL, PurityIssue
 
     return PurityIssue(
         kind=ISSUE_IMPURE_CALL,
@@ -1642,8 +1678,6 @@ def _warn_source_changed_since_load(fn: Callable) -> None:
     _SOURCE_CHANGED_WARNED.add(path)
     name = getattr(fn, "__qualname__", None) or getattr(fn, "__name__", "a function")
     try:
-        from .diagnostics import warn_diagnostic
-
         warn_diagnostic(
             CashCacheIneffectiveWarning,
             "KEY-SOURCE-CHANGED",
@@ -1830,8 +1864,6 @@ class Cash:
         self._arg_costs: dict[str, tuple] = {}
         # Running account of what caching cost vs what it saved, per function.
         # The decorator always caches by design -- this only ever informs.
-        from cash.effectiveness import EffectivenessLedger
-
         self._effectiveness = EffectivenessLedger()
         if self.config.summary:
             # Registered per instance rather than once per process: two Cash
@@ -2364,8 +2396,6 @@ class Cash:
         """
         if _EXPLAINING.get():
             return
-        from .purity_analyzer import ISSUE_UNTRACKABLE_DEP, get_analyzer
-        from .source_norm import _class_functions
 
         functions = _class_functions(carrier) if isinstance(carrier, type) else [getattr(carrier, "__func__", carrier)]
         for fn in functions:
@@ -2693,7 +2723,6 @@ class Cash:
         function, a bound method's function, or a class's own methods -- which
         is how a callable instance's ``__call__`` is reached.
         """
-        from .source_norm import _class_functions
 
         if isinstance(carrier, type):
             functions = _class_functions(carrier)
@@ -3010,8 +3039,6 @@ class Cash:
         # nothing is patched or analysed.
         if not self.config.disable:
             try:
-                from cash.tracking.file_tracker import install_read_watch
-
                 install_read_watch()
             except Exception:  # noqa: BLE001 - the first miss installs them anyway
                 logger.debug("[CORE] could not install the read watch at decoration", exc_info=True)
@@ -3084,7 +3111,6 @@ class Cash:
         Called inside the timed body, so the content hash is taken off the body
         time with the tracker's other read hashes.
         """
-        from cash.utils import normalize_path
 
         for _, path in self._declared_files.get(func_name, ()):
             if os.path.exists(path):
@@ -3202,12 +3228,7 @@ class Cash:
             modules = self._load_rng_draw_marker(func_name)
         if not modules:
             return state_hash
-        try:
-            from cash.tracking.randomness import seed_epoch_component
-
-            component = seed_epoch_component(modules)
-        except ImportError:  # pragma: no cover - notebook extra absent
-            return state_hash
+        component = seed_epoch_component(modules)
         if not component:
             return state_hash
         return hashlib.sha256(f"{state_hash}{component}".encode("utf-8")).hexdigest()
@@ -3262,10 +3283,8 @@ class Cash:
         if pre_state is None:
             return False
         try:
-            from cash.tracking.randomness import capture_rng_state, rng_modules_changed
-
             changed = rng_modules_changed(pre_state, capture_rng_state())
-        except (ImportError, TypeError, AttributeError):  # pragma: no cover
+        except (TypeError, AttributeError):  # pragma: no cover
             return False
         # A module merely imported by the call is newly present rather than
         # advanced; only count streams that already existed.
@@ -3283,21 +3302,14 @@ class Cash:
         # drawn module is actually SEEDED. An unseeded draw has no epoch that can
         # change, so its frozen value is correct from the first call; skipping the
         # write there would redraw and break the freeze-from-first-call contract.
-        try:
-            from cash.tracking.randomness import seed_epochs
-
-            return bool(drew & set(seed_epochs()))
-        except ImportError:  # pragma: no cover - notebook extra absent
-            return False
+        return bool(drew & set(seed_epochs()))
 
     @staticmethod
     def _capture_rng_pre_state() -> dict | None:
         """Snapshot the global RNG streams, or None if unavailable."""
         try:
-            from cash.tracking.randomness import capture_rng_state
-
             return capture_rng_state()
-        except (ImportError, TypeError, AttributeError):  # pragma: no cover
+        except (TypeError, AttributeError):  # pragma: no cover
             return None
 
     def _resolve_cache_key(
@@ -4071,10 +4083,6 @@ class Cash:
         The same freshness check a lookup makes, so the answer cannot
         contradict the behaviour it explains.
         """
-        from cash.tracking.file_dep_snapshot import (
-            dep_path_for_this_process,
-            file_dep_is_fresh,
-        )
 
         stale: dict[str, str] = {}
         seen: set[str] = set()
@@ -4127,7 +4135,6 @@ class Cash:
         path = self._stored_keys_path(func_name)
         if path is None:
             return empty
-        from cash.tracking.file_tracker import untracked
 
         with self._stored_doc_lock:
             try:
@@ -4180,8 +4187,6 @@ class Cash:
             entries = doc.setdefault(kind, {})
             while len(entries) > most:
                 entries.pop(next(iter(entries)))
-        from cash.backends.file_backend import recreate_cache_dir
-        from cash.tracking.file_tracker import untracked
 
         keys_dir = os.path.dirname(path)
         recreate_cache_dir(os.path.dirname(keys_dir))
@@ -4326,10 +4331,9 @@ class Cash:
 
     def _shared_with(self, result, args, kwargs, func) -> tuple[str, str] | None:
         """``(what, name)`` for the first sharing found in *result*, or None."""
-        import inspect as _inspect
 
         try:
-            names = list(_inspect.signature(func).parameters)
+            names = list(inspect.signature(func).parameters)
         except (TypeError, ValueError):
             names = []
         supplied = [(names[i] if i < len(names) else f"arg{i}", value) for i, value in enumerate(args)]
@@ -4471,10 +4475,6 @@ class Cash:
         price of the read being tracked at all, and it is small against the
         download the entry exists to avoid.
         """
-        from cash.tracking.file_dep_snapshot import (
-            attach_code_relative,
-            snapshot_dependencies,
-        )
 
         read_stats = getattr(tracker, "read_stats", {})
         hashed_at = getattr(tracker, "read_hashed_at", {})
@@ -4504,8 +4504,6 @@ class Cash:
         if not snap:
             return
         try:
-            from cash.tracking.file_tracker import _active_tracker
-
             tracker = _active_tracker.get()
         except Exception:  # noqa: BLE001 - tracking is best-effort
             return
@@ -4520,8 +4518,6 @@ class Cash:
             else:
                 # The file THIS process would read -- another install's copy
                 # would give the enclosing entry the writer's path (CAS-108).
-                from cash.tracking.file_dep_snapshot import dep_path_for_this_process
-
                 # The hit just checked this file against the recorded hash, so
                 # that hash is the file as it is: no second read to take it.
                 digest = recorded.get("hash") if isinstance(recorded, dict) else None
@@ -4549,12 +4545,6 @@ class Cash:
         snap = metadata.auto_file_deps or {}
         if not snap:
             return True  # nothing to check
-        from cash.remote_source import measured_validation
-        from cash.tracking.file_dep_snapshot import (
-            _full_hash_max_bytes,
-            dep_path_for_this_process,
-            file_dep_is_fresh,
-        )
 
         # The full-hash threshold, resolved ONCE for the pass. Reading it per
         # file costs a config merge each time, and a config merge walks the
@@ -4614,7 +4604,6 @@ class Cash:
         """
         if not count or not seconds:
             return
-        from cash.remote_source import validation_is_expensive
 
         saved = metadata.execution_time
         if not validation_is_expensive(seconds, saved):
@@ -4648,7 +4637,6 @@ class Cash:
         """
         if not validation.count:
             return
-        from cash.remote_source import validation_is_expensive, warn_validation_cost_once
 
         saved = metadata.execution_time
         if validation_is_expensive(validation.seconds, saved):
@@ -4715,8 +4703,6 @@ class Cash:
         if not drew or pre_state is None:
             return {}
         try:
-            from cash.tracking.randomness import capture_rng_state
-
             return {"rng_pre": pre_state, "rng_post": capture_rng_state()}
         except Exception:  # noqa: BLE001 - never break a call over this
             return {}
@@ -4730,12 +4716,6 @@ class Cash:
         if not post or not pre:
             return
         try:
-            from cash.tracking.randomness import (
-                capture_rng_state,
-                restore_rng_state,
-                rng_modules_changed,
-            )
-
             # Only the streams the body advanced, and only while each is where
             # that body found it. Every other module is left alone: a process
             # seeds `random` from the OS at import, so comparing all of them
@@ -4921,8 +4901,6 @@ class Cash:
         # Wrap the function call in FileAccessTracker so any auto-tracked
         # file reads (pandas/numpy/joblib/open/...) are recorded as implicit
         # cache dependencies - a later content change forces a recompute.
-        from cash.tracking.file_tracker import FileAccessTracker
-
         func, func_name, args, kwargs = spec.func, spec.func_name, call.args, call.kwargs
         run = _BodyRun()
         run.tracker = FileAccessTracker(getattr(func, "__globals__", None), propagate_to_parent=True, hash_on_read=True)
@@ -5494,7 +5472,6 @@ class Cash:
         hit = cache.get(code)
         if hit is not None:
             return hit
-        import dis
 
         written = frozenset(
             instr.argval for instr in dis.get_instructions(code) if instr.opname in ("STORE_DEREF", "DELETE_DEREF")
@@ -5611,8 +5588,6 @@ class Cash:
         unsafe: set[str] = set()
         write_methods: frozenset[str] = frozenset()
         if mutating_methods_only:
-            from cash.purity import _WRITE_METHODS
-
             write_methods = _WRITE_METHODS
         for node in ast.walk(tree):
             if waived is not None and isinstance(node, (ast.Call, ast.stmt)) and waived(node):
@@ -5661,7 +5636,6 @@ class Cash:
             return None
         if not filename:
             return None
-        from .effect_observer import _line_waived
 
         offset = max(first, 1) - 1
 
@@ -6239,7 +6213,6 @@ class Cash:
         if cached is not None:
             return cached
         g = getattr(func, "__globals__", {}) or {}
-        import dis
 
         scopes = tuple(Cash._iter_code_scopes(code))
         written = {
@@ -6361,7 +6334,6 @@ class Cash:
         if not isinstance(fn, types.FunctionType):
             return self._hash_callable_source(fn)
         own = self._hash_helper_identity(fn)
-        from .purity_analyzer import _own_code_is_user
 
         if not _own_code_is_user(fn, getattr(fn, "__module__", None)):
             return own
@@ -6721,8 +6693,6 @@ class Cash:
                 for module in modules:
                     consider(getattr(module, name, None))
         if isinstance(obj, type) or callable(obj):
-            from ._annotation_refs import annotation_referents
-
             seen_ids = {id(t) for t in targets}
             for value in annotation_referents(obj, self._is_user_code_object):
                 if id(value) not in seen_ids:
@@ -7467,7 +7437,6 @@ class Cash:
                 if owner is None or isinstance(owner, (type, types.ModuleType)):
                     return None
                 method = getattr(value, "__name__", "")
-                from cash.purity import _WRITE_METHODS
 
                 if method in _WRITE_METHODS or method in _LOG_METHOD_NAMES:
                     # `record = RESULTS.append`, `log = logger.info`: what the
@@ -7490,8 +7459,6 @@ class Cash:
                         return None
                     payload = ("reduce", cls.__module__, cls.__qualname__, reduced)
             if verdict is None:
-                from .purity_analyzer import _own_code_is_user, callable_layers
-
                 runs_user_code = any(_own_code_is_user(layer, root_module) for layer in callable_layers(value))
                 if runs_user_code:
                     # Its code is the helper walk's. What a LIBRARY wrapper
@@ -7657,7 +7624,6 @@ class Cash:
         *own_pkg*: the cached function's top-level package, which counts as
         user code wherever it is installed -- see ``_is_user_module``.
         """
-        import sys
 
         if Cash._in_own_package(getattr(cls, "__module__", None), own_pkg):
             return True
@@ -7693,8 +7659,6 @@ class Cash:
         if "site-packages" in p or "dist-packages" in p:
             return False
         try:
-            import sysconfig
-
             for key in ("stdlib", "platstdlib"):
                 std = sysconfig.get_paths().get(key)
                 if std and p.startswith(os.path.normcase(os.path.abspath(std))):
@@ -7802,7 +7766,6 @@ class Cash:
         cached = self._module_attr_cache.get(code)
         if cached is not None:
             return cached
-        import dis
 
         pairs: set[tuple[str, str]] = set()
         # `vars(conf)["K"]` / `getattr(conf, "K")`: the attribute is a string
@@ -7849,8 +7812,6 @@ class Cash:
             return self._local_binding_cache[code]
         plan = None
         try:
-            from .purity_analyzer import _local_import_map, own_source
-
             tree = ast.parse(textwrap.dedent(own_source(func)))
             func_def = next(
                 (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))), None
@@ -7899,7 +7860,6 @@ class Cash:
         plan = self._local_binding_plan(func)
         if not plan:
             return []
-        from .purity_analyzer import _resolve_local_import
 
         imports, attr_reads, bare_reads = plan
         own_pkg = self._own_package(func)
@@ -8558,8 +8518,6 @@ class Cash:
             # for the unmutated object (rounds 17-18).
             # The instance's OWN tag: one inherited from a tagged class made
             # every instance key alike (see cash.lineage_tag).
-            from cash.lineage_tag import own_tag
-
             lineage = own_tag(arg)
             if lineage is not None:
                 src = own_tag(arg, "_cash_lineage_src")
@@ -9441,7 +9399,6 @@ class Cash:
         against (round 20). Such a path goes into ``stale_memo_reads``, and the
         store is refused.
         """
-        from cash.tracking.file_tracker import credited_reads
 
         func = self.functions.get(func_name)
         if func is None or tracker is None:
@@ -9472,7 +9429,6 @@ class Cash:
     @staticmethod
     def _argument_paths(args: tuple, kwargs: dict) -> set[str]:
         """The resolved paths among a call's arguments, one container deep."""
-        from cash.utils import normalize_path
 
         values: list[Any] = [*args, *kwargs.values()]
         for value in list(values):
@@ -10262,12 +10218,6 @@ class Cash:
         enough Figures to cross ``chunk_max_bytes`` (or a million of them),
         which no reported case comes near.  Widen this if one ever does.
         """
-        # Local import: ``cacheability_decision`` pulls in the annotation and
-        # AST-analysis modules, and this runs only on a miss's store path.
-        # ``core`` -> ``cash.notebook`` is an established direction (see the
-        # module-level CodeAnalyzer / parse_annotation_line imports), so no
-        # shared module is needed for this.
-        from cash.analysis.cacheability_decision import identity_coupled_reason
 
         # ``func_name`` is already in the message prefix, so name the slot
         # rather than repeating the qualified path inside the reason.
@@ -10539,7 +10489,6 @@ class Cash:
         `next()` are summed, so a slow consumer cannot inflate the number the
         persistence decision reads.
         """
-        from cash.object_hashing import estimate_object_size
 
         buffer: list[Any] = []
         buffer_bytes = 0
@@ -10774,6 +10723,7 @@ class Cash:
 
     def explorer(self) -> CacheExplorer:
         """Return a `CacheExplorer` instance for interactive cache browsing."""
+        # Local: the explorer imports pandas, which `import cash` must not load.
         from .ui.explorer import CacheExplorer
 
         return CacheExplorer(self)
@@ -10893,8 +10843,6 @@ class Cash:
         try:
             text = self.run_summary()
             if text:
-                from .backends._base import _in_multiprocessing_child
-
                 if _in_multiprocessing_child():
                     # One table per worker process: say whose it is.
                     text = text.replace("cash:", f"cash (pid {os.getpid()}):", 1)
@@ -10931,6 +10879,8 @@ class Cash:
         Requires IPython/Jupyter and ipywidgets. In script environments,
         prints the same per-function table ``summary=True`` prints at exit.
         """
+
+        # Local: the dashboard imports matplotlib, which `import cash` must not load.
         from .ui.dashboard import HAS_WIDGETS, show_analytics_dashboard
 
         # Asking the dashboard whether it CAN run, rather than calling it and
@@ -10962,6 +10912,7 @@ class Cash:
         # Internal import - must always succeed when IPython is present.
         # Kept outside the ImportError guard above so a broken import path
         # surfaces loudly instead of masquerading as "IPython not available".
+        # Local: import cycle core -> notebook.ipython -> notebook.ipython.magics -> core.
         from .notebook.ipython.magics import CashMagics
 
         magics = CashMagics(ip, self)
@@ -11272,7 +11223,6 @@ class Cash:
         it is computing, and without the exclusion every cached function would
         be observed writing a file and every one of them would warn.
         """
-        from .effect_observer import EffectObserver
 
         cache_dir = getattr(self.config, "cache_dir", None)
         return EffectObserver(exclude_under=cache_dir)
@@ -11336,7 +11286,6 @@ class Cash:
         classes (tracked their own way, or not at all), and a global the
         function itself writes.
         """
-        from .purity_analyzer import ISSUE_MUTABLE_GLOBAL
 
         name = getattr(issue, "subject", "")
         if getattr(issue, "kind", None) != ISSUE_MUTABLE_GLOBAL or not name:
@@ -11378,7 +11327,6 @@ class Cash:
         code = getattr(fn, "__code__", None)
         if code is None:
             return False
-        import dis
 
         for scope in Cash._iter_code_scopes(code):
             for instr in dis.get_instructions(scope):
@@ -11431,8 +11379,6 @@ class Cash:
         # stale, and caching correctness can no longer be guaranteed. The user
         # must acknowledge the risk with assume_safe=True (the ``silent`` mode
         # handled above) to cache anyway.
-        from .purity_analyzer import ISSUE_UNTRACKABLE_DEP
-
         untrackable = [i for i in issues if getattr(i, "kind", None) == ISSUE_UNTRACKABLE_DEP]
         if untrackable and mode != "strict":
             untrackable_summary = _format_issues_summary(func_name, untrackable)
@@ -11454,8 +11400,6 @@ class Cash:
         # user to audit for writes that are not there, and left the actual
         # failure (a nightly job whose `date.today()` is the night it first
         # ran) unnamed.
-        from .purity_analyzer import ISSUE_AMBIENT_READ
-
         # strict=True keeps them in the one exception it raises: there, every
         # issue is a hard stop and splitting the report would hide half of it.
         ambient = [i for i in issues if getattr(i, "kind", None) == ISSUE_AMBIENT_READ]
@@ -11594,7 +11538,6 @@ class Cash:
             * Tracking is on the file's ``(mtime, size)``; downstream
               cache-key computation is automatic.
         """
-        from .tracking.file_tracker import FileDependencyRegistry
 
         registry = FileDependencyRegistry()
         registry.register(module_name, func_name, handler_factory)

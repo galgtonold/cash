@@ -4,7 +4,10 @@ from __future__ import annotations
 
 __all__ = ["CacheExplorer"]
 
+import base64
 import html
+import inspect
+import json
 import logging
 import math
 from datetime import datetime
@@ -69,8 +72,6 @@ class CacheExplorer:
             # Add source code if available in memory
             func_name = entry.get("func_name")
             if func_name and func_name in self.app.functions:
-                import inspect
-
                 try:
                     entry["source_code"] = inspect.getsource(self.app.functions[func_name])
                 except SOURCE_RETRIEVAL_ERRORS:
@@ -136,9 +137,6 @@ class CacheExplorer:
         Return an interactive widget for Jupyter with hierarchical view (HTML/JS version).
         """
         try:
-            import base64
-            import json
-
             from IPython.display import IFrame
         except ImportError:
             logger.warning("IPython is required for the widget.")

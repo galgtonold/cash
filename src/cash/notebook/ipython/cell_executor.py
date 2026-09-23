@@ -55,6 +55,7 @@ from IPython.display import display, publish_display_data
 
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...backends._base import discarded_writes
 from ...diagnostics import warn_diagnostic
 from ...exceptions import (
     AmbiguousCellError,
@@ -236,8 +237,6 @@ def discarded_writes_notification(seen_before: int) -> tuple[dict | None, int]:
     print renderer caps a row at 80 characters.
     """
     try:
-        from cash.backends._base import discarded_writes
-
         total = len(discarded_writes())
     except Exception:  # noqa: BLE001 - a diagnostic must never break a cell
         return None, seen_before

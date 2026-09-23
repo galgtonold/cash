@@ -29,6 +29,8 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
 from ..source_norm import read_code_file
+from .lineage_formula import imported_from, module_source_component
+from .upstream.mismatch_classifier import import_only
 
 if TYPE_CHECKING:
     from ..tracking.function_tracker import FunctionTracker
@@ -157,7 +159,6 @@ class ModuleInvalidator:
         edit was keyed apart from what the next morning looked up: nothing
         restored until a second restart (round 29, r29s1 2/2, r29s3 2/2).
         """
-        from .upstream.mismatch_classifier import import_only
 
         code = processor.executed_cell_codes.get(name)
         value = self._shell.user_ns.get(name)
@@ -272,8 +273,6 @@ class ModuleInvalidator:
         if not recorded or not code:
             return False
         try:
-            from .lineage_formula import imported_from, module_source_component
-
             source = imported_from(var_name, code)
             if source is None:
                 return False

@@ -25,6 +25,7 @@ except ImportError:
     HAS_MATPLOTLIB = False
 
 from ..analytics import AnalyticsManager
+from ..config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,6 @@ def show_analytics_dashboard(mgr: AnalyticsManager | None = None):
         return
 
     if mgr is None:
-        from ..config import get_config
-
         mgr = AnalyticsManager(enabled=get_config().analytics)
 
     # Style

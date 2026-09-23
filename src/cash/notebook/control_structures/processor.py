@@ -39,8 +39,19 @@ import types
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from ...analysis.cacheability import (
+    called_function_global_mutations,
+    statement_calls_user_writer,
+    statement_writes_files,
+)
+from ...analysis.code_analyzer import CodeAnalyzer
+from ...object_hashing import compute_hash_full
+from ..cache_key import called_function_globals, control_outcome_key
 from ..cache_status import CacheStatus
+from ..statement.file_deps import compute_file_hash_component
+from ..write_observer import observe_writes
 from . import helpers as _helpers
+from .try_handler import TryHandler
 
 if TYPE_CHECKING:
     from ...analysis.annotations import CacheAnnotation
@@ -308,8 +319,6 @@ def build_iteration_context(
         # hash here is exactly the collision this exists to prevent.
         digest = digests.get(name)
         if digest is None:
-            from cash.object_hashing import compute_hash_full
-
             digest = compute_hash_full(value)
         try:
             hash(value)
@@ -336,8 +345,6 @@ def compute_context_hash(context: dict[str, Any]) -> str:
         if not _is_primitive(value):
             digest = context.get(_DIGEST_PREFIX + key)
             if digest is None:
-                from cash.object_hashing import compute_hash_full
-
                 digest = compute_hash_full(value)
             value = digest
         items.append((key, value))
@@ -376,9 +383,11 @@ class ControlStructureProcessor:
         self.debug = debug
         # Per-strategy handlers — constructed once.  Each owns the
         # strategy-specific logic; the orchestrator stays thin.
+        # Local: import cycle control_structures.processor -> control_structures.for_handler -> ... -> control_structures.processor.
         from .for_handler import ForLoopHandler
+
+        # Local: import cycle control_structures.processor -> control_structures.if_handler -> ... -> control_structures.processor.
         from .if_handler import IfHandler
-        from .try_handler import TryHandler
 
         self._for_handler = ForLoopHandler(shell, statement_processor, debug, dispatcher=self)
         self._if_handler = IfHandler(shell, statement_processor, debug, dispatcher=self)
@@ -434,8 +443,6 @@ class ControlStructureProcessor:
         lineage = state.variable_lineage
         code = ast.unparse(node)
         try:
-            from ...analysis.code_analyzer import CodeAnalyzer
-
             reads, writes = CodeAnalyzer.analyze_code_block(code)
         except (SyntaxError, ValueError, TypeError):
             reads, writes = set(), set()
@@ -443,7 +450,6 @@ class ControlStructureProcessor:
         before = dict(lineage)
         reads_before = dict(state.statement_file_reads)
         rng_before = _global_rng_fingerprint() if isinstance(node, ast.For) else None
-        from ..write_observer import observe_writes
 
         sp = self.statement_processor
         begin_cost = getattr(sp, "begin_structure_cost", None)
@@ -472,7 +478,6 @@ class ControlStructureProcessor:
             for key, (local, _remote) in state.statement_file_reads.items():
                 if reads_before.get(key, (None,))[0] is not local:
                     files.update(local)
-            from ..statement.file_deps import compute_file_hash_component
 
             outcome = (entry, left, frozenset(files), compute_file_hash_component(files))
             outcomes[hashlib.sha256(code.encode("utf-8")).hexdigest()] = outcome
@@ -526,7 +531,6 @@ class ControlStructureProcessor:
         Best-effort both ways: without a record the loop is replayed, as it
         always was.
         """
-        from ..cache_key import control_outcome_key
 
         sp = self.statement_processor
         backend = getattr(getattr(sp, "cash_instance", None), "backend", None)
@@ -580,13 +584,6 @@ class ControlStructureProcessor:
             return None
         if rng_before != _global_rng_fingerprint():
             return None
-        from ...analysis.cacheability import (
-            called_function_global_mutations,
-            statement_calls_user_writer,
-            statement_writes_files,
-        )
-        from ...analysis.code_analyzer import CodeAnalyzer
-        from ..cache_key import called_function_globals
 
         user_ns = self.shell.user_ns
         if statement_writes_files(code) or statement_calls_user_writer(code, user_ns):

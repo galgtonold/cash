@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import glob
 import gzip
+import hashlib
 import heapq
 import logging
 import os
@@ -18,7 +19,11 @@ from typing import Any
 from cash.exceptions import CacheBackendError
 from cash.utils import replace_with_retry
 
+from ..diagnostics import warn_diagnostic
+from ..exceptions import CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
+from ..tracking.file_tracker import register_cache_dir, untracked
 from ._base import CacheBackend, MetadataDict, PendingWrites, gdsf_value
+from .adaptive_caps import _free_bytes_on_volume, adaptive_disk_cap_for, human_bytes
 from .entry_format import (
     ENTRY_SUFFIX,
     MAGIC,
@@ -135,8 +140,6 @@ def _register_writer(cache_dir: str, writes: PendingWrites) -> str:
     # needs telling. Imported here rather than at module scope: the backends
     # must stay importable without the notebook layer.
     try:
-        from cash.tracking.file_tracker import register_cache_dir
-
         register_cache_dir(cache_dir)
     except Exception:  # noqa: BLE001 - tracking is best-effort, storage is not
         logger.debug("Could not register %s with the file tracker", cache_dir, exc_info=True)
@@ -195,7 +198,6 @@ def _untracked() -> Any:
     listing of the cache directory from a user's listing of a directory that
     `cache_dir` may also be, so the scan says so where it happens.
     """
-    from cash.tracking.file_tracker import untracked
 
     return untracked()
 
@@ -422,8 +424,6 @@ class FileBackend(CacheBackend):
         """Turn this tier off for the rest of the process, and say why once."""
         self._unusable = True
         self._initialized = True  # never retried; the answer will not change
-        from cash.diagnostics import warn_diagnostic
-        from cash.exceptions import CashCacheStoreFailedWarning
 
         try:
             warn_diagnostic(
@@ -458,9 +458,6 @@ class FileBackend(CacheBackend):
         try:
             fd, probe = _create_temp_file(self.cache_dir, prefix=".probe-", suffix=".tmp")
         except OSError as exc:
-            from cash.diagnostics import warn_diagnostic
-            from cash.exceptions import CashCacheStoreFailedWarning
-
             warn_diagnostic(
                 CashCacheStoreFailedWarning,
                 "CACHE-DIR-UNWRITABLE",
@@ -685,7 +682,6 @@ class FileBackend(CacheBackend):
         now = time.monotonic()
         if not force and now - self._cap_derived_at < self._CAP_REFRESH_INTERVAL:
             return
-        from .adaptive_caps import adaptive_disk_cap_for
 
         self._cap_derived_at = now
         self._max_size_bytes = adaptive_disk_cap_for(
@@ -804,8 +800,6 @@ class FileBackend(CacheBackend):
             self._paths[self._get_path(key)] = key
 
     def _get_path(self, key: str) -> str:
-        import hashlib
-
         safe_name = hashlib.sha256(key.encode("utf-8")).hexdigest()
         return os.path.join(self.cache_dir, f"{safe_name}{ENTRY_SUFFIX}")
 
@@ -1834,11 +1828,6 @@ class FileBackend(CacheBackend):
         if self._warned_evict_after_write:
             return
         self._warned_evict_after_write = True
-
-        from cash.diagnostics import warn_diagnostic
-        from cash.exceptions import CashCacheIneffectiveWarning
-
-        from .adaptive_caps import _free_bytes_on_volume, human_bytes
 
         cap = human_bytes(self._max_size_bytes)
         free = _free_bytes_on_volume(self.cache_dir)

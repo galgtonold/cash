@@ -255,14 +255,14 @@ def load_model():
     return MyModel.from_disk("models/embeddings.bin", "models/vocab.json")
 ```
 
-<!-- claim: cash/core.py:Cash._track_declared_files @c730b5e1 -->
+<!-- claim: cash/core.py:Cash._track_declared_files @dea974d8 -->
 Under the hood, `_register_func` records each path (made absolute at decoration time), and every miss adds them to the call's file tracker as if the body had read them. The entry therefore stores their content fingerprint beside anything the body read itself, every lookup checks it the way it checks an auto-tracked read, and a cached function that calls this one inherits the files on a hit too.
 
 A declared file that does not exist yet is recorded as *absent*, like a lookup for a missing file: creating it later forces a miss. It does *not* fail loudly; you have to remember it's there.
 
 ## Escape hatch 2: registering a custom file source for auto-tracking
 
-<!-- claim: cash/core.py:Cash.register_file_handler @39310719, cash/tracking/file_tracker.py:_install_module_patches @027b224f -->
+<!-- claim: cash/core.py:Cash.register_file_handler @3285c27b, cash/tracking/file_tracker.py:_install_module_patches @027b224f -->
 For libraries you use across many cached functions, manually adding `file_depends_on=` to each decorator is repetitive. `Cash.register_file_handler` lets you teach the auto-tracker about a new reader once and have every subsequent call site picked up automatically:
 
 <!-- test:skip reason="illustrative — the handler wraps `my_lib`, which does not exist; executing it only proves a def parses, while shadowing the real load_features above" -->

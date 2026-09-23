@@ -188,7 +188,7 @@ def test_cash_info_prints_the_cap_the_backend_would_enforce(volume, capsys, monk
     config = get_config()
     monkeypatch.setattr(config, "cache_dir", str(cache))
     monkeypatch.setattr(config, "max_cache_size", None)
-    monkeypatch.setattr("cash.config.get_config", lambda **_: config)
+    monkeypatch.setattr("cash.__main__.get_config", lambda **_: config)
     cli.cmd_info(SimpleNamespace())
 
     printed = capsys.readouterr().out

@@ -21,6 +21,8 @@ import weakref
 from pathlib import Path
 from typing import Any
 
+from .config import _per_user_cache_root
+
 logger = logging.getLogger(__name__)
 
 # Sanity cap on the telemetry db file. An events log this large is runaway
@@ -33,7 +35,6 @@ _MAX_DB_BYTES = 64 * 1024 * 1024  # 64 MiB
 
 def default_db_path() -> Path:
     """Where the analytics db lives unless a path is given: the per-user cache root."""
-    from .config import _per_user_cache_root
 
     return _per_user_cache_root() / "analytics.db"
 

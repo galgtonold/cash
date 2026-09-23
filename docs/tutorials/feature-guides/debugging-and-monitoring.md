@@ -33,7 +33,7 @@ That's the decorator path. In a notebook the equivalents are `%cash_debug on`, `
 
 ## In a script: `CASH_SUMMARY` and `CASH_DEBUG`
 
-<!-- claim: cash/core.py:Cash._print_run_summary @8e96e43d, cash/core.py:Cash._log_decorator_call @7199cb42 -->
+<!-- claim: cash/core.py:Cash._print_run_summary @9b43a38c, cash/core.py:Cash._log_decorator_call @7199cb42 -->
 A script shows nothing about the cache by default. Two environment variables
 change that without touching the code:
 
@@ -105,7 +105,7 @@ The return value is a `CacheExplanation` dataclass (`would_hit`, `reason`, `func
 
 Inside a notebook, `%cash_debug on` raises the cash logger to DEBUG and prints labelled lines from each subsystem as cells execute. Turn it off with `%cash_debug off` (or pipe to JSON with `%cash_debug json`, or to a file with `%cash_debug file <path>`).
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @3a834f1c -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @1178ce8b -->
 The five log prefixes you'll see most:
 
 | Prefix | What it tells you |
@@ -142,7 +142,7 @@ For health checks rather than per-call diagnostics, you want aggregates.
 %cash_stats
 ```
 
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @f3f94b42 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @58a2cb0d -->
 Prints a summary of this kernel session (a restart resets it): cells executed, statements computed / restored / skipped, hit rate, and a time ledger of gross saved, cash overhead, and net saved. The net line is the honest headline, and it is **not** gross minus overhead: it credits only savings a measurement backs — one this session took by recomputing the same statement (*verified*), or the least an earlier kernel on this machine ever measured (*measured*), which is what lets a Restart & Run All report a number rather than a range — minus the measured overhead. Gross is printed beside it and labelled *(estimated)*, because it values each restore at what the entry cost when first written and nothing re-measures that. The consequence is deliberate understatement — an overstatement would be the bug — and a real loss prints as one ("cash cost you Xs this session"). `%cash_stats json` returns the same numbers as a dict (including `total_overhead`, `total_verified_saved`, `total_measured_saved`, `net_time_saved`, `net_time_saved_upper_bound`, and `discarded_writes`); `%cash_stats reset` zeros the counters, and forgets the measurements kept beside the cache — it cannot claim to have forgotten a baseline and then credit a later hit against it.
 
 If a cache write ever failed, a **discarded writes** line appears with the count and the first cause. Read it before anything else on the page: that work was never stored, so it recomputes every run, and no counter above can reveal it — a discarded write is not a miss, it is a hit that never got the chance to exist. Nothing raised when it happened, so the rest of the summary can look perfectly healthy. A `reset` deliberately does not clear these; the entries are still missing from disk afterwards.
@@ -254,7 +254,7 @@ The output gives the entry count, the total size, and a **per-function table sor
     To stop recording, set `analytics = false` in the config, or
     `CASH_ANALYTICS=0`; no file is created then.
 
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_export @d9f6e534, cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_import @cde3d810 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_export @d9f6e534, cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_import @70b97111 -->
 ## Cache management — export, import, clear
 
 When diagnosis is done and you need to *act*, two notebook magics and one CLI command cover the lifecycle:
@@ -306,7 +306,7 @@ explorer.get_preview(key)              # peek at a stored value
 explorer.clear_function("mod.func")    # surgical per-function clear
 ```
 
-<!-- claim: cash/ui/explorer.py:CacheExplorer @29620f36 broad="the listed method set is a claim about the whole class", cash/core.py:Cash.explorer @599913c8 -->
+<!-- claim: cash/ui/explorer.py:CacheExplorer @b2133930 broad="the listed method set is a claim about the whole class", cash/core.py:Cash.explorer @599913c8 -->
 `CacheExplorer` is the read-side: list, preview, and surgically clear entries by function name without touching the rest of the cache.
 
 For anything that needs to survive a version bump, stick to `f.explain()` and `%cash_debug`.

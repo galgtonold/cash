@@ -260,7 +260,7 @@ a *promotion hint*. A value larger than the cap quietly skips that tier but
 still writes to the unconstrained ones. Most caps are static class-level
 values; the file tier's is *dynamic* — its whole (machine-scaled) cap.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @67c1f69d, cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/sqlite_backend.py:SQLiteBackend.max_size_bytes == 104857600 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @a641a652, cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/sqlite_backend.py:SQLiteBackend.max_size_bytes == 104857600 -->
 | Backend | `max_size_bytes` cap | Rationale |
 |---|---|---|
 | `InMemoryBackend` | unbounded | RAM eviction handles pressure separately. |
@@ -373,7 +373,7 @@ configures a tool — a `tests/pyproject.toml` holding `[tool.ruff]` — does no
 so running from `tests/` still finds the repository's project and its
 `[tool.cash]`.
 
-<!-- claim: cash/__init__.py:configure @72f9b7fe -->
+<!-- claim: cash/__init__.py:configure @7436c67c -->
 ## Runtime mutation: `cash.configure()`
 
 Change the active configuration of the default singleton at runtime

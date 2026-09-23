@@ -98,7 +98,7 @@ method is `state_token()`, which must return a **value that
 changes when the data changes** — a version, a config digest, a tenant id. Cash
 folds that value into the cache key, so the entry invalidates when it moves.
 
-<!-- claim: cash/data_source.py:state_token_of @6c008991 -->
+<!-- claim: cash/data_source.py:state_token_of @01fb9637 -->
 > **Return a value, not a `bool`.** `state_token()` is what goes into the key
 > — not a yes/no flag. A `bool` only has two
 > states and cannot track changes, so the cache would never invalidate. Cash

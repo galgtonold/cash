@@ -38,10 +38,13 @@ import hashlib
 import io
 import logging
 import os
+import stat as _stat
+import sys
 import time
 from collections.abc import Iterable
 from typing import Any
 
+from cash.config import get_config
 from cash.utils import normalize_path
 
 logger = logging.getLogger(__name__)
@@ -118,12 +121,11 @@ def _full_hash_max_bytes() -> int:
         # process that has not built a Cash yet.
         config = ACTIVE_CONFIG.get()
         if config is None:
+            # Local: import cycle cash -> core -> tracking.file_dep_snapshot -> cash.
             import cash
 
             config = getattr(getattr(cash, "_global_cash", None), "config", None)
         if config is None:
-            from cash.config import get_config
-
             config = get_config()
         value = int(config.file_hash_full_max_bytes)
     except Exception:  # noqa: BLE001 - teardown, or a config that cannot load
@@ -253,7 +255,6 @@ def realpath_of_read_this_run(path: str) -> tuple[str, os.stat_result | None]:
     such a file is also the stat the read needs. Anything else -- a link, a
     missing file, a short ``~`` name -- is resolved in full.
     """
-    import stat as _stat
 
     if _HASH_EPOCH is None:
         return os.path.realpath(path), None
@@ -499,6 +500,7 @@ def snapshot_remote_deps(urls: Iterable[str]) -> dict[str, dict[str, Any]]:
     entry with no dependency at all - a permanent silent stale hit, the bug this
     whole mechanism exists to prevent.
     """
+    # Local: import cycle tracking.file_dep_snapshot -> remote_source -> tracking.file_dep_snapshot.
     from cash.remote_source import RemoteFileDataSource
 
     snapshot: dict[str, dict[str, Any]] = {}
@@ -547,6 +549,7 @@ def remote_dep_is_fresh(url: str, stored: dict[str, Any]) -> tuple[bool, str | N
     a token that could not be resolved in the first place - is stale, so the
     call recomputes rather than serving a result nobody could verify.
     """
+    # Local: import cycle tracking.file_dep_snapshot -> remote_source -> tracking.file_dep_snapshot.
     from cash.remote_source import RemoteFileDataSource
 
     stored_token = stored.get("hash")
@@ -833,7 +836,6 @@ def code_root_of(module_name: str | None) -> str | None:
     ``fxpkg.core`` -> ``…/fxpkg``; a script run as ``__main__`` -> its own
     directory. None when the module is not loaded or has no file.
     """
-    import sys
 
     if not module_name:
         return None

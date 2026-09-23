@@ -3,20 +3,26 @@
 from __future__ import annotations
 
 import ast
+import base64
 import contextlib
 import hashlib
+import importlib.util
 import inspect
 import logging
+import marshal
 import os
 import pickle
 import sys
 import time
+import traceback
 import types
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from io import StringIO
 from typing import Any, TypedDict
 
+import cash
+from cash import cost_model
 from cash.exceptions import (
     CacheBackendError,
     CacheKeyComputationError,
@@ -44,6 +50,19 @@ from cash.notebook.statement.restore import StatementRestorer
 from cash.object_hashing import estimate_object_size, mutation_fingerprint
 from cash.purity import is_known_pure, is_stateful
 from cash.tracking.file_dep_snapshot import snapshot_dependencies, snapshot_file_deps
+
+from ...analysis.cacheability import statement_calls_user_writer, statement_writes_files, statement_written_paths
+from ...backends.adaptive_caps import human_bytes
+from ...diagnostics import warn_diagnostic
+from ...tracking import file_dep_snapshot
+from ...tracking.file_tracker import tracking_seconds
+from ...tracking.randomness import CashRandomnessWarning
+from ..cache_key import called_function_dependencies, called_function_globals, import_bindings_key, mutation_verdict_key
+from ..call_refs import REF_BYTES_FIELD, REFS_FIELD, with_call_refs
+from ..carrier_history import FIGURE_KINDS, carrier_history_fingerprint
+from ..consumables import is_consumable_unrestorable
+from ..stateful_carriers import stateful_carrier_kind
+from .derivation_edges import is_uncacheable_alias
 
 __all__ = [
     "StatementCacheMetadata",
@@ -952,13 +971,7 @@ class StatementProcessor:
         """
         if self.cash_instance is not None:
             return self.cash_instance
-        try:
-            import cash as _cash_mod
-
-            return getattr(_cash_mod, "_global_cash", None)
-        except ImportError:
-            logger.debug("[PROCESSOR] Failed to import cash module for global instance")
-            return None
+        return getattr(cash, "_global_cash", None)
 
     def _attribute_input_change(self, metrics: dict, inputs, outputs) -> None:
         """Name the input whose change forced this statement to recompute.
@@ -1905,8 +1918,6 @@ class StatementProcessor:
             if digest in self._warned_entropy_reseed:
                 return
             self._warned_entropy_reseed.add(digest)
-            from cash.diagnostics import warn_diagnostic
-            from cash.tracking.randomness import CashRandomnessWarning
 
             warn_diagnostic(
                 CashRandomnessWarning,
@@ -2372,8 +2383,6 @@ class StatementProcessor:
         log.append((code, self._lineages_read(inputs)))
 
     def _lineages_read(self, inputs: set[str]) -> dict[str, str]:
-        from ..cache_key import called_function_dependencies
-
         read = {}
         for dep in called_function_dependencies(sorted(inputs), self.shell.user_ns, self.variable_lineage, None):
             name, _, lineage = dep.partition(":")
@@ -2560,7 +2569,6 @@ class StatementProcessor:
         numbers to store, stopped being saved and the next restart ran every
         CV again. Estimated with the cost model the size-aware skip uses.
         """
-        from cash import cost_model
 
         if execution_time <= 0:
             return False
@@ -2904,7 +2912,6 @@ class StatementProcessor:
 
     def _cash_time_marks(self) -> tuple[float, Any, float, float]:
         """Cash's own clocks, read around a statement (see :meth:`_statement_cost`)."""
-        from cash.tracking.file_tracker import tracking_seconds
 
         unit = getattr(getattr(self, "_call_cache", None), "_call_unit", None)
         return (tracking_seconds(), unit, getattr(unit, "overhead_s", 0.0), getattr(unit, "hits_saved_s", 0.0))
@@ -2923,7 +2930,6 @@ class StatementProcessor:
         `%cash_stats`, which reported 210 s of overhead for a run a pairing
         measured 370 s slower (round 30, r30s4).
         """
-        from cash.tracking.file_tracker import tracking_seconds
 
         tracking0, unit0, overhead0, saved0 = marks
         tracking = max(0.0, tracking_seconds() - tracking0)
@@ -3047,8 +3053,6 @@ class StatementProcessor:
         # base instead. ``.copy()`` produces no alias and stays
         # cacheable (over-invalidation guard).
         if not skip_cache:
-            from .derivation_edges import is_uncacheable_alias
-
             for out in outputs:
                 val = captured_vars.get(out)
                 if val is not None and is_uncacheable_alias(val, self.shell.user_ns):
@@ -3087,8 +3091,6 @@ class StatementProcessor:
         # stayed hidden while that reader was itself restored from the cache
         # (test_a_consumed_iterator_is_rebuilt_for_its_reader).
         if not skip_cache:
-            from ..consumables import is_consumable_unrestorable
-
             for out in outputs:
                 val = captured_vars.get(out)
                 if val is not None and is_consumable_unrestorable(val):
@@ -3111,6 +3113,7 @@ class StatementProcessor:
                 self._tracking_state.executed_write_stmt_codes.add(code)
                 # The upstream check's per-file answers for this cell run were
                 # taken before this write; nothing checked after it may use them.
+                # Local: import cycle statement.processor -> upstream.virtual_lineage -> statement.processor.
                 from ..upstream.virtual_lineage import forget_file_state_this_run
 
                 forget_file_state_this_run()
@@ -3237,9 +3240,6 @@ class StatementProcessor:
             return
         if not nodes:
             return
-        import base64
-        import importlib.util
-        import marshal
 
         user_ns = self.shell.user_ns
         bindings: dict[str, dict[str, Any]] = {}
@@ -3271,7 +3271,6 @@ class StatementProcessor:
         backend = self.cash_instance.backend if self.cash_instance else None
         if backend is None:
             return
-        from ..cache_key import import_bindings_key
 
         try:
             self._stmt_restorer.persist_metadata_only(
@@ -3303,7 +3302,6 @@ class StatementProcessor:
         backend = self.cash_instance.backend if self.cash_instance else None
         if backend is None:
             return
-        from ..cache_key import mutation_verdict_key
 
         try:
             self._stmt_restorer.persist_metadata_only(
@@ -3380,10 +3378,6 @@ class StatementProcessor:
         callees read too: an edited helper is a new payload.
         """
         try:
-            from cash.analysis.cacheability import statement_written_paths
-
-            from ..cache_key import called_function_globals
-
             raw_paths = statement_written_paths(code, tree, self.shell.user_ns) or set()
             named = {os.path.abspath(p) for p in raw_paths}
             seen = {p for p in written if os.path.exists(p)} - named
@@ -3427,8 +3421,6 @@ class StatementProcessor:
         ``carrier_history``); the history that drew it, taken from this cell's
         statements before the write, can.
         """
-        from ..carrier_history import FIGURE_KINDS, carrier_history_fingerprint
-        from ..stateful_carriers import stateful_carrier_kind
 
         log = self._cell_stmt_log
         end = next((k for k in range(len(log) - 1, -1, -1) if log[k][0] == code), None)
@@ -4098,8 +4090,6 @@ class StatementProcessor:
         wrote = bool(getattr(self, "_last_written_paths", None)) or not getattr(result, "success", False)
         if not wrote:
             try:
-                from ...analysis.cacheability import statement_calls_user_writer, statement_writes_files
-
                 wrote = (
                     statement_writes_files(code) or statement_calls_user_writer(code, self.shell.user_ns) is not None
                 )
@@ -4464,7 +4454,6 @@ class StatementProcessor:
         backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
         if not key or backend is None:
             return {}
-        from ...tracking import file_dep_snapshot
 
         epoch = file_dep_snapshot._HASH_EPOCH
         memo = self.__dict__.get("_producer_snapshot_memo")
@@ -4618,7 +4607,6 @@ class StatementProcessor:
         ``prediction`` is a dict with keys ``size_bytes``, ``restore_seconds``,
         ``type_name``, ``family``; or ``None`` if size estimation raises.
         """
-        from cash import cost_model
 
         try:
             obj_size = estimate_object_size(var_value)
@@ -4807,8 +4795,6 @@ class StatementProcessor:
         which is to persist the finished object once instead of every
         intermediate state of it.
         """
-        from cash.backends.adaptive_caps import human_bytes
-        from cash.diagnostics import warn_diagnostic
 
         first_line = (stmt_id.splitlines() or [""])[0].strip()
         if len(first_line) > 60:
@@ -5025,8 +5011,6 @@ class StatementProcessor:
         variables = self._filter_safe_vars(captured_vars)
         referenced: dict[str, int] = {}
         if self._call_cache is not None:
-            from cash.notebook.call_refs import with_call_refs
-
             trusted, unpacked = self._plain_call_result(code)
             variables = with_call_refs(
                 variables, self._call_cache.held_results(), referenced, trusted=trusted, unpacked=unpacked
@@ -5065,8 +5049,6 @@ class StatementProcessor:
         # the storage info on to the badge metrics.
         wire = metadata.to_dict()
         if referenced:
-            from cash.notebook.call_refs import REF_BYTES_FIELD, REFS_FIELD
-
             wire[REFS_FIELD] = sorted(referenced)
             wire[REF_BYTES_FIELD] = sum(referenced.values())
         # An intermediate of this cell (``cell_executor._written_later_in_cell``)
@@ -5256,7 +5238,6 @@ class StatementProcessor:
         """Does every name an import-only *tree* binds already hold the object
         that import would bind? Answered from ``sys.modules`` without importing
         anything; anything not already loaded, or relative, is "no"."""
-        import sys
 
         missing = object()
         ns = self.shell.user_ns
@@ -5322,7 +5303,6 @@ class StatementProcessor:
         code is compiled and executed) and includes all subsequent frames
         (e.g., user-defined function calls).
         """
-        import traceback
 
         exc_type, exc_value, exc_tb = sys.exc_info()
 

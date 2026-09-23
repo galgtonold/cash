@@ -10,11 +10,13 @@ invariants land in a later refactor.
 from __future__ import annotations
 
 import ast
+import base64
 import builtins
 import hashlib
 import importlib.util
 import inspect
 import logging
+import marshal
 import os
 import re
 import sys
@@ -25,6 +27,7 @@ from typing import Any
 
 from ...analysis.cacheability import (
     RECEIVER_READONLY_WRITE_METHODS,
+    analyze_statement,
     assigned_method_call_receivers,
     bare_call_argument_names,
     bare_call_arguments,
@@ -34,15 +37,18 @@ from ...analysis.cacheability import (
     function_arg_mutations,
     is_pandas_plot_call,
     module_setting_receivers,
+    selfref_reassignment_targets,
     standalone_call_arg_targets,
     standalone_method_call_inner_methods,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
+    statement_writes_files,
     top_level_call_argument_bases,
 )
 from ...analysis.cacheability_decision import receiver_is_identity_coupled
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...source_norm import source_identity_digest
+from ...tracking import file_dep_snapshot as _fds
 from ...tracking.file_dep_snapshot import _LISTING_MIN_FILES, file_dep_is_fresh, stats_from_listings
 from ...tracking.randomness import (
     hidden_lineage_reads,
@@ -56,14 +62,19 @@ from ..cache_key import (
     CacheKeyContext,
     VirtualCallable,
     called_function_dependencies,
+    called_function_globals,
     compute_cache_key,
+    control_outcome_key,
+    import_bindings_key,
     is_cash_instrumentation,
     is_module_like,
+    mutation_verdict_key,
     statement_source_hash,
     virtual_callable_key,
     virtual_namespace,
 )
 from ..cache_status import CacheStatus
+from ..call_refs import resolve_call_refs
 from ..control_structures import extract_target_names, get_control_structure_type, is_control_structure
 from ..lineage_formula import (
     callable_source_component,
@@ -71,6 +82,7 @@ from ..lineage_formula import (
     module_source_component,
     output_lineage,
 )
+from ..loop_split import is_split_half, loop_source_hash, split_nodes, store_for_backend
 from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
 from ..statement.processor import _is_control_body
@@ -180,7 +192,6 @@ _FILE_STATE_THIS_RUN: dict = {}
 
 def _file_state_this_run() -> dict | None:
     """This cell run's per-file memo, or None outside a run."""
-    from ...tracking import file_dep_snapshot as _fds
 
     epoch = _fds._HASH_EPOCH
     if epoch is None:
@@ -1455,6 +1466,7 @@ class VirtualLineage:
 
             stmt_code = ast.unparse(node)
             if raw_cell is not None:
+                # Local: import cycle upstream.virtual_lineage -> ipython.cell_executor -> ... -> upstream.virtual_lineage.
                 from ..ipython.cell_executor import CellExecutor
 
                 if CellExecutor._expr_has_trailing_semicolon(raw_cell, node):
@@ -1510,8 +1522,6 @@ class VirtualLineage:
             # usually gives it an output, but that record dies with the
             # kernel, so after a restart the call vanished from the trace and
             # a figure was rebuilt without it (round 21, replay corpus).
-            from ...analysis.cacheability import statement_writes_files
-
             if statement_writes_files(stmt_code) or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
                 simulation_trace.append(TraceEntry(stmt_code, outputs, inputs, input_hashes, {}, files_stale))
 
@@ -1822,8 +1832,6 @@ class VirtualLineage:
         # three reverted attempts. See ``notebook/loop_split.py``.
         split_k = self._loop_split_k(node)
         if split_k is not None:
-            from ..loop_split import split_nodes
-
             try:
                 halves = split_nodes(node, split_k)
             except ValueError:  # for/else -- not splittable
@@ -1866,8 +1874,6 @@ class VirtualLineage:
         if not isinstance(node, ast.For):
             return None
         try:
-            from ..loop_split import is_split_half, loop_source_hash, store_for_backend
-
             if is_split_half(node):
                 return None  # never split a half; that recurses
             if self._split_store is None:
@@ -1999,7 +2005,6 @@ class VirtualLineage:
         backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
         if backend is None or not hasattr(backend, "get_metadata"):
             return None
-        from ..cache_key import mutation_verdict_key
 
         try:
             record = backend.get_metadata(mutation_verdict_key(source_hash))
@@ -2027,7 +2032,6 @@ class VirtualLineage:
         backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
         if backend is None or not hasattr(backend, "get_metadata"):
             return None
-        from ..cache_key import control_outcome_key
 
         try:
             record = backend.get_metadata(control_outcome_key(stmt_code))
@@ -2053,7 +2057,6 @@ class VirtualLineage:
     def _may_write_files(node: ast.AST, stmt_code: str) -> bool:
         """A write in the text, or a call to something that might be a
         user function that writes (the planner decides which)."""
-        from ...analysis.cacheability import statement_writes_files
 
         if statement_writes_files(stmt_code):
             return True
@@ -2085,7 +2088,6 @@ class VirtualLineage:
         their files (upstream ran before the write), so re-checking can only
         repeat the answer.
         """
-        from ...tracking import file_dep_snapshot as _fds
 
         epoch = _fds._HASH_EPOCH
         memo = _FRESH_ENTRY_VERDICTS
@@ -2478,9 +2480,6 @@ class VirtualLineage:
                         continue
                     digest, is_class, code = entry.get("digest"), bool(entry.get("is_class")), None
                     if entry.get("code"):
-                        import base64
-                        import marshal
-
                         try:
                             code = marshal.loads(base64.b64decode(entry["code"]))
                         except (ValueError, EOFError, TypeError):
@@ -2522,7 +2521,6 @@ class VirtualLineage:
         re-run with ``score``'s ``OFFSET`` never rebuilt -- a NameError, where
         the cell had run fine. Modules included: the def's cell imported them.
         """
-        from ..cache_key import called_function_globals
 
         user_ns = self.shell.user_ns
         virtual = (
@@ -2647,8 +2645,6 @@ class VirtualLineage:
         found: dict[str, dict] = {}
         backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
         if backend is not None and hasattr(backend, "get_metadata"):
-            from ..cache_key import import_bindings_key
-
             try:
                 record = backend.get_metadata(import_bindings_key(stmt_code))
             except (OSError, TypeError, ValueError, AttributeError):
@@ -3290,8 +3286,6 @@ class VirtualLineage:
             metadata, cached_data = self.cash_instance.backend.get(cache_key)
             if cached_data is not None:
                 # Call results the entry refers to rather than copies (call_refs).
-                from cash.notebook.call_refs import resolve_call_refs
-
                 cached_data = resolve_call_refs(cached_data, self.cash_instance.backend)
 
             # Extract saved execution time
@@ -3549,7 +3543,6 @@ class VirtualLineage:
 
         Excludes loop target variables and built-ins.
         """
-        from ...analysis.cacheability import analyze_statement, selfref_reassignment_targets
 
         mutated_vars: set[str] = set()
 

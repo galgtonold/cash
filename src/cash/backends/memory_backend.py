@@ -654,7 +654,6 @@ def _pandas_copy_on_write() -> bool:
     """Whether pandas copy-on-write is in force (always, from pandas 3)."""
     if _COW:
         return _COW[0]
-    import sys
 
     pd = sys.modules.get("pandas")
     if pd is None:

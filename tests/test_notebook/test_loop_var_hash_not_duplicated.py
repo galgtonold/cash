@@ -47,9 +47,10 @@ def counting_magics(monkeypatch):
         counts[id(obj)] = counts.get(id(obj), 0) + 1
         return real(obj)
 
-    # Both call sites import this function-locally, at call time, so patching
-    # the module attribute reaches them.
-    monkeypatch.setattr(object_hashing, "compute_hash_full", counting_compute_hash_full)
+    # Both call sites bind the function when their module is imported, so
+    # patch it where each of them looks it up.
+    monkeypatch.setattr("cash.notebook.control_structures.processor.compute_hash_full", counting_compute_hash_full)
+    monkeypatch.setattr("cash.notebook.control_structures.for_handler.compute_hash_full", counting_compute_hash_full)
 
     shell = MockShell()
     cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)

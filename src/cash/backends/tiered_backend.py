@@ -7,8 +7,14 @@ import time
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
+from cash import cost_model
+
+from ..diagnostics import warn_diagnostic
+from ..exceptions import CashCacheIneffectiveWarning
 from ._base import CacheBackend, MetadataDict
+from .adaptive_caps import human_bytes
 from .serialization import PickleSerializer, Serializer
+from .value_policy import WORTH_CEILING_BYTES_PER_SECOND, worth_its_bytes
 
 _UNSEEN = object()
 
@@ -35,7 +41,6 @@ def _cap_list(caps: list[int] | None) -> str:
     """ " (its cap is 512.0 MiB)" / " (their caps are ...)" / "" when unknown."""
     if not caps:
         return ""
-    from .adaptive_caps import human_bytes
 
     rendered = ", ".join(human_bytes(c) for c in caps)
     return f" (cap: {rendered})" if len(caps) == 1 else f" (caps: {rendered})"
@@ -218,10 +223,6 @@ class TieredBackend(CacheBackend):
         """
         if floor and execution_time < self._min_persist_compute_s:
             return False
-        # Lazy import: only notebook-cached values carry the cost-model family,
-        # and by then cash.notebook is already loaded. Keeps this module (and a
-        # bare install / the decorator path) free of the notebook import.
-        from cash import cost_model
 
         est_restore = cost_model.estimated_restore_time(type_name, size_bytes, backend_kind)
         return execution_time - est_restore > self._min_persist_savings_pct * execution_time
@@ -289,10 +290,6 @@ class TieredBackend(CacheBackend):
         if self._warned_oversize:
             return
         self._warned_oversize = True
-        from cash.diagnostics import warn_diagnostic
-        from cash.exceptions import CashCacheIneffectiveWarning
-
-        from .adaptive_caps import human_bytes
 
         warn_diagnostic(
             CashCacheIneffectiveWarning,
@@ -396,12 +393,6 @@ class TieredBackend(CacheBackend):
     _NOT_WORTH_NAMED = 5
 
     def _say_not_worth(self, refused: list[tuple[str, int, float]]) -> None:
-        from cash.diagnostics import warn_diagnostic
-        from cash.exceptions import CashCacheIneffectiveWarning
-
-        from .adaptive_caps import human_bytes
-        from .value_policy import WORTH_CEILING_BYTES_PER_SECOND
-
         ceiling = human_bytes(WORTH_CEILING_BYTES_PER_SECOND)
         if len(refused) == 1:
             named, size_bytes, compute_seconds = refused[0]
@@ -640,8 +631,6 @@ class TieredBackend(CacheBackend):
         # restore actually saves here is the whole upstream chain, not the one
         # statement's own time.
         if not stored_metadata.get("force_persist"):
-            from .value_policy import worth_its_bytes
-
             weight = (stored_metadata.get("size") or size) + int(stored_metadata.get("call_ref_bytes") or 0)
             if not worth_its_bytes(weight, rebuild_seconds):
                 self._warn_not_worth_its_bytes(key, weight, rebuild_seconds, code=stored_metadata.get("code"))
@@ -804,8 +793,6 @@ class TieredBackend(CacheBackend):
                 is_call_entry = False
             bytes_refused = False
             if past_compute_floor and not (force_persist or decorated) and not is_call_entry:
-                from .value_policy import worth_its_bytes
-
                 if not worth_its_bytes(weight, exec_time):
                     past_compute_floor = False
                     bytes_refused = True

@@ -32,7 +32,7 @@ Five details of that formula are load-bearing:
   `input_lineages` and routed to the module component instead. Hashing a module object
   would fall back to its memory address, which is fresh in every kernel and would make
   every downstream key drift across a restart.
-  <!-- claim: cash/notebook/lineage_formula.py:module_read_lineage @79c91ad7 -->
+  <!-- claim: cash/notebook/lineage_formula.py:module_read_lineage @e20cbd4a -->
   The module component is not the whole module when it need not be. A statement
   that only reads attributes of a local module — `helpers.load(x)` — is keyed on
   what those attributes reach inside it, so editing `helpers.report` leaves it alone.
@@ -96,7 +96,7 @@ flowchart TD
 ```
 
 ??? warning "Keys survive a restart, not a move to another machine"
-    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @08702b7b -->
+    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @bd050962 -->
     Keys carry no wall-clock value *of their own*, so re-running the same notebook in a
     fresh kernel recomputes the same key and hits. But a statement that reads a file folds
     that file's **mtime and size** into its lineage (`compute_file_hash_component` in
@@ -224,7 +224,7 @@ See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full
 
 The two paths answer "what is this object's fingerprint?" differently, and the ordering in each is deliberate.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @9b2e47ef -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @21c5b8c5 -->
 **Decorator — hashing a call argument** (`Cash._hash_arg_payload`):
 
 1. **Hashers registered with `override=True`** — see [overriding a built-in](../tutorials/feature-guides/custom-hashers.md#overriding-a-built-in-content-hasher). Nothing below runs for such a type.
@@ -236,7 +236,7 @@ The two paths answer "what is this object's fingerprint?" differently, and the o
 
 Content beats the lineage attribute, and that ordering is the fix for a real bug: a notebook variable's `_cash_lineage_hash` is re-derived in every kernel session and is not reproducible across a restart, so keying a persisted decorator entry on it made `train_model(X_train, ...)` miss after a restart and re-train the model. Pinned by `tests/test_core/test_arg_hash_restart_stable.py`.
 
-<!-- claim: cash/notebook/lineage_store.py:LineageStore.resolve @81312a14, cash/object_hashing.py:_hash_dataframe_or_series @f6c309e2, cash/object_hashing.py:_hash_collection @c5d5c637, cash/object_hashing.py:compute_hash @a7245478 -->
+<!-- claim: cash/notebook/lineage_store.py:LineageStore.resolve @26a7e634, cash/object_hashing.py:_hash_dataframe_or_series @f6c309e2, cash/object_hashing.py:_hash_collection @c5d5c637, cash/object_hashing.py:compute_hash @a7245478 -->
 **Notebook — resolving a statement input** (`LineageStore.resolve`):
 
 1. **Virtual lineage** — the simulated value, when an upstream simulation is in flight.

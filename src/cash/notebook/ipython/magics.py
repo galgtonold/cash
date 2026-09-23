@@ -5,10 +5,12 @@ from __future__ import annotations
 import ast
 import contextlib
 import functools
+import json
 import logging
 import sys
 import threading
 import time
+import traceback
 
 # Any is used at IPython API boundaries where types come from the shell's dynamic
 # namespace (user_ns, execution info objects).  These cannot be typed more precisely
@@ -18,18 +20,31 @@ from typing import Any
 from IPython.core.magic import Magics, cell_magic, line_magic, magics_class
 from IPython.display import HTML, display, publish_display_data
 
+from ... import __version__
+from ...backends._base import all_pending_writes
 from ...core import Cash
+from ...logging import setup_logging
 from ...object_hashing import compute_hash
 from ...utils import safe_text
 from .. import badge_renderer as _badge
 from .. import compute_baselines
-from .._protocols import ShellProtocol
+from .._protocols import ShellProtocol, TrackingState
 from ..audit import AuditLogger
 from ..cache_status import CacheStatus
 from ..control_structures import ControlStructureProcessor
+from ..live_cells import install_expiry_hook, register_target
+from ..live_cells import reset as _reset_live_cells
 from ..module_invalidator import ModuleInvalidator
 from ..provenance import ProvenanceTracker
 from ..restore import Restorer
+from ..server_discovery import (
+    _in_colab,
+    _labextension_installed,
+    extract_notebook_path_from_vscode_cell_id,
+    get_notebook_cells,
+    invalidate_notebook_path_cache,
+    set_notebook_path,
+)
 from ..statement import ProcessResult, StatementProcessor
 
 # The SAME floor reader the cache-write decision uses. The cacheable/trivial
@@ -206,8 +221,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._badge_mode = "html"
 
         # Shared tracking state — single owner of all lineage/dependency dicts
-        from .._protocols import TrackingState
-
         self._tracking_state = TrackingState()
 
         self._init_processing_components(shell, cash_instance)
@@ -371,8 +384,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # one is present. A silent no-op everywhere else — register_target()
         # returns False rather than raising when there is no kernel / comm
         # manager to attach to (bare IPython, older ipykernel, MockShell, ...).
-        from ..live_cells import install_expiry_hook, register_target
-
         register_target(shell)
         # ...and retire each pushed snapshot when the execution it arrived for
         # ends. The store outlives the frontend that fills it, so without this a
@@ -506,8 +517,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         # Invalidate notebook path cache so we re-discover the current notebook
         # (fixes Issue 23: switching notebooks within the same kernel session)
-        from ..server_discovery import invalidate_notebook_path_cache
-
         invalidate_notebook_path_cache()
 
         # Clear upstream checker's simulation and AST caches to prevent stale
@@ -518,8 +527,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # PREVIOUS notebook -- otherwise the new notebook's first upstream
         # check would read stale cells from a document this session no longer
         # even has open, exactly the per-notebook staleness reset above.
-        from ..live_cells import reset as _reset_live_cells
-
         _reset_live_cells()
 
         self._auto_cache_enabled = True
@@ -555,7 +562,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # (a split install) and why suppressing-by-omission is the safe error.
         if not getattr(self, "_save_hint_shown", False):
             self._save_hint_shown = True
-            from ..server_discovery import _in_colab, _labextension_installed
 
             if not _in_colab() and not _labextension_installed():
                 print("[Tip] Cash reads upstream cells from the saved notebook file.")
@@ -601,14 +607,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             print("Cache debug output disabled.")
         elif mode == "json":
             self._debug = True
-            from ...logging import setup_logging
 
             self._log_handler = setup_logging(level=logging.DEBUG, json_output=True)
             print("Cache debug output enabled (JSON format).")
         elif mode == "file" and len(parts) > 1:
             log_path = parts[1]
             self._debug = True
-            from ...logging import setup_logging
 
             self._log_handler = setup_logging(level=logging.DEBUG, log_file=log_path)
             print(f"Cache debug output enabled (logging to {log_path}).")
@@ -846,7 +850,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             - lineage: Current variable lineage state
             - cache_stats: Backend statistics
         """
-        import json
 
         mode = strip_inline_comment(line).lower() or "print"
 
@@ -900,7 +903,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """If cell_id is a VS Code URI, seed the notebook-path cache from it."""
         if not cell_id:
             return
-        from ..server_discovery import extract_notebook_path_from_vscode_cell_id, set_notebook_path
 
         nb_path = extract_notebook_path_from_vscode_cell_id(cell_id)
         if nb_path:
@@ -930,8 +932,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         durability best-effort must not turn a working cell into an error.
         """
         try:
-            from ...backends._base import all_pending_writes
-
             for queue in all_pending_writes():
                 queue.wait_all()
         except Exception:  # noqa: BLE001 — best-effort, must not break the cell
@@ -1103,8 +1103,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             timer.start()
         except Exception as e:  # noqa: BLE001 - a badge must never break a cell; degrade to none
             if self._debug:
-                import traceback
-
                 print(f"[BADGE ARM ERROR] {e}")
                 traceback.print_exc()
             return
@@ -1839,8 +1837,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             _badge.print_text_badge(metrics_list, cell_total_time=cell_total_time)
         except Exception as e:  # noqa: BLE001 — the badge is never worth breaking a cell
             if self._debug:
-                import traceback
-
                 print(f"[BADGE RENDER ERROR] {e}")
                 traceback.print_exc()
 
@@ -1861,10 +1857,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         return context
 
     def _collect_bug_report_context(self) -> dict:
-        try:
-            from cash import __version__ as _v
-        except Exception:
-            _v = "unknown"
         backend = getattr(self._cash_instance, "backend", None)
         backend_name = type(backend).__name__ if backend else "unknown"
         python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
@@ -1891,14 +1883,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # --- Notebook source (actual .ipynb cell contents on disk) ---
         notebook_cells: list[str] = []
         try:
-            from ..server_discovery import get_notebook_cells
-
             notebook_cells = get_notebook_cells() or []
         except Exception:
             pass
 
         return {
-            "version": _v,
+            "version": __version__,
             "python_version": python_version,
             "backend": backend_name,
             "notebook_history": exec_history,
@@ -1959,8 +1949,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             return html or None
         except Exception as e:  # noqa: BLE001 — intentionally broad; see _render_interactive_badge
             if self._debug:
-                import traceback
-
                 print(f"[BADGE RENDER ERROR] {e}")
                 traceback.print_exc()
             return None
@@ -2022,8 +2010,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 display(HTML(html))
         except Exception as e:  # noqa: BLE001 — intentionally broad; see _render_interactive_badge
             if self._debug:
-                import traceback
-
                 print(f"[BADGE RENDER ERROR] {e}")
                 traceback.print_exc()
 

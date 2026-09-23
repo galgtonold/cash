@@ -64,6 +64,8 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from cash.backends.file_backend import recreate_cache_dir
+
 logger = logging.getLogger(__name__)
 
 _STORE_FILENAME = "_miss_guard.json"
@@ -214,8 +216,6 @@ class MissGuard:
         }
         tmp_path = f"{self._path}.{os.getpid()}.tmp"
         try:
-            from cash.backends.file_backend import recreate_cache_dir
-
             recreate_cache_dir(os.path.dirname(self._path))
             with open(tmp_path, "w", encoding="utf-8") as fh:
                 json.dump(doc, fh)

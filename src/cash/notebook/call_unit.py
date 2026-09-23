@@ -41,9 +41,11 @@ from types import ModuleType as _ModuleType
 from typing import Any
 
 from cash._clock import perf_counter as _perf_counter
+from cash._sizing import pandas_nbytes, pickled_size_estimate
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement, callee_source_global_mutations
-from cash.analysis.cacheability_decision import decide_cacheability
+from cash.analysis.cacheability_decision import decide_cacheability, identity_coupled_reason
+from cash.backends.value_policy import worth_its_bytes
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_interception import CallSite, _names_read
@@ -60,8 +62,11 @@ from cash.object_hashing import (
     estimate_object_size,
     is_identity_fallback_hash,
 )
-from cash.tracking.file_tracker import FileAccessTracker
+from cash.tracking.file_dep_snapshot import file_dep_is_fresh, snapshot_dependencies
+from cash.tracking.file_tracker import FileAccessTracker, _active_tracker, _is_user_file
 from cash.tracking.randomness import capture_rng_state, rng_modules_changed
+
+from ..cost_model import estimated_restore_time
 
 logger = logging.getLogger(__name__)
 
@@ -780,7 +785,6 @@ def _plain_or_code(value, seen: set[int], budget: list[int]) -> bool:
     if isinstance(value, _types.FunctionType):
         if getattr(value, "_is_file_tracker_patch", False) or getattr(value, "_cash_cached", False):
             return True  # cash's own: keyed or tracked by cash itself
-        from cash.tracking.file_tracker import _is_user_file
 
         filename = getattr(value.__code__, "co_filename", "") or ""
         # A cell's code has a `<cash-...>` / `<ipython-...>` name: the user's.
@@ -828,8 +832,6 @@ def _nbytes(value) -> int:
         return int(value.nbytes)
     pd = sys.modules.get("pandas")
     if pd is not None and isinstance(value, (pd.DataFrame, pd.Series)):
-        from cash._sizing import pandas_nbytes
-
         sized = pandas_nbytes(value)
         if sized is not None:
             return int(sized)
@@ -1448,8 +1450,6 @@ class CallUnit:
         if not snap:
             return
         try:
-            from cash.tracking.file_tracker import _active_tracker
-
             tracker = _active_tracker.get()
         except Exception:  # noqa: BLE001 - tracking is best-effort
             return
@@ -1857,8 +1857,6 @@ class CallUnit:
         comes back from after a restart, the case a cache is for.
         """
         try:
-            from ..cost_model import estimated_restore_time
-
             size = estimate_object_size(result)
             predicted = estimated_restore_time(type(result).__name__, size, "disk")
         except Exception:  # noqa: BLE001 - no prediction: store, as before
@@ -1936,8 +1934,6 @@ class CallUnit:
                 if result is arg:
                     return False
         try:
-            from ..analysis.cacheability_decision import identity_coupled_reason
-
             return identity_coupled_reason("<intercepted call>", result) is None
         except Exception:  # noqa: BLE001 - never let the predicate break the call
             return True
@@ -2040,10 +2036,6 @@ class CallUnit:
         snap = metadata.get("auto_file_deps") or {}
         if not snap:
             return True
-        try:
-            from cash.tracking.file_dep_snapshot import file_dep_is_fresh
-        except Exception:  # noqa: BLE001 - never let a broken import fail-open a hit
-            return False
         for path, recorded in snap.items():
             try:
                 is_fresh, _reason = file_dep_is_fresh(path, recorded)
@@ -2104,8 +2096,6 @@ class CallUnit:
             metadata["force_persist"] = True
         if file_deps or remote_deps:
             try:
-                from cash.tracking.file_dep_snapshot import snapshot_dependencies
-
                 snap = snapshot_dependencies(file_deps, remote_deps)
             except Exception:  # noqa: BLE001 - never let dep snapshotting break the store
                 snap = None
@@ -2173,8 +2163,6 @@ class CallUnit:
         is worth on disk (half: a digest skipped for a value worth keeping
         costs other statements their reference), or when it is its
         statement's plain value, whose reference needs no digest."""
-        from cash._sizing import pickled_size_estimate
-        from cash.backends.value_policy import worth_its_bytes
 
         estimate = pickled_size_estimate(value)
         if not estimate:

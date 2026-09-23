@@ -41,13 +41,16 @@ section, whose numbers are pinned to those constants by a claim-anchor test
 from __future__ import annotations
 
 import ast
+import builtins
 import copy
+import inspect
 import types
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ..analysis.cacheability_decision import identity_coupled_reason
 from .cache_key import CacheKeyContext
 
 __all__ = [
@@ -207,8 +210,6 @@ def _static_callee(node: ast.AST, namespace) -> object:
     property runs). Anything else -- an instance's method, a subscript, a call
     result -- is ``_NOT_FOUND``.
     """
-    import builtins
-    import inspect
 
     if isinstance(node, ast.Name):
         if node.id in namespace:
@@ -247,8 +248,6 @@ def _is_storable(result) -> bool:
     decorator would cache is still cached.
     """
     try:
-        from ..analysis.cacheability_decision import identity_coupled_reason
-
         return identity_coupled_reason("<intercepted call>", result) is None
     except Exception:  # noqa: BLE001 - never let the predicate break the call
         return True
@@ -494,7 +493,6 @@ def wrap_eligible_calls(
     comprehension or lambda binds around the call: they have no lineage, and
     the key holds their values (``CallSite.local_arg_positions``).
     """
-    import inspect
 
     try:
         gate_takes_local = gate is not None and "local" in inspect.signature(gate).parameters
@@ -750,6 +748,7 @@ def _eligible_calls_in_loop(
     the loop): nothing in the key could see it. A callee that cannot be found
     statically is not taken either.
     """
+    # Local: import cycle call_interception -> call_unit -> call_interception.
     from cash.notebook.call_unit import _global_names_reached
 
     written = frozenset(_loop_bound_names(loop))

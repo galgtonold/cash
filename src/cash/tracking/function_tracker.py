@@ -5,18 +5,22 @@ from __future__ import annotations
 import ast
 import contextlib
 import hashlib
+import importlib
 import inspect
 import logging
 import os
+import shutil
 import site
 import sys
 import sysconfig
+import tempfile
 import textwrap
 import types
 from typing import Any
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_norm import read_code_file, read_code_text, source_identity_digest
+from .module_symbols import _analysis_for
 
 __all__ = ["FunctionTracker", "is_local_module"]
 
@@ -166,9 +170,6 @@ def _reload_from_source(module) -> None:
     MODULE RELOADED badge (``test_a_from_import``, under load). An empty
     ``sys.pycache_prefix`` for the reload leaves the loader no bytecode to use.
     """
-    import importlib
-    import shutil
-    import tempfile
 
     previous = sys.pycache_prefix
     empty = tempfile.mkdtemp(prefix="cash-reload-")
@@ -434,7 +435,6 @@ class FunctionTracker:
         Returns:
             The file path of the module, or None if not found
         """
-        import sys
 
         self._tracked_modules.add(module_name)
 
@@ -705,8 +705,6 @@ class FunctionTracker:
         # functions and classes only, so `TABLE = build_table()` recorded no
         # edge and an edit to `build_table` left TABLE, and every reader of it,
         # counted as unchanged -- a lineage the invalidator could wrongly keep.
-        from .module_symbols import _analysis_for
-
         analysis = _analysis_for(file_path)
         if analysis is None:
             return {}
@@ -953,8 +951,6 @@ class FunctionTracker:
         Returns:
             True if reload succeeded, False otherwise
         """
-        import importlib
-        import sys
 
         module = sys.modules.get(module_name)
         if module is None:

@@ -15,6 +15,7 @@ import re
 import types
 
 from ...analysis.cacheability import analyze_statement
+from ...analysis.cacheability_decision import _is_lineage_exempt, receiver_is_identity_coupled
 from ...analysis.code_analyzer import CodeAnalyzer
 from .._protocols import TrackingState
 from .._trace import trace_event
@@ -481,8 +482,6 @@ class MismatchClassifier:
         """Whether *var_name* holds a live figure whose last change was a bare
         ``var_name.savefig(...)``."""
         try:
-            from cash.analysis.cacheability_decision import receiver_is_identity_coupled
-
             if not receiver_is_identity_coupled(self.shell.user_ns.get(var_name)):
                 return False
             body = ast.parse((self.executed_cell_codes.get(var_name) or "").strip()).body
@@ -1417,7 +1416,6 @@ class MismatchClassifier:
             return False
         if var_name in utility_vars or var_name.startswith("_"):
             return False
-        from ...analysis.cacheability_decision import _is_lineage_exempt
 
         if _is_lineage_exempt(var_name, self.shell.user_ns.get(var_name)):
             return False

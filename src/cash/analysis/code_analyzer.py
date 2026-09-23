@@ -14,6 +14,7 @@ import functools
 import hashlib
 import inspect
 import logging
+import textwrap
 import time
 import types
 import uuid
@@ -22,6 +23,7 @@ from typing import Any
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_norm import bytecode_identity, source_identity_digest
+from .cacheability import callee_mutated_globals_for_tree
 
 __all__ = ["CodeAnalyzer"]
 
@@ -465,10 +467,8 @@ class CodeAnalyzer:
         # partial never hit across processes (found attacking the decorator
         # before round 26). What it wraps is stable; what it binds reaches the
         # key through the arguments and the function's own namespace name.
-        import functools as _functools
-
         depth = 0
-        while isinstance(func, _functools.partial) and depth < 8:
+        while isinstance(func, functools.partial) and depth < 8:
             func = func.func
             depth += 1
         module = getattr(func, "__module__", None) or "?"
@@ -529,7 +529,6 @@ class CodeAnalyzer:
         Round 19: ``sum(map(inner, [n]))`` with ``inner`` cached kept its old
         result after ``inner``'s helper changed -- only a CALL made an edge.
         """
-        import textwrap
 
         try:
             source = textwrap.dedent(inspect.getsource(func))
@@ -819,8 +818,6 @@ class CodeAnalyzer:
         inputs, outputs = visitor.real_inputs, visitor.outputs
         if resolve_source is not None:
             try:
-                from .cacheability import callee_mutated_globals_for_tree
-
                 extra = callee_mutated_globals_for_tree(tree, resolve_source, user_ns)
             except Exception:  # noqa: BLE001 - analysis must never break a cell
                 extra = frozenset()

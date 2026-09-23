@@ -28,6 +28,8 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
+from ...analysis.annotations import ANNOTATION_PATTERN
+from ...remote_source import RemoteFileDataSource
 from ...source_norm import drop_docstrings, read_code_file, stat_has_settled
 from ...tracking.file_dep_snapshot import realpath_of_read_this_run
 from ...utils import normalize_path
@@ -118,8 +120,6 @@ def compute_file_hash_component(
         # this one is identical on every machine -- a statement reading object
         # storage keys the same for a teammate (CAS-233's portability problem,
         # which for remote data simply does not arise).
-        from cash.remote_source import RemoteFileDataSource
-
         file_components.append(f"{url}:{RemoteFileDataSource(url).state_token()}")
 
     if file_components:
@@ -189,7 +189,6 @@ def _module_identity(raw: bytes) -> bytes:
         rendered = ast.unparse(tree)
     except (UnicodeDecodeError, SyntaxError, ValueError, AttributeError, RecursionError):
         return raw
-    from ...analysis.annotations import ANNOTATION_PATTERN
 
     parts = [rendered]
     parts.extend(line.strip() for line in text.splitlines() if ANNOTATION_PATTERN.search(line))

@@ -10,6 +10,9 @@ from typing import Any
 
 from cash.utils import safe_text
 
+from .renderers.text import render_text
+from .view_builder import build_interactive_badge
+
 
 def print_text_badge(
     metrics_list: list[dict[str, Any]],
@@ -22,9 +25,6 @@ def print_text_badge(
     metrics_list = metrics_list or []
     if not metrics_list:
         return
-
-    from .renderers.text import render_text
-    from .view_builder import build_interactive_badge
 
     view = build_interactive_badge(
         metrics_list,

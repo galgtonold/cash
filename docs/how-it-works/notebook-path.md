@@ -101,7 +101,7 @@ flowchart TD
     I3 --> K3
 ```
 
-<!-- claim: cash/notebook/control_structures/processor.py:compute_context_hash @61bb7dde, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @b6533eca -->
+<!-- claim: cash/notebook/control_structures/processor.py:compute_context_hash @10c994da, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @7d2ad2f4 -->
 The mechanism is deliberately plain: the context hash is prepended to the body
 statement as a *comment*, so it flows into the ordinary statement cache key
 through the source hash — no special key format is needed.
@@ -169,13 +169,13 @@ one of them can change on its own and the rest still hit, at the statement
 level as well as the call level. See
 [Reordering a loop's items](../known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
 
-<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @05332caa, cash/notebook/control_structures/try_handler.py:TryHandler.process @22e3e208 -->
+<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @dc6a3040, cash/notebook/control_structures/try_handler.py:TryHandler.process @22e3e208 -->
 Conditionals work the same way with a different marker: `if`/`elif`/`else` and
 `try`/`except` bodies are decomposed per statement and tagged with a
 `# control_context:` branch hash, so only the branch that actually ran is
 cached and unused branches never pollute the key space.
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @29430d76, cash/notebook/control_structures/processor.py:get_control_structure_type @a07b3e05 -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @4be9adee, cash/notebook/control_structures/processor.py:get_control_structure_type @a07b3e05 -->
 `while` and `with` are the exception — they are executed as a **single cacheable
 unit** through the statement processor rather than decomposed, because neither
 has an enumerable iteration space to key on.
@@ -222,7 +222,7 @@ final value straight from cache:
 # Cash restores the final 'df' directly:  ~0.1s (deserialization only)
 ```
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @f520693c -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @6fe3d5eb -->
 That holds for values computed *from* a loop too. A loop's outputs get lineages
 derived from the values it built, which the upstream simulation cannot derive
 from code, so Cash writes down what a loop left behind when it runs, and the
@@ -263,7 +263,7 @@ line of the chart, or an upstream edit to the data it writes. Writes a C
 extension makes without going through Python's `open` are not seen; such a
 writer is re-run as before.
 
-<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._find_stale_file_writer_indices @1679288a, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._note_stale_exports @0025d4be -->
+<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._find_stale_file_writer_indices @a3c82feb, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._note_stale_exports @0025d4be -->
 A writer whose file the cell you run does not read is left alone, as a plain
 kernel leaves a cell you did not run. "Does not read" has to be provable: a
 path in the code, a name bound to one, or a list of paths a loop or
