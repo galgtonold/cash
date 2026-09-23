@@ -10,7 +10,7 @@ the tools that let you verify what Cash did.
 
 Every computation Cash touches — a notebook statement or a decorated function call — passes through the same five steps. Cash **analyzes** which variables and files the code reads and writes, **keys** the computation by fingerprinting the code together with its current inputs, **checks** the backend to see whether that exact fingerprint is already stored, then either **executes** the code fresh or **restores** the saved result, and finally **tracks** lineage so that anything downstream knows what it depends on.
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @3dd62608, cash/tracking/function_tracker.py:FunctionTracker @46893d5b broad="the trust thesis names two whole mechanisms - file freshness and function-source tracking - not one function each" -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @3dd62608, cash/tracking/function_tracker.py:FunctionTracker @7ea78663 broad="the trust thesis names two whole mechanisms - file freshness and function-source tracking - not one function each" -->
 The trust thesis is simple: Cash recomputes whenever something relevant changed, and refuses to cache when replaying a snapshot would be wrong. If your code reads a file that was modified or calls a function whose source changed, Cash will not serve you the old answer.
 
 <!-- claim: cash/tracking/randomness.py:capture_rng_state @39505ae0, cash/tracking/randomness.py:restore_rng_state @3e10fc77 -->
