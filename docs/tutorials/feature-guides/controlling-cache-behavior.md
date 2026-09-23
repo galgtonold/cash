@@ -53,7 +53,7 @@ api_response = requests.get("https://api.example.com/data")
 print(f"Debug: {some_value}")
 ```
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @b5ac154c -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
 The decision-merge layer short-circuits as soon as it sees this annotation — `decide_cacheability` returns `(False, ['@cash:no-cache annotation'])` before consulting anything else. The badge shows the statement as NOT CACHED with that exact reason string.
 
 <iframe class="cash-badge" src="/_badges/not_cached_explicit.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>

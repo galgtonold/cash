@@ -213,7 +213,7 @@ Now any cell that calls `log_to_dashboard(...)` or `send_alert(...)` runs fresh 
 
 ### What it actually does
 
-<!-- claim: cash/purity.py:stateful @d2b97ef0, cash/analysis/cacheability_decision.py:decide_cacheability @b5ac154c -->
+<!-- claim: cash/purity.py:stateful @d2b97ef0, cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
 `@stateful` sets `_cash_stateful = True` on the wrapped function. When the statement processor walks the bare-name calls in a cell and finds one whose resolved callable has that attribute, `_check_callable_stateful` returns `True`. The caller (in `decide_cacheability`) then refuses to cache the cell and records the reason "Calls @stateful function".
 
 `_check_callable_stateful` looks only for `@stateful`, so if you ever (accidentally) stack both decorators on the same function, stateful wins. Don't rely on that — see the [caveats](#mixing-markers).

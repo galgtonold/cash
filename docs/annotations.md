@@ -108,7 +108,7 @@ now = datetime.utcnow()    # always fresh
 
 This is the right directive when a statement has observable side effects or produces values that must always be recomputed (timestamps, monotonic counters, "fire and forget" prints).
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @b5ac154c -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
 Behind the scenes: the cacheability decision short-circuits at [`cacheability_decision.py` — `decide_cacheability`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/cacheability_decision.py):
 
 <!-- test:skip reason="source-code excerpt: has return outside function" -->
@@ -253,7 +253,7 @@ An unseeded opted-in fit warns that the cached model is a frozen replay (the
 
 ### `# @cash:assume-safe`
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @b5ac154c, cash/analysis/annotations.py:leading_cell_annotation @06896efb -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6, cash/analysis/annotations.py:leading_cell_annotation @06896efb -->
 Cash runs a statement with a side effect every time, because a cache hit would
 skip it: a file write, a subprocess, a write to a database, drawing on pyplot's
 current figure, or a request that sends something — `requests.post(...)`,

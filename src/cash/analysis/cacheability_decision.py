@@ -229,7 +229,7 @@ def decide_cacheability(
     """
     if annotation is not None and annotation.no_cache:
         return False, ["@cash:no-cache annotation"]
-    waived = annotation is not None and annotation.assume_safe
+    waived = bool(getattr(annotation, "assume_safe", False))
 
     try:
         forbidden = scan_forbidden(code, user_ns, tree)

@@ -243,7 +243,7 @@ are on it: every type that has one writes to a filesystem, and an
 folder missing. The same list is what a `@cash.cache` function is checked
 against, so a call that runs every time in a notebook is reported there too.
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @b5ac154c -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
 A name cannot tell a POST that creates an order from one that runs a search.
 When a statement's side effect is harmless to skip, put
 [`# @cash:assume-safe`](../annotations.md#cashassume-safe) on it: the statement
@@ -316,7 +316,7 @@ Cash checks the live estimator and warns through the same channel.
 
 ## From watching to deciding
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @b5ac154c -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
 The findings above are merged into a single verdict per statement by
 `decide_cacheability`. It has five reason-sources and the first one that
 triggers wins:
