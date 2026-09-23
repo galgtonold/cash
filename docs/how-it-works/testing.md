@@ -17,14 +17,14 @@ are the part that does not change.
 
 ## The shape of the suite
 
-**<!-- docnum:tests_total -->~10,700<!-- /docnum --> tests** across three suites,
-spread over <!-- docnum:test_files -->~1,530<!-- /docnum --> files:
+**<!-- docnum:tests_total -->~11,050<!-- /docnum --> tests** across three suites,
+spread over <!-- docnum:test_files -->~1,540<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | <!-- docnum:tests_unit -->~5,790<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
-| Notebook integration | <!-- docnum:tests_integration -->~4,530<!-- /docnum --> | Real kernels executing real notebooks, cell by cell |
-| Docs | <!-- docnum:tests_docs -->~380<!-- /docnum --> | The documentation itself — see [below](#the-docs-are-tested-too) |
+| Unit | <!-- docnum:tests_unit -->~6,080<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
+| Notebook integration | <!-- docnum:tests_integration -->~4,540<!-- /docnum --> | Real kernels executing real notebooks, cell by cell |
+| Docs | <!-- docnum:tests_docs -->~430<!-- /docnum --> | The documentation itself — see [below](#the-docs-are-tested-too) |
 
 The unit suite runs on **<!-- docnum:platforms -->15<!-- /docnum --> platform combinations** — Python
 3.10 through 3.14, on Linux, Windows and macOS — on every push. The matrix is deliberately kept in
@@ -94,7 +94,7 @@ through a real harness. There is no whitelist to maintain, so a new page is
 covered the day it lands. Sample output in the docs is checked against what the
 code actually prints.
 
-**Prose is pinned to source.** Around **<!-- docnum:claims -->~390<!-- /docnum --> claims** across
+**Prose is pinned to source.** Around **<!-- docnum:claims -->~400<!-- /docnum --> claims** across
 the documentation carry an anchor naming the function that decides them, plus a
 fingerprint of that function's normalized source:
 
