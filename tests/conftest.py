@@ -620,14 +620,14 @@ ABOVE_PERSISTENCE_FLOOR_S = 0.2
 # ---------------------------------------------------------------------------
 def _discarded_write_count():
     try:
-        from cash.backends._base import discarded_writes
+        from cash.backends._writes import discarded_writes
     except Exception:  # noqa: BLE001 - import cycles during collection
         return 0
     return len(discarded_writes())
 
 
 def _discarded_since(n):
-    from cash.backends._base import discarded_writes
+    from cash.backends._writes import discarded_writes
 
     return discarded_writes()[n:]
 
@@ -640,7 +640,7 @@ def _no_silently_discarded_cache_writes(request):
         # Absorb this test's own failures, including the ones still in flight.
         # Without the drain they land during the NEXT test and get charged to
         # it -- which is exactly what happened to test_label_consistency.
-        from cash.backends._base import all_pending_writes, reset_discarded_writes
+        from cash.backends._writes import all_pending_writes, reset_discarded_writes
 
         for queue in all_pending_writes():
             try:
@@ -690,7 +690,7 @@ def pytest_sessionfinish(session, exitstatus):
     class cannot pass silently.
     """
     try:
-        from cash.backends._base import all_pending_writes, discarded_writes
+        from cash.backends._writes import all_pending_writes, discarded_writes
     except Exception:  # noqa: BLE001
         return
     for queue in all_pending_writes():

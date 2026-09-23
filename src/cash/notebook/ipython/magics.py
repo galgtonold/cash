@@ -22,7 +22,7 @@ from IPython.core.magic import Magics, line_magic, magics_class
 from IPython.display import HTML, display, publish_display_data
 
 from ... import __version__
-from ...backends._base import all_pending_writes
+from ...backends._writes import all_pending_writes
 from ...core import Cash
 from ...logging import setup_logging
 from ...object_hashing import compute_hash

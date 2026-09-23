@@ -40,7 +40,7 @@ import warnings
 
 import pytest
 
-from cash.backends._base import PendingWrites, discarded_writes
+from cash.backends._writes import PendingWrites, discarded_writes
 from cash.backends.file_backend import _TEMP_NAME_ATTEMPTS, FileBackend, _create_temp_file
 
 # --------------------------------------------------------------------------- #

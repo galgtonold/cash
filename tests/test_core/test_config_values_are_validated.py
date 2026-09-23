@@ -21,7 +21,7 @@ import pytest
 
 import cash
 from cash import Cash
-from cash.backends._base import discarded_writes
+from cash.backends._writes import discarded_writes
 from cash.config import get_config
 
 pytestmark = pytest.mark.core

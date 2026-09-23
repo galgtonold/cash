@@ -8,7 +8,8 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError, DependencyNotFoundError
 
-from ._base import CacheBackend, MetadataDict, PendingWrites
+from ._base import CacheBackend, MetadataDict
+from ._writes import PendingWrites
 from .entry_format import (
     ENTRY_SUFFIX,
     CorruptEntry,

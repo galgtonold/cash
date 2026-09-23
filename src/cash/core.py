@@ -41,7 +41,8 @@ from .analysis.annotations import parse_annotation_line
 from .analysis.cacheability_decision import identity_coupled_reason
 from .analysis.code_analyzer import CodeAnalyzer
 from .backends import CacheBackend, CacheMetadata, TieredBackend
-from .backends._base import in_multiprocessing_child, ttl_expired
+from .backends._base import ttl_expired
+from .backends._writes import in_multiprocessing_child
 from .backends.factory import build_backend_from_config
 from .backends.file_backend import recreate_cache_dir
 from .backends.serialization import get_serializer

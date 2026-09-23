@@ -26,7 +26,7 @@ import time
 
 import pytest
 
-from cash.backends._base import PendingWrites
+from cash.backends._writes import PendingWrites
 
 
 @pytest.fixture

@@ -22,9 +22,9 @@ pytestmark = [pytest.mark.core]
 def test_a_nested_store_does_not_make_the_cache_dir_an_outer_dependency(tmp_path, monkeypatch):
     """In a pool worker a write runs inline, before the task's result goes
     back -- forced here, so the scan it makes happens on the calling thread."""
-    from cash.backends import _base
+    from cash.backends import _writes
 
-    monkeypatch.setattr(_base, "in_multiprocessing_child", lambda: True)
+    monkeypatch.setattr(_writes, "in_multiprocessing_child", lambda: True)
     cache_dir = tmp_path / "custom_cache_name"  # not ".cash": no name-based guard
     c = Cash(cache_dir=str(cache_dir), register_magic=False)
     runs = []

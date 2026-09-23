@@ -22,7 +22,8 @@ from cash.utils import replace_with_retry
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
 from ..tracking.file_tracker import register_cache_dir, untracked
-from ._base import CacheBackend, MetadataDict, PendingWrites, gdsf_value, ttl_expired
+from ._base import CacheBackend, MetadataDict, gdsf_value, ttl_expired
+from ._writes import PendingWrites
 from .adaptive_caps import adaptive_disk_cap_for, free_bytes_on_volume, human_bytes
 from .entry_format import (
     ENTRY_SUFFIX,

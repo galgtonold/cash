@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import pytest
 
-from cash.backends._base import PendingWrites
+from cash.backends._writes import PendingWrites
 from cash.exceptions import CashCacheStoreFailedWarning
 
 pytestmark = pytest.mark.expects_failed_writes
@@ -119,9 +119,9 @@ def test_the_failure_is_still_recorded_for_reporting():
     The badge row and %cash_stats both read the discarded-writes registry, so
     this is the channel that replaced the permanent re-raise.
     """
-    from cash.backends import _base
+    from cash.backends import _writes
 
-    _base.reset_discarded_writes()
+    _writes.reset_discarded_writes()
     pw = PendingWrites()
     try:
         _failing(pw)
@@ -129,8 +129,8 @@ def test_the_failure_is_still_recorded_for_reporting():
             pw.wait("k")
         pw.wait("k")  # consumed; still no re-raise
 
-        recorded = _base.discarded_writes()
+        recorded = _writes.discarded_writes()
         assert [k for k, _ in recorded] == ["k"], recorded
     finally:
         pw.shutdown(wait=True)
-        _base.reset_discarded_writes()
+        _writes.reset_discarded_writes()

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from cash.backends import _base as _backend_base
+from cash.backends import _writes as _backend_base
 from cash.notebook.ipython.cell_executor import discarded_writes_notification
 
 

@@ -55,7 +55,7 @@ from IPython.display import display, publish_display_data
 
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.code_analyzer import CodeAnalyzer
-from ...backends._base import discarded_writes
+from ...backends._writes import discarded_writes
 from ...diagnostics import warn_diagnostic
 from ...exceptions import (
     AmbiguousCellError,

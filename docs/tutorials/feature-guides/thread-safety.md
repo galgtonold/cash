@@ -56,7 +56,7 @@ def expensive(x):
     ...
 ```
 
-<!-- claim: cash/core.py:Cash.__init__ @cb4984c5 -->
+<!-- claim: cash/core.py:Cash.__init__ @b7b5f33e -->
 The flag is a `Cash`-instance option, not a per-decorator one. All functions registered through this instance go through the lock path on misses; switch instances if you want a mix.
 
 Lock acquisition uses **the cache backend itself** — `self.backend.lock(cache_key)` returns a context manager whose semantics are defined by the backend subclass. See the next section for what each backend implements.
@@ -123,7 +123,7 @@ The standard introspection surface works:
 
 ## Across processes: Pool, ProcessPoolExecutor, joblib { #across-processes-pool-processpoolexecutor-joblib }
 
-<!-- claim: cash/utils.py:resolve_main_module @556ba406, cash/backends/_base.py:in_multiprocessing_child @3ffc7af7, cash/core.py:Cash._print_run_summary @edd281cb -->
+<!-- claim: cash/utils.py:resolve_main_module @556ba406, cash/backends/_writes.py:in_multiprocessing_child @9bd4615e, cash/core.py:Cash._print_run_summary @edd281cb -->
 A `multiprocessing.Pool`, a `ProcessPoolExecutor` or joblib's process workers
 all use the cache directory of the process that started them, so what one
 worker computes is a hit for the others, for the parent afterwards, and for the

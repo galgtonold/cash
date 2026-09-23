@@ -13,7 +13,8 @@ from typing import Any
 
 from cash.exceptions import CacheSerializationError
 
-from ._base import CacheBackend, MetadataDict, PendingWrites, ttl_expired
+from ._base import CacheBackend, MetadataDict, ttl_expired
+from ._writes import PendingWrites
 from .serialization import PickleSerializer, Serializer
 
 logger = logging.getLogger(__name__)

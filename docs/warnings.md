@@ -680,7 +680,7 @@ check for it before passing it, so the warning keeps meaning something.
 
 ## CACHE-WRITE-ABANDONED {#cache-write-abandoned}
 
-<!-- claim: cash/config.py:CashConfig.shutdown_write_timeout @5ac9f606, cash/backends/_base.py:PendingWrites.shutdown @a2c42b01, cash/backends/_base.py:_DaemonWriterPool.shutdown @a6534a5d -->
+<!-- claim: cash/config.py:CashConfig.shutdown_write_timeout @5ac9f606, cash/backends/_writes.py:PendingWrites.shutdown @298bbecd, cash/backends/_writes.py:_DaemonWriterPool.shutdown @814ad0be -->
 **What happened.** Your program finished, and cash was still writing cache
 entries in the background. It waits for them at exit -- for 60 seconds by
 default -- and this time the deadline expired with writes still running. The

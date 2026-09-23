@@ -81,13 +81,13 @@ def test_with_pool_keeps_every_workers_writes(tmp_path):
 
 def test_the_main_process_is_not_a_child():
     """The control: the parent keeps its background writes."""
-    from cash.backends._base import in_multiprocessing_child
+    from cash.backends._writes import in_multiprocessing_child
 
     assert in_multiprocessing_child() is False
 
 
 def _report(q):
-    from cash.backends._base import in_multiprocessing_child
+    from cash.backends._writes import in_multiprocessing_child
 
     q.put(in_multiprocessing_child())
 

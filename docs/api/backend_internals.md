@@ -9,7 +9,7 @@ fixes to the bundled ones. End-users picking a backend should go to
 
 ```python
 from cash.backends import CacheBackend, CacheMetadata
-from cash.backends._base import PendingWrites
+from cash.backends._writes import PendingWrites
 from cash.backends.serialization import (
     Serializer,
     PickleSerializer,
@@ -132,7 +132,7 @@ Per-backend background-write scheduler. Used by the bundled
 `FileBackend`, `SQLiteBackend`, `RedisBackend`, and `S3Backend` so a
 slow `set()` doesn't block the user's calling thread.
 
-::: cash.backends._base.PendingWrites
+::: cash.backends._writes.PendingWrites
     options:
       members:
         - submit
@@ -148,7 +148,7 @@ The recommended pattern in a custom backend:
 
 ```python
 from cash.backends import CacheBackend
-from cash.backends._base import PendingWrites
+from cash.backends._writes import PendingWrites
 
 class MyBackend(CacheBackend):
     def __init__(self):

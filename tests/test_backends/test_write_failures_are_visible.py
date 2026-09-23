@@ -23,7 +23,7 @@ import pytest
 # rather than the guard: the guard firing here is it working.
 pytestmark = pytest.mark.expects_failed_writes
 
-from cash.backends._base import PendingWrites
+from cash.backends._writes import PendingWrites
 
 
 class Boom(RuntimeError):
@@ -63,7 +63,7 @@ class TestFailureIsRecorded:
         invisible in every normal configuration.
         """
         pw = _failing_writes()
-        with caplog.at_level(logging.WARNING, logger="cash.backends._base"):
+        with caplog.at_level(logging.WARNING, logger="cash.backends._writes"):
             pw.shutdown(wait=True)
         assert any(
             "cache write(s) failed" in r.message or "cache write(s) failed" in r.getMessage() for r in caplog.records
@@ -97,7 +97,7 @@ class TestFailureIsRecorded:
         """Bulk reads must survive one bad entry, while leaving a trace."""
         pw = _failing_writes()
         try:
-            with caplog.at_level(logging.DEBUG, logger="cash.backends._base"):
+            with caplog.at_level(logging.DEBUG, logger="cash.backends._writes"):
                 pw.wait_all()  # must not raise
             assert any("Pending write failed" in r.getMessage() for r in caplog.records)
         finally:
