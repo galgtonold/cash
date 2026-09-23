@@ -43,15 +43,23 @@ REPORT = (
 
 
 def test_a_big_value_that_rebuilds_quickly_does_not_reach_disk(nb_runner):
-    """~48 MB built in 0.05 s: about 300 MiB per compute-second.
+    """~96 MB built in about 0.17 s: over 500 MiB per compute-second.
 
     The reported shape -- 48 MiB entries whose recorded compute was 0.00 s, 72 of
     them, 3.5 GB. Nothing this cheap is worth that much disk.
+
+    The sleep keeps the compute above the 0.1 s persistence floor, and the
+    refusal must name the bytes ceiling, so nothing else can be what keeps it
+    off disk. The value is twice the reported size so the ceiling (128 MiB per
+    compute-second) is crossed only past ~0.72 s of recorded compute, about
+    four times the ~0.17 s it takes. At 48 MB it was crossed at ~0.36 s, which
+    a loaded machine can reach, and then the value is written for a
+    legitimate reason.
     """
     nb_runner.create_notebook(
         [
             "import numpy as np\nimport time",
-            "def make_frame():\n    time.sleep(0.15)\n    return np.arange(6_000_000, dtype='float64')",
+            "def make_frame():\n    time.sleep(0.15)\n    return np.arange(12_000_000, dtype='float64')",
             "big = make_frame()\nprint(f'shape={big.shape[0]}')",
             REPORT,
         ]
@@ -59,18 +67,22 @@ def test_a_big_value_that_rebuilds_quickly_does_not_reach_disk(nb_runner):
     nb_runner.start_kernel()
     nb_runner.run_all()
 
-    assert "shape=6000000" in nb_runner.get_output(3)
-    assert _disk_bytes(nb_runner, 4) < 1_000_000, "a 48 MB value that rebuilds in 0.15 s was written to disk anyway"
+    assert "shape=12000000" in nb_runner.get_output(3)
+    raw = nb_runner.get_raw_output(3)
+    assert _disk_bytes(nb_runner, 4) < 1_000_000, (
+        f"a 96 MB value that rebuilds in 0.15 s was written to disk anyway:\n{raw}"
+    )
+    assert "CACHE-NOT-WORTH-BYTES" in raw, f"kept off disk, but not by the bytes ceiling:\n{raw}"
 
 
 def test_a_big_value_that_is_expensive_still_reaches_disk(nb_runner):
     """The control. The ceiling must not simply refuse everything large --
     that was a bug once, and re-creating it would be worse than the
-    disk it saves."""
+    disk it saves. The same value as the arm above; only the compute differs."""
     nb_runner.create_notebook(
         [
             "import numpy as np\nimport time",
-            "def make_frame():\n    time.sleep(2.0)\n    return np.arange(6_000_000, dtype='float64')",
+            "def make_frame():\n    time.sleep(2.0)\n    return np.arange(12_000_000, dtype='float64')",
             "big = make_frame()\nprint(f'shape={big.shape[0]}')",
             REPORT,
         ]
@@ -78,5 +90,5 @@ def test_a_big_value_that_is_expensive_still_reaches_disk(nb_runner):
     nb_runner.start_kernel()
     nb_runner.run_all()
 
-    assert "shape=6000000" in nb_runner.get_output(3)
-    assert _disk_bytes(nb_runner, 4) > 1_000_000, "a 48 MB value that costs 2 s to rebuild should be on disk"
+    assert "shape=12000000" in nb_runner.get_output(3)
+    assert _disk_bytes(nb_runner, 4) > 1_000_000, "a 96 MB value that costs 2 s to rebuild should be on disk"
