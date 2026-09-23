@@ -164,7 +164,7 @@ caching is switched off — each carrying its own `details` (which files changed
 which argument type couldn't be hashed). The
 full shape is in the [`CacheExplanation`](../api/cash.md) reference.
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats @b467e7e4, cash/core.py:Cash._wrap_with_stats.cache_info @905b7b2b, cash/decorator/reporting.py:ReportingMixin._log_decorator_call @f23b179b -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats @8602bf1d, cash/core.py:Cash._wrap_with_stats.cache_info @905b7b2b, cash/decorator/reporting.py:ReportingMixin._log_decorator_call @f23b179b -->
 !!! warning "`cache_info()` is not the surface to trust in a notebook"
     The wrapper also exposes `cache_info()`, but its `hits` / `misses` counters
     live on the **wrapper object** and count only since that wrapper was

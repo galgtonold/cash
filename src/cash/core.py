@@ -32,7 +32,7 @@ from .decorator.arg_hashing import (
     CODE_VALUE_TYPES,
     ArgHashingMixin,
 )
-from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction
+from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, new_stats
 from .decorator.call_state import (
     CACHE_MISS,
     CALL_ENTRY,
@@ -1046,12 +1046,7 @@ class Cash(
             and forgets ``_warn_once`` dedup marks for this function so the
             next misbehavior re-warns instead of being silently swallowed.
             """
-            _stats["hits"] = 0
-            _stats["misses"] = 0
-            _stats["total_time_saved"] = 0.0
-            _stats["bypassed"] = 0
-            for tally in ("miss_reasons", "not_persisted", "not_stored", "changed"):
-                _stats[tally].clear()
+            _stats.update(new_stats())
             self._delete_backend_entries(func_name)
             with self._decorator_call_log_lock:
                 cf.warnings.clear()

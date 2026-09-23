@@ -1233,7 +1233,7 @@ Keys:
 
 ### `func.cache_clear()`
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @b5ac9b37 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @84016c41 -->
 Wipe backend entries whose key starts with this function's name. Also
 resets stats, drops the warnings log, and forgets the `_warn_once`
 dedup marks (so the next misbehavior re-warns instead of being silent).

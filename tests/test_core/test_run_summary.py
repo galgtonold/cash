@@ -59,6 +59,19 @@ def test_it_reports_hits_and_misses_per_function(tmp_path):
     assert "1 of 3 calls restored" in text
 
 
+def test_cache_clear_resets_what_the_summary_charges(tmp_path):
+    """cache_clear() reset hits and misses by hand and left the two cost
+    counters, so the summary charged cash's pre-clear cost to later calls."""
+    from cash.decorator.cached_function import new_stats
+
+    c = _cash(tmp_path)
+    work = _exercise(c)
+    stats = c._cached[c.get_func_key(work.__wrapped__)].stats
+    assert stats["lookup_seconds"] > 0 and stats["miss_overhead_seconds"] > 0
+    work.cache_clear()
+    assert stats == new_stats()
+
+
 def test_one_is_singular_and_the_comma_stays_put(tmp_path):
     """Padding the WORD rather than the token produced "1 hit ,"."""
     c = _cash(tmp_path)
