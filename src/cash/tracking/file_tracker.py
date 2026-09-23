@@ -420,27 +420,6 @@ _CASH_INTERNAL_SEGMENTS: tuple[str, ...] = ("/.cash/", "/_global_cash/")
 _CASH_CACHE_DIRS: set[str] = set()
 _CASH_CACHE_DIRS_LOCK = threading.Lock()
 
-#: What cash itself writes into a cache directory. Being in a registered
-#: directory is NOT enough on its own: ``cache_dir`` can legitimately point at
-#: a directory that also holds the user's data -- ``Cash(cache_dir=".")`` is
-#: enough to do it -- and swallowing a real dependency is far worse than the
-#: bug this guard exists to prevent. A missed dependency serves a stale value
-#: silently; an extra one only costs a recompute.
-_CASH_FILE_SUFFIXES: tuple[str, ...] = (
-    ".entry",  # one file per entry
-    ".part",  # a write still in flight
-    ".db",
-    ".db-wal",
-    ".db-shm",  # SQLiteBackend
-)
-_CASH_FILE_NAMES: frozenset[str] = frozenset(
-    {
-        "CACHE_VERSION",  # the on-disk format stamp
-        "_loop_split.json",  # the notebook loop-split store
-        "_compute_baselines.json",  # measured compute costs, for %cash_stats
-    }
-)
-
 
 def register_cache_dir(path: str) -> None:
     """Declare *path* as cash's own storage, whatever it is called."""
@@ -452,25 +431,34 @@ def register_cache_dir(path: str) -> None:
         _CASH_CACHE_DIRS.add(resolved.replace("\\", "/").rstrip("/") + "/")
 
 
-def _is_cash_storage_filename(name: str) -> bool:
-    return name in _CASH_FILE_NAMES or name.endswith(_CASH_FILE_SUFFIXES)
-
-
 def _is_cash_internal(path: str) -> bool:
-    """True for a read or write of cash's own cache storage."""
+    """True for a read or write of cash's own cache storage.
+
+    Being in a registered directory is NOT enough on its own: ``cache_dir``
+    can legitimately point at a directory that also holds the user's data --
+    ``Cash(cache_dir=".")`` is enough to do it -- and swallowing a real
+    dependency is far worse than the bug this guard exists to prevent. A
+    missed dependency serves a stale value silently; an extra one only costs a
+    recompute. So the file must also be one cash writes there
+    (`cache_dir.is_cash_file`, the list ``cash clear`` uses too).
+    """
     p = str(path).replace("\\", "/")
     if any(seg in p for seg in _CASH_INTERNAL_SEGMENTS):
         return True
 
-    if not _is_cash_storage_filename(p.rsplit("/", 1)[-1]):
-        return False
     with _CASH_CACHE_DIRS_LOCK:
         dirs = tuple(_CASH_CACHE_DIRS)
     if not dirs:
         return False
     # The recorded path may be relative while the registered one is absolute.
     absolute = p if os.path.isabs(p) else os.path.abspath(p).replace("\\", "/")
-    return absolute.startswith(dirs)
+    inside = [absolute[len(d) :] for d in dirs if absolute.startswith(d)]
+    if not inside:
+        return False
+    # Imported here: cash.backends imports this module.
+    from cash.backends.cache_dir import is_cash_file
+
+    return any(is_cash_file(rel) for rel in inside)
 
 
 #: ``_memory.reads_by_code``: ``code -> {file: its stat when last read}`` for

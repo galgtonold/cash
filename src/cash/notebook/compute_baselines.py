@@ -29,9 +29,11 @@ import atexit
 import contextlib
 import hashlib
 
+from cash.backends.cache_dir import COMPUTE_BASELINES_FILENAME
+
 from .versioned_json_store import StoreRegistry, VersionedJsonStore
 
-_STORE_FILENAME = "_compute_baselines.json"
+_STORE_FILENAME = COMPUTE_BASELINES_FILENAME
 _STORE_VERSION = 1
 
 #: Keep the store small and its write cheap. At the cap the CHEAPEST baselines

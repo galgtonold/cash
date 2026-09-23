@@ -135,7 +135,7 @@ class TestCLIClear:
         cache_dir = tmp_path / "to_clear"
         cache_dir.mkdir()
         (cache_dir / "CACHE_VERSION").write_text("1", encoding="utf-8")
-        (cache_dir / "file.data").write_bytes(b"data")
+        (cache_dir / f"file{ENTRY_SUFFIX}").write_bytes(b"data")
 
         from types import SimpleNamespace
 
@@ -150,7 +150,7 @@ class TestCLIClear:
         cache_dir = tmp_path / ".cash"
         cache_dir.mkdir()
         (cache_dir / "CACHE_VERSION").write_text("1", encoding="utf-8")
-        (cache_dir / "file.data").write_bytes(b"data")
+        (cache_dir / f"file{ENTRY_SUFFIX}").write_bytes(b"data")
         monkeypatch.setenv("CASH_CACHE_DIR", str(cache_dir))
 
         from types import SimpleNamespace
@@ -198,7 +198,7 @@ class TestCLIClear:
         cache_dir = tmp_path / ".cash"
         cache_dir.mkdir()
         (cache_dir / "CACHE_VERSION").write_text("1", encoding="utf-8")
-        (cache_dir / "data.meta").write_bytes(b"data")
+        (cache_dir / f"data{ENTRY_SUFFIX}").write_bytes(b"data")
 
         from types import SimpleNamespace
 

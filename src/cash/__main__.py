@@ -16,11 +16,10 @@ from pathlib import Path
 from cash import __version__
 from cash._location import per_user_cache_root
 from cash.backends.adaptive_caps import adaptive_disk_cap_for, human_bytes, resolve_ram_cap
-from cash.backends.cache_dir import VERSION_FILENAME, entry_totals
+from cash.backends.cache_dir import DB_FILENAME, KEYS_DIRNAME, VERSION_FILENAME, entry_totals, is_cash_file
 from cash.backends.entry_format import ENTRY_SUFFIX
 from cash.backends.file_backend import FileBackend, StoredEntry
 from cash.backends.persistence_policy import PersistencePolicy
-from cash.backends.sqlite_backend import DB_FILENAME
 from cash.config import (
     SIZE_FIELDS,
     TOML_MISSING,
@@ -689,28 +688,18 @@ def _rmtree_cache(cache_dir: str, force: bool = False) -> None:
     print(f"Cleared: {resolved}")
 
 
-#: Names a cash cache directory holds: an entry, the format stamp, the advisory
-#: indexes and their temp files, and a single-file backend's database.
-_CASH_CACHE_NAMES = frozenset({VERSION_FILENAME, DB_FILENAME, ".gitignore"})
-_CASH_CACHE_SUFFIXES = (ENTRY_SUFFIX, ".data", ".meta", ".tmp", ".part", ".log")
-#: Directories cash writes inside its cache, with what they may hold.
-_CASH_CACHE_DIRS = {".keys": (".json",)}
-
-
 def _not_cash_files(cache_dir: str) -> list[str]:
     """Names in *cache_dir* that cash did not write, shallowest first."""
     found: list[str] = []
     for root, dirs, files in os.walk(cache_dir):
-        own = _CASH_CACHE_DIRS.get(os.path.basename(root)) if root != cache_dir else None
-        if own is not None and os.path.dirname(root) == cache_dir:
-            files = [name for name in files if not name.endswith(own)]
+        rel_root = os.path.relpath(root, cache_dir)
         for name in files:
-            if name in _CASH_CACHE_NAMES or name.endswith(_CASH_CACHE_SUFFIXES):
-                continue
-            found.append(os.path.relpath(os.path.join(root, name), cache_dir))
-        if not files and not dirs and root != cache_dir and own is None:
+            rel = name if root == cache_dir else os.path.join(rel_root, name)
+            if not is_cash_file(rel):
+                found.append(rel)
+        if not files and not dirs and root != cache_dir and rel_root != KEYS_DIRNAME:
             # An empty directory is the user's too, unless it is one of cash's.
-            found.append(os.path.relpath(root, cache_dir) + os.sep)
+            found.append(rel_root + os.sep)
         if len(found) > 32:
             return found
     return found

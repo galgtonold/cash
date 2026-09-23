@@ -39,10 +39,12 @@ from __future__ import annotations
 
 import ast
 
+from cash.backends.cache_dir import LOOP_SPLIT_FILENAME
+
 from .cache_key import statement_source_hash
 from .versioned_json_store import StoreRegistry, VersionedJsonStore
 
-_STORE_FILENAME = "_loop_split.json"
+_STORE_FILENAME = LOOP_SPLIT_FILENAME
 _STORE_VERSION = 1
 
 

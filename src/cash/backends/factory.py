@@ -20,10 +20,11 @@ from typing import TYPE_CHECKING, Any
 from ..exceptions import DependencyNotFoundError
 from ._base import CacheBackend
 from .adaptive_caps import resolve_disk_cap, resolve_ram_cap
+from .cache_dir import DB_FILENAME
 from .file_backend import FileBackend
 from .memory_backend import InMemoryBackend
 from .persistence_policy import PersistencePolicy
-from .sqlite_backend import DB_FILENAME, SQLiteBackend
+from .sqlite_backend import SQLiteBackend
 from .tiered_backend import TieredBackend
 
 if TYPE_CHECKING:
