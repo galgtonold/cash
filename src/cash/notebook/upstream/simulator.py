@@ -35,7 +35,7 @@ from ...analysis.cacheability import (
 )
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import CellEffects
-from ...tracking.function_tracker import is_local_module
+from ...tracking.function_tracker import FunctionTracker, is_local_module
 from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .._trace import is_tracing, trace_event
@@ -114,6 +114,7 @@ class NotebookSimulator:
         tracking_state: TrackingState,
         compute_hash_fn: Callable[[Any], str] | None = None,
         debug: bool = False,
+        function_tracker: FunctionTracker | None = None,
     ) -> None:
         self.shell = shell
         self.cash_instance = cash_instance
@@ -131,6 +132,7 @@ class NotebookSimulator:
             tracking_state=tracking_state,
             compute_hash_fn=compute_hash_fn,
             debug=debug,
+            function_tracker=function_tracker,
         )
 
         # Phase-2 classifier. Shares tracking-state references and routes
@@ -186,7 +188,7 @@ class NotebookSimulator:
         r28s4, exported). Done before pass 1, so this very simulation already
         keys the module's readers on its source.
         """
-        ft = getattr(self.virtual_lineage, "function_tracker", None)
+        ft = self.virtual_lineage.function_tracker
         user_ns = getattr(self.shell, "user_ns", None)
         if ft is None or not user_ns:
             return

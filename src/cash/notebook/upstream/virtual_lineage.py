@@ -22,7 +22,7 @@ import sys
 import time as time_module
 import types
 from collections.abc import Callable, Iterable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cash.control_markers import iteration_digest, strip_markers
 
@@ -82,6 +82,9 @@ from ._types import (
     TraceEntry,
     apply_collected_mutations,
 )
+
+if TYPE_CHECKING:
+    from ...tracking.function_tracker import FunctionTracker
 
 __all__ = ["VirtualLineage"]
 
@@ -240,12 +243,15 @@ class VirtualLineage:
         tracking_state: TrackingState,
         compute_hash_fn: Callable[[Any], str] | None = None,
         debug: bool = False,
+        function_tracker: FunctionTracker | None = None,
     ) -> None:
         self.shell = shell
         self.cash_instance = cash_instance
         self.compute_hash_fn = compute_hash_fn
         self.debug = debug
-        self.function_tracker: Any | None = None
+        #: The runtime's tracker, so the simulation hashes called functions
+        #: and modules exactly as the statement processor does.
+        self.function_tracker = function_tracker
         self.current_cell_id: str | None = None
 
         # Shared state refs (same dicts as NotebookSimulator / UpstreamChecker).
@@ -860,7 +866,7 @@ class VirtualLineage:
                 ctx=CacheKeyContext(
                     variable_lineage=self.variable_lineage,
                     user_ns=self.shell.user_ns,
-                    function_tracker=self.function_tracker if hasattr(self, "function_tracker") else None,
+                    function_tracker=self.function_tracker,
                     virtual_lineage=key_lineages(input_hashes),
                     virtual_modules=virtual_modules,
                     compute_hash_fn=self.compute_hash_fn,
@@ -1911,7 +1917,7 @@ class VirtualLineage:
         """Each input's lineage (``lineage_formula.input_lineage``), with the
         simulation's own lineages in front of the recorded ones."""
         input_lineages_all = []
-        function_tracker = getattr(self, "function_tracker", None)
+        function_tracker = self.function_tracker
         for inp in sorted(inputs):
             if inp in {"get_ipython", "__builtins__"}:
                 continue
@@ -2172,7 +2178,7 @@ class VirtualLineage:
         """
         if tree is None:
             return
-        tracker = getattr(self, "function_tracker", None)
+        tracker = self.function_tracker
         for node in tree.body:
             if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
                 continue
@@ -2291,7 +2297,7 @@ class VirtualLineage:
         A callee that is only a simulated def contributes its digest as the
         live function would (``_virtual_callable_hashes``).
         """
-        function_tracker = getattr(self, "function_tracker", None)
+        function_tracker = self.function_tracker
         user_ns = self.shell.user_ns
         try:
             func_component = callable_source_component(function_tracker, inputs, user_ns)
@@ -2497,7 +2503,7 @@ class VirtualLineage:
                     ctx=CacheKeyContext(
                         variable_lineage=self.variable_lineage,
                         user_ns=self.shell.user_ns,
-                        function_tracker=self.function_tracker if hasattr(self, "function_tracker") else None,
+                        function_tracker=self.function_tracker,
                         virtual_lineage=virtual_lineage,
                         virtual_modules=virtual_modules,
                         compute_hash_fn=self.compute_hash_fn,
@@ -2533,7 +2539,7 @@ class VirtualLineage:
                 ctx=CacheKeyContext(
                     variable_lineage=self.variable_lineage,
                     user_ns=self.shell.user_ns,
-                    function_tracker=self.function_tracker if hasattr(self, "function_tracker") else None,
+                    function_tracker=self.function_tracker,
                     virtual_lineage=virtual_lineage,
                     virtual_modules=virtual_modules,
                     compute_hash_fn=self.compute_hash_fn,
@@ -2885,7 +2891,7 @@ class VirtualLineage:
                     ctx=CacheKeyContext(
                         variable_lineage=self.variable_lineage,
                         user_ns=self.shell.user_ns,
-                        function_tracker=self.function_tracker if hasattr(self, "function_tracker") else None,
+                        function_tracker=self.function_tracker,
                         virtual_lineage=input_hashes,
                         virtual_modules=virtual_modules,
                         compute_hash_fn=self.compute_hash_fn,
@@ -2981,7 +2987,7 @@ class VirtualLineage:
                 ctx=CacheKeyContext(
                     variable_lineage=self.variable_lineage,
                     user_ns=self.shell.user_ns,
-                    function_tracker=self.function_tracker if hasattr(self, "function_tracker") else None,
+                    function_tracker=self.function_tracker,
                     virtual_lineage=key_lineages(input_hashes),
                     virtual_modules=virtual_modules,
                     compute_hash_fn=self.compute_hash_fn,

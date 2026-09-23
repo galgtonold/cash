@@ -39,6 +39,7 @@ from ..staleness import StalenessTracker
 from .simulator import NotebookSimulator
 
 if TYPE_CHECKING:
+    from ...tracking.function_tracker import FunctionTracker
     from ..statement import ProcessResult
 
 __all__ = ["UpstreamChecker", "UpstreamResult"]
@@ -112,12 +113,12 @@ class UpstreamChecker:
         debug: bool = False,
         compute_hash_fn: Callable[[Any], str] | None = None,
         tracking_state: TrackingState | None = None,
+        function_tracker: FunctionTracker | None = None,
     ) -> None:
         self.shell: ShellProtocol = shell
         self.cash_instance: CashInstanceProtocol | None = cash_instance
         self.debug = debug
         self.compute_hash_fn: Callable[[Any], str] | None = compute_hash_fn
-        self.function_tracker: Any | None = None
 
         # per-session ledger of already-warned broken upstream cells,
         # keyed by cell index -> cell source hash. Keeps the "cell N has a
@@ -145,7 +146,13 @@ class UpstreamChecker:
             tracking_state=ts,
             compute_hash_fn=compute_hash_fn,
             debug=debug,
+            function_tracker=function_tracker,
         )
+
+    @property
+    def function_tracker(self) -> FunctionTracker | None:
+        """The runtime's function tracker the simulation keys with."""
+        return self.simulator.virtual_lineage.function_tracker
 
     def reset_caches(self) -> None:
         """Clear simulation and AST caches.
@@ -295,11 +302,6 @@ class UpstreamChecker:
 
         self.current_cell_id = cell_id
         self.simulator.set_current_cell_id(cell_id)
-        # Keep simulator's function_tracker in sync. CashMagics sets
-        # ``upstream_checker.function_tracker`` after construction (see
-        # magics.py); we propagate it lazily so the simulator picks up the
-        # latest reference.
-        self.simulator.virtual_lineage.function_tracker = self.function_tracker
 
         # Resolve the notebook path ONCE for the whole cell check and
         # thread it through the analysis helpers + Phase 2, instead of each site

@@ -246,14 +246,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         Wires shared tracking state and function tracker so all components
         use the same lineage dictionaries and source hashes.
         """
-        self._upstream_checker = UpstreamChecker(
-            shell,
-            cash_instance=cash_instance,
-            debug=self._debug,
-            compute_hash_fn=compute_hash,
-            tracking_state=self.tracking_state,
-        )
-
         self._statement_processor = StatementProcessor(
             shell,
             cash_instance,
@@ -262,9 +254,16 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             tracking_state=self.tracking_state,
         )
 
-        # Share function_tracker so the upstream simulation computes cache keys
-        # with the same func_source_hashes as the runtime statement processor.
-        self._upstream_checker.function_tracker = self._statement_processor.function_tracker
+        # The processor's function tracker, so the upstream simulation computes
+        # cache keys with the same func_source_hashes as the runtime.
+        self._upstream_checker = UpstreamChecker(
+            shell,
+            cash_instance=cash_instance,
+            debug=self._debug,
+            compute_hash_fn=compute_hash,
+            tracking_state=self.tracking_state,
+            function_tracker=self._statement_processor.function_tracker,
+        )
 
         self._control_structure_processor = ControlStructureProcessor(
             shell,
