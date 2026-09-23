@@ -1142,8 +1142,7 @@ class StatementProcessor:
             "uncacheable_reasons": [],
         }
         self._stamp_random_effect(metrics, code, unseeded_calls)
-        if self.debug:
-            logger.debug("%s Processing statement: %s...", _LOG_DEBUG, code[:50])
+        logger.debug("%s Processing statement: %s...", _LOG_DEBUG, code[:50])
 
         process_start = time.time()
 
@@ -1346,7 +1345,7 @@ class StatementProcessor:
         metadata, cached_data, cache_check_time = self._do_cache_lookup(skip_cache, cache_key, effective_ttl, inputs)
         self._observe_miss_guard(skip_cache, code, source_hash, cache_key, cached_data, inputs)
 
-        if self.debug:
+        if logger.isEnabledFor(logging.DEBUG):
             self._print_cache_debug(code, cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
 
         if cached_data and not self._import_needs_reexecution(_parsed_tree):
@@ -1506,8 +1505,7 @@ class StatementProcessor:
             "uncacheable_reasons": [],
         }
         self._stamp_random_effect(metrics, code, unseeded_calls)
-        if self.debug:
-            logger.debug("%s Processing statement (async): %s...", _LOG_DEBUG, code[:50])
+        logger.debug("%s Processing statement (async): %s...", _LOG_DEBUG, code[:50])
 
         process_start = time.time()
 
@@ -1657,7 +1655,7 @@ class StatementProcessor:
         metadata, cached_data, cache_check_time = self._do_cache_lookup(skip_cache, cache_key, effective_ttl, inputs)
         self._observe_miss_guard(skip_cache, code, source_hash, cache_key, cached_data, inputs)
 
-        if self.debug:
+        if logger.isEnabledFor(logging.DEBUG):
             self._print_cache_debug(code, cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
 
         # CACHE HIT — returns before any coroutine is built, so an identical
@@ -2462,8 +2460,7 @@ class StatementProcessor:
             return self._freshness.check_cache(
                 self.tracking_state, cache_key, ttl, inputs, epoch=getattr(self.shell, "execution_count", None)
             )
-        if self.debug:
-            logger.debug("%s Skipping cache lookup due to missing input lineage or @cash:no-cache", _LOG_ANNOTATION)
+        logger.debug("%s Skipping cache lookup due to missing input lineage or @cash:no-cache", _LOG_ANNOTATION)
         return None, None, 0.0
 
     def _observe_miss_guard(
@@ -2694,7 +2691,6 @@ class StatementProcessor:
                         user_ns=self.shell.user_ns,
                         function_tracker=self.function_tracker,
                         compute_hash_fn=self.compute_hash,
-                        debug=self.debug,
                     ),
                     # `self.current_loop_vars_for_call_key` (bound method, not
                     # a lambda capturing a snapshot) so it re-reads
@@ -2738,8 +2734,7 @@ class StatementProcessor:
         accessed_remote)``.
         *error_metrics* is non-None only when execution fails; callers should return it.
         """
-        if self.debug:
-            logger.debug("%s Executing (cache miss)", _LOG_CACHE_DEBUG)
+        logger.debug("%s Executing (cache miss)", _LOG_CACHE_DEBUG)
 
         marks = self._cash_time_marks()
         result, captured, execution_time, accessed_files, accessed_remote = self._execute_statement(
@@ -2808,8 +2803,7 @@ class StatementProcessor:
         stdout/stderr/rich capture, output display, error handling) is byte-for-
         byte the same.
         """
-        if self.debug:
-            logger.debug("%s Executing (cache miss)", _LOG_CACHE_DEBUG)
+        logger.debug("%s Executing (cache miss)", _LOG_CACHE_DEBUG)
 
         marks = self._cash_time_marks()
         result, captured, execution_time, accessed_files, accessed_remote = await self._execute_statement_async(
@@ -3080,8 +3074,7 @@ class StatementProcessor:
         pure_mutations = statement_analysis.all_mutated_vars - outputs
         if pure_mutations:
             self.tracking_state.vars_with_mutation_lineage.update(pure_mutations)
-            if self.debug:
-                logger.debug("%s Detected in-place mutations on: %s", _LOG_MUTATION, pure_mutations)
+            logger.debug("%s Detected in-place mutations on: %s", _LOG_MUTATION, pure_mutations)
 
         # Perpetual-miss guard: this statement's key has churned for
         # ``GUARD_AFTER_CONSECUTIVE_CHURN_MISSES`` runs with zero hits, so
@@ -3112,12 +3105,11 @@ class StatementProcessor:
         # stores under it. Self-healing, one extra recompute per statement.
         if self._rng_draw_newly_seen and not skip_cache:
             skip_cache = True
-            if self.debug:
-                logger.debug(
-                    "%s Not storing %s: hidden RNG draw discovered after its key was built; next run keys it correctly",
-                    _LOG_ANNOTATION,
-                    source_hash[:12],
-                )
+            logger.debug(
+                "%s Not storing %s: hidden RNG draw discovered after its key was built; next run keys it correctly",
+                _LOG_ANNOTATION,
+                source_hash[:12],
+            )
 
         saved_metadata = None
         if not skip_cache:
@@ -3138,7 +3130,7 @@ class StatementProcessor:
                 miss_guarded=miss_guarded,
                 accessed_remote=accessed_remote,
             )
-        elif self.debug:
+        else:
             logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
 
         if saved_metadata and saved_metadata.storage is not None:
@@ -3613,7 +3605,7 @@ class StatementProcessor:
         right after a kernel restart).
         """
         try:
-            if self.debug:
+            if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("%s Cache hit for key: %s...", _LOG_CACHE_HIT, cache_key[:20])
                 logger.debug(
                     "%s Input lineages used: %s",
@@ -3744,12 +3736,11 @@ class StatementProcessor:
 
             if has_reloaded:
                 self.recently_reloaded_modules -= source_module_names
-                if self.debug:
-                    logger.debug(
-                        "%s Import involves recently-reloaded module, disabling cache for: %s",
-                        _LOG_OPTIMIZATION,
-                        code.strip(),
-                    )
+                logger.debug(
+                    "%s Import involves recently-reloaded module, disabling cache for: %s",
+                    _LOG_OPTIMIZATION,
+                    code.strip(),
+                )
                 return None, True  # updated skip_cache
 
             if not all_present:
@@ -3762,8 +3753,7 @@ class StatementProcessor:
                 # prep; see `import_only` in the upstream classifier).
                 return None, True
             if all_present:
-                if self.debug:
-                    logger.debug("%s SKIPPING redundant import: %s", _LOG_OPTIMIZATION, code.strip())
+                logger.debug("%s SKIPPING redundant import: %s", _LOG_OPTIMIZATION, code.strip())
                 metrics["status"] = CacheStatus.SKIPPED
                 metrics["total_time"] = time.time() - process_start
                 self._update_state_tracking(
@@ -3779,8 +3769,7 @@ class StatementProcessor:
                 return metrics, skip_cache
 
         except (ImportError, AttributeError, SyntaxError) as e:
-            if self.debug:
-                logger.debug("%s Error checking imports: %s", _LOG_OPTIMIZATION, e)
+            logger.debug("%s Error checking imports: %s", _LOG_OPTIMIZATION, e)
 
         return None, skip_cache
 
@@ -4396,10 +4385,9 @@ class StatementProcessor:
                     f"({backend_label}, <{pct_label} savings) — "
                     f"use @cash:persist to force"
                 )
-                if self.debug:
-                    logger.debug("[SIZE_AWARE] %s", reason)
+                logger.debug("[SIZE_AWARE] %s", reason)
                 return True, reason, prediction
-            if self.debug and obj_size > 10 * 1024 * 1024:
+            if obj_size > 10 * 1024 * 1024:
                 size_mb = obj_size / (1024 * 1024)
                 backend_label = "copy" if is_ram_backend else "serialize"
                 logger.debug(
@@ -4418,8 +4406,7 @@ class StatementProcessor:
 
     def _filter_safe_vars(self, captured_vars: dict[str, Any]) -> dict[str, Any]:
         """Drop module objects; keep everything else (unknown types assumed picklable)."""
-        if self.debug:
-            logger.debug("[CACHE DEBUG] Filtering %s variables for pickleability...", len(captured_vars))
+        logger.debug("[CACHE DEBUG] Filtering %s variables for pickleability...", len(captured_vars))
         safe: dict[str, Any] = {}
         for k, v in captured_vars.items():
             try:
@@ -4429,8 +4416,7 @@ class StatementProcessor:
                 if type(v).__name__ in _KNOWN_PICKLABLE_TYPE_NAMES or True:  # noqa: SIM210
                     safe[k] = v
             except (TypeError, AttributeError, pickle.PicklingError) as e:
-                if self.debug:
-                    logger.debug("[CACHE DEBUG] Variable '%s' cannot be pickled (%s), skipping cache storage.", k, e)
+                logger.debug("[CACHE DEBUG] Variable '%s' cannot be pickled (%s), skipping cache storage.", k, e)
         return safe
 
     @staticmethod
@@ -4646,12 +4632,11 @@ class StatementProcessor:
             # taken for a given statement (see the floor-exit test, which pins
             # the threshold rather than trusting the machine to be fast).
             if execution_time < min_exec_time and not self._final_over_costly_inputs(inputs, outputs):
-                if self.debug:
-                    logger.debug(
-                        "[SIZE_AWARE] Compute took only %.1fms, below %.0fms floor — not writing cache entry",
-                        execution_time * 1000,
-                        min_exec_time * 1000,
-                    )
+                logger.debug(
+                    "[SIZE_AWARE] Compute took only %.1fms, below %.0fms floor — not writing cache entry",
+                    execution_time * 1000,
+                    min_exec_time * 1000,
+                )
                 return None
 
         # Size-aware caching: skip storing large objects when serialization overhead dominates
@@ -4845,9 +4830,8 @@ class StatementProcessor:
         store_time = time.time() - t_store
         total_time = time.time() - process_start
 
-        if self.debug:
-            logger.debug("[TIMING] Store: %.1fms | OVERALL: %.1fms", store_time * 1000, total_time * 1000)
-            logger.debug("[CACHE DEBUG] Stored in cache: %s", cache_key)
+        logger.debug("[TIMING] Store: %.1fms | OVERALL: %.1fms", store_time * 1000, total_time * 1000)
+        logger.debug("[CACHE DEBUG] Stored in cache: %s", cache_key)
 
         return StatementCacheMetadata.from_dict(wire)
 
@@ -4904,8 +4888,6 @@ class StatementProcessor:
                     user_ns=self.shell.user_ns,
                     function_tracker=self.function_tracker,
                     compute_hash_fn=self.compute_hash,
-                    debug=self.debug,
-                    debug_print_fn=lambda msg: logger.debug(msg),
                 ),
                 outputs=outputs,
                 occurrence_index=occurrence_index,
@@ -5096,8 +5078,7 @@ class StatementProcessor:
     def _handle_execution_error(self, result: Any, silent: bool) -> bool | None:
         if not silent:
             raise result.error from None
-        if self.debug:
-            logger.debug("[SILENT] Error in statement: %s", result.error)
+        logger.debug("[SILENT] Error in statement: %s", result.error)
         return False
 
 

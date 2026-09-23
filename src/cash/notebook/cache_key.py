@@ -13,10 +13,8 @@ import dis
 import hashlib
 import logging
 import types
-from dataclasses import dataclass
-
-logger = logging.getLogger(__name__)
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from cash.notebook.lineage_store import resolve_lineage
@@ -28,6 +26,8 @@ from .lineage_formula import (
     module_read_lineage,
     statement_environment_component,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "CacheKeyContext",
@@ -167,7 +167,7 @@ class CacheKeyContext:
     """Groups the environment state needed for cache key computation.
 
     This reduces the parameter count of ``compute_cache_key`` by bundling
-    lineage state, namespace, trackers, and debug options into one object.
+    lineage state, namespace and trackers into one object.
     Parameters that change per-call (code, inputs, outputs, occurrence_index)
     remain as direct arguments to ``compute_cache_key``.
     """
@@ -178,8 +178,6 @@ class CacheKeyContext:
     virtual_lineage: dict[str, str] | None = None
     virtual_modules: set[str] | None = None
     compute_hash_fn: Callable[[object], str] | None = None
-    debug: bool = False
-    debug_print_fn: Callable[..., Any] | None = None
     #: Simulation only: lineage -> :class:`VirtualCallable`, for a function
     #: named as an input that is not live in ``user_ns``. The runtime never
     #: sets it, so its keys are unchanged.
@@ -429,8 +427,6 @@ def _process_input_var(
     virtual_lineage: dict[str, str],
     compute_hash_fn: Callable[[object], str] | None,
     function_tracker: FunctionTrackerProtocol | None,
-    debug: bool,
-    debug_print_fn: Callable[..., Any],
     input_hashes: list[str],
     func_source_hashes: list[str],
     module_source_hashes: list[str],
@@ -455,8 +451,7 @@ def _process_input_var(
             return
         if var_name in variable_lineage:
             module_source_hashes.append(f"{var_name}:{variable_lineage[var_name]}")
-            if debug:
-                debug_print_fn(f"[CACHE_KEY] Module component for '{var_name}': {variable_lineage[var_name][:12]}...")
+            logger.debug("[CACHE_KEY] Module component for %r: %.12s...", var_name, variable_lineage[var_name])
         return
 
     lineage = resolve_lineage(
@@ -468,8 +463,7 @@ def _process_input_var(
     )
     if lineage:
         input_hashes.append(lineage)
-        if debug:
-            debug_print_fn(f"[CACHE_KEY] Input '{var_name}' resolved to: {lineage[:16]}...")
+        logger.debug("[CACHE_KEY] Input %r resolved to: %.16s...", var_name, lineage)
 
     if val is None and lineage and virtual_callables and var_name not in user_ns:
         virtual = virtual_callables.get(virtual_callable_key(lineage, var_name))
@@ -482,8 +476,7 @@ def _process_input_var(
             func_hash = function_tracker.get_function_source_hash(val)
             if func_hash is not None:
                 func_source_hashes.append(f"{var_name}:{func_hash}")
-                if debug:
-                    debug_print_fn(f"[CACHE_KEY] Func component for '{var_name}': {func_hash[:12]}...")
+                logger.debug("[CACHE_KEY] Func component for %r: %.12s...", var_name, func_hash)
         except (AttributeError, TypeError, ValueError, OSError) as exc:
             logger.debug("[CACHE_KEY] Failed to get function source hash for '%s': %s", var_name, exc)
 
@@ -493,8 +486,6 @@ def _collect_output_module_hashes(
     code: str,
     variable_lineage: dict[str, str],
     user_ns: Mapping[str, Any],
-    debug: bool,
-    debug_print_fn: Callable[..., Any],
 ) -> list[str]:
     """Return ``["out:var:hash", ...]`` entries for output variables that are modules.
 
@@ -510,23 +501,20 @@ def _collect_output_module_hashes(
         val = user_ns.get(out_var)
         if isinstance(val, types.ModuleType):
             hashes.append(f"out:{out_var}:{variable_lineage[out_var]}")
-            if debug:
-                debug_print_fn(
-                    f"[CACHE_KEY] Output module lineage for '{out_var}': {variable_lineage[out_var][:12]}..."
-                )
+            logger.debug("[CACHE_KEY] Output module lineage for %r: %.12s...", out_var, variable_lineage[out_var])
         elif callable(val):
             obj_module = getattr(val, "__module__", None)
             if obj_module and obj_module in variable_lineage:
                 hashes.append(f"from_out:{out_var}:{obj_module}:{variable_lineage[obj_module]}")
-                if debug:
-                    debug_print_fn(
-                        f"[CACHE_KEY] from-import output module lineage for "
-                        f"'{out_var}' (module '{obj_module}'): "
-                        f"{variable_lineage[obj_module][:12]}..."
-                    )
+                logger.debug(
+                    "[CACHE_KEY] from-import output module lineage for %r (module %r): %.12s...",
+                    out_var,
+                    obj_module,
+                    variable_lineage[obj_module],
+                )
         else:
             # Non-callable from-import: parse AST to find source module
-            entry = _from_import_constant_hash(out_var, code, variable_lineage, debug, debug_print_fn)
+            entry = _from_import_constant_hash(out_var, code, variable_lineage)
             if entry:
                 hashes.append(entry)
     return hashes
@@ -536,8 +524,6 @@ def _from_import_constant_hash(
     out_var: str,
     code: str,
     variable_lineage: dict[str, str],
-    debug: bool,
-    debug_print_fn: Callable[..., Any],
 ) -> str | None:
     """Return a lineage hash entry for a ``from X import Y`` where Y is a non-callable constant."""
     try:
@@ -549,12 +535,12 @@ def _from_import_constant_hash(
                     if imported_name == out_var:
                         from_mod = node.module
                         if from_mod in variable_lineage:
-                            if debug:
-                                debug_print_fn(
-                                    f"[CACHE_KEY] from-import constant output lineage for "
-                                    f"'{out_var}' (module '{from_mod}'): "
-                                    f"{variable_lineage[from_mod][:12]}..."
-                                )
+                            logger.debug(
+                                "[CACHE_KEY] from-import constant output lineage for %r (module %r): %.12s...",
+                                out_var,
+                                from_mod,
+                                variable_lineage[from_mod],
+                            )
                             return f"from_out:{out_var}:{from_mod}:{variable_lineage[from_mod]}"
                         break
     except SyntaxError:
@@ -584,7 +570,7 @@ def compute_cache_key(
     inputs : set[str]
         Variable names detected as inputs by CodeAnalyzer.
     ctx : CacheKeyContext
-        Bundles environment state (lineage, namespace, trackers, debug).
+        Bundles environment state (lineage, namespace, trackers).
     outputs : set[str], optional
         Variable names detected as outputs by CodeAnalyzer. Used for import
         statements where the OUTPUT is a module — the module's lineage is
@@ -618,8 +604,6 @@ def compute_cache_key(
     virtual_lineage = ctx.virtual_lineage or {}
     virtual_modules = ctx.virtual_modules or set()
     compute_hash_fn = ctx.compute_hash_fn
-    debug = ctx.debug
-    debug_print_fn = ctx.debug_print_fn or print
 
     source_hash = statement_source_hash(code)
 
@@ -640,8 +624,6 @@ def compute_cache_key(
             virtual_lineage,
             compute_hash_fn,
             function_tracker,
-            debug,
-            debug_print_fn,
             input_hashes,
             func_source_hashes,
             module_source_hashes,
@@ -663,9 +645,7 @@ def compute_cache_key(
     # must differ from the pre-reload key. Otherwise the backend cache returns
     # the old module object even though importlib already reloaded it.
     if outputs:
-        output_module_hashes = _collect_output_module_hashes(
-            outputs, code, variable_lineage, user_ns, debug, debug_print_fn
-        )
+        output_module_hashes = _collect_output_module_hashes(outputs, code, variable_lineage, user_ns)
         module_source_hashes.extend(output_module_hashes)
         if module_source_hashes:
             module_component = ":" + ":".join(sorted(module_source_hashes))
@@ -698,14 +678,16 @@ def compute_cache_key(
     combined_hash = hashlib.sha256(combined_hash_str.encode("utf-8")).hexdigest()
     cache_key = f"{namespace}:{combined_hash}"
 
-    if debug:
-        debug_print_fn(
-            f"[CACHE_KEY] Code: {code[:80]}... | "
-            f"source_hash: {source_hash[:12]}... | "
-            f"input_hashes: {[h[:12] + '...' for h in input_hashes]} | "
-            f"func: {func_component[:30] if func_component else '(none)'} | "
-            f"module: {module_component[:30] if module_component else '(none)'} | "
-            f"cache_key: {cache_key[:30]}..."
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "[CACHE_KEY] Code: %.80s... | source_hash: %.12s... | input_hashes: %s | func: %s | module: %s | "
+            "cache_key: %.30s...",
+            code,
+            source_hash,
+            [h[:12] + "..." for h in input_hashes],
+            func_component[:30] or "(none)",
+            module_component[:30] or "(none)",
+            cache_key,
         )
 
     return CacheKeyResult(cache_key, source_hash, input_hashes, func_source_hashes, module_source_hashes)
