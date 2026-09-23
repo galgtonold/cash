@@ -236,7 +236,7 @@ The opposite mystery: you edited code, but Cash is serving a stale value. Call `
 cash inspect ./.cash
 ```
 
-<!-- claim: cash/__main__.py:_inspect_cache_dir @5372c14d -->
+<!-- claim: cash/__main__.py:_inspect_cache_dir @de0a89d4 -->
 The output gives the entry count, the total size, and a **per-function table sorted by size** — so the thing filling your disk is the first row, not something you have to work out. Drill into one with `cash inspect --function NAME` — each row shows what that entry *saves* alongside its size, so you can tell a cheap 5 MB entry from a 900-byte one worth 41 seconds — and drop what you no longer want with `cash clear --function NAME` or `cash clear --entry ID`. If a single statement rather than a function is responsible, consider `# @cash:no-cache` on cheap statements you don't need to cache, or pick a different backend (`SQLiteBackend` is more efficient for thousands of small entries — see [Choosing a backend](choosing-a-backend.md)).
 
 <!-- claim: cash/analytics.py:AnalyticsManager.__init__ @aec1a862 -->
@@ -306,7 +306,7 @@ explorer.get_preview(key)              # peek at a stored value
 explorer.clear_function("mod.func")    # surgical per-function clear
 ```
 
-<!-- claim: cash/ui/explorer.py:CacheExplorer @b2133930 broad="the listed method set is a claim about the whole class", cash/core.py:Cash.explorer @599913c8 -->
+<!-- claim: cash/ui/explorer.py:CacheExplorer @7abe3173 broad="the listed method set is a claim about the whole class", cash/core.py:Cash.explorer @599913c8 -->
 `CacheExplorer` is the read-side: list, preview, and surgically clear entries by function name without touching the rest of the cache.
 
 For anything that needs to survive a version bump, stick to `f.explain()` and `%cash_debug`.

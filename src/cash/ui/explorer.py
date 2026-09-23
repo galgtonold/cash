@@ -9,10 +9,10 @@ import html
 import inspect
 import json
 import logging
-import math
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from ..backends.adaptive_caps import human_bytes
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 
 try:
@@ -241,13 +241,16 @@ class CacheExplorer:
                 let selectedFunc = null;
                 let selectedEntry = null;
 
-                function formatBytes(bytes, decimals = 2) {{
-                    if (bytes === 0) return '0 Bytes';
-                    const k = 1024;
-                    const dm = decimals < 0 ? 0 : decimals;
-                    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-                    const i = Math.floor(Math.log(bytes) / Math.log(k));
-                    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+                // Powers of 1024, labelled as such -- the same text as
+                // ``human_bytes`` on the Python side.
+                function formatBytes(bytes) {{
+                    let size = Number(bytes) || 0;
+                    for (const unit of ['B', 'KiB', 'MiB', 'GiB', 'TiB']) {{
+                        if (size < 1024 || unit === 'TiB') {{
+                            return unit === 'B' ? Math.floor(size) + ' B' : size.toFixed(1) + ' ' + unit;
+                        }}
+                        size /= 1024;
+                    }}
                 }}
 
                 function renderTree() {{
@@ -446,7 +449,7 @@ class CacheExplorer:
                     print(f"Function: {func}")
                     print(f"Module: {module}")
                     print(f"Cached Entries: {len(data['entries'])}")
-                    print(f"Total Size: {self._format_bytes(data['total_size'])}")
+                    print(f"Total Size: {human_bytes(data['total_size'])}")
 
                 entry_options = []
                 for e in data["entries"]:
@@ -472,7 +475,7 @@ class CacheExplorer:
                 details_html = f"""
                 <b>Key:</b> {html.escape(str(entry["key"]))}<br>
                 <b>Timestamp:</b> {html.escape(str(entry.get("timestamp_human")))}<br>
-                <b>Size:</b> {self._format_bytes(entry.get("size", 0))}<br>
+                <b>Size:</b> {human_bytes(entry.get("size", 0))}<br>
                 <b>TTL:</b> {html.escape(str(entry.get("ttl")))}<br>
                 <hr>
                 <b>Source Code:</b><br>
@@ -623,15 +626,6 @@ class CacheExplorer:
             hierarchy[module][func]["entries"].append(entry)
             hierarchy[module][func]["total_size"] += entry.get("size", 0)
         return hierarchy
-
-    def _format_bytes(self, bytes_val: int, decimals: int = 2) -> str:
-        if bytes_val == 0:
-            return "0 Bytes"
-        k = 1024
-        dm = max(decimals, 0)
-        sizes = ["Bytes", "KB", "MB", "GB", "TB"]
-        i = math.floor(math.log(bytes_val) / math.log(k))
-        return f"{bytes_val / (k**i):.{dm}f} {sizes[i]}"
 
     def show(self) -> None:
         """Display the explorer widget in IPython, or print the entries elsewhere."""

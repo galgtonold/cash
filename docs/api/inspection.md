@@ -1,6 +1,6 @@
 # Inspection tools
 
-<!-- claim: cash/core.py:Cash.explorer @599913c8, cash/ui/explorer.py:CacheExplorer @b2133930 broad="the page documents the class as a whole" -->
+<!-- claim: cash/core.py:Cash.explorer @599913c8, cash/ui/explorer.py:CacheExplorer @7abe3173 broad="the page documents the class as a whole" -->
 Three classes for looking at a cache from code rather than from a magic or
 the badge. Each has one import path:
 

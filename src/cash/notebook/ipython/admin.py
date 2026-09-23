@@ -59,16 +59,6 @@ def _fmt_signed_time(seconds: float) -> str:
     return _fmt_time(seconds)
 
 
-def _fmt_size(bytes_val: int) -> str:
-    if bytes_val < 1024:
-        return f"{bytes_val}B"
-    if bytes_val < 1024**2:
-        return f"{bytes_val / 1024:.1f}KB"
-    if bytes_val < 1024**3:
-        return f"{bytes_val / 1024**2:.1f}MB"
-    return f"{bytes_val / 1024**3:.2f}GB"
-
-
 # ---------------------------------------------------------------------------
 # Module-level I/O helpers (used by cash_diff)
 # ---------------------------------------------------------------------------

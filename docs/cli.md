@@ -217,7 +217,7 @@ cash info
   that is not a setting, or a value cash could not use, is left out of the
   list and reported as a warning.
 
-<!-- claim: cash/__main__.py:cmd_inspect @0975006f, cash/__main__.py:_inspect_cache_dir @5372c14d, cash/__main__.py:_inspect_notebook @b18767fe -->
+<!-- claim: cash/__main__.py:cmd_inspect @0975006f, cash/__main__.py:_inspect_cache_dir @de0a89d4, cash/__main__.py:_inspect_notebook @b18767fe -->
 ### `cash inspect [path] [--function NAME]` { #cash-inspect-path }
 
 Summarise a cache directory, or report on a notebook and its sibling `.cash`
@@ -268,8 +268,8 @@ cash inspect /tmp/some-cache-dir
 
   ```
   ENTRY             SAVES       SIZE   USES   LAST USED   PRODUCES
-  aaaaaaaaaaaa      12.5s     4.0 KB     3x   2 min ago   df, model
-  bbbbbbbbbbbb       0.4s     1.0 KB     1x   2 min ago   scores
+  aaaaaaaaaaaa      12.5s    4.0 KiB     3x   2 min ago   df, model
+  bbbbbbbbbbbb       0.4s    1.0 KiB     1x   2 min ago   scores
   ```
 
   `SAVES` is the recorded execution time of the function's own body (cash's
@@ -295,10 +295,10 @@ here is "what is filling my disk, and what can I afford to drop?":
 
 ```
 Cache directory: .cash
-  Total size: 13.7 MB    Entries: 3    Functions: 2
+  Total size: 13.7 MiB    Entries: 3    Functions: 2
 
   FUNCTION                      ENTRIES        SIZE   LAST USED
-  model.heavy_field                   2     13.7 MB   2 min ago
+  model.heavy_field                   2    13.7 MiB   2 min ago
   model.small_helper                  1       620 B   2 min ago
 ```
 
@@ -459,7 +459,7 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 ---
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @a89bac59 -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @a7574c7d -->
 ## Exit codes
 
 | Code | When |

@@ -158,11 +158,11 @@ def cmd_info(args: argparse.Namespace) -> None:
     database = _sqlite_cache(config.cache_dir)
     held = database if database is not None else _entry_totals(config.cache_dir)
     if database is not None:
-        print(f"  Holds:      {database[0]} entries, {_format_bytes(database[1])} (one sqlite database)")
+        print(f"  Holds:      {database[0]} entries, {human_bytes(database[1])} (one sqlite database)")
     elif held is None:
         print("  Holds:      nothing yet (no cache written here)")
     else:
-        print(f"  Holds:      {held[0]} entries, {_format_bytes(held[1])}")
+        print(f"  Holds:      {held[0]} entries, {human_bytes(held[1])}")
     if held:
         # A total alone is a dead end (round 27, r27s1): the next question is
         # always which entries, and whether they earn their space.
@@ -229,7 +229,7 @@ def cmd_info(args: argparse.Namespace) -> None:
     if tools:
         print("  Tool caches (reach one with --tool NAME):")
         for name, path, entries, size in tools:
-            print(f"    {name:<20} {entries:>5} entries  {_format_bytes(size):>10}  {path}")
+            print(f"    {name:<20} {entries:>5} entries  {human_bytes(size):>10}  {path}")
 
 
 def _tier_text(tier) -> str:
@@ -265,18 +265,6 @@ def _setting_text(config, key: str) -> str:
     if key in SIZE_FIELDS and isinstance(value, int):
         return format_size(value)
     return repr(value)
-
-
-def _format_bytes(size_bytes: int) -> str:
-    # Powers of 1024, so labelled as such: "GB" here read as a mis-parsed
-    # "2GB" setting (round 18).
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    if size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KiB"
-    if size_bytes < 1024 * 1024 * 1024:
-        return f"{size_bytes / (1024**2):.1f} MiB"
-    return f"{size_bytes / (1024**3):.2f} GiB"
 
 
 @dataclass
@@ -556,7 +544,7 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
         # A sqlite cache is one file; the per-function table below reads entry
         # files and would report an empty cache over a working one.
         print(
-            f"  Total size: {_format_bytes(database[1])}    Entries: {database[0]}"
+            f"  Total size: {human_bytes(database[1])}    Entries: {database[0]}"
             f"    (one sqlite database: {_SQLITE_DB_NAME})"
         )
         print("\n  Per-function detail is not available for the sqlite backend.")
@@ -569,7 +557,7 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
         owned = sorted((e for e in entries if e.function == resolved), key=lambda e: e.size, reverse=True)
         owned_size = sum(e.size for e in owned)
         noun = "entry" if len(owned) == 1 else "entries"
-        print(f"  {resolved} - {len(owned)} {noun}, {_format_bytes(owned_size)}\n")
+        print(f"  {resolved} - {len(owned)} {noun}, {human_bytes(owned_size)}\n")
 
         # SAVES is the column a delete decision actually turns on: bytes say
         # what you get back, seconds say what it costs you to lose. The old
@@ -585,7 +573,7 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
             produces = ", ".join(entry.outputs) if shows_outputs else ""
             row = (
                 f"  {entry.stem[:12]:<14}{saves:>9}"
-                f"{_format_bytes(entry.size):>11}{str(entry.uses) + 'x':>7}"
+                f"{human_bytes(entry.size):>11}{str(entry.uses) + 'x':>7}"
                 f"   {_age(entry.mtime):<12}{_expires(entry.expires):<12}{produces}"
             )
             print(row.rstrip())
@@ -600,7 +588,7 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
     for entry in entries:
         functions.setdefault(entry.function, []).append(entry)
 
-    print(f"  Total size: {_format_bytes(total_size)}    Entries: {len(entries)}    Functions: {len(functions)}")
+    print(f"  Total size: {human_bytes(total_size)}    Entries: {len(entries)}    Functions: {len(functions)}")
 
     if not functions:
         print("\n  (no readable entries)")
@@ -610,7 +598,7 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
     print(f"\n  {'FUNCTION':<40}{'ENTRIES':>9}{'SIZE':>12}   LAST USED")
     for name, owned in ranked:
         newest = max(e.mtime for e in owned)
-        print(f"  {name[:40]:<40}{len(owned):>9}{_format_bytes(sum(e.size for e in owned)):>12}   {_age(newest)}")
+        print(f"  {name[:40]:<40}{len(owned):>9}{human_bytes(sum(e.size for e in owned)):>12}   {_age(newest)}")
     print("\n  cash inspect --function NAME   to list one function's entries")
     print("  cash clear   --function NAME   to drop them")
     if NOTEBOOK_GROUP in functions:
@@ -644,7 +632,7 @@ def _clear_function(cache_dir: str, wanted: str) -> None:
         removed += 1
     _bump_generation(cache_path)
     noun = "entry" if removed == 1 else "entries"
-    print(f"Cleared {removed} {noun} for {resolved} ({_format_bytes(freed)} freed)")
+    print(f"Cleared {removed} {noun} for {resolved} ({human_bytes(freed)} freed)")
 
 
 def _remove_entry_files(cache_path: Path, stem: str) -> None:
@@ -671,7 +659,7 @@ def _clear_entry(cache_dir: str, wanted: str) -> None:
         sys.exit(1)
     _remove_entry_files(cache_path, entry.stem)
     _bump_generation(cache_path)
-    print(f"Cleared entry {entry.stem[:12]} from {entry.function} ({_format_bytes(entry.size)} freed)")
+    print(f"Cleared entry {entry.stem[:12]} from {entry.function} ({human_bytes(entry.size)} freed)")
 
 
 def _clear_expired(cache_dir: str) -> None:
@@ -694,7 +682,7 @@ def _clear_expired(cache_dir: str) -> None:
     print(
         f"Cleared {len(expired)} expired "
         f"entr{'y' if len(expired) == 1 else 'ies'} from {cache_path} "
-        f"({_format_bytes(sum(e.size for e in expired))} freed)"
+        f"({human_bytes(sum(e.size for e in expired))} freed)"
     )
 
 

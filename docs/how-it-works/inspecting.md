@@ -305,7 +305,7 @@ and entry counts it points you at `cash info` in a terminal.
 Anything that requires touching the cache directory itself lives in the CLI, not
 in a magic. These five subcommands are the whole surface:
 
-<!-- claim: cash/__main__.py:main @fc218b1b, cash/__main__.py:cmd_info @a89bac59, cash/__main__.py:_inspect_cache_dir @5372c14d -->
+<!-- claim: cash/__main__.py:main @fc218b1b, cash/__main__.py:cmd_info @a7574c7d, cash/__main__.py:_inspect_cache_dir @de0a89d4 -->
 ```bash
 cash version            # installed version
 cash info               # resolved config, where it came from, what the cache holds
@@ -338,7 +338,7 @@ For the thresholds that actually drive persistence, see
 
 ## Programmatic inspection
 
-<!-- claim: cash/core.py:Cash.explorer @599913c8, cash/ui/explorer.py:CacheExplorer @b2133930 broad="the table is a claim about what the class offers" -->
+<!-- claim: cash/core.py:Cash.explorer @599913c8, cash/ui/explorer.py:CacheExplorer @7abe3173 broad="the table is a claim about what the class offers" -->
 For everything you'd want to do from code rather than a magic, Cash ships a
 few inspection tools:
 

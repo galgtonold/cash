@@ -9,7 +9,6 @@ import pytest
 from cash.__main__ import (
     HOOK_FILENAME,
     HOOK_MARKER,
-    _format_bytes,
     cmd_autoload,
     cmd_clear,
     cmd_info,
@@ -17,6 +16,7 @@ from cash.__main__ import (
     cmd_version,
     main,
 )
+from cash.backends.adaptive_caps import human_bytes
 from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry
 
 
@@ -29,19 +29,19 @@ def _autoload_off(*, profile="default", force=False):
 
 
 class TestCLIFormatBytes:
-    """Test _format_bytes helper."""
+    """The CLI's sizes: powers of 1024, labelled as such."""
 
     def test_bytes(self):
-        assert _format_bytes(500) == "500 B"
+        assert human_bytes(500) == "500 B"
 
     def test_kilobytes(self):
-        assert _format_bytes(2048) == "2.0 KiB"
+        assert human_bytes(2048) == "2.0 KiB"
 
     def test_megabytes(self):
-        assert _format_bytes(5 * 1024 * 1024) == "5.0 MiB"
+        assert human_bytes(5 * 1024 * 1024) == "5.0 MiB"
 
     def test_gigabytes(self):
-        assert _format_bytes(2 * 1024 * 1024 * 1024) == "2.00 GiB"
+        assert human_bytes(2 * 1024 * 1024 * 1024) == "2.0 GiB"
 
 
 class TestCLIVersion:
