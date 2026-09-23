@@ -139,6 +139,7 @@ def full_hash_max_bytes() -> int:
             config = get_config()
         value = int(config.file_hash_full_max_bytes)
     except Exception:  # noqa: BLE001 - teardown, or a config that cannot load
+        logger.debug("[SNAPSHOT] no config for the full-hash threshold; using the default", exc_info=True)
         return _HASH_FULL_MAX_BYTES_DEFAULT
     return value if value > 0 else _HASH_FULL_MAX_BYTES_DEFAULT
 

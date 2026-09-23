@@ -95,7 +95,8 @@ class LoopSplitPolicy:
             return None
         try:
             iterable[0:0]
-        except Exception:  # noqa: BLE001 - any failure means not sliceable
+        except Exception:  # noqa: BLE001 - a user __getitem__ can raise anything: not sliceable
+            logger.debug("[LOOP_SPLIT] iterable is not sliceable", exc_info=True)
             return None
         if not header_safe_to_reevaluate(node.iter, iterable, user_ns):
             return None
@@ -169,7 +170,10 @@ class LoopSplitPolicy:
         try:
             store.record(loop_source_hash(node), PROBE_ITERS)
             logger.debug("[LOOP_SPLIT] recorded k=%d; splits from next run", PROBE_ITERS)
-        except Exception:  # noqa: BLE001 - learning must never break execution
+        except (OSError, ValueError, RecursionError):
+            # The store swallows its own write failures; this is the source
+            # hash (``ast.unparse`` of a very deep loop) and a cache dir that
+            # cannot be made. Learning must never break execution.
             logger.debug("[LOOP_SPLIT] could not record a verdict", exc_info=True)
 
     def recorded_k(self, node: ast.For, iterable: Any, user_ns: dict[str, Any]) -> int | None:
@@ -188,6 +192,6 @@ class LoopSplitPolicy:
             return None
         try:
             return store.get(loop_source_hash(node))
-        except Exception:  # noqa: BLE001 - a lookup must never break the loop
+        except (OSError, ValueError, RecursionError):
             logger.debug("[LOOP_SPLIT] verdict lookup failed", exc_info=True)
             return None

@@ -550,7 +550,7 @@ def _try_extension_cells() -> tuple[NotebookCell, ...] | None:
         return None
     try:
         extracted = _code_cells(cells)
-    except Exception as e:  # noqa: BLE001
+    except (AttributeError, TypeError) as e:  # a cell that is not the JSON shape
         logger.debug("[UTILS] extension cell shape unusable: %s", e)
         return None
     # An unrecognised shape must fall through to the file, never disable the
@@ -876,7 +876,8 @@ class NotebookCellReaders:
                 nb = json.load(f)
 
             cells = _code_cells(nb.get("cells", []))
-        except Exception as e:
+        except (OSError, ValueError, AttributeError, TypeError) as e:
+            # Unreadable, not JSON, not UTF-8, or not a notebook's shape.
             logger.error("Error reading notebook file: %s", e)
             return ()
 

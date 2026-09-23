@@ -239,8 +239,10 @@ def header_safe_to_reevaluate(iter_node: ast.AST, iterable: Any, user_ns: dict[s
     try:
         if not fresh and iter(iterable) is iterable:
             return False
-    except Exception:  # noqa: BLE001 - defensive; non-iterables fail later anyway
-        pass
+    except TypeError:
+        pass  # not iterable: the loop itself will say so
+    except Exception:  # noqa: BLE001 - a user __iter__ can raise anything; the loop re-raises it
+        logger.debug("[FAST_LOOP] iter() on the loop's iterable raised", exc_info=True)
 
     for sub in ast.walk(iter_node):
         # A one-shot iterator ANYWHERE in the header, not only as the
@@ -258,8 +260,10 @@ def header_safe_to_reevaluate(iter_node: ast.AST, iterable: Any, user_ns: dict[s
                 try:
                     if iter(value) is value:
                         return False
-                except Exception:  # noqa: BLE001 - not iterable: cannot be drained
-                    pass
+                except TypeError:
+                    pass  # not iterable: cannot be drained
+                except Exception:  # noqa: BLE001 - a user __iter__ can raise anything
+                    logger.debug("[FAST_LOOP] iter(%s) raised", sub.id, exc_info=True)
 
         # A bare-name call to anything other than a known side-effect-free
         # builtin may consume/mutate state on re-evaluation.
@@ -307,7 +311,8 @@ def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, A
             try:
                 value = eval(compile(ast.Expression(node), "<loop-size>", "eval"), {"__builtins__": {}}, dict(user_ns))
                 return len(value)
-            except Exception:  # noqa: BLE001 - sizing is advisory; unknown is safe
+            except Exception:  # noqa: BLE001 - user expression; sizing is advisory, unknown is safe
+                logger.debug("[FAST_LOOP] could not size %s", ast.unparse(node), exc_info=True)
                 return None
         if not isinstance(node, ast.Call):
             return None
@@ -330,7 +335,8 @@ def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, A
 
     try:
         return length_of(iter_node)
-    except Exception:  # noqa: BLE001 - no estimate means per-iteration, the safe default
+    except Exception:  # noqa: BLE001 - user __len__; no estimate means per-iteration, the safe default
+        logger.debug("[FAST_LOOP] could not estimate the iteration count", exc_info=True)
         return None
 
 

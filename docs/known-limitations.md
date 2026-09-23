@@ -567,7 +567,7 @@ the file is behind and says so on the badge — a warning row naming the time th
 file was last saved. That proof condemns the whole file, so the warning stands
 until you save.
 
-<!-- claim: cash/notebook/live_cells.py:handle_message @f101a60b, cash/notebook/server_discovery.py:_try_extension_cells @1c9b3c41 -->
+<!-- claim: cash/notebook/live_cells.py:handle_message @f101a60b, cash/notebook/server_discovery.py:_try_extension_cells @766cbfd6 -->
 **On JupyterLab, cash's own extension pushes your unsaved edits to the kernel.**
 `pip install cash-lib` also drops a prebuilt JupyterLab extension
 (`cash-live-cells`) into your environment, which JupyterLab discovers at startup
