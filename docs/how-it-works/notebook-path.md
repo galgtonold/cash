@@ -50,7 +50,7 @@ A few of these steps deserve a closer look:
   [Staying correct: invalidation](invalidation.md). This page and that one
   describe the same engine from two angles: here it's "how a cell runs," there
   it's "how a cell knows it's stale."
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6, cash/notebook/statement/processor.py:StatementProcessor.process_statement @07346bd6 -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6, cash/notebook/statement/processor.py:StatementProcessor.process_statement @93d2de89 -->
 - **Step 7 — the per-statement decision.** Each statement passes the detector
   pre-checks from [Safety](safety.md) — merged into one verdict by
   `decide_cacheability` — before the cache is consulted at all. If the verdict
@@ -223,7 +223,7 @@ final value straight from cache:
 # Cash restores the final 'df' directly:  ~0.1s (deserialization only)
 ```
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @0f43abb4 -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @bec431ab -->
 That holds for values computed *from* a loop too. A loop's outputs get lineages
 derived from the values it built, which the upstream simulation cannot derive
 from code, so Cash writes down what a loop left behind when it runs, and the

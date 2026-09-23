@@ -255,7 +255,7 @@ Content beats the lineage attribute, and that ordering is the fix for a real bug
 `compute_hash` itself ends at `sha256(str(id(obj)))` for an object that cannot be pickled. That does not corrupt anything — the statement executes normally and the result is stored — but the key is then tied to a memory address, so the entry is effectively per-session and will not restore after a kernel restart.
 
 ??? note "Under the hood"
-    <!-- claim: cash/notebook/statement/lineage.py:StatementLineageBuilder.capture_and_track_variables @2f792035, cash/notebook/lineage_formula.py:output_lineage @9c114ecd, cash/notebook/lineage_formula.py:module_source_component @22694512 -->
+    <!-- claim: cash/notebook/statement/lineage.py:StatementLineageBuilder.capture_and_track_variables @0199595d, cash/notebook/lineage_formula.py:output_lineage @9c114ecd, cash/notebook/lineage_formula.py:module_source_component @22694512 -->
     All statement keys are built by `compute_cache_key()` in
     `cash.notebook.cache_key`, and every output lineage by the functions in
     `cash.notebook.lineage_formula` — both shared by runtime execution

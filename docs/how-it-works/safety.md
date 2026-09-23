@@ -53,7 +53,7 @@ The split looks arbitrary until you write the two forms side by side.
 statement's outputs; `d.update(o)` is a bare expression with no target at all.
 The first can be re-derived from the statement that made it; the second cannot.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @d2a395fa, cash/analysis/cacheability.py:selfref_inplace_write_vars @f9e28262 -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @30310186, cash/analysis/cacheability.py:selfref_inplace_write_vars @f9e28262 -->
 !!! note "…but only when the base was made in the same cell"
     The **Cached** verdicts above are this classifier's per-statement decision.
     A separate rule sits on top, in the upstream checker: a variable the cell
@@ -74,7 +74,7 @@ The first can be re-derived from the statement that made it; the second cannot.
 has no store target to give the receiver a fresh lineage. So Cash classifies
 method-call receivers in tiers, in this order:
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @08a14a35, cash/analysis/cacheability.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/cacheability.py:standalone_method_call_inner_methods @4a62a44e, cash/analysis/cacheability.py:chain_is_pure @530e6134, cash/analysis/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @697bbf7a, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @1cca2d82 -->
+<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @704f9e6f, cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @716a2694, cash/analysis/cacheability.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/cacheability.py:standalone_method_call_inner_methods @4a62a44e, cash/analysis/cacheability.py:chain_is_pure @530e6134, cash/analysis/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @697bbf7a, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @1cca2d82 -->
 
 - **Excluded outright.** A module receiver is a plain function call, not a
   mutation: `np.foo()`, `time.sleep()`, `plt.title()`. The exception is a
@@ -163,7 +163,7 @@ a draw on a live `Axes`/`Figure` (including one handed to a helper,
 
 ### A bare `model.fit(X, y)`
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._estimator_fit_receivers @7e4d333f, cash/analysis/annotations.py:CacheAnnotation.cache_fit == False -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._estimator_fit_receivers @4b10b7d8, cash/analysis/cacheability.py:is_estimator @7eb88875, cash/analysis/annotations.py:CacheAnnotation.cache_fit == False -->
 A bare fit is a method-call mutation of its receiver, so it takes the default
 path above: **skip-cache, re-execute every run**. That is net-neutral — a fit
 that would keep missing cannot cost more than it saves — and it avoids the

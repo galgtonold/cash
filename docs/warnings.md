@@ -975,7 +975,7 @@ DateTime; DateTime.now()`, `import time as _time` and `from time import time as
 now` all count, and a method of your own that happens to be called `now` does
 not.
 
-<!-- claim: cash/purity_flow.py:is_log_helper @6bf250bd, cash/purity_analyzer.py:_log_helper_names @69f8504d -->
+<!-- claim: cash/purity_flow.py:is_log_helper @6bf250bd, cash/purity_analyzer.py:_log_helper_names @c43afd2c -->
 A read whose value goes only into a log line cannot reach the result, and is
 not reported. A log line is a `print`, a `logging` call, `warnings.warn`,
 `sys.stderr.write`, or a function of your own whose body is nothing but those
