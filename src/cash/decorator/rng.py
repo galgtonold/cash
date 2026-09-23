@@ -265,8 +265,8 @@ class RngMixin:
 
         A hit never runs the body, so the stream it advanced stays where it was
         and the CALLER's next draw returns what the function drew: with
-        ``np.random.seed(0)``, the draw after a hit WAS the cached value (found
-        attacking the decorator before round 26). The notebook path replays the
+        ``np.random.seed(0)``, the draw after a hit WAS the cached value. The
+        notebook path replays the
         recorded state; this is the same for the decorator.
 
         Both ends are recorded. Replaying the post-state is only right when the
@@ -367,7 +367,7 @@ class RngMixin:
         # seeded to the detector, but whether it is depends on the call:
         # `def simulate(params, seed=None)` draws from OS entropy whenever the
         # caller leaves the seed out, and R Monte Carlo replicates came back
-        # identical with nothing said (CAS-116). Note which parameters, and
+        # identical with nothing said. Note which parameters, and
         # check their bound value per call.
         seed_params = seed_parameters(src)
         if seed_params:
@@ -428,9 +428,9 @@ class RngMixin:
     def _warn_if_seed_is_none(self, func: Callable, func_name: str, args: tuple, kwargs: dict) -> None:
         """RANDOM-UNSEEDED for a seed that is None in THIS call.
 
-        The seed may be a parameter (CAS-116) or read from one or from a module
+        The seed may be a parameter or read from one or from a module
         global: ``default_rng(settings.seed)`` with the field None froze one
-        draw across processes and said nothing (round 18), while the bare
+        draw across processes and said nothing, while the bare
         ``seed=None`` parameter warned.
         """
         bound = None
@@ -492,11 +492,10 @@ class RngMixin:
         decorator path had no equivalent, so the recommended way to cache a fit
         was also the silent one.
 
-        Reported in round 14: three runs returned the identical model (first
-        tree's `random_state` 1200527474), no warning, no badge marker, using
-        the docs' own recipe. The tester's words for the harm are the reason
-        this exists -- "I would have written 'the model is completely stable
-        across random seeds' in a report."
+        Three runs returned the identical model (first tree's `random_state`
+        1200527474), with no warning and no badge marker, using the docs' own
+        recipe: a report would have called the model "completely stable across
+        random seeds".
 
         Same verdict rule as ``_unseeded_estimator_fits``: unseeded iff
         ``get_params()`` HAS ``random_state`` and it is ``None``. A seed of any

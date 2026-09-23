@@ -33,7 +33,7 @@ Cash warns the first time this happens:
 
 The cost floor decides whether a value is worth *persisting*. It does not decide whether you see the same number twice.
 
-<!-- claim: cash/decorator/rng.py:RngMixin._rng_replay_parts @ab3f27d7, cash/decorator/rng.py:RngMixin._replay_rng_state @597e8922 -->
+<!-- claim: cash/decorator/rng.py:RngMixin._rng_replay_parts @cb52a36f, cash/decorator/rng.py:RngMixin._replay_rng_state @597e8922 -->
 **What the caller draws next is not affected.** A hit does not run the body, so
 the stream it advanced would stay where it was and the caller's own next draw
 would repeat what the function drew — with `np.random.seed(0)`, exactly the

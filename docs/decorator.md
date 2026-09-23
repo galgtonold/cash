@@ -281,7 +281,7 @@ Worth understanding before any parameter. With a bare `@cash.cache` and nothing
 configured, a cached result is discarded and recomputed when **any** of these
 change:
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/registry.py:RegistryMixin._analyze_dependencies @0faafa3f -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/decorator/registry.py:RegistryMixin._analyze_dependencies @35b8b434 -->
 | What changed | How it's detected |
 |---|---|
 | The **arguments** | Hashed by *content* — so DataFrames and arrays work, and two equal-but-distinct objects share one entry |
@@ -383,7 +383,7 @@ cached function counts as your code even after `pip install .`, so a changed
 checkout. If you do need a third-party function's identity in the key, name it
 with [`depends_on=`](#depends_on-explicit-dependency-graph).
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._local_binding_parts @440fccdc, cash/purity_analyzer.py:resolve_local_import @e2289266 -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._local_binding_parts @8a3a536d, cash/purity_analyzer.py:resolve_local_import @e2289266 -->
 An import written **inside** the function (`from .models import auc`, the usual
 way out of an import cycle) is followed the same way as one at the top of the
 file -- a function it imports, a constant (`from .settings import ROUNDING`),
@@ -443,7 +443,7 @@ import of cash's file tracker. `multiprocessing.Pool` and joblib's workers are
 not wrapped: files read only there are not seen, so name them with
 `file_depends_on=`.
 
-<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._credit_remembered_reads @22499d44, cash/tracking/file_tracker.py:_credit_read_to_stack @a47279d7 -->
+<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._credit_remembered_reads @c6e8b40e, cash/tracking/file_tracker.py:_credit_read_to_stack @a47279d7 -->
 A read your code **memoises** counts for every call that uses it. With
 `parse = functools.lru_cache()(parse_csv)` — or a module-level dict of parsed
 files — only the first cached function to call `parse(path)` actually opens
@@ -486,7 +486,7 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._fold_read_globals @6c43e132, cash/decorator/globals_fold.py:GlobalsFoldMixin._fold_dependency_read_globals @29b6151a -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._fold_read_globals @6c43e132, cash/decorator/globals_fold.py:GlobalsFoldMixin._fold_dependency_read_globals @abf3ee0c -->
 Only globals that are **read** participate — and that includes globals read
 on someone else's behalf: by a **helper**, so a helper returning a module-level
 `CONFIG` invalidates its caller when that config changes, and by another
@@ -517,7 +517,7 @@ normally.
 The same rule applies to variables a closure captures, not just module
 globals.
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._carried_global_hash @d3d7ca80 -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFoldMixin._carried_global_hash @2ae561ae -->
 **A callable built from data counts as that data.** A global that is a
 library callable carrying values — `SMOOTH = partial(ndimage.gaussian_filter,
 sigma=SIGMA)`, `POLY = np.poly1d(COEFFS)`, `CAL = interp1d(X, Y)`,
@@ -829,7 +829,7 @@ After the TTL elapses, the next call recomputes and replaces the entry.
 Entries whose calls never come back stay on disk until you reclaim them —
 call `cash.cleanup()`, or run `python -m cash clear` from the CLI.
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_ttl @4df547f6, cash/decorator/explain.py:ExplainMixin._absent_entry_reason @69e58ae2 -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_ttl @b7544486, cash/decorator/explain.py:ExplainMixin._absent_entry_reason @69e58ae2 -->
 An entry remembers the `ttl` it was written with, and the decorator's
 current `ttl` applies too, so the **shorter** of the two wins. Lengthening
 `ttl=60` to `ttl=3600` does not rescue entries already written under 60 s:
@@ -1138,7 +1138,7 @@ for line in read_lines("huge.log"):
 # Second run: chunks are read lazily from disk; RAM bounded by chunk size.
 ```
 
-<!-- claim: cash/decorator/iterators.py:ChunkedCachedIterator @0c6c821f broad="the claim is about the replay iterator's whole supported protocol" -->
+<!-- claim: cash/decorator/iterators.py:ChunkedCachedIterator @8437fd80 broad="the claim is about the replay iterator's whole supported protocol" -->
 The cached iterator supports `iter()`, `__next__`, `close()`. Generator
 methods `.send()` and `.throw()` are not supported — call them and you
 get an `AttributeError` reminding you the iterator is a replay.
@@ -1328,7 +1328,7 @@ columns), 50 ms for a 100 MB numpy array. What cash does about it:
   treated the same way; without it, every call hashes.)
 - **In a notebook**, `%cash_on` tracks every assignment and mutation, and cash
   uses that instead of hashing a tracked object again.
-- <!-- claim: cash/decorator/arg_hashing.py:plain_key_part @81d7207e, cash/_plain_data.py:is_plain @7f7e9e70, cash/_plain_data.py:dict_rows @39223208, cash/_plain_data.py:pickle_unshared @841b27ff -->
+- <!-- claim: cash/decorator/arg_hashing.py:plain_key_part @10345e4f, cash/_plain_data.py:is_plain @7f7e9e70, cash/_plain_data.py:dict_rows @39223208, cash/_plain_data.py:pickle_unshared @841b27ff -->
   **Lists and tuples of plain values** — the rows a parser returns, including
   `date`, `datetime`, `timedelta` and `Decimal` columns — and **lists of dicts**
   that share their keys (`csv.DictReader` rows, JSON records) are recognised
@@ -1395,7 +1395,7 @@ frozen, so a call receiving one runs uncached
 
 ### When a cached function changes what it was given
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._argument_identities @4f205dbb, cash/_plain_data.py:identity_changed @a853a1cf -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._argument_identities @14a2dea3, cash/_plain_data.py:identity_changed @a853a1cf -->
 A call that sorts, appends to or rewrites an argument in place makes a change
 the caller sees — and a hit would not make it. Cash checks for that after each
 miss, and a call it catches is not stored: it runs every time, as it would
@@ -1593,7 +1593,7 @@ A `requests.get` is not a file read, and is never checked.
 
 ### A function returning a matplotlib `Figure` is never cached
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._refuses_identity_coupled @0612aaac -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._refuses_identity_coupled @a3290610 -->
 `@cash.cache` refuses to store a result that is — or contains — a matplotlib
 `Figure` or `Axes`, and warns once saying so.
 

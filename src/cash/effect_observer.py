@@ -170,7 +170,7 @@ def _hook_mock_calls() -> None:
     A mock stands in for the real thing wherever it was put: one level below
     what the body calls (``requests.Session.request``, ``HTTPAdapter.send``)
     or swapped into a global after the key's bindings were read. No binding
-    the key reads can show those (round 20), but a mock that RAN cannot hide
+    the key reads can show those, but a mock that RAN cannot hide
     that it did: every call on one goes through
     ``CallableMixin._increment_mock_call``. Never imports ``unittest.mock``
     itself -- a program that has not imported it has no mocks. Installed
@@ -274,7 +274,7 @@ class EffectObserver:
         written; the user's code that called into it can carry one, the same
         statement-scoped waiver the static findings take. Before this the only
         way to quiet an observed effect was ``assume_safe=True``, which also
-        silences every effect added to the function later (round 18).
+        silences every effect added to the function later.
         """
         sites = self._user_sites()
         if any(line_waived(filename, lineno) for filename, lineno in sites):

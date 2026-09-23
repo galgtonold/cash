@@ -143,8 +143,7 @@ class CodeIdentityMixin:
         """
         if isinstance(func, functools.partial):
             # `repr(partial)` holds the wrapped function's ADDRESS, so every
-            # process took a fresh namespace and none of them ever hit (found
-            # attacking the decorator before round 26). Name it after what it
+            # process took a fresh namespace and none of them ever hit. Name it after what it
             # wraps, plus what it binds -- two partials of one function stay
             # two namespaces, and each is the same in every process.
             inner = CodeIdentityMixin.get_func_key(func.func)
@@ -381,7 +380,7 @@ class CodeIdentityMixin:
         # edited after this process imported it (new files land, the restart
         # comes later) gives the NEW text for the OLD code object, and an entry
         # keyed by the new text but computed by the old code was served to the
-        # restarted process (CAS-110). Key such a helper by what actually runs.
+        # restarted process. Key such a helper by what actually runs.
         # One os.stat in the normal case; see `loaded_code_matches_disk`.
         if not loaded_code_matches_disk(fn):
             digest = loaded_class_identity(fn) if isinstance(fn, type) else compiled_identity(fn)
@@ -423,7 +422,7 @@ class CodeIdentityMixin:
         import compiled. It used to be taken at the FIRST CALL, and a deploy
         that landed new files between import and that call keyed the old
         body's result by the new body's text; every restarted process then
-        served it as an ordinary hit (round 18, two testers independently).
+        served it as an ordinary hit.
         The first call still compares the loaded code with the file once, to
         say so. A pin not taken at decoration (the table is full) falls back to
         the same loaded-vs-disk check helpers get.
@@ -449,7 +448,7 @@ class CodeIdentityMixin:
                     # the text the pin was read from is not the code that runs.
                     # Keyed by what runs instead: the result belongs to the old
                     # body, and a process running the new one keys by the new
-                    # text and recomputes (round 20).
+                    # text and recomputes.
                     live = bytecode_identity(func)
                     if live is not None:
                         pin = self._own_pins[key] = live
@@ -1342,7 +1341,7 @@ class CodeIdentityMixin:
         in the tool's own `settings.py` stopped reaching the key, and a
         reinstall with a changed constant served the old report -- while
         `from settings import FACTOR`, a helper in a sibling module and a
-        same-module global all still invalidated (CAS-111).
+        same-module global all still invalidated.
         """
         if CodeIdentityMixin._in_own_package(getattr(mod, "__name__", None), own_pkg):
             return True

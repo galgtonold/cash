@@ -98,7 +98,7 @@ def _user_frame_level() -> int | None:
     """`_stacklevel_of_first_user_frame`, also passing over thread and process
     pool machinery -- or ``None`` when no frame on this thread's stack is the
     user's. A cached function first called in a ``ThreadPoolExecutor`` blamed
-    CPython's ``concurrent/futures/thread.py`` (round 20): a worker's stack
+    CPython's ``concurrent/futures/thread.py``: a worker's stack
     has nothing of the user's above cash, and the line that submitted the
     work is on another thread."""
     roots = _machinery_roots()
@@ -268,7 +268,7 @@ def log_diagnostic(log: logging.Logger, code: str, what: str, fix: str) -> None:
     For the few advisories that should reach a log-only reader too. With no
     handler anywhere, which is every plain script, the record would go to
     logging's last-resort stderr handler and print the same text a second
-    time right above the warning (round 17, KEY-OPAQUE-CALLABLE).
+    time right above the warning.
     """
     if log.hasHandlers():
         log.warning(format_diagnostic(code, what, fix))
@@ -289,7 +289,7 @@ def warn_diagnostic(
     For a warning raised from cash's own machinery with no user frame worth
     naming: resolved "at emit time" from a notebook backend, the nearest frame
     outside Cash is ipykernel's, and every such warning read
-    ``ipkernel.py:460: ...`` (round 28).
+    ``ipkernel.py:460: ...``.
 
     Warns with an *instance* rather than a message string so the code survives
     to the handler: a caller can test ``w.message.code == "CACHE-THRASH"``

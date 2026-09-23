@@ -87,7 +87,7 @@ class ClosureFoldMixin:
         else:
             # Only mutations visible in this function's own source disqualify a
             # capture outright. "Passed to a call" is provisional: folded, then
-            # confirmed by observation (CAS-270). Before this split, `sum(data)`
+            # confirmed by observation. Before this split, `sum(data)`
             # put `data` beyond the fold and the closure served stale forever.
             result = ClosureFoldMixin._unsafe_uses_of(
                 tree,
@@ -133,13 +133,13 @@ class ClosureFoldMixin:
         was over-broad and chose the worse failure: `sum(G)`, `len(G)`,
         `helper(G)` and `model.predict(G)` all put `G` beyond it, so a later
         `G = ...` never reached the key and the function served a stale value
-        for ever, silently (CAS-270).
+        for ever, silently.
 
         ``mutating_methods_only=True`` narrows the method-call rule to methods
         that actually write -- ``append``, ``update``, ``sort`` and their
         relatives, the same table the purity analyzer uses. "Any method, since
         we cannot prove purity" made the same over-broad choice one level down,
-        and a round-16 tester paid for it: a lookup table read as
+        and it cost: a lookup table read as
         ``ALIASES.get(v, v)`` never reached the key, so editing the table
         published stale labels with nothing to see. `ALIASES[v]`, `v in
         ALIASES`, `d = ALIASES; d.get(v)` and a bare read all tracked
@@ -238,7 +238,7 @@ class ClosureFoldMixin:
         written = self._closure_written_freevars(code)
         unsafe = self._capture_unsafe_uses(func)
         # Captures excluded ONLY because they were passed to a call. Folded, then
-        # confirmed at runtime -- same treatment as module globals (CAS-270). A
+        # confirmed at runtime -- same treatment as module globals. A
         # missing entry means "unknown": watch it rather than fold it blind.
         provisional = self._provisional_capture_cache.get(code)
         learned_mutating = self._mutating_globals.get((code, "closure"), frozenset())
@@ -253,7 +253,7 @@ class ClosureFoldMixin:
             # A captured FUNCTION is its code, so fold its source. Reaching
             # this before the `unsafe` check is the point: a capture the body
             # PASSES TO A CALL is marked unsafe and skipped (watch it, don't
-            # fold it blind -- CAS-270), and calling is exactly what you do
+            # fold it blind), and calling is exactly what you do
             # with a captured function. So the strategy-factory shape
             #
             #     def make(weight_fn):
@@ -351,7 +351,7 @@ class ClosureFoldMixin:
                 # `lambda: when` with `when` a list, a dict -- or a datetime
                 # before the type list above had it -- gave every value ONE
                 # entry, so the standard frozen-clock fixture served July's
-                # answer to a March test (round 19). What the body mutates
+                # answer to a March test. What the body mutates
                 # (a decorator's cache dict, a counter list) stays out, as
                 # before: folding it would make every call miss.
                 if unsafe is None:
@@ -372,9 +372,8 @@ class ClosureFoldMixin:
         A default is evaluated once, at ``def`` time, and lives on the function
         object -- so ``def shrink(v, alpha=ALPHA)`` reads the same after
         ``ALPHA`` changes, the source digest does not move, and global folding
-        never sees the name (it is not read in the body). Round 17 served 8
-        wrong answers in 8 from a service whose ridge penalty was a helper's
-        default (CAS-112). The cached function's own defaults were already
+        never sees the name (it is not read in the body): a service whose ridge
+        penalty was a helper's default served 8 wrong answers in 8. The cached function's own defaults were already
         folded (``_fold_defaults``); now every followed helper's are, by value,
         through the same payload hasher and the same callable fallback.
 
@@ -387,9 +386,8 @@ class ClosureFoldMixin:
             # A class's own source says nothing about what it inherits, and
             # this channel is what the key folds: ``Worker(Base)`` calling an
             # inherited ``run`` kept serving the old answer after ``Base.run``
-            # was rewritten -- 20 where an uncached run gives 500, in one file
-            # (found attacking the decorator before round 26). An OPAQUE base
-            # still contributes nothing, as for a class passed as an argument.
+            # was rewritten -- 20 where an uncached run gives 500, in one file.
+            # An OPAQUE base still contributes nothing, as for a class passed as an argument.
             bases = [
                 self._hash_callable_source(base)
                 for base in fn.__mro__[1:]
@@ -552,7 +550,7 @@ class ClosureFoldMixin:
         A factory-built callable as a default (`def run(xs, fn=make(3))`)
         shares its source with every other one the factory makes; the value it
         was built with lives in its closure, and was not keyed -- `make(3)` ->
-        `make(1)` served the old result (round 18). `_hash_helper_identity`
+        `make(1)` served the old result. `_hash_helper_identity`
         adds its immutable captures and its own defaults.
         """
         if inspect.isfunction(v):

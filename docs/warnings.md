@@ -20,7 +20,7 @@ Handlers can branch on the code rather than the wording, which is free to change
     if any(getattr(w.message, "code", None) == "CACHE-THRASH" for w in caught):
         ...
 
-<!-- claim: cash/diagnostics.py:warn_diagnostic @ba5feec8 -->
+<!-- claim: cash/diagnostics.py:warn_diagnostic @af27ed90 -->
 Every code is on `.code`, including the notebook warnings that point at a
 line of a cell rather than at a frame ([`RANDOM-REPLAYED`](#random-replayed),
 [`RANDOM-UNSEEDED`](#random-unseeded),
@@ -131,7 +131,7 @@ not ignore it if this is the function you were trying to speed up.
 
 ## CACHE-IDENTITY-COUPLED {#cache-identity-coupled}
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._refuses_identity_coupled @0612aaac -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._refuses_identity_coupled @a3290610 -->
 **What happened.** Your cached function returned a live matplotlib `Figure` or
 `Axes` — or a list, tuple, dict or array holding one — and Cash refused to
 store it. "Identity-coupled" is Cash's term for an object that a library keeps
@@ -339,7 +339,7 @@ speaks up once the loss has accumulated past a couple of real seconds *and* its
 per-call overhead exceeds even the largest body time it has seen, so a function
 that is usually fast but occasionally very slow will not be flagged.
 
-<!-- claim: cash/effectiveness.py:EffectivenessLedger.final_verdicts @4332e49a -->
+<!-- claim: cash/effectiveness.py:EffectivenessLedger.final_verdicts @f71a83d3 -->
 It needs three calls of a function to judge during the run, and a command-line
 tool that calls each function once per process never gets there — so the same
 test runs again when the process exits, and there one call can count. The
@@ -411,7 +411,7 @@ roomier volume.
 
 ## CACHE-RESULT-SHARED {#cache-result-shared}
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._warn_shared_result @0868a2a2, cash/decorator/purity_checks.py:PurityChecksMixin._shared_with @26fa6105 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._warn_shared_result @775a745d, cash/decorator/purity_checks.py:PurityChecksMixin._shared_with @26fa6105 -->
 **What happened.** The result shares state with an object the caller still
 holds: it *is* an argument, holds one inside it, sits on the same memory as an
 ndarray argument, or is one of the function's module globals. On the run that
@@ -750,7 +750,7 @@ invisible to the caller and never counts. The price is the caching itself, so
 the fix below is still worth making; `assume_safe=True` on the decorator stores
 such a call anyway.
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._argument_identities @4f205dbb, cash/_plain_data.py:identity_changed @a853a1cf -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._argument_identities @14a2dea3, cash/_plain_data.py:identity_changed @a853a1cf -->
 A list or tuple of plain values — parsed rows, of any size — is checked by
 the identities of what it holds, level by level, which costs a fraction of
 hashing it: `rows.sort()`, an append, a `del`, `rows[i] = ...` or a field
@@ -771,7 +771,7 @@ as the line inside your helper). It waives that effect and nothing else, so an
 effect added to the function later is still reported. `@cash.cache(assume_safe=True)`
 waives the whole function, including whatever is added to it later.
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._report_observed_effects @5bd3de81 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._report_observed_effects @47196b48 -->
 One caveat worth knowing: only the path this particular call took was watched.
 An effect behind a branch that did not run was not seen, so silence here is not
 a proof of purity — this supplements the source scan behind
@@ -800,7 +800,7 @@ file and line number. That line can be in a helper several calls below the
 cached function (`through LEDGER.record(result) in docmind.llm.complete`); the
 write itself may be deeper still, in a method of the object that line calls.
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._learn_mutating_captures @f2f93512 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._learn_mutating_captures @844b4e0c -->
 **Why it matters.** Two things follow, and neither is visible at the call site.
 A cache hit runs no body, so the write stops happening: a counter stops
 counting, an accumulator stops accumulating, and code that reads the variable
@@ -842,7 +842,7 @@ questionable. It found some. The message lists each one with its line number and
 a short label in square brackets, and the label is the part that tells you how
 much to care:
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._mutable_global_is_keyed @3a7ccf15 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecksMixin._mutable_global_is_keyed @a66ed1d2 -->
 - `impure_call` — a call whose job is a side effect: `print` to stdout,
   `input`, `open(..., "w")`, `os.remove`, `subprocess.run`, `requests.post`,
   `json.dump`, or a write-shaped method on a receiver the function did not
@@ -1336,7 +1336,7 @@ decorator silences every finding in the function instead. Under
 
 ## KEY-OPAQUE-CALLABLE {#key-opaque-callable}
 
-<!-- claim: cash/decorator/code_args.py:CodeArgsMixin._is_user_code_carrier @d583a27d, cash/decorator/code_identity.py:CodeIdentityMixin._is_user_module @ae329dc7 -->
+<!-- claim: cash/decorator/code_args.py:CodeArgsMixin._is_user_code_carrier @d583a27d, cash/decorator/code_identity.py:CodeIdentityMixin._is_user_module @998fb383 -->
 **What happened.** A function, a class, or an object whose class carries code
 reached a cached call — as an argument you passed, or
 as a parameter default you never typed — and Cash could not fingerprint its
@@ -1416,7 +1416,7 @@ answering it after the restart. The same happened to the cached function
 itself, in a worker that imported the old code and made its first call after
 the deploy landed.
 
-<!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin._pin_own_source @a0c8d612 -->
+<!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin._pin_own_source @7b4fb07b -->
 So cash keys that code by what is **actually running** instead: a cached
 function by the source it was imported with (its identity is taken when the
 decorator runs, not at its first call — and by its loaded bytecode when even
@@ -1478,7 +1478,7 @@ declined to cache the call. The message names the type. The same holds for a
 default of a helper the function calls, since a helper's defaults are folded
 into the key too; the message then names the helper.
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFoldMixin._defaults_unhashable @4a02abf1, cash/decorator/closure_fold.py:ClosureFoldMixin._hash_helper_identity @e040d354 -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFoldMixin._defaults_unhashable @4a02abf1, cash/decorator/closure_fold.py:ClosureFoldMixin._hash_helper_identity @5cbe6721 -->
 **Why it matters.** Cash folds defaults into the key so that `build()` and
 `build(Schema)` are recognised as the same call, and so that changing a default
 invalidates. It cannot tell whether an unhashable default has changed, and it
@@ -1989,7 +1989,7 @@ failing until you fix its cause.
 
 ## STORE-CODE-CHANGED {#store-code-changed}
 
-<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._code_moved_since_keyed @0f4b33ea, cash/decorator/registry.py:RegistryMixin._code_functions @bbc5e6f3 -->
+<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._code_moved_since_keyed @54401443, cash/decorator/registry.py:RegistryMixin._code_functions @bbc5e6f3 -->
 **What happened.** The file holding your cached function, a helper it calls, or
 another cached function it depends on changed on disk after this process read
 the code it keys that function by — and the change touched the code this call
@@ -2042,7 +2042,7 @@ the benefit.
 
 ## STORE-INPUT-CHANGED {#store-input-changed}
 
-<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._inputs_moved_during_call @80b6ca64, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @faa17b34 -->
+<!-- claim: cash/decorator/file_deps.py:FileDepsMixin._inputs_moved_during_call @460be4de, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @faa17b34 -->
 **What happened.** A file the cached function read changed before the function
 returned — its size or timestamps moved between the moment it was read and the
 moment the result was about to be stored. The warning names the file. The

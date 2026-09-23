@@ -129,10 +129,10 @@ class GlobalsFoldMixin:
     #: and ``__name__`` differ per checkout and per invocation, so folding them
     #: would make a cache key un-shareable between two machines and between
     #: ``python job.py`` and ``python -m job``. It is wrong for the ones a
-    #: library actually declares: a round-16 tester bumped ``__version__``,
-    #: watched it invalidate NOTHING, and kept publishing a report stamped with
-    #: the old version through three further edits that each correctly
-    #: invalidated other stages. ``RELEASE`` and ``LEVEL`` in the same file were
+    #: library actually declares: a bumped ``__version__`` invalidated
+    #: NOTHING, and a report stamped with the old version went on being
+    #: published through three further edits that each correctly invalidated
+    #: other stages. ``RELEASE`` and ``LEVEL`` in the same file were
     #: tracked; only the dunder spelling was not.
     _MACHINERY_DUNDERS = frozenset(
         {
@@ -198,8 +198,7 @@ class GlobalsFoldMixin:
         }
         # A name spelled as a string reads the same global: `globals()["K"]`
         # is a LOAD_CONST, so `co_names` never had it and editing K served the
-        # old answer -- 20 where an uncached run gives 500 (found attacking the
-        # decorator before round 26). The code channel already resolves string
+        # old answer -- 20 where an uncached run gives 500. The code channel already resolves string
         # constants this way (`_referenced_user_code`); this is its data twin.
         # A string that merely happens to match a global costs a fold, never a
         # stale value.
@@ -220,7 +219,7 @@ class GlobalsFoldMixin:
         # `hard` is that set: mutations visible in this function's own source.
         # `provisional` is the weaker case the argument rule used to lump in with
         # it - a name merely PASSED to a call. Those are folded (so a change
-        # invalidates, CAS-270) and confirmed at runtime by
+        # invalidates) and confirmed at runtime by
         # `_learn_mutating_captures`, which demotes any that the call is actually
         # observed to mutate.
         provisional: frozenset = frozenset()
@@ -287,8 +286,8 @@ class GlobalsFoldMixin:
         ``run(name)`` that calls ``STEPS[name](x)`` -- was keyed by each
         function's own source, so an edit to a helper the step calls was a HIT
         with the old result; and a cached function stored there was keyed by
-        cash's own wrapper, so not even an edit to its body moved the key
-        (round 20). A cached function counts as its dependency state, the same
+        cash's own wrapper, so not even an edit to its body moved the key. A
+        cached function counts as its dependency state, the same
         as a call to it would; a plain function of the user's as its source
         plus its helpers, re-resolved live like any helper's.
         """
@@ -426,7 +425,7 @@ class GlobalsFoldMixin:
                     # The CLASS itself, not an instance of it: `TABLE = {"fast":
                     # impl.Fast}` pickles by reference, so editing `Fast.run`
                     # moved nothing while the same dict holding a FUNCTION was
-                    # followed (found attacking the decorator before round 26).
+                    # followed.
                     surface = self._code_surface_hash(item)
                     if surface is not None:
                         parts.append((f"{name}#cls:{item.__qualname__}", surface))
@@ -517,8 +516,8 @@ class GlobalsFoldMixin:
         # A callable bound at a call site carries DATA besides its code: a
         # partial's arguments, a bound method's instance, a callable
         # instance's attributes. Its code is followed as a helper; this is the
-        # rest (round 18: `F = partial(base, k=2)` -> `k=3`, and `F = S(2).f`,
-        # were both served stale).
+        # rest (`F = partial(base, k=2)` -> `k=3`, and `F = S(2).f`, were both
+        # served stale).
         carried: list[str] = []
         for module_name, chain, _ref in report.helper_bindings:
             if (module_name, chain) in report.waived_bindings:
@@ -579,7 +578,7 @@ class GlobalsFoldMixin:
         elif callable(value) and not is_mock(value) and held_partials(value):
             # A LIBRARY wrapper around the user's code keeps its own caches,
             # but the partials it holds are data the user built it with:
-            # `np.vectorize(partial(scale, k=K))` ran with the old K (round 20).
+            # `np.vectorize(partial(scale, k=K))` ran with the old K.
             payload = ("wrapped partials", held_partials(value))
         else:
             return None
@@ -596,7 +595,7 @@ class GlobalsFoldMixin:
         np.poly1d(COEFFS)``, ``CAL = interp1d(X, Y)``, ``LOOKUP = RATES.get``:
         the code is a library's, so the helper walk does not follow it, and
         what it was built with reached no channel -- editing SIGMA served the
-        old result (round 19). The same partial passed as an argument was
+        old result. The same partial passed as an argument was
         keyed all along.
 
         None for what another channel keys or what carries no data: a
@@ -645,7 +644,7 @@ class GlobalsFoldMixin:
                     # A C callable keeps what it was built with where only
                     # `__reduce__` reaches it: `operator.itemgetter("n")`,
                     # `attrgetter`, `methodcaller` -- changing the sort key
-                    # served the mis-sorted report (round 20). A reduce that
+                    # served the mis-sorted report. A reduce that
                     # is just a global name (`np.add`, `len`) carries no data.
                     reduced = reduced_state(value)
                     if reduced is None:
@@ -657,7 +656,7 @@ class GlobalsFoldMixin:
                     # Its code is the helper walk's. What a LIBRARY wrapper
                     # around that code holds besides is still data the user
                     # built it with: `np.vectorize(partial(scale, k=K))` ran
-                    # with the old K (round 20). Only the partials: the
+                    # with the old K. Only the partials: the
                     # wrapper's own caches move when it is called.
                     held = held_partials(value)
                     self._note_carrier_verdict(value, "partials" if held else False)
@@ -739,8 +738,8 @@ class GlobalsFoldMixin:
         Edit THRESHOLD and ``inner`` recomputes -- its key moved -- while
         ``outer`` returns the answer computed under the old value, with zero
         executions and no warning. One process disagreeing with itself, which
-        is what a round-15 tester reported after building exactly this shape as
-        a library (config module, io module, build module).
+        is what a user reported after building exactly this shape as a
+        library (config module, io module, build module).
 
         The SOURCE side of the same edge already worked: editing ``inner``'s
         body, or ``keep``'s, invalidates ``outer`` through the graph and the
@@ -884,7 +883,7 @@ class GlobalsFoldMixin:
     def _local_binding_parts(self, func: Callable) -> list[tuple[str, str]]:
         """Key parts for data reached through names the module's globals never see.
 
-        Two shapes, both served stale (round 19, a constant 2 -> 0 and the old
+        Two shapes, both served stale (a constant 2 -> 0 and the old
         report back):
 
         * an import written INSIDE the body -- ``from .settings import
@@ -998,7 +997,7 @@ class GlobalsFoldMixin:
                 # Read statically, a classmethod, property or cached_property is
                 # its descriptor, which is neither callable nor data: hashing it
                 # warned KEY-UNHASHABLE-GLOBAL for `A.make(v)`, whose code is
-                # followed like any method's (round 25).
+                # followed like any method's.
                 continue
             if callable(value) and not isinstance(value, (dict, list, tuple, set)):
                 # A class method/staticmethod/classmethod is handled by the
@@ -1018,8 +1017,8 @@ class GlobalsFoldMixin:
                 if getattr(value, "_cash_cached", False):
                     # A cached helper is cash's wrapper, whose globals are
                     # cash's own: it warned KEY-UNHASHABLE-GLOBAL for
-                    # 'rates.fetch.ACTIVE_CONFIG' on every run (round 22; the
-                    # class-method twin was fixed in round 19, source_norm).
+                    # 'rates.fetch.ACTIVE_CONFIG' on every run (the class-method
+                    # twin is handled in source_norm).
                     value = getattr(value, "__wrapped__", value)
                 helper_globals = getattr(value, "__globals__", None)
                 if not isinstance(helper_globals, dict):

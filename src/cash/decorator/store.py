@@ -72,7 +72,7 @@ class StoreMixin:
                 self._warn_cache_if_raised(func_name, e)
                 refusal = "cache_if raised"
         # After the body ran, before deciding to store: a provisional global
-        # this call moved must stop being folded (CAS-270).
+        # this call moved must stop being folded.
         if capture_watch is not NO_WATCH:
             self._learn_mutating_captures(func, func_name, capture_watch)
         if refusal is None and self._refuses_identity_coupled(func_name, res):
@@ -90,15 +90,15 @@ class StoreMixin:
         if refusal is None and observer is not None and observer.mock_called:
             # Wherever the mock sat -- below the library call the body makes,
             # or swapped in after the key's bindings were read -- the result
-            # may be a test's fake, and the next real run would be served it
-            # (round 20). Not waivable: no audit makes a fake the answer.
+            # may be a test's fake, and the next real run would be served it.
+            # Not waivable: no audit makes a fake the answer.
             refusal = "a unittest.mock object was called while it ran, so the result may be a test's fake"
         mutated = observer.mutated_args if observer is not None else None
         if refusal is None and mutated and self._purity_mode(func_name) != "silent":
             # A hit returns the stored value and leaves the caller's object as
             # it was, where this call changed it: downstream of the call, the
-            # program then differs between a hit and a miss (round 19:
-            # `a -= a.mean()`, `rng.shuffle(a)`, `np.clip(..., out=a)`). Not
+            # program then differs between a hit and a miss (`a -= a.mean()`,
+            # `rng.shuffle(a)`, `np.clip(..., out=a)`). Not
             # storing makes every call run, which is what the code means.
             # `assume_safe=True` is the audited opt-out.
             names = ", ".join(repr(n) for n in mutated)
@@ -162,7 +162,7 @@ class StoreMixin:
         if type(result) in IMMUTABLE_PRIMS:
             # Nothing to attach and nothing worth sparing a hash of: under
             # CASH_DEBUG every int result logged "Cannot attach
-            # _cash_lineage_hash to int" (round 19).
+            # _cash_lineage_hash to int".
             return
         frozen = self._is_frozen(func_name)
         if frozen and type(result) in (list, tuple, dict):
@@ -244,7 +244,7 @@ class StoreMixin:
             except (AttributeError, TypeError):
                 # Once per type, then never tried again: it logged on every
                 # call returning a dict or an array, and meant nothing to the
-                # user reading CASH_DEBUG (round 20).
+                # user reading CASH_DEBUG.
                 UNTAGGABLE_TYPES.add(type(result))
                 logger.debug(
                     "results of type %s cannot carry a lineage tag, so a cached function taking one hashes its content",
@@ -277,13 +277,13 @@ class StoreMixin:
             # -- which the next process pays again whether this entry exists
             # or not. Judged on wall-clock, a function that returns at once was
             # persisted whenever a busy machine made that first-call work cross
-            # the 0.1s floor (Windows CI, round 18).
+            # the 0.1s floor (Windows CI).
             if body_seconds is not None:
                 execution_time = body_seconds
             # The ttl the entry is WRITTEN with, a tier's default included: a
             # backend drops an expired entry on read, so the next miss can only
             # say "expired" -- rather than "evicted or cleared" -- if this
-            # process and the stored-key record know it (round 19).
+            # process and the stored-key record know it.
             ttl_declared = ttl is not None or None
             if ttl is None:
                 ttl = self._tier_default_ttl()
@@ -316,7 +316,7 @@ class StoreMixin:
                 # quick it is. The compute floor belongs to the notebook, where
                 # cash caches every statement by itself; here it meant a script
                 # run twice recomputed everything, which reads as "cash does
-                # not cache" (found attacking the decorator before round 26).
+                # not cache".
                 # Size caps and the tiers' own refusals still apply.
                 decorator_entry=True,
                 # A SEPARATE promise: the stored value is what the next call

@@ -378,7 +378,7 @@ class Cash(
         # Track which functions have had their graph edges + purity report
         # populated (separate from _analyzed: a dependency can be populated to
         # complete a parent's state hash long before it is called directly and
-        # surfaced). Keeps the cache key stable from the first call (finding #7).
+        # surfaced). Keeps the cache key stable from the first call.
         self._populated: set[str] = set()
         self._effective_ttl_cache: dict[str, int | None] = {}
         self._deref_writes: dict = {}  # code object -> frozenset of reassigned freevars
@@ -395,14 +395,14 @@ class Cash(
         self._capture_use_cache: dict = {}
         # code object -> tuple of global names it reads (global folding)
         self._global_read_cache: dict = {}
-        # code object -> names folded only provisionally (CAS-270). See
+        # code object -> names folded only provisionally. See
         # `_read_global_data_names`. A missing entry means "unknown", which
         # `_fold_read_globals` treats as "watch everything".
         self._provisional_global_cache: dict = {}
         # (code object, scope) -> names a call was OBSERVED to mutate. Learned
         # once, then those names stop being folded (see `_learn_mutating_captures`).
         self._mutating_globals: dict = {}
-        # code object -> closure free vars folded only provisionally (CAS-270).
+        # code object -> closure free vars folded only provisionally.
         self._provisional_capture_cache: dict = {}
         # (module_global, attribute) read pairs per code object; see
         # _read_module_attr_pairs.
@@ -811,7 +811,7 @@ class Cash(
         # Watch reads from now, not from the first miss: a memo the cached
         # function will use is usually filled before it is first called
         # (`main()` logging its settings), and a read nobody saw is an input
-        # no entry records (round 20). Not when caching is off: that promises
+        # no entry records. Not when caching is off: that promises
         # nothing is patched or analysed.
         if not self.config.disable:
             try:
@@ -841,8 +841,7 @@ class Cash(
 
     # -- why a call missed ---------------------------------------------------
     #
-    # Round 17: four of five testers could not find out why a call recomputed.
-    # The reasons below are decided where the lookup fails, from what that
+    # Why a call recomputed. The reasons below are decided where the lookup fails, from what that
     # lookup saw plus what this process remembers about the key -- never by
     # re-deriving the key, which would cost every call to explain a few.
 
@@ -1081,7 +1080,7 @@ class Cash(
         stats_wrapper.__wrapped__ = func
         # Marker so the purity analyzer treats a call to this wrapper as a
         # dependency-graph edge rather than recursing into cash's own wrapper
-        # machinery (finding #9). functools.wraps copies __module__, which would
+        # machinery. functools.wraps copies __module__, which would
         # otherwise make the wrapper look like same-package user code.
         stats_wrapper._cash_cached = True
         # Declared TTL, exposed so the notebook statement cache can see it. A
@@ -1285,7 +1284,7 @@ class Cash(
         saved = sum(s["total_time_saved"] for _, s in rows)
         # What cash cost: the hits' lookups AND the misses' keys, checks and
         # stores. Counting the lookups alone reported a 24 s loss as 14 s, and
-        # a function that never hit as costing nothing (round 20).
+        # a function that never hit as costing nothing.
         spent = sum(s.get("lookup_seconds", 0.0) + s.get("miss_overhead_seconds", 0.0) for _, s in rows)
         width = min(44, max(len(name) for name, _ in rows))
 
@@ -1311,8 +1310,7 @@ class Cash(
             # nothing cached" is answered or excluded by this one line: a
             # scheduled job's cwd-relative cache, a path typed with one
             # backslash too few, a container volume that is not the one they
-            # meant. A tester spent a round on a cache directory that was not
-            # the one they thought they had set.
+            # meant.
             lines.append(f"  cache: {where}")
         for name, stat in rows:
             # Pad the whole "N hits," token, not the word: padding the word
@@ -1379,18 +1377,18 @@ class Cash(
                     # One table per worker process: say whose it is.
                     text = text.replace("cash:", f"cash (pid {os.getpid()}):", 1)
                 # stderr: stdout is the program's output -- a report, a pipe, a
-                # JSON response -- and a summary landing in it broke all three
-                # for round-17 testers. ONE write: pool workers exiting together
-                # interleaved print()'s separate writes mid-line (round 18).
+                # JSON response -- and a summary landing in it broke all three.
+                # ONE write: pool workers exiting together
+                # interleaved print()'s separate writes mid-line.
                 # Into the application's log when it will print it: a service
                 # whose output goes through dictConfig never saw the summary.
                 # Otherwise to stderr -- once: both, with cash's own handler
-                # passing it on as well, printed it three times (round 19).
+                # passing it on as well, printed it three times.
                 # Through the application's handlers whenever it has one that
                 # takes INFO -- past the level filters, as CASH_DEBUG's lines
                 # are: CASH_SUMMARY asked for it. Gated on the levels, the
                 # block came through the app's formatter at INFO and raw at
-                # WARNING, two shapes for a log shipper to parse (round 20).
+                # WARNING, two shapes for a log shipper to parse.
                 cash_logger = logging.getLogger("cash")
                 if any(h.level <= logging.INFO for h in _log.application_handlers(cash_logger)):
                     summary_logger = logging.getLogger("cash.summary")

@@ -137,14 +137,14 @@ NO_WATCH = object()
 #: The seconds cash spent inside the body of the cached call in progress, on
 #: its nested cached calls: their keys, lookups, stores. They belong to those
 #: calls, not to this body -- counted in, an outer function's "saved" was 4-9x
-#: what running it uncached costs (round 20). A one-element list, so a nested
+#: what running it uncached costs. A one-element list, so a nested
 #: call adds to its caller's without resetting anything.
 NESTED_CASH_SECONDS: contextvars.ContextVar[list | None] = contextvars.ContextVar("_cash_nested_seconds", default=None)
 
 
 #: Threads inside a cached call right now, and how deep each is. A hit's saving
 #: is the body time it stood in for, and sixteen 0.5 s hits on eight threads
-#: stood in for 1 s of waiting, not 8 s (round 20): the summary divides a
+#: stood in for 1 s of waiting, not 8 s: the summary divides a
 #: hit's saving by how many threads were running cached calls with it.
 _CALL_DEPTH = threading.local()
 THREADS_IN_CALLS = [0]

@@ -297,8 +297,7 @@ def hash_pandas(value: Any) -> str | None:
     and a tz-aware series collided, and the tz-aware call was served the naive
     one's ``TypeError: Cannot convert tz-naive timestamps``; so did
     ``int64``/``Int64`` (pd.NA semantics), ``int64``/``int32`` and a
-    categorical against an object column (found attacking the decorator
-    before round 26).
+    categorical against an object column.
     """
     try:
         import pandas as pd
@@ -332,7 +331,7 @@ def array_layout(value: Any) -> str:
     returned ``arr[:, 0]`` handed its caller a view on the computing run and
     a contiguous copy on every restored one, so the caller's key changed
     between the two and its expensive step ran twice after every upstream
-    edit (round 17, measured 1 then 1 then 0 executions).
+    edit.
 
     So: the axes of length > 1, ordered by |stride| from outermost in, with
     a broadcast (zero-stride) axis outermost. Identity is ``C``, reversed is
@@ -343,7 +342,7 @@ def array_layout(value: Any) -> str:
     ``copy``) reads in Fortran order only when the array is F-CONTIGUOUS,
     and C order otherwise -- so an F-like strided view (``a.T[::2]``) and
     its F-contiguous copy read differently, and sharing ``F`` handed one the
-    other's result (round 18, 8/8). ``Fs`` is the F-like array that is not
+    other's result. ``Fs`` is the F-like array that is not
     F-contiguous. Nothing else needs the flag: with two or more axes longer
     than 1, only an F-like layout can be F-contiguous, and ``order='A'``
     reads everything else in C order, as ``C`` and ``K…`` already imply.
@@ -516,7 +515,7 @@ def _content_bytes(values: Any) -> bytes:
     differ in every process and between a value and its copy. A frame with a
     text column (whose ``.values`` is an object array) hashed differently after
     every restart, so an ``if`` or ``for`` body that might reassign it gave it
-    a new lineage each time, and nothing downstream restored (round 21). Its
+    a new lineage each time, and nothing downstream restored. Its
     elements are pickled instead, which is content. Numeric arrays keep the raw
     bytes, so their hashes -- and the keys built on them -- do not move.
     """
@@ -532,7 +531,7 @@ def _frame_dtypes_signature(obj: Any) -> str:
     pandas' Arrow-backed string index) and called ``repr`` on every column's
     dtype object. A loop mutating a 3130x800 frame re-hashed it after every
     iteration, and building that string was 42% of a loop that ran 70x slower
-    under cash than without it (round 28, r28s3). The OUTPUT must not change:
+    under cash than without it. The OUTPUT must not change:
     it is part of every frame's hash, and keys already on disk must not move
     (``test_a_numeric_frame_hash_is_unchanged``). So: the columns come out in
     one ``tolist()``, the dict keeps its semantics for duplicate names, and a
@@ -577,8 +576,8 @@ def _hash_collection(obj: Any) -> str:
         # A few frames in a dict (`blocks = {w: net_returns(orders, w) ...}`)
         # were pickled WHOLE -- every byte of every frame -- after each restore
         # and each loop iteration that changed the dict, while a frame on its
-        # own is hashed by sampling: seconds per hit at 400 MiB a frame (round
-        # 28, r28s5). Such a collection is hashed element by element, each
+        # own is hashed by sampling: seconds per hit at 400 MiB a frame. Such
+        # a collection is hashed element by element, each
         # element as ``compute_hash`` would hash it alone. Only then: a plain
         # collection keeps the hash it always had, so its keys do not move.
         items = list(obj.items()) if isinstance(obj, dict) else None
@@ -665,7 +664,7 @@ def compute_hash(obj: Any) -> str:
             # pickles its CLASS by reference, which fails for a class made on
             # the spot -- as `df.itertuples()` makes one per call -- and the
             # identity tier below then keyed every row on `id(row)`, new on
-            # every run: a loop over itertuples() never restored (r28s1, r28s3).
+            # every run: a loop over itertuples() never restored.
             fields = type(obj)._fields
             return hashlib.sha256(
                 f"namedtuple:{type(obj).__name__}:{fields!r}:{_hash_collection(tuple(obj))}".encode("utf-8")
@@ -721,7 +720,7 @@ def compute_hash_full(obj: Any) -> str:
 # for a 200-row, five-column frame, deep or not, against ~0.05 ms to sum the
 # column arrays' ``nbytes`` to the same number. Cash sized every stored frame
 # twice, once for the RAM tier's cap and once for the restore-cost estimate;
-# in a loop over a thousand small files that was 18% of the cell (round 23).
+# in a loop over a thousand small files that was 18% of the cell.
 #
 # ``deep=True`` is also unbounded where it differs at all: a column of Python
 # objects is walked value by value, seconds for millions of strings. Those are
@@ -783,7 +782,7 @@ def _arrays_bytes(obj: Any) -> int | None:
     when a column needs a closer look (objects, categories) or the manager's
     shape is not the one known. ``items()`` boxes every column as a Series:
     ~1.5 ms a call for a 20-column group frame, sized once per element of a
-    comprehension over 360 of them (round 25, r25s5)."""
+    comprehension over 360 of them."""
     try:
         arrays = obj._mgr.arrays
     except Exception:  # noqa: BLE001 - a private attribute: any surprise means "no"
@@ -894,8 +893,8 @@ def pickled_size_estimate(value: Any, _depth: int = 0, _seen: set[int] | None = 
     For frames, series, numpy arrays and tuples, lists and dicts of them;
     0 for anything else. Fixed-width data counts exactly; Python objects are
     sampled. Enough to see that a value is far too big to be worth storing
-    without pickling it to find out: r28s5's 1.7 GiB result took 2.7 s to
-    pickle, after 2.8 s of compute.
+    without pickling it to find out: a 1.7 GiB result took 2.7 s to pickle,
+    after 2.8 s of compute.
     """
     seen = set() if _seen is None else _seen
     kind = type(value).__name__
@@ -1077,8 +1076,8 @@ def memory_footprint(obj: Any, _seen: set[int] | None = None) -> int:
     that way would miss the one big frame in the middle of a statement's
     variables. Plain data -- lists and tuples of primitives -- is summed a level
     at a time (`cash._plain_data.size_of`): the per-item walk took 3.5 s for two
-    million parsed rows (round 19), and every notebook entry holds the RNG
-    state, a tuple of 625 ints one dict down (round 23: 1.7M calls in one cell).
+    million parsed rows, and every notebook entry holds the RNG
+    state, a tuple of 625 ints one dict down (1.7M calls in one cell).
     """
     seen = set() if _seen is None else _seen
     if id(obj) in seen:

@@ -233,7 +233,7 @@ class RegistryMixin:
         ``helper_source_hashes``; those used to be filled lazily on each
         dependency's own first call, so the key deepened only after the chain
         warmed - and a fresh process therefore missed the first call to every
-        cached function even though a valid entry was on disk (finding #7).
+        cached function even though a valid entry was on disk.
 
         Surfacing stays per-function: each dependency warns/raises on its OWN
         first direct call, not here, so eager population doesn't change which

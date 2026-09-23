@@ -117,7 +117,7 @@ What is **not** supported:
 
 ## Replay semantics
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._wrap_iterator_hit @0f360cdb, cash/decorator/iterators.py:StreamingCachedIterator @c3985e69 broad="the claim is about the whole replay wrapper", cash/decorator/iterators.py:ChunkedCachedIterator @0c6c821f broad="the claim is about the whole replay wrapper" -->
+<!-- claim: cash/decorator/runtime.py:RuntimeMixin._wrap_iterator_hit @0f360cdb, cash/decorator/iterators.py:StreamingCachedIterator @c3985e69 broad="the claim is about the whole replay wrapper", cash/decorator/iterators.py:ChunkedCachedIterator @8437fd80 broad="the claim is about the whole replay wrapper" -->
 On a cache hit, the dispatch at `Cash._wrap_iterator_hit` reads `metadata['iterator_storage']` and returns a **fresh** `ChunkedCachedIterator` over the stored chunks — a lazy iterator that fetches one chunk at a time. It is also handed the call's recompute, so a chunk lost between the manifest check and the read reruns the function instead of raising; sync and async hits, the locked re-read and the async follower all pass it. That is *every* iterator hit, single-chunk included: a one-chunk result is still stored as a manifest plus one chunk entry, so it replays through the same path.
 
 `StreamingCachedIterator` is the other half, and it belongs to the **first** call rather than to a hit. It wraps `_stream_and_store`, so a miss hands you the producer's own items at the producer's own pace while the chunks fill behind you — there is nothing to read back out of the backend, because the result does not exist yet:

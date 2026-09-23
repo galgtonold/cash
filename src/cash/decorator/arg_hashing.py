@@ -58,7 +58,7 @@ def plain_key_part(value: Any) -> Any:
     Each plain argument is keyed by its content on its own, pickled without the
     memo (`_plain_data.pickle_unshared`). It used to take the fast path only
     when EVERY argument did: one small dict beside two million rows sent the
-    whole call down the general path, 8x the cost (round 20).
+    whole call down the general path, 8x the cost.
     """
     if type(value) not in PLAIN_SEQS:
         return value
@@ -215,7 +215,7 @@ class ArgHashingMixin:
         ``score(df, lambda d: d * 2)`` blamed the DataFrame and advised a
         DataFrame hasher -- which cash rejects, and which with override=True
         would re-key every DataFrame function -- while the lambda was the
-        culprit (round 18). This runs only on the failure path. Strings,
+        culprit. This runs only on the failure path. Strings,
         numbers, None and built-in containers are skipped: a scalar always
         hashes, and a container holding the culprit is reported as "nested",
         which says more than naming the list. When no single candidate fails
@@ -278,8 +278,7 @@ class ArgHashingMixin:
                 # that parameter's value. `def request(url, /, **params)`
                 # called as `request("/a", url="x")` then keyed on the kwargs
                 # `url` alone, so every such call shared one entry and
-                # `request("/b", url="x")` was served `GET /a` (found
-                # attacking the decorator before round 26).
+                # `request("/b", url="x")` was served `GET /a`.
                 for k in sorted(val):
                     canon_kwargs[f"{name}:{k}"] = val[k]
             else:
@@ -334,8 +333,7 @@ class ArgHashingMixin:
         signal, and it only governs writes through PANDAS. ``pd.DataFrame(arr,
         copy=False)`` keeps the caller's ndarray, and ``arr[0, 0] = 100`` goes
         straight past pandas: same blocks, changed data. The memo answered 10.0
-        where the frame really summed to 109.0 (found attacking the decorator
-        before round 26). Such a frame is re-hashed on every call.
+        where the frame really summed to 109.0. Such a frame is re-hashed on every call.
 
         *held* is the memo's own shallow copy of *obj*. Its blocks are views
         whose ``base`` is *obj*'s array, one reference each. Those references
@@ -576,7 +574,7 @@ class ArgHashingMixin:
         # An argument with no hasher of its own goes into the payload AS IS,
         # and its cost is the walk and the pickle below, not the lookup timed
         # above -- so CACHE-NET-LOSS named a 2M-row list as taking "about 0ms
-        # to hash" (round 19). The payload's time is charged to the largest
+        # to hash". The payload's time is charged to the largest
         # such argument.
         raw = [
             (label, value)
@@ -692,7 +690,7 @@ class ArgHashingMixin:
                 # which are keyed now. `cash.opaque(functools.partial)` was the
                 # old advice for silencing KEY-OPAQUE-CALLABLE, and it silenced
                 # EVERY partial in the process, including ones over code the
-                # user then edited (round 18).
+                # user then edited.
                 return False
             target = obj if isinstance(obj, type) else type(obj)
             return target in ArgHashingMixin._OPAQUE_TYPES

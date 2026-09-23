@@ -121,7 +121,7 @@ class ReportingMixin:
             saved = entry.get("time_saved") or 0.0
             lookup = entry.get("execution_time") or 0.0
             # What the hit cost, when it is not small: the summary said "time
-            # saved" while warm runs were 9x slower than uncached (round 19).
+            # saved" while warm runs were 9x slower than uncached.
             if lookup >= 0.01 and lookup >= 0.1 * saved:
                 verdict = "; a net loss" if lookup > saved else ""
                 line = f"HIT  {name}{tag}  (saved {saved:.2f}s; the lookup took {lookup:.2f}s{verdict})"
@@ -131,7 +131,7 @@ class ReportingMixin:
             if sampled:
                 # Larger than file_hash_full_max_bytes: the HIT rests on the
                 # timestamps, and "when it does not recompute I need to be sure
-                # it was right not to" had no way to see that (round 20).
+                # it was right not to" had no way to see that.
                 shown = ", ".join(os.path.basename(p) for p in sampled[:3])
                 more = f" and {len(sampled) - 3} more" if len(sampled) > 3 else ""
                 line += f"  -- trusts the timestamps of {shown}{more} (sampled: larger than file_hash_full_max_bytes)"
@@ -142,7 +142,7 @@ class ReportingMixin:
         line = f"MISS {name}{tag}  {missed}"
         # The body's own time: the persistence floor named beside it is judged
         # on that, and the call's time -- key, analysis, lookup -- made "ran
-        # 0.20s ... under the 0.1s floor" read as a contradiction (round 19).
+        # 0.20s ... under the 0.1s floor" read as a contradiction.
         ran = entry.get("body_seconds")
         line += f"  (ran {entry['execution_time'] if ran is None else ran:.2f}s"
         if entry.get("not_stored"):
@@ -155,7 +155,7 @@ class ReportingMixin:
         """Record a call whose body raised: nothing is stored, and it counts.
 
         Such a call produced no line at all, and a run that crashed half-way
-        summarised as "5 of 5 calls restored" (round 18).
+        summarised as "5 of 5 calls restored".
         """
         self._log_decorator_call(
             func_name,
@@ -268,7 +268,7 @@ class ReportingMixin:
         names the lines and the code it found them in -- so a later process
         records it in ``cache_info()['warnings']`` without printing it. For
         the static findings a source reading makes, which were the same 32
-        lines in a nightly job's log every night (round 20); an edit that
+        lines in a nightly job's log every night; an edit that
         changes what they say shows them again.
 
         ``message`` is one sentence of *what happened*; ``fix`` is one
@@ -369,13 +369,13 @@ class ReportingMixin:
         lookup, and on a miss the store as well. The store used to be left out
         as a once-per-key cost, but a result kept in RAM only is copied in
         every process that computes it, and a 2.5M-row parse cost 4x its body
-        that way with nothing reporting it (round 20).
+        that way with nothing reporting it.
         """
         cf = self._cached.get(func_name)
         culprit = cf.arg_cost if cf is not None else None
         producer = self._cached.get(culprit[3]) if culprit is not None and culprit[3] else None
         if producer is not None and producer.frozen:
-            # Already frozen: advising frozen=True on it (round 20) is noise.
+            # Already frozen: advising frozen=True on it is noise.
             culprit = (*culprit[:3], None, *culprit[4:])
         try:
             verdict = self._effectiveness.record(

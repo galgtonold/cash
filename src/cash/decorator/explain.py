@@ -194,7 +194,7 @@ STORE_OUTCOMES_MAX = 4096
 def same_file_key(path: str) -> str:
     """One spelling per file: the tracker can record a file under the relative
     path the code opened it by AND its absolute path, which listed it twice --
-    "and 1 more" was the same file (round 18)."""
+    "and 1 more" was the same file."""
     try:
         return os.path.normcase(os.path.realpath(path))
     except (OSError, ValueError, TypeError):
@@ -221,7 +221,7 @@ def describe_file_deps(deps: dict[str, Any] | None) -> dict[str, str]:
             parts.append(f"{rec['size']} bytes")
         if rec.get("hash") and is_sampled_dep(rec):
             # Printed like a full hash, it read as proof of content that it is
-            # not (round 20).
+            # not.
             parts.append(
                 f"sampled hash {str(rec['hash'])[:12]} (head, middle and "
                 f"tail only; the rest is trusted to its timestamps)"
@@ -310,7 +310,7 @@ class ExplainMixin:
             )
         # Populate the dependency closure first so the state hash matches what
         # a real call computes (otherwise explain() reports a stale pre-analysis
-        # key and a false `no_entry` - finding #7). This only fills internal
+        # key and a false `no_entry`). This only fills internal
         # analysis caches; it does not warn, run the function, or touch the
         # backend.
         self._ensure_closure_analyzed(func)
@@ -395,7 +395,7 @@ class ExplainMixin:
             }
             # A tracked dynamic dependency that changed produces a NEW cache key,
             # so the miss surfaces as no_entry rather than file_changed. Make the
-            # explanation say so and list what's tracked (finding #8).
+            # explanation say so and list what's tracked.
             dyn_ids = self._describe_dynamic_dependencies(dynamic_depends_on, args, kwargs)
             if dyn_ids:
                 details["dynamic_dependencies"] = dyn_ids
@@ -409,7 +409,7 @@ class ExplainMixin:
             # What this process knows about the key says more than "first call
             # or cleared": that it was never stored, why, or that it expired
             # under the ttl it was WRITTEN with -- which a backend drops on
-            # read, so the entry looks absent (round 17).
+            # read, so the entry looks absent.
             missed = self._absent_entry_reason(func_name, cache_key)
             if missed.kind is MissKind.TTL:
                 return CacheExplanation(
@@ -674,8 +674,7 @@ class ExplainMixin:
     def _what_changed(self, func_name: str, old_state: str, new_state: str, doc: dict | None = None) -> str | None:
         """Name what moved between two states of *func_name*, or None if unknown.
 
-        "code or state changed" alone sent every round-20 tester to diff their
-        own edits: a moved helper, an edited constant, a changed default, a
+        "code or state changed" alone sends the user to diff their own edits: a moved helper, an edited constant, a changed default, a
         path whose case differed by launch mode all read the same.
         """
         old = self._flat_ledger(func_name, old_state, doc)

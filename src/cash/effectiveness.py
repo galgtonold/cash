@@ -78,8 +78,8 @@ class _FunctionLedger:
     warned: bool = False
     #: The overhead split by where it was paid: a hit's is the lookup and the
     #: restore, a miss's the key and the store. Which one dominates decides
-    #: what the message blames -- round 20 was told "loading the stored result"
-    #: about a function that had never hit.
+    #: what the message blames: "loading the stored result" is wrong about a
+    #: function that has never hit.
     hit_overhead: float = 0.0
     miss_overhead: float = 0.0
     hits: int = 0
@@ -183,13 +183,13 @@ class EffectivenessLedger:
         `record` waits for `MIN_OBSERVATIONS` calls of a function, which a
         command-line tool that calls each function once per process never
         reaches: its parser was a net loss of seconds on every run, and nothing
-        ever said so (round 19). At the end of the run one call is allowed to
+        ever said so. At the end of the run one call is allowed to
         count -- under the same bar: seconds of real loss, and overhead above
         the largest body time seen.
         """
         out: list[tuple[str, str]] = []
         # Functions losing, each under the bar: ten of them losing 0.4-0.9 s
-        # apiece made a run 1.3x slower and nothing said so (round 20).
+        # apiece made a run 1.3x slower and nothing said so.
         small: list[tuple[float, str]] = []
         for func_name, led in self._ledgers.items():
             if led.warned or not led.calls or not led.body_samples:
@@ -276,10 +276,10 @@ def _message(
     key_seconds = culprit[2] if culprit is not None else None
     if key_seconds is not None and key_seconds < 0.25 * led.typical_overhead():
         # Not the key: the lookup itself -- reading and rebuilding the stored
-        # result. Blaming an argument sent round 19's tester after "'path'
-        # (str), about 0ms to hash" for a parser whose hit was a 2M-row restore.
+        # result. Blaming an argument sends the user after "'path' (str),
+        # about 0ms to hash" for a parser whose hit was a 2M-row restore.
         # And on misses there is nothing to load: the cost is keeping the
-        # result -- copying it into memory, writing it (round 20).
+        # result -- copying it into memory, writing it.
         where = (
             "loading the stored result, which takes longer than running the function"
             if led.hit_overhead > led.miss_overhead

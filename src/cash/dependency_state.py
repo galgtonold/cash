@@ -54,8 +54,8 @@ EXPLAINING: contextvars.ContextVar[bool] = contextvars.ContextVar("_cash_explain
 #: What the state segment of the key being built is made of, by name: the
 #: function's own source, each cached function and helper it calls, the
 #: globals it reads, its captures and defaults. Filled while a decorator key
-#: is built, so a "code or state changed" miss can say WHICH of them moved --
-#: every round-20 tester got the same unexplained reason. ``None`` whenever no
+#: is built, so a "code or state changed" miss can say WHICH of them moved.
+#: ``None`` whenever no
 #: key is being built. Values are kept raw (the fold's own digests and part
 #: lists); they are only formatted on a miss, never on the hit path.
 STATE_LEDGER: contextvars.ContextVar[dict | None] = contextvars.ContextVar("_cash_state_ledger", default=None)

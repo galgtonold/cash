@@ -118,9 +118,9 @@ class CodeArgsMixin:
         gets here too.
 
         Names the parameter, the cached function and what the object wraps.
-        Round 18: the text named only the object's type, so an object the
-        user had already covered with depends_on= and a new one nobody had
-        covered printed the same line -- a new hole looked like a handled one.
+        With only the object's type named, an object the user had already
+        covered with depends_on= and a new one nobody had covered printed the
+        same line -- a new hole looked like a handled one.
         Once per (object, function, parameter) for the same reason.
         """
         if _EXPLAINING.get():
@@ -184,8 +184,7 @@ class CodeArgsMixin:
         # produced it (`_remember_frozen_container`), code inside it included:
         # walking two million rows for functions was most of a hit's cost.
         # Checked BEFORE the plain-data census below, which is itself a walk:
-        # in that order frozen=True on a list still cost a linear pass per call
-        # (round 20, r20s2 F5).
+        # in that order frozen=True on a list still cost a linear pass per call.
         if (
             self._frozen_containers
             and id(value) in self._frozen_containers
@@ -371,7 +370,7 @@ class CodeArgsMixin:
                 if digest is not None:
                     parts.append(f"{self._carrier_name(carrier)}:{digest}")
                     # Its CODE is in the key; the globals that code reads
-                    # were not (CAS-113). A callback reading a module
+                    # were not. A callback reading a module
                     # constant served the old result after the constant
                     # changed, while the same read one call level deeper,
                     # or in the cached function itself, invalidated.

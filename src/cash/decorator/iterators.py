@@ -71,8 +71,8 @@ class ChunkedCachedIterator:
     A chunk can go while the caller is still reading: another process clears
     or rewrites the entry, or the RAM tier evicts it. ``_chunks_are_intact``
     is checked at lookup, which is before that -- so a lost chunk used to end
-    the iteration, and the caller got a silent PREFIX (100 of 1000 items,
-    found attacking the decorator before round 26). The rest is recomputed
+    the iteration, and the caller got a silent PREFIX (100 of 1000 items).
+    The rest is recomputed
     from *recompute* instead, skipping what was already yielded; with no way
     to recompute, the loss is raised. A truncated answer is worse than a slow
     one.
@@ -170,8 +170,7 @@ def is_one_shot_iterator(value: Any) -> bool:
         if isinstance(value, io.IOBase):
             # A file object is its own iterator, so this path claimed it: the
             # caller got a replay iterator with no `read`, `write`, `name` or
-            # `fileno`, and the handle was drained to build the chunks (found
-            # attacking the decorator before round 26). A handle is not a
+            # `fileno`, and the handle was drained to build the chunks. A handle is not a
             # stream of values to replay -- it is a handle.
             return False
         return iter(value) is value

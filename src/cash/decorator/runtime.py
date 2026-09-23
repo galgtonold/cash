@@ -276,7 +276,7 @@ class RuntimeMixin:
         applied as it stands now, in both directions. Otherwise the SHORTER of
         the ttl the entry was written with and the tier's ``default_ttl`` as
         configured now: lowering a tier's default from a day to 5 seconds left
-        every entry written under the day being served (round 19, 3 of 3),
+        every entry written under the day being served,
         while lowering a decorator's ttl took effect at once.
         """
         if ttl is not None:

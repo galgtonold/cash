@@ -135,9 +135,8 @@ class PurityChecksMixin:
         computing run shares, a later run does not: ``return base[lo:hi]``
         stops sharing memory with ``base``, ``return Wrapper(rows)`` stops
         holding the caller's list, and ``return CONFIG`` stops carrying the
-        caller's writes back to the module (found attacking the decorator
-        before round 26 -- correct on the computing run, silently different on
-        every later one).
+        caller's writes back to the module (correct on the computing run,
+        silently different on every later one).
 
         Cash cannot tell whether the caller relies on that sharing, so this
         names what will differ rather than refusing to cache; ``assume_safe``
@@ -220,7 +219,7 @@ class PurityChecksMixin:
 
         A global merely *passed to a call* (`sum(G)`, `model.predict(G)`) used to
         be dropped from the key outright, on the theory that the callee might
-        mutate it. That silently served stale values forever (CAS-270). Those
+        mutate it. That silently served stale values forever. Those
         names are folded now, and confirmed here: hash them again once the body
         has run and compare against the hash the key already needed.
 
@@ -233,7 +232,7 @@ class PurityChecksMixin:
 
         * The entry just written stays valid -- it is keyed on the PRE-call
           state, which is what produced it. The next call keys without this
-          name, misses once, and thereafter behaves as it did before CAS-270.
+          name, misses once, and thereafter keys like any watched global.
         * A change *between* calls (`G = [...]` anywhere) is invisible to this
           window by construction, which is correct: that is precisely what
           folding is for, and it needs no detection.
@@ -350,7 +349,7 @@ class PurityChecksMixin:
         during the *store*, because the RAM tier deep-copies and
         ``Figure.__setstate__`` re-registers the copy as pyplot's current
         figure.  The user then draws on their figure while ``plt.savefig()``
-        writes the cache's private snapshot (CAS-245).
+        writes the cache's private snapshot.
 
         Checked here rather than inside ``_store_in_cache`` so the refusal
         lands beside ``cache_if``, BEFORE ``_attach_lineage``: a value that is
@@ -405,7 +404,7 @@ class PurityChecksMixin:
         # The key was hashed a moment ago, on this thread: if that already cost
         # more than the check may, the check is retired before it pays -- a
         # miss on two million rows hashed them three times, once for the key,
-        # once here and once after the body (round 19). Read from what
+        # once here and once after the body. Read from what
         # `_note_arg_cost` kept: it has already taken `ARG_COST.last`.
         cost = cf.arg_cost
         if cost is not None and cost[2] > self._MUTATION_CHECK_BUDGET_S:
@@ -444,7 +443,7 @@ class PurityChecksMixin:
         The hash snapshot below is retired for a big argument and never covers
         a frozen one, which is exactly where ``rows.sort()`` on a million
         parsed rows, or a field rewritten in every row of a frozen result, got
-        stored (round 20). Identities cost a fraction of a hash, so they are
+        stored. Identities cost a fraction of a hash, so they are
         taken whatever the size (`_plain_data.identity_snapshot`).
         """
         try:
@@ -558,7 +557,7 @@ class PurityChecksMixin:
           analyzer listed is not news when the observer sees it too. Only the
           kinds they cover are dropped. The whole warning used to be, so a
           static finding about a log line hid a network read in the same
-          function: never reported in 30 starts (round 18).
+          function: never reported in 30 starts.
         * nothing was observed -- which is *not* proof of purity. Only the
           path this call took was watched, so an effect behind a branch that
           did not run is unobserved. That is why this supplements the static
@@ -598,7 +597,7 @@ class PurityChecksMixin:
 
         Then "cached results won't reflect changes to it" is false: a setter
         rebinding it, or a test patching it, makes the next call a new entry.
-        Measured in round 18 -- a `configure()`-set module flag re-ran the
+        Measured: a `configure()`-set module flag re-ran the
         function each time it changed, 0 diffs against a no-cache oracle --
         while the warning, of the kind the docs say never to ignore, said
         otherwise. Kept for what the fold leaves out: callables, modules,
@@ -624,7 +623,7 @@ class PurityChecksMixin:
             # _CFG.update(...)`) "reads" it only to fill it: its writes are
             # findings of their own, and the dict is not its input. Reported
             # as a stale-result risk, it was one more false alarm on the most
-            # common settings pattern there is (round 19).
+            # common settings pattern there is.
             return True
         try:
             if name not in self._read_global_data_names(reader):

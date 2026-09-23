@@ -93,7 +93,7 @@ class FileDepsMixin:
         )
         # A file beside the function's own code is part of this INSTALL, not a
         # fixed location: record where it sits relative to the code, so another
-        # install or release checks its own copy (CAS-108).
+        # install or release checks its own copy.
         return attach_code_relative(deps, code_module) or None
 
     @staticmethod
@@ -119,7 +119,7 @@ class FileDepsMixin:
                 tracker.add_tracked_remote(path)
             else:
                 # The file THIS process would read -- another install's copy
-                # would give the enclosing entry the writer's path (CAS-108).
+                # would give the enclosing entry the writer's path.
                 # The hit just checked this file against the recorded hash, so
                 # that hash is the file as it is: no second read to take it.
                 digest = recorded.get("hash") if isinstance(recorded, dict) else None
@@ -243,7 +243,7 @@ class FileDepsMixin:
         A parse memoised with ``functools.lru_cache`` or a module dict: the
         first cached consumer read the file and recorded it; the second got
         the memoised rows, read nothing, and stored ``file_deps: None`` -- so
-        after the file changed it kept serving the old total (round 19).
+        after the file changed it kept serving the old total.
 
         For each function this call's code reaches that did NOT read a file in
         this call, its remembered files are added (`credited_reads`). A memo
@@ -256,7 +256,7 @@ class FileDepsMixin:
         file has changed since, the memo handed this call the OLD version's
         data -- right for this process until it refills, but not an answer
         for the file as it is now, which is what the entry would be stored
-        against (round 20). Such a path goes into ``stale_memo_reads``, and the
+        against. Such a path goes into ``stale_memo_reads``, and the
         store is refused.
         """
 
@@ -313,8 +313,8 @@ class FileDepsMixin:
         pool starts during the call, whatever the file holds THEN. Edited in
         between, the result of one version was stored under the other's key,
         and a later process running the first version was served the second
-        one's numbers (round 19: a helper edited while a pooled call ran, and a
-        deploy that replaced a helper under a running job). Nothing can say
+        one's numbers (a helper edited while a pooled call ran; a deploy that
+        replaced a helper under a running job). Nothing can say
         which version the result came from, so it is returned and not stored.
 
         Only THIS code's text counts: a file edited elsewhere -- another
@@ -371,8 +371,8 @@ class FileDepsMixin:
         The entry's file fingerprints are taken when it is STORED. A file
         rewritten after the body read it but before it returned was
         fingerprinted in its new state, so the entry matched the new file
-        and served the old answer on every later call (CAS-109, round 17:
-        a sync job overlapping a long pipeline; and, one level up, an outer
+        and served the old answer on every later call (a sync job overlapping
+        a long pipeline; and, one level up, an outer
         aggregate re-fingerprinting a file its inner call had already read).
         The documented mitigation -- write to a temp file and rename -- did
         not help, because the rename lands before the store.
