@@ -297,7 +297,7 @@ class _Session:
         self.magics._statement_processor._store.CHEAP_WRITE_SHARE = 0.0
         self.magics._auto_cache_enabled = True
         self.metrics: list[dict] = []
-        self.magics.render_interactive_badge = lambda metrics, **kw: self.metrics.extend(metrics)
+        self.magics.badges.render = lambda metrics, **kw: self.metrics.extend(metrics)
 
         # Every backend.set is one serialisation of the value — the cost the
         # guard exists to stop paying.

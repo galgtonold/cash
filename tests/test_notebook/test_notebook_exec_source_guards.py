@@ -27,7 +27,7 @@ def cell_runner():
     cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
     magics = CashMagics(shell, cash)
     magics.cash_on("")
-    magics.badge_mode = "off"
+    magics.badges.mode = "off"
     shell.user_ns["c"] = cash
 
     def run(cell: str):

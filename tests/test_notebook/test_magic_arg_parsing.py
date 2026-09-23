@@ -101,11 +101,11 @@ def test_persist_unknown_argument_refuses_and_leaves_mode_alone(cash_magics, cap
 
 
 def test_badge_mode_with_trailing_comment_is_applied(cash_magics, capsys):
-    cash_magics.badge_mode = "html"
+    cash_magics.badges.mode = "html"
 
     cash_magics.cash_badge("off  # too noisy")
 
-    assert cash_magics.badge_mode == "off"
+    assert cash_magics.badges.mode == "off"
 
 
 def test_cash_on_ttl_with_trailing_comment_is_parsed(cash_magics, capsys):

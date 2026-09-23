@@ -206,6 +206,7 @@ class TestEarlyCellIdCapture:
     @pytest.fixture
     def magics_fixture(self):
         """Minimal CashMagics fixture with a mock shell."""
+        from cash.notebook.ipython.badges import BadgePresenter
         from cash.notebook.ipython.cell_executor import CellExecutor
         from cash.notebook.ipython.magics import CashMagics
 
@@ -219,7 +220,8 @@ class TestEarlyCellIdCapture:
             m = CashMagics.__new__(CashMagics)
             m.shell = shell
             m._auto_cache_enabled = True
-            m.badge_mode = "off"
+            m.badges = BadgePresenter(shell, None)
+            m.badges.mode = "off"
             m._debug = False
             m.current_cell_id = None
             m._in_sync_cell = False
@@ -230,12 +232,12 @@ class TestEarlyCellIdCapture:
             m._control_structure_processor = MagicMock()
             m._cash_instance = MagicMock()
             # CellExecutor needs to exist so _execute_cell can delegate; the
-            # cell_id capture happens inside the executor's pipeline.  The
-            # tests suppress() the later-phase failures.
+            # cell_id is resolved before it is called.  The tests suppress()
+            # the later-phase failures.
             m._cell_executor = CellExecutor(
                 shell=shell,
                 cash_instance=m._cash_instance,
-                magics=m,
+                badges=m.badges,
                 tracking_state=MagicMock(),
                 statement_processor=m._statement_processor,
                 upstream_checker=m._upstream_checker,

@@ -22,15 +22,17 @@ The shape of every statement's journey is the same:
 ## What happens when you run a cell
 
 <!-- claim: cash/notebook/ipython/magics.py:CashMagics._execute_cell @6944c822, cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @a7df9ff6, cash/notebook/ipython/cell_executor.py:CellExecutor._prepare_cell @1eda1a92 -->
-`CashMagics` stands in front of IPython's `run_cell`, and hands the cell to
-`CellExecutor.execute_cell()`. Steps 2-7 below are that method's own
-seven phases (`_prepare_cell` runs 2-6, then the statements run, inside one cell run); step 1 (interception) and step 8 (badge render) happen in
-`CashMagics` around it:
+`CashMagics` stands in front of IPython's `run_cell`, resolves the cell's id,
+and hands the cell to `CellExecutor.execute_cell()` with that id and the
+session's TTL. Steps 2-7 below are that method's own phases (`_prepare_cell`
+runs everything up to the statements, then the statements run, inside one cell
+run); step 1 (interception) and step 8 (badge render) happen in `CashMagics`
+around it:
 
 ```mermaid
 flowchart TD
     S1["<b>1. User executes cell</b><br/><code>CashMagics._execute_cell()</code> intercepts"]
-    S2["<b>2.</b> Cell id + notebook path; badge and timing init"]
+    S2["<b>2.</b> Cell id + notebook path (resolved by <code>CashMagics</code>); badge and timing init"]
     S3["<b>3.</b> Module change detection<br/>(must precede the upstream check)"]
     S4["<b>4. Upstream resolution</b><br/><code>CellExecutor._ensure_state_for_inputs()</code><br/><code>CodeAnalyzer.analyze_code_block()</code> → inputs &amp; outputs<br/>For each missing input: <code>Restorer.restore_variable()</code><br/><code>UpstreamChecker.check_and_reexecute()</code>: simulate upstream cells (virtual lineage), detect lineage mismatches, re-execute if needed"]
     S5["<b>5.</b> Parse the cell into statements"]

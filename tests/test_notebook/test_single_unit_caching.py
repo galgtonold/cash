@@ -370,7 +370,7 @@ class TestShowCleanErrorIntegration:
             # Don't actually call the real one (it would try to use showtraceback)
             return
 
-        magics.show_clean_error = patched_show
+        magics.badges.show_error = patched_show
         magics._auto_cache_enabled = True
 
         # Cell code: for loop with error on line 4

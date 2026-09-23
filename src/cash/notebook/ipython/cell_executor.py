@@ -3,7 +3,7 @@
 Owns the 7-phase pipeline that ``%cash_on``'s ``run_cell`` and
 ``run_cell_async`` hooks run every cell through:
 
-    1. Cell ID & notebook path resolution
+    1. Cell ID & notebook path resolution (the caller's: ``cell_id``)
     2. Badge & timing initialisation
     3. Module change detection
     4. Upstream dependency resolution
@@ -18,11 +18,9 @@ one cell-execution code path.
 **Anti-god-class rule (load-bearing):**
 
 - ``CellExecutor`` does not call IPython's ``display()`` or
-  ``publish_display_data()`` directly.  Display side effects live in the
-  IPython adapter (``CashMagics``).  Today the executor invokes the
-  adapter's badge methods through a back-reference (``self._magics``);
-  the long-term plan (see ``.github/planning/ARCHITECTURE_DEEPENING.md``
-  §6) is to replace that scaffold with a typed ``ProgressEvent`` callback.
+  ``publish_display_data()`` directly.  The badge and the error display are
+  drawn by the :class:`BadgePresenter` it is given, the same one
+  ``CashMagics`` draws the final badge with.
 - ``CellExecutor`` does not restore variables.  Variable-granular cache
   work is :class:`Restorer`'s job.  The executor calls
   ``restorer.restore_variable(var_name)`` during upstream resolution; it
@@ -79,7 +77,7 @@ if TYPE_CHECKING:
     from ..statement import StatementProcessor
     from ..upstream import UpstreamChecker
     from ._types import TimingBreakdown
-    from .magics import CashMagics
+    from .badges import BadgePresenter
 
 import logging
 
@@ -143,6 +141,8 @@ class _CellRun:
     badge_display_id: str
     hook_start: float
     timing_breakdown: TimingBreakdown
+    #: The TTL the cell's statements are stored with.
+    ttl: int | None = None
 
 
 @dataclass(frozen=True)
@@ -987,7 +987,7 @@ class CellExecutor:
         self,
         shell: ShellProtocol,
         cash_instance: Any,
-        magics: "CashMagics",
+        badges: "BadgePresenter",
         tracking_state: "TrackingState",
         statement_processor: "StatementProcessor",
         upstream_checker: "UpstreamChecker",
@@ -997,7 +997,7 @@ class CellExecutor:
     ) -> None:
         self.shell = shell
         self._cash_instance = cash_instance
-        self._magics = magics  # back-ref for badge rendering — scaffold for typed ProgressEvent callback
+        self._badges = badges
         self.tracking_state = tracking_state
         self._statement_processor = statement_processor
         self._upstream_checker = upstream_checker
@@ -1015,6 +1015,9 @@ class CellExecutor:
         args: tuple = (),
         kwargs: dict | None = None,
         original_run_cell: Callable[..., Any] | None = None,
+        *,
+        ttl: int | None = None,
+        cell_id: str | None = None,
     ) -> PipelineCompleted | PipelineSyntaxError | EarlyReturn:
         """Run *raw_cell* through the 7-phase cached-execution pipeline.
 
@@ -1024,7 +1027,7 @@ class CellExecutor:
         - :class:`EarlyReturn` — propagate the wrapped value (hook only)
         """
         with self._cell_scope():
-            cell = self._prepare_cell(raw_cell, args, kwargs or {}, original_run_cell)
+            cell = self._prepare_cell(raw_cell, args, kwargs or {}, original_run_cell, ttl, cell_id)
             if not isinstance(cell, _CellRun):
                 return cell
             with self._statements_scope(cell):
@@ -1037,6 +1040,9 @@ class CellExecutor:
         args: tuple = (),
         kwargs: dict | None = None,
         original_run_cell: Callable[..., Any] | None = None,
+        *,
+        ttl: int | None = None,
+        cell_id: str | None = None,
     ) -> PipelineCompleted | PipelineSyntaxError | EarlyReturn:
         """:meth:`execute_cell` for a cell with a top-level ``await``.
 
@@ -1045,7 +1051,7 @@ class CellExecutor:
         ``await`` runs on IPython's live loop.
         """
         with self._cell_scope():
-            cell = self._prepare_cell(raw_cell, args, kwargs or {}, original_run_cell)
+            cell = self._prepare_cell(raw_cell, args, kwargs or {}, original_run_cell, ttl, cell_id)
             if not isinstance(cell, _CellRun):
                 return cell
             with self._statements_scope(cell):
@@ -1084,11 +1090,15 @@ class CellExecutor:
         args: tuple,
         kwargs: dict,
         original_run_cell: Callable[..., Any] | None,
+        ttl: int | None,
+        cell_id: str | None,
     ) -> _CellRun | PipelineSyntaxError | EarlyReturn:
-        """Phases 1-6: everything before the cell's statements run."""
-        # 1. Cell ID & notebook path
-        self._extract_cell_id_and_notebook_path()
+        """Phases 2-6: everything before the cell's statements run.
 
+        Phase 1, the cell id and the notebook path, is the caller's: *cell_id*
+        is what it resolved, and *ttl* the TTL the cell's entries are stored
+        with.
+        """
         # 2. Badge & timing init
         badge_display_id = str(uuid.uuid4())
         timing_breakdown = self._init_cell_timing_and_badge(badge_display_id)
@@ -1107,6 +1117,8 @@ class CellExecutor:
             args,
             kwargs,
             original_run_cell,
+            ttl=ttl,
+            cell_id=cell_id,
         )
         if isinstance(upstream_result, EarlyReturn):
             return upstream_result
@@ -1117,8 +1129,7 @@ class CellExecutor:
         try:
             tree = CodeAnalyzer.parse_cell(raw_cell)
         except SyntaxError:
-            self._magics.cancel_progress_badge()
-            self._magics.render_interactive_badge([], display_id=badge_display_id, status="DONE")
+            self._badges.close(badge_display_id)
             return PipelineSyntaxError()
 
         # 6. Pre-execution notifications
@@ -1127,7 +1138,7 @@ class CellExecutor:
             pre_upstream_metrics,
             upstream_metrics,
         )
-        return _CellRun(raw_cell, tree, all_metrics, badge_display_id, hook_start, timing_breakdown)
+        return _CellRun(raw_cell, tree, all_metrics, badge_display_id, hook_start, timing_breakdown, ttl)
 
     @contextlib.contextmanager
     def _statements_scope(self, cell: _CellRun) -> Iterator[None]:
@@ -1214,51 +1225,14 @@ class CellExecutor:
             pass
 
     # ------------------------------------------------------------------
-    # Phase 1: cell ID & notebook path
-    # ------------------------------------------------------------------
-
-    def _extract_cell_id_and_notebook_path(self) -> None:
-        """Resolve cell_id and notebook path from IPython kernel metadata.
-
-        Must run BEFORE the upstream check so the notebook path is available
-        for reading upstream cells.  Stores the cell id on the adapter via
-        the back-reference.
-        """
-        try:
-            cell_id = self._magics.cell_id_from_parent_metadata(self.shell)
-            self._magics.current_cell_id = cell_id
-            self._magics.maybe_seed_notebook_path(cell_id)
-
-            # Debug-level logging (not a raw print): silent unless %cash_debug
-            # is on. The "No cell_id" branch otherwise fires on every cell in
-            # the default proxy path for environments that don't supply one.
-            if cell_id:
-                logger.debug("[PROXY_CELL_ID] Captured cell_id early: %s", cell_id)
-            else:
-                logger.debug("[PROXY_CELL_ID] No cell_id in parent metadata")
-        except (AttributeError, TypeError, KeyError, RuntimeError) as e:
-            logger.debug("[PROXY_CELL_ID] Could not capture cell_id early: %s", e)
-
-    # ------------------------------------------------------------------
     # Phase 2: badge & timing init
     # ------------------------------------------------------------------
 
     def _init_cell_timing_and_badge(self, badge_display_id: str) -> "TimingBreakdown":
         """Set up timing tracking and render the initial 'RUNNING' badge."""
         timing_breakdown: "TimingBreakdown" = {}
-        cell_start = time.time()
-
-        self._magics.badge_cell_start_time = cell_start
-        self._magics.last_badge_render_time = 0.0
-
         t_badge_init = time.time()
-        if self._magics.badge_mode == "html":
-            self._magics.render_interactive_badge(
-                [],
-                display_id=badge_display_id,
-                status="RUNNING",
-                update_existing=False,
-            )
+        self._badges.start_cell(badge_display_id)
         timing_breakdown["badge_init"] = time.time() - t_badge_init
         return timing_breakdown
 
@@ -1326,6 +1300,9 @@ class CellExecutor:
         cell_code: str,
         required_inputs: set,
         progress_callback: Callable[..., None] | None = None,
+        *,
+        ttl: int | None = None,
+        cell_id: str | None = None,
     ) -> tuple[list[ProcessResult], float, float]:
         """Delegate to ``UpstreamChecker``.
 
@@ -1336,8 +1313,8 @@ class CellExecutor:
             cell_code,
             required_inputs,
             self._statement_processor.process_statement,
-            self._magics.global_ttl,
-            cell_id=self._magics.current_cell_id,
+            ttl,
+            cell_id=cell_id,
             progress_callback=progress_callback,
             control_structure_callback=self._control_structure_processor.process,
         )
@@ -1376,6 +1353,9 @@ class CellExecutor:
         self,
         cell_code: str,
         progress_callback: Callable[..., None] | None = None,
+        *,
+        ttl: int | None = None,
+        cell_id: str | None = None,
     ) -> tuple[list[ProcessResult], float, float]:
         """Ensure all required inputs are available in ``user_ns``.
 
@@ -1415,6 +1395,8 @@ class CellExecutor:
                 cell_code,
                 inputs,
                 progress_callback=progress_callback,
+                ttl=ttl,
+                cell_id=cell_id,
             )
             total_restore_time += upstream_restore_time
             upstream_metrics.extend(reexec_metrics)
@@ -1449,6 +1431,9 @@ class CellExecutor:
         args: tuple,
         kwargs: dict,
         original_run_cell: Callable[..., Any] | None,
+        *,
+        ttl: int | None = None,
+        cell_id: str | None = None,
     ) -> tuple[list[ProcessResult], float, float] | EarlyReturn:
         """Run upstream dependency checking and state restoration.
 
@@ -1467,7 +1452,7 @@ class CellExecutor:
         ) -> None:
             combined = pre_upstream_metrics + upstream_metrics_so_far
             upstream_label = f"↑ {current_stmt_code}" if current_stmt_code else current_stmt_code
-            self._magics.maybe_progress_badge(
+            self._badges.maybe_progress(
                 combined,
                 display_id=badge_display_id,
                 step=current_step if current_step is not None else len(combined),
@@ -1480,6 +1465,8 @@ class CellExecutor:
             upstream_metrics, total_restore_time, total_execution_time = self._ensure_state_for_inputs(
                 raw_cell,
                 progress_callback=_upstream_progress_cb,
+                ttl=ttl,
+                cell_id=cell_id,
             )
         except KeyboardInterrupt:
             raise
@@ -1563,13 +1550,11 @@ class CellExecutor:
             # AST-parse SyntaxError path).  Any other exception propagates so
             # the caller sees the real error.
             if isinstance(caught, SyntaxError):
-                self._magics.cancel_progress_badge()
-                self._magics.render_interactive_badge([], display_id=badge_display_id, status="DONE")
+                self._badges.close(badge_display_id)
                 return EarlyReturn(None)
             raise caught
         if isinstance(caught, SyntaxError):
-            self._magics.cancel_progress_badge()
-            self._magics.render_interactive_badge([], display_id=badge_display_id, status="DONE")
+            self._badges.close(badge_display_id)
             return EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
         if isinstance(caught, (RuntimeError, AmbiguousCellError, UpstreamStateError, ForwardReferenceError)):
             # Re-raise inside the user's cell so IPython renders the traceback
@@ -1586,8 +1571,7 @@ class CellExecutor:
             # code cash wrote, with the real failure nowhere in sight. repr()
             # also handles the newlines this message routinely carries.
             error_code = f"from {cls.__module__} import {cls.__name__}; raise {cls.__name__}({str(caught)!r}) from None"
-            self._magics.cancel_progress_badge()
-            self._magics.render_interactive_badge([], display_id=badge_display_id, status="DONE")
+            self._badges.close(badge_display_id)
             return EarlyReturn(original_run_cell(error_code, *args, **kwargs))
         # An internal failure, and the cell is about to run UNCACHED. This used
         # to be logger.error only -- invisible in a notebook, where nobody is
@@ -1615,8 +1599,7 @@ class CellExecutor:
             )
         except Exception:  # noqa: BLE001 - a diagnostic must never break a cell
             pass
-        self._magics.cancel_progress_badge()
-        self._magics.render_interactive_badge([], display_id=badge_display_id, status="BYPASSED")
+        self._badges.close(badge_display_id, status="BYPASSED")
         return EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
 
     # ------------------------------------------------------------------
@@ -1844,19 +1827,14 @@ class CellExecutor:
         # A statement that just raised may have an armed progress timer
         # (it hadn't finished, so nothing cancelled it yet) -- stop it before
         # rendering the DONE badge below so a late fire can't overwrite it.
-        self._magics.cancel_progress_badge()
-        self._magics.show_clean_error(e, cell.raw_cell, node)
-        hook_total = time.time() - cell.hook_start
-        if self._magics.badge_mode == "html":
-            self._magics.render_interactive_badge(
-                cell.all_metrics,
-                display_id=cell.badge_display_id,
-                cell_total_time=hook_total,
-                timing_breakdown=cell.timing_breakdown,
-                status="DONE",
-            )
-        elif self._magics.badge_mode == "print":
-            self._magics.print_text_badge(cell.all_metrics, cell_total_time=hook_total)
+        self._badges.cancel_progress()
+        self._badges.show_error(e, cell.raw_cell, node)
+        self._badges.finish(
+            cell.all_metrics,
+            cell.badge_display_id,
+            time.time() - cell.hook_start,
+            cell.timing_breakdown,
+        )
 
     def _execute_cell_statements(self, cell: _CellRun) -> tuple[list[ProcessResult], list, float]:
         """Run the cell's statements (see :meth:`_cell_steps`).
@@ -1939,7 +1917,7 @@ class CellExecutor:
             unified_step = upstream_step_count + i + 1
 
             t_badge_pre = time.time()
-            self._magics.arm_progress_badge(
+            self._badges.arm_progress(
                 all_metrics,
                 display_id=cell.badge_display_id,
                 step=unified_step,
@@ -1969,7 +1947,7 @@ class CellExecutor:
                                 # the whole structure runs as one awaited unit.
                                 logger.debug("[CONTROL] Await inside control body, running as awaited single unit")
                                 ctrl_result = yield _Step(
-                                    {"ttl": self._magics.global_ttl, "silent": True, "raw_cell": raw_cell},
+                                    {"ttl": cell.ttl, "silent": True, "raw_cell": raw_cell},
                                     await_unit=node,
                                 )
                             else:
@@ -1978,7 +1956,7 @@ class CellExecutor:
                                 )
                                 ctrl_result = self._control_structure_processor.process(
                                     node,
-                                    ttl=self._magics.global_ttl,
+                                    ttl=cell.ttl,
                                     silent=True,
                                     raw_cell=raw_cell,
                                     prev_node=tree.body[i - 1] if i > 0 else None,
@@ -2009,7 +1987,7 @@ class CellExecutor:
                             metrics = yield _Step(
                                 {
                                     "code": stmt_code,
-                                    "ttl": self._magics.global_ttl,
+                                    "ttl": cell.ttl,
                                     "silent": True,
                                     "annotation": annotation,
                                     "display_code": stmt_display,
@@ -2029,13 +2007,13 @@ class CellExecutor:
                         finally:
                             _set_written_later(self, frozenset())
 
-                    self._magics.cancel_progress_badge()
+                    self._badges.cancel_progress()
                     t_badge = time.time()
                     # `unified_step`, NOT `unified_step + 1`: this fires when a
                     # statement has FINISHED, and the next one has not started.
                     # The number means "the furthest statement cash has reached",
-                    # which is what `arm_progress_badge` publishes too.
-                    self._magics.maybe_progress_badge(
+                    # which is what `arm_progress` publishes too.
+                    self._badges.maybe_progress(
                         all_metrics,
                         display_id=cell.badge_display_id,
                         step=unified_step,
@@ -2054,6 +2032,6 @@ class CellExecutor:
                 # await -- skips the `except` above entirely. Left armed, that
                 # timer fires later, on whatever cell is running by then.
                 # Safe to call unconditionally: a no-op once already cancelled.
-                self._magics.cancel_progress_badge()
+                self._badges.cancel_progress()
 
         return (all_metrics, buffered_result_outputs, badge_render_time)

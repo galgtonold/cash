@@ -227,7 +227,7 @@ class TestVerificationFiresOnTheRealPipeline:
 
     def test_compute_then_restore_credits_a_verified_saving(self, magics_fixture):
         magics, shell, _backend = magics_fixture
-        magics.badge_mode = "off"
+        magics.badges.mode = "off"
         # A statement expensive enough to clear the 10ms cache floor, with no
         # import (imports are cheap and separately cached).
         cell = "slow = sum(i * i for i in range(2_000_000))"
@@ -247,7 +247,7 @@ class TestVerificationFiresOnTheRealPipeline:
 
     def test_stats_reset_forgets_the_measured_baselines(self, magics_fixture, capsys):
         magics, _shell, _backend = magics_fixture
-        magics.badge_mode = "off"
+        magics.badges.mode = "off"
         run_cash_cell(magics, "slow2 = sum(i * i for i in range(2_000_000))")
         assert magics._session.measured_compute
 

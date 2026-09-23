@@ -58,7 +58,7 @@ def counting_magics(monkeypatch):
     cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
     magics = CashMagics(shell, cash)
     magics.cash_on("")
-    magics.badge_mode = "off"
+    magics.badges.mode = "off"
     shell.user_ns["arrays"] = [np.arange(1000, dtype=float) + i for i in range(ITERATIONS)]
     return magics, counts
 

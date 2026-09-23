@@ -38,7 +38,7 @@ def cell_runner():
     cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
     magics = CashMagics(shell, cash)
     magics.cash_on("")
-    magics.badge_mode = "off"  # keep the badge out of the captured output
+    magics.badges.mode = "off"  # keep the badge out of the captured output
     shell.user_ns["c"] = cash
 
     def run(cell: str) -> int:
@@ -94,7 +94,7 @@ def test_a_pep614_parenthesised_decorator_does_not_kill_the_cell():
     cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
     magics = CashMagics(shell, cash)
     magics.cash_on("")
-    magics.badge_mode = "off"
+    magics.badges.mode = "off"
     shell.user_ns["c"] = cash
 
     cell = "@(\n    c.cache\n)\ndef f(n):\n    return n  # @cash:assume-safe\nf(3)\n"
@@ -128,7 +128,7 @@ def async_cell_runner():
     cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
     magics = CashMagics(shell, cash)
     magics.cash_on("")
-    magics.badge_mode = "off"  # keep the badge out of the captured output
+    magics.badges.mode = "off"  # keep the badge out of the captured output
     shell.user_ns["c"] = cash
 
     async def _tick(n):

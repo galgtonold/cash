@@ -1,6 +1,6 @@
 """IPython adapter for the notebook caching subsystem.
 
-The four files in this package — `magics`, `admin`, `cell_executor`,
+The modules in this package — `magics`, `admin`, `cell_executor`, `badges`,
 `error_display` — make up the adapter that wires Cash's caching pipeline
 into IPython's `Magics` system: `%cash_on`, `%cash_status`,
 `%cash_stats`, and so on.
@@ -8,7 +8,7 @@ into IPython's `Magics` system: `%cash_on`, `%cash_status`,
 Public surface:
     - :class:`CashMagics` — the `Magics` subclass that IPython registers.
 
-Everything else (`CashAdminMagicsMixin`, `CellExecutor`, the value types
+Everything else (`CashAdminMagicsMixin`, `CellExecutor`, `BadgePresenter`, the value types
 `TimingBreakdown` / `StatementSummary` / `CellMetrics` / `CashSession`,
 `show_clean_error`, the internal pipeline sentinels) is package-internal.
 See ADR-013 for the package-extraction rationale.

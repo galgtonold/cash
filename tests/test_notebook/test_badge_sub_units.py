@@ -296,7 +296,7 @@ def test_real_for_loop_stamps_call_events_with_loop_header(magics_fixture):
     needs was always ``None`` there, for ANY statement, regardless of this
     task's changes). The badge-render call is what receives the full raw
     ``ProcessResult`` dicts, so this spies on
-    ``CashMagics.render_interactive_badge`` and reads its ``metrics_list``
+    ``BadgePresenter.render`` and reads its ``metrics_list``
     argument instead.
 
     This is requirement 2's guarantee at the point that matters -- the unit
@@ -353,13 +353,13 @@ def _run_real_for_loop_and_capture_metrics(magics_obj, shell, code: str) -> list
     both need the exact same real, un-mocked pipeline output.
     """
     captured_metrics_lists: list[list] = []
-    original_render = magics_obj.render_interactive_badge
+    original_render = magics_obj.badges.render
 
     def _spy(metrics_list, *args, **kwargs):
         captured_metrics_lists.append(list(metrics_list))
         return original_render(metrics_list, *args, **kwargs)
 
-    magics_obj.render_interactive_badge = _spy
+    magics_obj.badges.render = _spy
     run_cash_cell(magics_obj, code.strip())
     assert captured_metrics_lists, "badge render was never called"
     return max(captured_metrics_lists, key=len)

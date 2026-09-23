@@ -1,7 +1,7 @@
 """End-to-end tests for the public badge rendering API.
 
-These exercise ``render_interactive_badge`` and ``print_text_badge``
-through the ``CashMagics`` wrapper. They are deliberately concrete about
+These exercise ``BadgePresenter.render`` and ``BadgePresenter.print_text``
+through the ``CashMagics`` that owns the presenter. They are deliberately concrete about
 *what users see* (CACHED label, upstream-step disclosure, etc.) and
 indifferent to the rendering implementation.
 
@@ -76,9 +76,9 @@ class TestIterationContextStripping:
                 "outputs": ["result"],
             }
         ]
-        magics.badge_mode = "html"
-        with patch("cash.notebook.ipython.magics.display") as mock_display:
-            magics.render_interactive_badge(metrics, display_id="test_id")
+        magics.badges.mode = "html"
+        with patch("cash.notebook.ipython.badges.display") as mock_display:
+            magics.badges.render(metrics, display_id="test_id")
             html_str = _extract_html(mock_display)
             assert html_str is not None
             assert "abc123hash" not in html_str
@@ -94,7 +94,7 @@ class TestIterationContextStripping:
                 "outputs": ["result"],
             }
         ]
-        magics.print_text_badge(metrics)
+        magics.badges.print_text(metrics)
         out = capsys.readouterr().out
         assert "result = process(item)" in out
         assert "abc123hash" not in out
@@ -127,9 +127,9 @@ class TestExpandableSkippedSteps:
             },
             {"code": "current_step()", "status": CacheStatus.COMPUTED, "total_time": 0.5, "outputs": ["result"]},
         ]
-        magics.badge_mode = "html"
-        with patch("cash.notebook.ipython.magics.display") as mock_display:
-            magics.render_interactive_badge(metrics, display_id="test_skip")
+        magics.badges.mode = "html"
+        with patch("cash.notebook.ipython.badges.display") as mock_display:
+            magics.badges.render(metrics, display_id="test_skip")
             html_str = _extract_html(mock_display)
             assert html_str is not None
             assert "<details" in html_str
@@ -150,9 +150,9 @@ class TestExpandableSkippedSteps:
             }
             for i in range(5)
         ] + [{"code": "current()", "status": CacheStatus.COMPUTED, "total_time": 0.1, "outputs": ["r"]}]
-        magics.badge_mode = "html"
-        with patch("cash.notebook.ipython.magics.display") as mock_display:
-            magics.render_interactive_badge(metrics, display_id="test_count")
+        magics.badges.mode = "html"
+        with patch("cash.notebook.ipython.badges.display") as mock_display:
+            magics.badges.render(metrics, display_id="test_count")
             html_str = _extract_html(mock_display)
             assert html_str is not None
             assert "5 upstream steps not re-run" in html_str
@@ -169,9 +169,9 @@ class TestExpandableSkippedSteps:
             },
             {"code": "current()", "status": CacheStatus.COMPUTED, "total_time": 0.1, "outputs": ["r"]},
         ]
-        magics.badge_mode = "html"
-        with patch("cash.notebook.ipython.magics.display") as mock_display:
-            magics.render_interactive_badge(metrics, display_id="test_singular")
+        magics.badges.mode = "html"
+        with patch("cash.notebook.ipython.badges.display") as mock_display:
+            magics.badges.render(metrics, display_id="test_singular")
             html_str = _extract_html(mock_display)
             assert html_str is not None
             assert "1 upstream step not re-run" in html_str
@@ -203,9 +203,9 @@ class TestExpandableSkippedSteps:
             },
             {"code": "current()", "status": CacheStatus.COMPUTED, "total_time": 0.1, "outputs": ["r"]},
         ]
-        magics.badge_mode = "html"
-        with patch("cash.notebook.ipython.magics.display") as mock_display:
-            magics.render_interactive_badge(metrics, display_id="test_skip_loop")
+        magics.badges.mode = "html"
+        with patch("cash.notebook.ipython.badges.display") as mock_display:
+            magics.badges.render(metrics, display_id="test_skip_loop")
             html_str = _extract_html(mock_display)
             assert html_str is not None
             # v3: loop renders as <details> with histogram bars; for-line is
@@ -246,9 +246,9 @@ class TestUpstreamLoopGrouping:
                 "outputs": ["result"],
             },
         ]
-        magics.badge_mode = "html"
-        with patch("cash.notebook.ipython.magics.display") as mock_display:
-            magics.render_interactive_badge(metrics, display_id="test_upstream_loop")
+        magics.badges.mode = "html"
+        with patch("cash.notebook.ipython.badges.display") as mock_display:
+            magics.badges.render(metrics, display_id="test_upstream_loop")
             html_str = _extract_html(mock_display)
             assert html_str is not None
             # v3: upstream sits under a "upstream context" <details>, loop
@@ -269,9 +269,9 @@ class TestUpstreamLoopGrouping:
             },
             {"code": "current()", "status": CacheStatus.COMPUTED, "total_time": 0.1, "outputs": ["r"]},
         ]
-        magics.badge_mode = "html"
-        with patch("cash.notebook.ipython.magics.display") as mock_display:
-            magics.render_interactive_badge(metrics, display_id="test_upstream_only_skip")
+        magics.badges.mode = "html"
+        with patch("cash.notebook.ipython.badges.display") as mock_display:
+            magics.badges.render(metrics, display_id="test_upstream_only_skip")
             html_str = _extract_html(mock_display)
             assert html_str is not None
             # v3 renames "UPSTREAM HISTORY" header to a "upstream context" disclosure.
@@ -298,7 +298,7 @@ class TestTextBadge:
                 "outputs": ["y"],
             },
         ]
-        magics.print_text_badge(metrics)
+        magics.badges.print_text(metrics)
         out = capsys.readouterr().out
         assert "[Cash]" in out
         assert "EXECUTED" in out
@@ -316,7 +316,7 @@ class TestTextBadge:
             },
             {"code": "compute()", "status": CacheStatus.COMPUTED, "total_time": 0.3, "outputs": ["r"]},
         ]
-        magics.print_text_badge(metrics)
+        magics.badges.print_text(metrics)
         out = capsys.readouterr().out
         assert "Upstream" in out
         assert "^CACHED" in out  # ASCII upstream marker
@@ -335,19 +335,19 @@ class TestRenderInteractiveBadge:
 
     def test_badge_with_no_metrics(self, magics_fixture):
         magics, _shell, _backend = magics_fixture
-        magics.badge_mode = "html"
-        magics.render_interactive_badge([], display_id="test_empty")
+        magics.badges.mode = "html"
+        magics.badges.render([], display_id="test_empty")
 
     def test_badge_with_none_metrics(self, magics_fixture):
         magics, _shell, _backend = magics_fixture
-        magics.badge_mode = "html"
-        magics.render_interactive_badge(None, display_id="test_none")
+        magics.badges.mode = "html"
+        magics.badges.render(None, display_id="test_none")
 
     def test_badge_mode_off(self, magics_fixture):
         magics, _shell, _backend = magics_fixture
-        magics.badge_mode = "off"
-        with patch("cash.notebook.ipython.magics.display") as mock_display:
-            magics.render_interactive_badge(
+        magics.badges.mode = "off"
+        with patch("cash.notebook.ipython.badges.display") as mock_display:
+            magics.badges.render(
                 [{"code": "x=1", "status": CacheStatus.COMPUTED, "total_time": 0.1, "outputs": ["x"]}],
                 display_id="test_off",
             )
@@ -365,9 +365,9 @@ class TestRenderInteractiveBadge:
             },
             {"code": "compute()", "status": CacheStatus.COMPUTED, "total_time": 0.3, "outputs": ["r"]},
         ]
-        magics.badge_mode = "html"
-        with patch("cash.notebook.ipython.magics.display") as mock_display:
-            magics.render_interactive_badge(metrics, display_id="test_sections")
+        magics.badges.mode = "html"
+        with patch("cash.notebook.ipython.badges.display") as mock_display:
+            magics.badges.render(metrics, display_id="test_sections")
             html_str = _extract_html(mock_display)
             assert html_str is not None
             # v3: upstream rows live in a "upstream context" disclosure;
@@ -378,9 +378,9 @@ class TestRenderInteractiveBadge:
     def test_badge_no_upstream_disclosure_without_upstream(self, magics_fixture):
         magics, _shell, _backend = magics_fixture
         metrics = [{"code": "x = 1", "status": CacheStatus.COMPUTED, "total_time": 0.1, "outputs": ["x"]}]
-        magics.badge_mode = "html"
-        with patch("cash.notebook.ipython.magics.display") as mock_display:
-            magics.render_interactive_badge(metrics, display_id="test_no_upstream")
+        magics.badges.mode = "html"
+        with patch("cash.notebook.ipython.badges.display") as mock_display:
+            magics.badges.render(metrics, display_id="test_no_upstream")
             html_str = _extract_html(mock_display)
             assert html_str is not None
             assert "upstream context" not in html_str

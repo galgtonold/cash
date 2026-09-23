@@ -23,14 +23,9 @@ __all__ = ["run_cash_cell"]
 def run_cash_cell(magics: Any, code: str, *, ttl: int | None = None) -> None:
     """Run *code* as one cell under ``%cash_on`` (``%cash_on ttl=N`` with *ttl*).
 
-    *ttl* applies to this cell only; the magics' own TTL is restored after it.
+    *ttl* applies to this cell only; the magics' own TTL is not changed.
     """
-    saved_ttl = magics.global_ttl
-    magics.global_ttl = ttl
-    try:
-        result = magics._cell_executor.execute_cell(code)
-        if isinstance(result, (EarlyReturn, PipelineSyntaxError)):
-            return
-        magics._finalize_cell_body(code, result)
-    finally:
-        magics.global_ttl = saved_ttl
+    result = magics._cell_executor.execute_cell(code, ttl=ttl, cell_id=magics.resolve_cell_id())
+    if isinstance(result, (EarlyReturn, PipelineSyntaxError)):
+        return
+    magics._finalize_cell_body(code, result)

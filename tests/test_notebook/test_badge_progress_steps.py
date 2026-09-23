@@ -27,23 +27,22 @@ pytest.importorskip("IPython")
 CELL = "a = 1\nb = 2\nc = 3\nd = slow()\ne = d + 1\nprint(e)\n"
 
 
-class _RecordingMagics:
-    """Stands in for CashMagics, recording every step the badge is told about."""
+class _RecordingBadges:
+    """Stands in for the BadgePresenter, recording every step the badge is told about."""
 
-    badge_mode = "html"
-    global_ttl = None
+    mode = "html"
 
     def __init__(self) -> None:
         self.armed: list[tuple[int, int, str | None]] = []
         self.reported: list[tuple[int, int]] = []
 
-    def arm_progress_badge(self, metrics, display_id, step, total, code):
+    def arm_progress(self, metrics, display_id, step, total, code):
         self.armed.append((step, total, code))
 
-    def maybe_progress_badge(self, metrics, display_id, step, total, code):
+    def maybe_progress(self, metrics, display_id, step, total, code):
         self.reported.append((step, total))
 
-    def cancel_progress_badge(self):
+    def cancel_progress(self):
         pass
 
 
@@ -59,7 +58,7 @@ class _StubProcessor:
 
 @pytest.fixture
 def executor():
-    """A CellExecutor wired to a recording magics, with execution stubbed out.
+    """A CellExecutor wired to a recording badge, with execution stubbed out.
 
     `__new__` rather than the constructor: the loop under test needs only the
     badge hooks and the statement processor, and building a real executor
@@ -69,7 +68,7 @@ def executor():
     from cash.notebook.ipython.cell_executor import CellExecutor
 
     ex = CellExecutor.__new__(CellExecutor)
-    ex._magics = _RecordingMagics()
+    ex._badges = _RecordingBadges()
     ex._statement_processor = _StubProcessor()
     return ex
 
@@ -78,21 +77,21 @@ def _run(executor, cell: str = CELL):
     from cash.notebook.ipython.cell_executor import _CellRun
 
     executor._execute_cell_statements(_CellRun(cell, ast.parse(cell), [], "display-1", 0.0, {}))
-    return executor._magics
+    return executor._badges
 
 
 def test_the_counter_never_runs_past_the_end_of_the_cell(executor):
-    magics = _run(executor)
-    assert magics.reported, "the post-statement render never fired"
-    overshoot = [(s, t) for s, t in magics.reported if s > t]
+    badges = _run(executor)
+    assert badges.reported, "the post-statement render never fired"
+    overshoot = [(s, t) for s, t in badges.reported if s > t]
     assert not overshoot, f"progress badge reported a step past the total: {overshoot}"
 
 
 def test_a_finished_statement_reports_itself_not_the_next_one(executor):
     """`(2/6)` after statement 1 claims statement 2 is running. It is not."""
-    magics = _run(executor)
+    badges = _run(executor)
     total = len(ast.parse(CELL).body)
-    assert magics.reported == [(i, total) for i in range(1, total + 1)]
+    assert badges.reported == [(i, total) for i in range(1, total + 1)]
 
 
 def test_both_sources_agree_on_the_step_a_statement_owns(executor):
@@ -102,12 +101,12 @@ def test_both_sources_agree_on_the_step_a_statement_owns(executor):
     right after said "running 5". Whichever one the throttle let through was
     the number on screen, so the badge disagreed with itself run to run.
     """
-    magics = _run(executor)
-    assert [s for s, _t, _c in magics.armed] == [s for s, _t in magics.reported]
+    badges = _run(executor)
+    assert [s for s, _t, _c in badges.armed] == [s for s, _t in badges.reported]
 
 
 def test_the_armed_step_still_names_the_statement_it_belongs_to(executor):
     """Guards the control arm: the fix must not shift what `arm` publishes."""
-    magics = _run(executor)
+    badges = _run(executor)
     codes = [ast.unparse(n) for n in ast.parse(CELL).body]
-    assert [(s, c) for s, _t, c in magics.armed] == list(enumerate(codes, start=1))
+    assert [(s, c) for s, _t, c in badges.armed] == list(enumerate(codes, start=1))

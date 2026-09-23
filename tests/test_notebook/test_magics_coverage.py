@@ -118,27 +118,27 @@ class TestCashBadge:
     def test_set_badge_html(self, magics_fixture, capsys):
         magics, _, _ = magics_fixture
         magics.cash_badge("html")
-        assert magics.badge_mode == "html"
+        assert magics.badges.mode == "html"
         captured = capsys.readouterr()
         assert "Badge mode set to: html" in captured.out
 
     def test_set_badge_print(self, magics_fixture, capsys):
         magics, _, _ = magics_fixture
         magics.cash_badge("print")
-        assert magics.badge_mode == "print"
+        assert magics.badges.mode == "print"
         captured = capsys.readouterr()
         assert "Badge mode set to: print" in captured.out
 
     def test_set_badge_off(self, magics_fixture, capsys):
         magics, _, _ = magics_fixture
         magics.cash_badge("off")
-        assert magics.badge_mode == "off"
+        assert magics.badges.mode == "off"
         captured = capsys.readouterr()
         assert "Badge mode set to: off" in captured.out
 
     def test_badge_invalid_shows_current(self, magics_fixture, capsys):
         magics, _, _ = magics_fixture
-        magics.badge_mode = "print"
+        magics.badges.mode = "print"
         magics.cash_badge("invalid_mode")
         captured = capsys.readouterr()
         assert "Current badge mode: print" in captured.out
@@ -146,7 +146,7 @@ class TestCashBadge:
 
     def test_badge_empty_shows_current(self, magics_fixture, capsys):
         magics, _, _ = magics_fixture
-        magics.badge_mode = "html"
+        magics.badges.mode = "html"
         magics.cash_badge("")
         captured = capsys.readouterr()
         assert "Current badge mode: html" in captured.out

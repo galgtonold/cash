@@ -62,17 +62,17 @@ def magics_fixture():
 def _last_metric(magics, code: str) -> dict:
     """Run one cell and return the last metric the processor recorded."""
     captured: list[list[dict]] = []
-    real_render = magics.render_interactive_badge
+    real_render = magics.badges.render
 
     def capture(metrics, **kw):
         captured.append(list(metrics))
         return real_render(metrics, **kw)
 
-    magics.render_interactive_badge = capture  # type: ignore[assignment]
+    magics.badges.render = capture  # type: ignore[assignment]
     try:
         run_cash_cell(magics, code)
     finally:
-        magics.render_interactive_badge = real_render  # type: ignore[assignment]
+        magics.badges.render = real_render  # type: ignore[assignment]
     assert captured, "no metrics captured"
     return captured[-1][-1]
 
