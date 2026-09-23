@@ -10,7 +10,7 @@ Without file tracking, every CSV/parquet load you make from a cached function wo
 
 The fingerprint is `(mtime, size, hash)`, and **content is authoritative whenever the size matches**. The cheap size check runs first — a differing size proves staleness without reading a byte of data — and only when the size is equal does Cash hash the file to decide. The mtime is recorded but no longer arbitrates: a touch that leaves the bytes alone is a **hit**, and a same-size edit under an indistinguishable mtime is still a **miss**.
 
-<!-- claim: cash/tracking/io_watch.py:hold @fcfb42b4, cash/tracking/file_tracker.py:_on_open @cf213c2f -->
+<!-- claim: cash/tracking/io_watch.py:hold @fcfb42b4, cash/tracking/file_tracker.py:_on_open @0ac87d87 -->
 The mechanism has two parts. Every Python-level `open()` — `builtins.open`, `io.open`, `pathlib`, and every library that opens its file through them (`json`, `pickle`, `joblib`, `numpy`) — and every directory listing reaches cash as a Python audit event (`sys.addaudithook`), whoever calls it and however it was imported. Readers that open files in C, C++ or Rust (pyarrow, polars, sqlite3, some pandas readers), and the calls that raise no event (`os.path.exists`, `Path.stat`), are wrapped. When a `@cash.cache` function executes, Cash opens a `FileAccessTracker` around the call, which records both kinds of read; the first tracker to open installs the wrappers and the last one to close restores the originals, so outside a cached call (and outside `%cash_on`) `pd.read_csv` is pandas' own function. The resulting file dictionary goes into the cache metadata. On the next lookup, Cash re-checks every recorded file and re-runs the function if the contents moved.
 
 ## Quick start
@@ -34,7 +34,7 @@ No decorator argument, no manual registration. Cash sees the `read_csv` call, re
 
 ## What's automatically tracked
 
-<!-- claim: cash/tracking/file_tracker.py:FileDependencyRegistry._initialize_defaults @b63601b2, cash/tracking/file_tracker.py:_find_patch_targets @30ce0d87, cash/tracking/file_tracker.py:_on_listing @3c97d75d -->
+<!-- claim: cash/tracking/file_tracker.py:FileDependencyRegistry._initialize_defaults @b63601b2, cash/tracking/file_tracker.py:_find_patch_targets @30ce0d87, cash/tracking/file_tracker.py:_on_listing @c2c76d1d -->
 The `open` and listing audit events are handled by `_on_open` and `_on_listing`; the wrapped readers are registered in `FileDependencyRegistry._initialize_defaults`:
 
 | Module | Functions |
@@ -55,7 +55,7 @@ The pandas entry is the glob `read_*`, expanded by `_find_patch_targets` against
 
 A reader may be given its path positionally or by keyword — `pd.read_csv(filepath_or_buffer=p)`, `np.load(file=p)`, `pq.read_table(source=p)` — and both are tracked. pyarrow reads files in C++, so none of its reads pass through `open()`; before its readers were registered, a function that switched to `pyarrow.csv` for speed recorded no dependency at all and kept returning the old file's answer. `pyarrow.parquet.ParquetFile` is not wrapped (it is a class, and replacing it with a function would break `isinstance` checks), and `pyarrow.dataset.dataset` records only the path it was given; read through them and name the files with `file_depends_on=`.
 
-<!-- claim: cash/tracking/file_tracker.py:_is_read_mode @238e2cb8, cash/tracking/file_tracker.py:_on_open @cf213c2f -->
+<!-- claim: cash/tracking/file_tracker.py:_is_read_mode @238e2cb8, cash/tracking/file_tracker.py:_on_open @0ac87d87 -->
 For `open()`, cash records the path as a *dependency* only when the call can read what was there before: a mode containing `'r'`, or `'+'` without `'w'` or `'x'` (`'r+'`, `'a+'`) — see `_is_read_mode`. An `open(path, 'w')` for output does **not** become a dependency, which is what you want: folding a file the function writes into its own cache key would invalidate the entry on its own output. Nor does `'w+'` / `'x+'`, which start from an empty file — Pillow saves every image with `'w+b'`, so a `savefig` used to depend on the PNG it had just written.
 
 A write is not ignored, though — it is an *effect*, and it is reported as one. The same `open` event handler hands a write-mode open to the [effect observer](purity-decorators.md#observed-effects-what-the-first-call-actually-did), which warns once if the first call wrote a file the static analyzer never saw. That matters because every cache hit from then on skips the write.

@@ -223,7 +223,7 @@ final value straight from cache:
 # Cash restores the final 'df' directly:  ~0.1s (deserialization only)
 ```
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @e1d22e47 -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @d3f9915a -->
 That holds for values computed *from* a loop too. A loop's outputs get lineages
 derived from the values it built, which the upstream simulation cannot derive
 from code, so Cash writes down what a loop left behind when it runs, and the
