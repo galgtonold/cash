@@ -48,7 +48,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from ..source_norm import stat_has_settled, unparse_without_docstrings
+from ..source_norm import read_code_text, stat_has_settled, unparse_without_docstrings
 
 __all__ = ["closure_digest", "static_attribute_reads"]
 
@@ -276,8 +276,7 @@ def _analysis_for(path: str) -> _Analysis | None:
         return cached[2]
     settled = stat_has_settled(st)
     try:
-        with open(path, encoding="utf-8") as fh:
-            analysis = _analyse(fh.read())
+        analysis = _analyse(read_code_text(path))
     except (OSError, UnicodeDecodeError):
         analysis = None
     if settled:

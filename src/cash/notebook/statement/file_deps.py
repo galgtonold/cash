@@ -28,7 +28,7 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
-from ...source_norm import drop_docstrings, stat_has_settled
+from ...source_norm import drop_docstrings, read_code_file, stat_has_settled
 from ...utils import normalize_path
 from ..file_dep_snapshot import realpath_of_read_this_run
 from ..server_discovery import get_notebook_path
@@ -207,8 +207,7 @@ def _identity_digest(path: str) -> str | None:
         return cached[2]
     settled = stat_has_settled(st)
     try:
-        with open(path, "rb") as fh:
-            raw = fh.read()
+        raw = read_code_file(path)
     except OSError:
         return None
     # Keyed on the same signal `FunctionTracker.check_tracked_modules` uses to

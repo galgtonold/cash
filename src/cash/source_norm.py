@@ -687,6 +687,26 @@ def _process_start_time() -> float:
     return started
 
 
+def read_code_file(path: str) -> bytes:
+    """The bytes of the code file at *path*, read where no file tracker sees it.
+
+    Cash reads a module to key or check the code that runs, not as data that
+    code reads. Through ``open`` the read was recorded by whatever statement or
+    cached call was running (the tracker patches ``open``), so the module
+    became a raw-bytes input and a comment added to it re-ran the work. The
+    memos in front of these reads hid it once a file had settled; for two
+    seconds after a save (`stat_has_settled`) every key re-read the file.
+    ``io.FileIO`` is not patched.
+    """
+    with io.FileIO(path, "rb") as fh:
+        return fh.readall()
+
+
+def read_code_text(path: str) -> str:
+    """:func:`read_code_file` as UTF-8 text, newlines translated as text-mode ``open`` does."""
+    return read_code_file(path).decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _compiled_module(path: str) -> types.CodeType | None:
     """The whole file at *path*, compiled, cached per (path, mtime, size)."""
     import os
@@ -700,10 +720,7 @@ def _compiled_module(path: str) -> types.CodeType | None:
         return cached[2]
     settled = stat_has_settled(st)
     try:
-        # FileIO, not `open`: this read is cash checking the code it runs, and
-        # through `open` a cached call it runs inside recorded it as an input.
-        with io.FileIO(path, "rb") as fh:
-            source = fh.read()
+        source = read_code_file(path)
         code: types.CodeType | None = compile(source, path, "exec", dont_inherit=True)
     except (OSError, SyntaxError, ValueError):
         code = None

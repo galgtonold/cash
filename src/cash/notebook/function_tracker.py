@@ -16,7 +16,7 @@ import types
 from typing import Any
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from ..source_norm import source_identity_digest
+from ..source_norm import read_code_file, read_code_text, source_identity_digest
 
 __all__ = ["FunctionTracker", "is_local_module"]
 
@@ -527,8 +527,7 @@ class FunctionTracker:
                 continue
 
             try:
-                with open(mod_file, encoding="utf-8") as f:
-                    source = f.read()
+                source = read_code_text(mod_file)
                 tree = ast.parse(source, filename=mod_file)
             except (SyntaxError, OSError, UnicodeDecodeError):
                 logger.debug("Could not parse transitive dependency '%s'", mod_name)
@@ -612,8 +611,7 @@ class FunctionTracker:
             return {}
 
         try:
-            with open(file_path, encoding="utf-8") as f:
-                source = f.read()
+            source = read_code_text(file_path)
             tree = ast.parse(source, filename=file_path)
         except (SyntaxError, OSError, UnicodeDecodeError):
             return {}
@@ -862,8 +860,7 @@ class FunctionTracker:
             if not file_path or not os.path.isfile(file_path):
                 return hashlib.sha256(b"unknown").hexdigest()
             try:
-                with open(file_path, "rb") as f:
-                    return hashlib.sha256(f.read()).hexdigest()
+                return hashlib.sha256(read_code_file(file_path)).hexdigest()
             except OSError:
                 return hashlib.sha256(b"unknown").hexdigest()
 
@@ -1160,8 +1157,7 @@ class FunctionTracker:
             if not mod_file or not os.path.isfile(mod_file):
                 continue
             try:
-                with open(mod_file, encoding="utf-8") as f:
-                    source = f.read()
+                source = read_code_text(mod_file)
                 tree = ast.parse(source)
             except (SyntaxError, OSError, UnicodeDecodeError):
                 continue
@@ -1206,8 +1202,7 @@ class FunctionTracker:
                 imports_map[mod_name] = set()
                 continue
             try:
-                with open(mod_file, encoding="utf-8") as f:
-                    source = f.read()
+                source = read_code_text(mod_file)
                 tree = ast.parse(source)
             except (SyntaxError, OSError, UnicodeDecodeError):
                 imports_map[mod_name] = set()

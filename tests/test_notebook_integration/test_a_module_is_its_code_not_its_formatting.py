@@ -132,3 +132,35 @@ def test_a_cash_directive_added_to_a_module_still_re_runs_it(nb_runner, tmp_path
         "a @cash: directive was added to the function and the statement was "
         "served from cache, so the directive had no effect:\n" + raw
     )
+
+
+@LOAD_SENSITIVE
+def test_a_module_used_the_moment_it_is_written_is_still_its_code(nb_runner, tmp_path):
+    """The same, with the module written by the cell before the one that uses it.
+
+    For two seconds after a write cash does not memoise what it read from a
+    file (``source_norm.stat_has_settled``), so building the key re-reads the
+    module. It did that with plain ``open``, inside the running statement, and
+    the statement's own file tracker recorded the module as a data file it
+    read: the comment added below changed the bytes and the call re-ran. The
+    tests above only hit this when the kernel booted in under two seconds.
+    """
+    source = _module()
+    nb_runner.create_notebook(
+        [
+            HEAD,
+            "from pathlib import Path\nPath('freshlib.py').write_text(" + repr(source) + ", encoding='utf-8')",
+            "import freshlib",
+            "DATA = freshlib.load(8)",
+        ]
+    )
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    (tmp_path / "freshlib.py").write_text(_module("# a note to myself\n"), encoding="utf-8")
+    nb_runner.run_cell(4)
+    raw = nb_runner.get_raw_output(4)
+    assert "CACHED: DATA" in raw, (
+        "the module was written just before its first use, then a comment was "
+        "added, and the call re-ran; nothing it does changed:\n" + raw
+    )

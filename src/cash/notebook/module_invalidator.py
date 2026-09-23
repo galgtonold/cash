@@ -28,6 +28,8 @@ import sys
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
+from ..source_norm import read_code_file
+
 if TYPE_CHECKING:
     from ._protocols import ShellProtocol
     from .function_tracker import FunctionTracker
@@ -532,8 +534,7 @@ class ModuleInvalidator:
 
         if file_path and os.path.isfile(file_path):
             try:
-                with open(file_path, "rb") as f:
-                    hasher.update(f.read())
+                hasher.update(read_code_file(file_path))
             except OSError as e:
                 logger.debug("[MODULE] Could not read module file %r for hash: %s", file_path, e)
 
@@ -545,8 +546,7 @@ class ModuleInvalidator:
         for dep_path in sorted(dep_files):
             if os.path.isfile(dep_path):
                 try:
-                    with open(dep_path, "rb") as f:
-                        hasher.update(f.read())
+                    hasher.update(read_code_file(dep_path))
                 except OSError as e:
                     logger.debug("[MODULE] Could not read dep file %r for hash: %s", dep_path, e)
 
