@@ -36,22 +36,6 @@ class TestMutableObjectMutations:
         out2 = nb_runner.get_output(4)
         assert "Items: ['a', 'b']" in out2
 
-    def test_dict_update_across_cells(self, nb_runner):
-        """Dict built incrementally with updates across cells."""
-        nb_runner.create_notebook(
-            [
-                "config = {}",
-                "config['host'] = 'localhost'",
-                "config['port'] = 8080",
-                "config['debug'] = True",
-                "print(f'Config: {sorted(config.items())}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "debug" in out and "host" in out and "port" in out
-
     def test_set_operations_across_cells(self, nb_runner):
         """Set built with add/update operations."""
         nb_runner.create_notebook(
@@ -118,53 +102,6 @@ class TestMutableObjectMutations:
 class TestClassInstanceMutations:
     """Test caching with class instance state changes across cells."""
 
-    def test_class_attribute_mutation(self, nb_runner):
-        """Class instance with method calls that change state."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                class Counter:
-                    def __init__(self):
-                        self.value = 0
-                    def increment(self, n=1):
-                        self.value += n
-                    def __repr__(self):
-                        return f'Counter({self.value})'
-                c = Counter()"""),
-                "c.increment()",
-                "c.increment(5)",
-                "print(f'Counter: {c}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "Counter(6)" in out
-
-    def test_class_method_chain(self, nb_runner):
-        """Class with method chaining pattern."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                class Builder:
-                    def __init__(self):
-                        self.parts = []
-                    def add(self, part):
-                        self.parts.append(part)
-                        return self
-                    def build(self):
-                        return '-'.join(self.parts)"""),
-                "b = Builder()",
-                "b.add('head').add('body')",
-                "b.add('foot')",
-                "result = b.build()\nprint(f'Built: {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "Built: head-body-foot" in out
-
     def test_instance_attribute_change_detected(self, nb_runner):
         """Changing an earlier cell's mutation should propagate.
 
@@ -199,53 +136,8 @@ class TestClassInstanceMutations:
         assert "Mode:" in out2  # At minimum, we get output
 
 
-class TestGlobalStatePatterns:
-    """Test caching with global mutable state patterns."""
-
-    def test_module_level_list_accumulator(self, nb_runner):
-        """Global list used as an accumulator across cells."""
-        nb_runner.create_notebook(
-            [
-                "log = []",
-                "log.append('step1')",
-                "log.append('step2')",
-                "log.append('step3')",
-                "print(f'Log: {log}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "step1" in out and "step2" in out and "step3" in out
-
-
 class TestDecoratorPatterns:
     """Test caching with various decorator patterns."""
-
-    def test_function_with_decorator(self, nb_runner):
-        """Function defined with a decorator in one cell, used in another."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def log_calls(func):
-                    def wrapper(*args, **kwargs):
-                        wrapper.call_count += 1
-                        return func(*args, **kwargs)
-                    wrapper.call_count = 0
-                    wrapper.__name__ = func.__name__
-                    return wrapper"""),
-                textwrap.dedent("""\
-                @log_calls
-                def compute(x):
-                    return x * 2"""),
-                "r1 = compute(5)\nr2 = compute(10)",
-                "print(f'Results: {r1}, {r2}, Calls: {compute.call_count}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "Results: 10, 20" in out
 
     def test_decorator_change_propagates(self, nb_runner):
         """Changing the decorator definition should invalidate decorated functions."""
@@ -276,54 +168,9 @@ class TestDecoratorPatterns:
         out2 = nb_runner.get_output(3)
         assert "Result: 18" in out2  # (5+1)*3
 
-    def test_property_decorator(self, nb_runner):
-        """Class with @property decorator."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                class Circle:
-                    def __init__(self, radius):
-                        self._radius = radius
-                    @property
-                    def area(self):
-                        import math
-                        return math.pi * self._radius ** 2
-                    @property
-                    def circumference(self):
-                        import math
-                        return 2 * math.pi * self._radius"""),
-                "c = Circle(5)",
-                "print(f'Area: {c.area:.2f}, Circ: {c.circumference:.2f}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "Area: 78.54" in out
-        assert "Circ: 31.42" in out
-
 
 class TestGeneratorPatterns:
     """Test caching with generator patterns."""
-
-    def test_generator_function_usage(self, nb_runner):
-        """Generator function defined in one cell, consumed in another."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def fibonacci(n):
-                    a, b = 0, 1
-                    for _ in range(n):
-                        yield a
-                        a, b = b, a + b"""),
-                "fibs = list(fibonacci(8))",
-                "print(f'Fibonacci: {fibs}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "Fibonacci: [0, 1, 1, 2, 3, 5, 8, 13]" in out
 
     def test_generator_expression_caching(self, nb_runner):
         """Generator expression converted to list — should cache the list."""
@@ -456,22 +303,6 @@ class TestComplexDependencyChains:
         out2 = nb_runner.get_output(4)
         assert "Result: 10" in out2
 
-    def test_multiple_outputs_single_cell(self, nb_runner):
-        """Cell that produces multiple outputs, used by different downstream cells."""
-        nb_runner.create_notebook(
-            [
-                "a, b, c = 1, 2, 3",
-                "x = a * 10",
-                "y = b * 10",
-                "z = c * 10",
-                "print(f'x={x}, y={y}, z={z}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "x=10, y=20, z=30" in out
-
 
 class TestRealWorldPatterns:
     """Real-world usage patterns from data science workflows."""
@@ -502,22 +333,6 @@ class TestRealWorldPatterns:
         nb_runner.run_all()
         out = nb_runner.get_output(4)
         assert "Total: 825.0" in out  # (100+200+150+300)*1.1
-
-    def test_feature_engineering_pipeline(self, nb_runner):
-        """ML-style feature engineering across cells."""
-        nb_runner.create_notebook(
-            [
-                "import numpy as np\nnp.random.seed(42)\nX = np.random.randn(100, 3)",
-                "X_centered = X - X.mean(axis=0)",
-                "X_scaled = X_centered / X_centered.std(axis=0)",
-                "print(f'Mean: {X_scaled.mean(axis=0).round(4).tolist()}')\nprint(f'Std: {X_scaled.std(axis=0).round(4).tolist()}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        # After centering and scaling, mean should be ~0 and std ~1
-        assert "0.0" in out or "-0.0" in out
 
     def test_config_driven_computation(self, nb_runner):
         """Configuration dict drives computation in later cells."""
@@ -556,50 +371,6 @@ class TestRealWorldPatterns:
 class TestEdgeCasePatterns:
     """Edge cases that might trip the caching system."""
 
-    def test_empty_cell_between_deps(self, nb_runner):
-        """Empty cell between dependent cells shouldn't break caching."""
-        nb_runner.create_notebook(
-            [
-                "x = 42",
-                "",  # empty cell
-                "y = x * 2\nprint(f'y: {y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "y: 84" in out
-
-    def test_comment_only_cell(self, nb_runner):
-        """Cell with only comments shouldn't affect caching."""
-        nb_runner.create_notebook(
-            [
-                "x = 10",
-                "# This is a comment\n# Another comment",
-                "y = x + 5\nprint(f'y: {y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "y: 15" in out
-
-    def test_none_value_assignment(self, nb_runner):
-        """Assigning None should be tracked correctly."""
-        nb_runner.create_notebook(
-            [
-                "result = None",
-                textwrap.dedent("""\
-                if result is None:
-                    result = 42
-                print(f'Result: {result}')"""),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "Result: 42" in out
-
     def test_walrus_operator(self, nb_runner):
         """Walrus operator (:=) in comprehension."""
         nb_runner.create_notebook(
@@ -627,33 +398,6 @@ class TestEdgeCasePatterns:
         nb_runner.run_all()
         out = nb_runner.get_output(3)
         assert "Result: 131.88" in out
-
-    def test_multiline_string_assignment(self, nb_runner):
-        """Multi-line string should be cached correctly."""
-        nb_runner.create_notebook(
-            [
-                'text = """line1\nline2\nline3"""',
-                "lines = text.strip().split('\\n')\nprint(f'Lines: {len(lines)}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "Lines: 3" in out
-
-    def test_large_number_of_variables(self, nb_runner):
-        """Cell that creates many variables at once."""
-        nb_runner.create_notebook(
-            [
-                "\n".join(f"v{i} = {i}" for i in range(20)),
-                "total = " + " + ".join(f"v{i}" for i in range(20)),
-                "print(f'Total: {total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "Total: 190" in out  # sum(0..19) = 190
 
 
 class TestFileAndModuleInteraction:

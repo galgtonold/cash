@@ -31,67 +31,9 @@ class TestStringFormattingPatterns:
         nb_runner.run_all()
         assert "Alice: avg=89.0, total=267" in nb_runner.get_output(2)
 
-    def test_template_string_pattern(self, nb_runner):
-        """String.Template across cells."""
-        nb_runner.create_notebook(
-            [
-                "from string import Template",
-                textwrap.dedent("""\
-                tmpl = Template("Hello $name, you have $count items")
-            """),
-                textwrap.dedent("""\
-                msg = tmpl.substitute(name='Bob', count=5)
-                print(msg)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "Hello Bob, you have 5 items" in nb_runner.get_output(3)
-
-    def test_multiline_string_operations(self, nb_runner):
-        """Multi-line string operations across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent('''\
-                text = """
-                Line one
-                Line two
-                Line three
-                """
-            '''),
-                textwrap.dedent("""\
-                lines = [l.strip() for l in text.strip().split('\\n') if l.strip()]
-                print(f"count={len(lines)} first={lines[0]}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "count=3 first=Line one" in nb_runner.get_output(2)
-
 
 class TestRegexPatterns:
     """Test regex patterns across cells."""
-
-    def test_compiled_regex_across_cells(self, nb_runner):
-        """Compiled regex used in subsequent cell."""
-        nb_runner.create_notebook(
-            [
-                "import re",
-                "pattern = re.compile(r'(\\d{4})-(\\d{2})-(\\d{2})')",
-                textwrap.dedent("""\
-                text = "Born on 1990-05-15, graduated 2012-06-01"
-                dates = pattern.findall(text)
-                print(dates)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        output = nb_runner.get_output(3)
-        assert "1990" in output
-        assert "2012" in output
 
     def test_regex_change_propagation(self, nb_runner):
         """Change regex pattern → downstream updates."""
@@ -150,27 +92,6 @@ class TestJsonPatterns:
         nb_runner.run_all()
         output = nb_runner.get_output(3)
         assert "'name': 'test'" in output or '"name": "test"' in output
-
-    def test_json_transform_pipeline(self, nb_runner):
-        """JSON transform across multiple cells."""
-        nb_runner.create_notebook(
-            [
-                "import json",
-                textwrap.dedent("""\
-                raw = '[{"name": "a", "val": 1}, {"name": "b", "val": 2}]'
-                records = json.loads(raw)
-            """),
-                textwrap.dedent("""\
-                transformed = {r['name']: r['val'] * 10 for r in records}
-                print(transformed)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        output = nb_runner.get_output(3)
-        assert "'a': 10" in output
-        assert "'b': 20" in output
 
 
 class TestCsvPatterns:

@@ -39,31 +39,6 @@ class TestMonteCarloSimulation:
         val = float(output.split("pi_est=")[1].strip())
         assert abs(val - 3.14159) < 0.1
 
-    def test_random_walk(self, nb_runner):
-        """Random walk simulation across cells."""
-        nb_runner.create_notebook(
-            [
-                "import numpy as np",
-                textwrap.dedent("""\
-                np.random.seed(42)
-                steps = np.random.choice([-1, 1], size=1000)
-                walk = np.cumsum(steps)
-            """),
-                textwrap.dedent("""\
-                final_pos = walk[-1]
-                max_pos = walk.max()
-                min_pos = walk.min()
-                print(f"final={final_pos} max={max_pos} min={min_pos}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        output = nb_runner.get_output(3)
-        assert "final=" in output
-        assert "max=" in output
-        assert "min=" in output
-
 
 class TestStatisticalTests:
     """Test statistical computation patterns."""

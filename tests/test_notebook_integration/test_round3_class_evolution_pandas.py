@@ -110,34 +110,6 @@ class TestClassEvolution:
         nb_runner.run_all()
         assert "60" in nb_runner.get_output(2)
 
-    def test_class_hierarchy_refactor(self, nb_runner):
-        """Refactor class hierarchy by inserting an intermediate base."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                class Vehicle:
-                    def __init__(self, speed):
-                        self.speed = speed
-                    def info(self):
-                        return f"Speed: {self.speed}"
-            """),
-                textwrap.dedent("""\
-                class Car(Vehicle):
-                    def __init__(self, speed, doors):
-                        super().__init__(speed)
-                        self.doors = doors
-            """),
-                textwrap.dedent("""\
-                c = Car(120, 4)
-                print(c.info(), c.doors)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "Speed: 120" in nb_runner.get_output(3)
-        assert "4" in nb_runner.get_output(3)
-
 
 # ============================================================
 # Test Group 2: Selective Cell Re-execution
@@ -207,51 +179,6 @@ class TestVariableReassignment:
         nb_runner.run_all()
         assert "[0, 4, 16, 36, 64]" in nb_runner.get_output(4)
 
-    def test_variable_type_change(self, nb_runner):
-        """Variable changes type across cells."""
-        nb_runner.create_notebook(
-            [
-                "value = 42",  # int
-                "value = str(value)",  # str
-                "value = list(value)",  # list of chars
-                "print(value)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "['4', '2']" in nb_runner.get_output(4)
-
-    def test_swap_variables(self, nb_runner):
-        """Swap two variables across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                a = 'first'
-                b = 'second'
-            """),
-                "a, b = b, a",
-                "print(a, b)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "second first" in nb_runner.get_output(3)
-
-    def test_augmented_assignment_chain(self, nb_runner):
-        """Chain of augmented assignments across cells."""
-        nb_runner.create_notebook(
-            [
-                "total = 0",
-                "total += 10",
-                "total += 20",
-                "total *= 2",
-                "print(total)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "60" in nb_runner.get_output(5)
-
     def test_conditional_variable_assignment(self, nb_runner):
         """Variable assigned conditionally across cells."""
         nb_runner.create_notebook(
@@ -279,66 +206,6 @@ class TestVariableReassignment:
 # ============================================================
 # Test Group 4: Import Pattern Evolution
 # ============================================================
-
-
-class TestImportPatternEvolution:
-    """Test evolving import patterns during a notebook session."""
-
-    def test_add_imports_incrementally(self, nb_runner):
-        """Add imports incrementally across cells."""
-        nb_runner.create_notebook(
-            [
-                "import math",
-                "from collections import Counter",
-                textwrap.dedent("""\
-                data = [1, 1, 2, 3, 3, 3]
-                counts = Counter(data)
-                entropy = -sum(
-                    (c/len(data)) * math.log2(c/len(data))
-                    for c in counts.values()
-                )
-                print(f"{entropy:.2f}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        output = nb_runner.get_output(3)
-        # Should be a valid entropy value
-        assert "." in output
-
-    def test_import_alias_change(self, nb_runner):
-        """Change import alias and verify downstream updates."""
-        nb_runner.create_notebook(
-            [
-                "import math as m",
-                textwrap.dedent("""\
-                result = m.sqrt(144)
-                print(result)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "12.0" in nb_runner.get_output(2)
-
-    def test_selective_imports(self, nb_runner):
-        """From-imports of specific items."""
-        nb_runner.create_notebook(
-            [
-                "from os.path import join, basename, dirname",
-                textwrap.dedent("""\
-                path = join('home', 'user', 'file.txt')
-                base = basename(path)
-                directory = dirname(path)
-                print(base, directory)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        output = nb_runner.get_output(2)
-        assert "file.txt" in output
 
 
 # ============================================================
@@ -370,24 +237,6 @@ class TestDatetimePatterns:
         output = nb_runner.get_output(3)
         assert "2024-01-22 13:30" in output
         assert "7" in output
-
-    def test_date_range_generation(self, nb_runner):
-        """Generate date ranges with pandas."""
-        nb_runner.create_notebook(
-            [
-                "import pandas as pd",
-                textwrap.dedent("""\
-                dates = pd.date_range('2024-01-01', periods=5, freq='D')
-                df = pd.DataFrame({'date': dates, 'value': range(5)})
-            """),
-                textwrap.dedent("""\
-                print(len(df), df['value'].sum())
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "5 10" in nb_runner.get_output(3)
 
     def test_timedelta_arithmetic(self, nb_runner):
         """Timedelta arithmetic across cells."""

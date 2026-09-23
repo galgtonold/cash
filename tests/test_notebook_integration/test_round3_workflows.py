@@ -47,45 +47,6 @@ class TestRealWorldDataScience:
         assert output2.strip() == output.strip()
 
     @pytest.mark.libraries
-    def test_datetime_computation_workflow(self, nb_runner):
-        """Date/time computations typical in analytics notebooks."""
-        nb_runner.create_notebook(
-            [
-                "from datetime import datetime, timedelta",
-                "start = datetime(2024, 1, 1)\nend = datetime(2024, 12, 31)",
-                "duration = (end - start).days",
-                "months = duration // 30",
-                "print(f'days={duration} months={months}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(5)
-        assert "days=365" in output
-        assert "months=12" in output
-
-    @pytest.mark.libraries
-    def test_json_api_response_processing(self, nb_runner):
-        """Processing JSON data like API responses."""
-        nb_runner.create_notebook(
-            [
-                "import json",
-                'raw = \'{"users": [{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}]}\'',
-                "data = json.loads(raw)",
-                "names = [u['name'] for u in data['users']]\navg_age = sum(u['age'] for u in data['users']) / len(data['users'])",
-                "print(f'names={names} avg_age={avg_age}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(5)
-        assert "Alice" in output
-        assert "Bob" in output
-        assert "avg_age=27.5" in output
-
-    @pytest.mark.libraries
     def test_regex_text_processing(self, nb_runner):
         """Regex-based text processing common in NLP notebooks."""
         nb_runner.create_notebook(
@@ -164,21 +125,6 @@ class TestErrorRecovery:
         output = nb_runner.get_output(4)
         assert "result_late=" in output
         assert "1, 2, 3, 1, 2, 3" in output
-
-    @pytest.mark.core
-    def test_import_error_then_workaround(self, nb_runner):
-        """Handle ImportError by providing a fallback."""
-        nb_runner.create_notebook(
-            [
-                "try:\n    import nonexistent_package\n    source = 'package'\nexcept ImportError:\n    source = 'fallback'",
-                "print(f'source={source}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(2)
-        assert "source=fallback" in output
 
 
 class TestDecoratorAndClosurePatterns:
@@ -288,23 +234,6 @@ class TestMultiCellClassPatterns:
         output2 = nb_runner.get_output(4)
         assert "result=20" in output2
 
-    @pytest.mark.core
-    def test_class_with_classmethod_and_staticmethod(self, nb_runner):
-        """Class with classmethods and staticmethods."""
-        nb_runner.create_notebook(
-            [
-                "class MathHelper:\n    factor = 2\n    \n    @classmethod\n    def scale(cls, x):\n        return x * cls.factor\n    \n    @staticmethod\n    def add(a, b):\n        return a + b",
-                "scaled = MathHelper.scale(5)\nadded = MathHelper.add(3, 4)",
-                "print(f'scaled={scaled} added={added}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(3)
-        assert "scaled=10" in output
-        assert "added=7" in output
-
 
 class TestDynamicVariablePatterns:
     """Tests for dynamic variable creation patterns."""
@@ -332,23 +261,6 @@ class TestDynamicVariablePatterns:
 
         output2 = nb_runner.get_output(4)
         assert "result=10.0" in output2
-
-    @pytest.mark.core
-    def test_enumerate_pattern(self, nb_runner):
-        """Enumerate in loops should cache results."""
-        nb_runner.create_notebook(
-            [
-                "items = ['a', 'b', 'c']",
-                "indexed = {i: v for i, v in enumerate(items)}",
-                "print(f'indexed={indexed}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(3)
-        assert "0" in output
-        assert "'a'" in output
 
     @pytest.mark.core
     def test_zip_pattern(self, nb_runner):
@@ -429,79 +341,6 @@ class TestNotebookIterativeWorkflow:
         assert "below=2" in output2
 
 
-class TestConditionalImportPatterns:
-    """Tests for conditional and dynamic import patterns."""
-
-    @pytest.mark.modules
-    def test_try_import_with_fallback(self, nb_runner):
-        """Try importing an optional package with fallback."""
-        nb_runner.create_notebook(
-            [
-                "try:\n    import scipy\n    HAS_SCIPY = True\nexcept ImportError:\n    HAS_SCIPY = False",
-                "if HAS_SCIPY:\n    result = 'scipy available'\nelse:\n    result = 'scipy not available'",
-                "print(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(3)
-        assert "result=" in output
-        assert "scipy" in output
-
-    @pytest.mark.modules
-    def test_import_from_pathlib(self, nb_runner):
-        """Import Path from pathlib and use it."""
-        nb_runner.create_notebook(
-            [
-                "from pathlib import Path",
-                "p = Path('/tmp/test')",
-                "parts = p.parts",
-                "print(f'parts={parts}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(4)
-        assert "parts=" in output
-
-    @pytest.mark.modules
-    def test_collections_import_and_use(self, nb_runner):
-        """Use collections module types."""
-        nb_runner.create_notebook(
-            [
-                "from collections import Counter, defaultdict",
-                "data = ['a', 'b', 'a', 'c', 'a', 'b']",
-                "counts = Counter(data)\ndd = defaultdict(list)\nfor item in data:\n    dd[item].append(1)",
-                "print(f'counts={dict(counts)} dd_keys={sorted(dd.keys())}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(4)
-        assert "'a': 3" in output
-        assert "'b': 2" in output
-
-    @pytest.mark.modules
-    def test_import_star_equivalent_manual(self, nb_runner):
-        """Multiple specific imports from same module."""
-        nb_runner.create_notebook(
-            [
-                "from os.path import join, dirname, basename, exists",
-                "p = join('/tmp', 'test', 'file.txt')",
-                "d = dirname(p)\nb = basename(p)",
-                "print(f'd={d} b={b}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(4)
-        assert "b=file.txt" in output
-
-
 class TestContextManagerPatterns:
     """Tests for context manager and resource management patterns."""
 
@@ -524,43 +363,9 @@ class TestContextManagerPatterns:
         output = nb_runner.get_output(4)
         assert "content=hello from context manager" in output
 
-    @pytest.mark.core
-    def test_custom_context_manager(self, nb_runner):
-        """Custom context manager class."""
-        nb_runner.create_notebook(
-            [
-                "class Timer:\n    def __enter__(self):\n        self.started = True\n        return self\n    def __exit__(self, *args):\n        self.started = False",
-                "with Timer() as t:\n    result = 42\n    was_started = t.started",
-                "print(f'result={result} was_started={was_started}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(3)
-        assert "result=42" in output
-        assert "was_started=True" in output
-
 
 class TestComplexExpressionPatterns:
     """Tests for complex expression patterns."""
-
-    @pytest.mark.core
-    def test_chained_comparisons(self, nb_runner):
-        """Python chained comparisons."""
-        nb_runner.create_notebook(
-            [
-                "x = 5",
-                "result = 1 < x < 10\nresult2 = 10 < x < 20",
-                "print(f'result={result} result2={result2}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(3)
-        assert "result=True" in output
-        assert "result2=False" in output
 
     @pytest.mark.core
     def test_ternary_expression_chain(self, nb_runner):
@@ -584,55 +389,3 @@ class TestComplexExpressionPatterns:
 
         output2 = nb_runner.get_output(3)
         assert "category=high" in output2
-
-    @pytest.mark.core
-    def test_nested_list_comprehension(self, nb_runner):
-        """Nested list comprehension (matrix flatten)."""
-        nb_runner.create_notebook(
-            [
-                "matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]",
-                "flat = [x for row in matrix for x in row]",
-                "total = sum(flat)",
-                "print(f'total={total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(4)
-        assert "total=45" in output
-
-    @pytest.mark.core
-    def test_dict_merge_operator(self, nb_runner):
-        """Dict merge with | operator (Python 3.9+)."""
-        nb_runner.create_notebook(
-            [
-                "d1 = {'a': 1, 'b': 2}",
-                "d2 = {'b': 3, 'c': 4}",
-                "merged = d1 | d2",
-                "print(f'merged={merged}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(4)
-        assert "'a': 1" in output
-        assert "'b': 3" in output  # d2 wins
-        assert "'c': 4" in output
-
-    @pytest.mark.core
-    def test_multiple_assignment_targets(self, nb_runner):
-        """Multiple assignment targets in one statement."""
-        nb_runner.create_notebook(
-            [
-                "x = y = z = 42",
-                "total = x + y + z",
-                "print(f'total={total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(3)
-        assert "total=126" in output

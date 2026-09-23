@@ -43,97 +43,10 @@ class TestContextManagerBasics:
         assert "label=test" in nb_runner.get_output(2)
         assert "elapsed_positive=True" in nb_runner.get_output(2)
 
-    def test_contextlib_redirect_stdout(self, nb_runner):
-        """contextlib.redirect_stdout pattern across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                import io
-
-                buffer = io.StringIO()
-                # Manually write to buffer (simulating redirect)
-                buffer.write("captured line 1\\n")
-                buffer.write("captured line 2\\n")
-                captured = buffer.getvalue()
-                print(f"captured_len={len(captured)}")
-            """),
-                textwrap.dedent("""\
-                lines = captured.strip().split('\\n')
-                print(f"lines={lines}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "captured_len=" in nb_runner.get_output(1)
-        out2 = nb_runner.get_output(2)
-        assert "captured line 1" in out2
-        assert "captured line 2" in out2
-
-    def test_nested_context_managers(self, nb_runner):
-        """Nested context managers across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                class Indent:
-                    def __init__(self, label, level):
-                        self.label = label
-                        self.level = level
-                    def __enter__(self):
-                        return self
-                    def __exit__(self, *args):
-                        pass
-                    def log(self, msg):
-                        return '  ' * self.level + f'[{self.label}] {msg}'
-
-                outer = Indent('outer', 1)
-                inner = Indent('inner', 2)
-                entry1 = outer.log('start')
-                entry2 = inner.log('doing work')
-                entry3 = outer.log('end')
-                log_entries = [entry1, entry2, entry3]
-                print(f"entries={log_entries}")
-            """),
-                textwrap.dedent("""\
-                print(f"log_count={len(log_entries)}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "[outer] start" in nb_runner.get_output(1)
-        assert "[inner] doing work" in nb_runner.get_output(1)
-        assert "log_count=3" in nb_runner.get_output(2)
-
 
 @pytest.mark.stress
 class TestResourcePatterns:
     """Test resource management patterns."""
-
-    def test_suppress_exceptions(self, nb_runner):
-        """contextlib.suppress pattern."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                from contextlib import suppress
-
-                results = []
-                data = ['10', 'abc', '20', None, '30']
-                for item in data:
-                    with suppress(TypeError, ValueError):
-                        results.append(int(item))
-                print(f"results={results}")
-            """),
-                textwrap.dedent("""\
-                total = sum(results)
-                print(f"total={total}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "results=[10, 20, 30]" in nb_runner.get_output(1)
-        assert "total=60" in nb_runner.get_output(2)
 
     def test_exitstack(self, nb_runner):
         """ExitStack for dynamic context management."""

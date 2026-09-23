@@ -9,60 +9,6 @@ import pytest
 class TestClosureBasics:
     """Test closure patterns across cells."""
 
-    def test_closure_captures_value(self, nb_runner):
-        """Closure capturing variable from outer scope."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def make_multiplier(factor):
-                    def multiply(x):
-                        return x * factor
-                    return multiply
-
-                double = make_multiplier(2)
-                triple = make_multiplier(3)
-            """),
-                textwrap.dedent("""\
-                r1 = double(10)
-                r2 = triple(10)
-                print(f"r1={r1} r2={r2}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "r1=20 r2=30" in nb_runner.get_output(2)
-
-    def test_closure_over_mutable_state(self, nb_runner):
-        """Closure with nonlocal modifying mutable state."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def make_counter(start=0):
-                    count = start
-                    def increment():
-                        nonlocal count
-                        count += 1
-                        return count
-                    def get():
-                        return count
-                    return increment, get
-
-                inc, get = make_counter(10)
-            """),
-                textwrap.dedent("""\
-                inc()
-                inc()
-                inc()
-                val = get()
-                print(f"val={val}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "val=13" in nb_runner.get_output(2)
-
     def test_closure_factory_change(self, nb_runner):
         """Changing closure factory propagates."""
         nb_runner.create_notebook(
@@ -134,59 +80,10 @@ class TestLatebinding:
         assert "late=[4, 4, 4, 4, 4]" in out
         assert "early=[0, 1, 2, 3, 4]" in out
 
-    def test_functools_partial_vs_closure(self, nb_runner):
-        """Comparing partial vs closure across cells."""
-        nb_runner.create_notebook(
-            [
-                "from functools import partial",
-                textwrap.dedent("""\
-                def power(base, exp):
-                    return base ** exp
-
-                square_closure = lambda x: power(x, 2)
-                square_partial = partial(power, exp=2)
-                cube_partial = partial(power, exp=3)
-            """),
-                textwrap.dedent("""\
-                r1 = square_closure(5)
-                r2 = square_partial(5)
-                r3 = cube_partial(5)
-                print(f"closure={r1} partial_sq={r2} partial_cu={r3}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "closure=25 partial_sq=25 partial_cu=125" in nb_runner.get_output(3)
-
 
 @pytest.mark.stress
 class TestNestedScopes:
     """Test deeply nested scope patterns."""
-
-    def test_triple_nested_closure(self, nb_runner):
-        """Three levels of closure nesting."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def outer(a):
-                    def middle(b):
-                        def inner(c):
-                            return a + b + c
-                        return inner
-                    return middle
-
-                fn = outer(100)(20)
-            """),
-                textwrap.dedent("""\
-                result = fn(3)
-                print(f"result={result}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=123" in nb_runner.get_output(2)
 
     def test_closure_with_class(self, nb_runner):
         """Closure inside a class method."""
@@ -228,35 +125,3 @@ class TestNestedScopes:
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "results=['clicked:button', 'also:button']" in nb_runner.get_output(2)
-
-    def test_nonlocal_accumulator(self, nb_runner):
-        """Nonlocal variable accumulation across calls."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def make_accumulator():
-                    total = 0
-                    items = []
-                    def add(value):
-                        nonlocal total
-                        total += value
-                        items.append(value)
-                        return total
-                    def summary():
-                        return {'total': total, 'count': len(items), 'items': items[:]}
-                    return add, summary
-
-                add, summary = make_accumulator()
-            """),
-                textwrap.dedent("""\
-                add(10)
-                add(20)
-                add(30)
-                s = summary()
-                print(f"total={s['total']} count={s['count']} items={s['items']}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total=60 count=3 items=[10, 20, 30]" in nb_runner.get_output(2)

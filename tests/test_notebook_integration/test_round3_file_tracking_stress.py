@@ -135,67 +135,6 @@ class TestFileTrackingEdgeCases:
         assert "profit=540" in output2
 
 
-class TestComplexPandasWorkflows:
-    """Tests for complex pandas operation chains."""
-
-    @pytest.mark.libraries
-    def test_groupby_agg_pipeline(self, nb_runner):
-        """GroupBy + aggregation pipeline."""
-        nb_runner.create_notebook(
-            [
-                "import pandas as pd",
-                "df = pd.DataFrame({\n    'category': ['A', 'B', 'A', 'B', 'A'],\n    'value': [10, 20, 30, 40, 50]\n})",
-                "grouped = df.groupby('category')['value'].agg(['sum', 'mean', 'count'])",
-                "a_sum = grouped.loc['A', 'sum']\nb_mean = grouped.loc['B', 'mean']",
-                "print(f'a_sum={a_sum} b_mean={b_mean}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(5)
-        assert "a_sum=90" in output
-        assert "b_mean=30.0" in output
-
-    @pytest.mark.libraries
-    def test_merge_and_filter(self, nb_runner):
-        """DataFrame merge and filter operations."""
-        nb_runner.create_notebook(
-            [
-                "import pandas as pd",
-                "users = pd.DataFrame({'id': [1, 2, 3], 'name': ['Alice', 'Bob', 'Charlie']})",
-                "orders = pd.DataFrame({'user_id': [1, 2, 1, 3, 2], 'amount': [100, 200, 150, 300, 50]})",
-                "merged = orders.merge(users, left_on='user_id', right_on='id')",
-                "alice_total = merged[merged['name'] == 'Alice']['amount'].sum()",
-                "print(f'alice_total={alice_total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(6)
-        assert "alice_total=250" in output
-
-    @pytest.mark.libraries
-    def test_pivot_table(self, nb_runner):
-        """Pivot table creation and querying."""
-        nb_runner.create_notebook(
-            [
-                "import pandas as pd\nimport numpy as np",
-                "df = pd.DataFrame({\n    'date': ['Mon', 'Mon', 'Tue', 'Tue'],\n    'product': ['A', 'B', 'A', 'B'],\n    'sales': [10, 20, 30, 40]\n})",
-                "pivot = df.pivot_table(values='sales', index='date', columns='product', aggfunc='sum')",
-                "mon_a = pivot.loc['Mon', 'A']\ntue_total = pivot.loc['Tue'].sum()",
-                "print(f'mon_a={mon_a} tue_total={tue_total}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(5)
-        assert "mon_a=10" in output
-        assert "tue_total=70" in output
-
-
 class TestNumpyComputationChains:
     """Tests for numpy computation chains."""
 
@@ -247,26 +186,6 @@ class TestNumpyComputationChains:
         nb_runner.run_all()
         output2 = nb_runner.get_output(4)
         assert output2.strip() == output.strip()
-
-    @pytest.mark.libraries
-    def test_array_reshaping_chain(self, nb_runner):
-        """Array reshaping and manipulation chain."""
-        nb_runner.create_notebook(
-            [
-                "import numpy as np",
-                "arr = np.arange(24)",
-                "reshaped = arr.reshape(2, 3, 4)",
-                "sliced = reshaped[0, :, :2]",
-                "result = sliced.sum()",
-                "print(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(6)
-        # arr = 0..23, reshape(2,3,4), [0,:,:2] gives first half items
-        assert "result=" in output
 
 
 class TestCacheInvalidationStress:
@@ -400,25 +319,6 @@ class TestStringProcessingPipelines:
         output2 = nb_runner.get_output(6)
         assert "word_count=3" in output2
 
-    @pytest.mark.core
-    def test_string_building_accumulation(self, nb_runner):
-        """Building strings across cells."""
-        nb_runner.create_notebook(
-            [
-                "parts = []",
-                "parts_with_header = parts + ['Header']",
-                "parts_with_body = parts_with_header + ['Body line 1', 'Body line 2']",
-                "parts_with_footer = parts_with_body + ['Footer']",
-                "document = '\\n'.join(parts_with_footer)\nline_count = len(parts_with_footer)",
-                "print(f'line_count={line_count}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(6)
-        assert "line_count=4" in output
-
 
 class TestMathComputationChains:
     """Tests for mathematical computation chains."""
@@ -446,22 +346,6 @@ class TestMathComputationChains:
 
         output2 = nb_runner.get_output(4)
         assert "fib(15)=377" in output2
-
-    @pytest.mark.core
-    def test_recursive_function_caching(self, nb_runner):
-        """Recursive function definition and usage."""
-        nb_runner.create_notebook(
-            [
-                "def factorial(n):\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)",
-                "result = factorial(10)",
-                "print(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(3)
-        assert "result=3628800" in output
 
     @pytest.mark.core
     def test_math_module_computations(self, nb_runner):

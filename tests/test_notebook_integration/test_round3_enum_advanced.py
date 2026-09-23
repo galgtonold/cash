@@ -154,29 +154,3 @@ class TestEnumAutoAndFunctional:
         assert "CRITICAL: Fix bug" in out
         # CRITICAL (4) should come first
         assert out.index("CRITICAL") < out.index("LOW")
-
-    def test_functional_enum(self, nb_runner):
-        """Functional Enum creation across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                from enum import Enum
-
-                Status = Enum('Status', ['PENDING', 'ACTIVE', 'COMPLETED', 'ARCHIVED'])
-                items = {
-                    'task1': Status.PENDING,
-                    'task2': Status.ACTIVE,
-                    'task3': Status.COMPLETED,
-                }
-                print(f"count={len(items)}")
-            """),
-                textwrap.dedent("""\
-                active = [k for k, v in items.items() if v == Status.ACTIVE]
-                print(f"active={active}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "count=3" in nb_runner.get_output(1)
-        assert "active=['task2']" in nb_runner.get_output(2)

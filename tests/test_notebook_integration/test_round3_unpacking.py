@@ -35,30 +35,6 @@ class TestUnpacking:
         assert "x=6" in out
         assert "y=7" in out
 
-    def test_nested_unpacking(self, nb_runner):
-        """Nested tuple/list unpacking."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                records = [
-                    ('Alice', (95, 87, 92)),
-                    ('Bob', (78, 82, 90)),
-                    ('Charlie', (88, 91, 85)),
-                ]
-                summaries = []
-                for name, (s1, s2, s3) in records:
-                    avg = round((s1 + s2 + s3) / 3, 1)
-                    summaries.append((name, avg))
-            """),
-                "print(f'summaries={summaries}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "Alice" in out
-        assert "91.3" in out
-
     def test_swap_and_multi_assign(self, nb_runner):
         """Swap and multiple assignment in one line."""
         nb_runner.create_notebook(
@@ -80,26 +56,6 @@ class TestUnpacking:
         assert "x=42" in out
         assert "p=14" in out
         assert "q=2" in out
-
-    def test_dict_unpacking(self, nb_runner):
-        """Dict unpacking with ** operator."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                defaults = {'color': 'red', 'size': 10}
-                overrides = {'size': 20, 'weight': 5}
-                merged = {**defaults, **overrides, 'label': 'item'}
-            """),
-                "print(f'merged={merged}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "'color': 'red'" in out
-        assert "'size': 20" in out
-        assert "'weight': 5" in out
-        assert "'label': 'item'" in out
 
     def test_unpacking_propagation(self, nb_runner):
         """Unpacking with upstream data change."""

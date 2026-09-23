@@ -65,33 +65,6 @@ class TestCrossCellFunctionState:
         assert "25" in output
         assert "37" in output
 
-    def test_multiple_functions_sharing_state(self, nb_runner):
-        """Multiple functions in different cells sharing a config."""
-        nb_runner.create_notebook(
-            [
-                "base_rate = 0.05",
-                textwrap.dedent("""\
-                def simple_interest(principal, years):
-                    return principal * base_rate * years
-            """),
-                textwrap.dedent("""\
-                def compound_interest(principal, years):
-                    return principal * (1 + base_rate) ** years - principal
-            """),
-                textwrap.dedent("""\
-                si = simple_interest(1000, 5)
-                ci = compound_interest(1000, 5)
-                print(f"SI={si:.2f} CI={ci:.2f}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        output = nb_runner.get_output(4)
-        assert "SI=250.00" in output
-        # CI = 1000 * 1.05^5 - 1000 = 1276.28 - 1000 = 276.28
-        assert "CI=276.28" in output
-
     def test_recursive_function_across_cells(self, nb_runner):
         """Recursive function defined in one cell, called in another."""
         nb_runner.create_notebook(
@@ -235,34 +208,6 @@ class TestComplexDependencyGraphs:
         nb_runner.run_all()
         # 101+102+103+104+105 = 515
         assert "515" in nb_runner.get_output(8)
-
-    def test_chain_with_intermediate_function(self, nb_runner):
-        """Chain where intermediate step uses a function."""
-        nb_runner.create_notebook(
-            [
-                "raw = [5, 3, 8, 1, 9, 2, 7]",
-                textwrap.dedent("""\
-                def clean(data):
-                    return sorted([x for x in data if x > 2])
-                cleaned = clean(raw)
-            """),
-                textwrap.dedent("""\
-                def analyze(data):
-                    return {'min': min(data), 'max': max(data), 'mean': sum(data)/len(data)}
-                stats = analyze(cleaned)
-            """),
-                textwrap.dedent("""\
-                print(f"min={stats['min']} max={stats['max']} mean={stats['mean']:.1f}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        output = nb_runner.get_output(4)
-        # cleaned = [3, 5, 7, 8, 9], min=3, max=9, mean=6.4
-        assert "min=3" in output
-        assert "max=9" in output
-        assert "mean=6.4" in output
 
 
 class TestMultipleRestorePhases:

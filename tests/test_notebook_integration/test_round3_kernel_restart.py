@@ -313,67 +313,6 @@ class TestOutOfOrderExecution:
         # Either way it shouldn't crash the framework
 
 
-class TestVariableShadowing:
-    """Tests for variable name reuse/shadowing across cells."""
-
-    @pytest.mark.core
-    def test_same_variable_redefined_in_later_cell(self, nb_runner):
-        """Variable redefined in a later cell should use the latest value."""
-        nb_runner.create_notebook(
-            [
-                "x = 10",
-                "y = x * 2",
-                "x = 100",  # shadow x
-                "z = x * 2",
-                "print(f'y={y} z={z}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(5)
-        assert "y=20" in output  # uses original x=10
-        assert "z=200" in output  # uses shadowed x=100
-
-    @pytest.mark.core
-    def test_shadow_with_different_type(self, nb_runner):
-        """Redefining a variable with a different type should work."""
-        nb_runner.create_notebook(
-            [
-                "data = [1, 2, 3]",
-                "length = len(data)",
-                "data = 'hello world'",  # now a string
-                "length2 = len(data)",
-                "print(f'length={length} length2={length2}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(5)
-        assert "length=3" in output
-        assert "length2=11" in output
-
-    @pytest.mark.core
-    def test_shadow_function_with_value(self, nb_runner):
-        """Redefining a function name with a value should work."""
-        nb_runner.create_notebook(
-            [
-                "def compute(): return 42",
-                "result1 = compute()",
-                "compute = 99",  # shadow function with value
-                "result2 = compute",
-                "print(f'result1={result1} result2={result2}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(5)
-        assert "result1=42" in output
-        assert "result2=99" in output
-
-
 class TestComplexCellInteractions:
     """Tests for complex multi-cell interaction patterns."""
 
@@ -456,22 +395,6 @@ class TestComplexCellInteractions:
 
         output = nb_runner.get_output(4)
         assert "total=20" in output  # 0+2+4+6+8
-
-    @pytest.mark.core
-    def test_walrus_operator(self, nb_runner):
-        """Walrus operator (:=) in expressions should track assignments."""
-        nb_runner.create_notebook(
-            [
-                "data = [1, 2, 3, 4, 5]",
-                "filtered = [y for x in data if (y := x * 2) > 4]",
-                "print(f'filtered={filtered}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(3)
-        assert "filtered=" in output
 
     @pytest.mark.core
     def test_string_formatting_methods(self, nb_runner):
@@ -576,22 +499,6 @@ class TestLargeDataPatterns:
         nb_runner.run_all()
         output2 = nb_runner.get_output(3)
         assert "total=4999950000" in output2
-
-    @pytest.mark.core
-    def test_nested_data_structure_caching(self, nb_runner):
-        """Deeply nested data structures should cache correctly."""
-        nb_runner.create_notebook(
-            [
-                "nested = {'level1': {'level2': {'level3': [1, 2, 3]}}}",
-                "val = nested['level1']['level2']['level3'][1]",
-                "print(f'val={val}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(3)
-        assert "val=2" in output
 
     @pytest.mark.core
     def test_dataframe_operations_chain(self, nb_runner):

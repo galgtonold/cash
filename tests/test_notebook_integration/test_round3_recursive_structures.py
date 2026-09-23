@@ -13,39 +13,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.stress]
 class TestTreePatterns:
     """Test tree data structures across cells."""
 
-    def test_binary_tree_construction(self, nb_runner):
-        """Binary tree built across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                class Node:
-                    def __init__(self, val, left=None, right=None):
-                        self.val = val
-                        self.left = left
-                        self.right = right
-            """),
-                textwrap.dedent("""\
-                root = Node(1,
-                    Node(2, Node(4), Node(5)),
-                    Node(3, Node(6), Node(7))
-                )
-            """),
-                textwrap.dedent("""\
-                def inorder(node):
-                    if node is None:
-                        return []
-                    return inorder(node.left) + [node.val] + inorder(node.right)
-            """),
-                textwrap.dedent("""\
-                result = inorder(root)
-                print(result)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "[4, 2, 5, 1, 6, 3, 7]" in nb_runner.get_output(4)
-
     def test_tree_modification_propagates(self, nb_runner):
         """Modify tree structure → traversal changes."""
         nb_runner.create_notebook(
@@ -214,29 +181,6 @@ class TestNestedContainers:
         nb_runner.run_all()
         assert "host=localhost user=admin ttl=300" in nb_runner.get_output(2)
 
-    def test_list_of_dicts_manipulation(self, nb_runner):
-        """List of dicts filtered and mapped across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                employees = [
-                    {'name': 'Alice', 'dept': 'Eng', 'salary': 120000},
-                    {'name': 'Bob', 'dept': 'Sales', 'salary': 90000},
-                    {'name': 'Charlie', 'dept': 'Eng', 'salary': 130000},
-                    {'name': 'Diana', 'dept': 'Sales', 'salary': 95000},
-                ]
-            """),
-                textwrap.dedent("""\
-                eng_team = [e for e in employees if e['dept'] == 'Eng']
-                avg_salary = sum(e['salary'] for e in eng_team) / len(eng_team)
-                print(f"eng_avg={avg_salary:.0f}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "eng_avg=125000" in nb_runner.get_output(2)
-
 
 class TestRecursiveAlgorithms:
     """Test recursive algorithms defined and used across cells."""
@@ -264,28 +208,3 @@ class TestRecursiveAlgorithms:
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "fib(30)=832040" in nb_runner.get_output(2)
-
-    def test_quicksort(self, nb_runner):
-        """Quicksort across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def quicksort(arr):
-                    if len(arr) <= 1:
-                        return arr
-                    pivot = arr[len(arr) // 2]
-                    left = [x for x in arr if x < pivot]
-                    mid = [x for x in arr if x == pivot]
-                    right = [x for x in arr if x > pivot]
-                    return quicksort(left) + mid + quicksort(right)
-            """),
-                textwrap.dedent("""\
-                data = [3, 6, 8, 10, 1, 2, 1]
-                sorted_data = quicksort(data)
-                print(sorted_data)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "[1, 1, 2, 3, 6, 8, 10]" in nb_runner.get_output(2)

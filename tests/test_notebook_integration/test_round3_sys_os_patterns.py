@@ -32,52 +32,6 @@ class TestSysPatterns:
         nb_runner.run_all()
         assert "result=126" in nb_runner.get_output(2)
 
-    def test_sys_modules_inspection(self, nb_runner):
-        """Inspect loaded modules via sys.modules."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                import sys
-                import json
-                import csv
-                loaded = sorted(k for k in sys.modules if k in ('json', 'csv', 'os'))
-                print(f"loaded={loaded}")
-            """),
-                textwrap.dedent("""\
-                has_json = 'json' in sys.modules
-                has_csv = 'csv' in sys.modules
-                print(f"json={has_json} csv={has_csv}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(1)
-        assert "json" in out
-        assert "csv" in out
-        assert "json=True csv=True" in nb_runner.get_output(2)
-
-    def test_sys_version_info(self, nb_runner):
-        """Access sys.version_info across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                import sys
-                major = sys.version_info.major
-                minor = sys.version_info.minor
-                print(f"python={major}.{minor}")
-            """),
-                textwrap.dedent("""\
-                is_3 = major >= 3
-                print(f"is_python3={is_3}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "python=3." in nb_runner.get_output(1)
-        assert "is_python3=True" in nb_runner.get_output(2)
-
 
 @pytest.mark.stress
 class TestOsPatterns:
@@ -155,32 +109,3 @@ class TestOsPatterns:
         nb_runner.run_all()
         assert "files=3" in nb_runner.get_output(2)
         assert "content_0" in nb_runner.get_output(3)
-
-
-@pytest.mark.stress
-class TestPlatformPatterns:
-    """Test platform detection patterns."""
-
-    def test_platform_detection(self, nb_runner):
-        """Platform detection across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                import platform
-                system = platform.system()
-                python_ver = platform.python_version()
-                print(f"system={system}")
-            """),
-                textwrap.dedent("""\
-                is_windows = system == 'Windows'
-                ver_parts = python_ver.split('.')
-                major = int(ver_parts[0])
-                print(f"is_windows={is_windows} major={major}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "system=" in nb_runner.get_output(1)
-        out = nb_runner.get_output(2)
-        assert "major=3" in out

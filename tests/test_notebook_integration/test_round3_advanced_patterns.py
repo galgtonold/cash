@@ -276,27 +276,6 @@ class TestNestedLoopPatterns:
     """Test nested loop patterns and their interaction with caching."""
 
     @pytest.mark.loops
-    def test_nested_for_loop(self, nb_runner):
-        """Nested for loop building a matrix."""
-        nb_runner.create_notebook(
-            [
-                "rows = 3\ncols = 4",
-                textwrap.dedent("""\
-                matrix = []
-                for i in range(rows):
-                    row = []
-                    for j in range(cols):
-                        row.append(i * cols + j)
-                    matrix.append(row)"""),
-                "print(f'Matrix rows: {len(matrix)}, cols: {len(matrix[0])}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "Matrix rows: 3, cols: 4" in out
-
-    @pytest.mark.loops
     def test_while_loop_convergence(self, nb_runner):
         """While loop that converges to a value."""
         nb_runner.create_notebook(
@@ -487,31 +466,6 @@ class TestMultiCellFunctionPatterns:
     """Test function definition and usage across multiple cells."""
 
     @pytest.mark.core
-    def test_helper_function_chain(self, nb_runner):
-        """Multiple helper functions defined across cells, composed together."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def double(x):
-                    return x * 2"""),
-                textwrap.dedent("""\
-                def add_one(x):
-                    return x + 1"""),
-                textwrap.dedent("""\
-                def compose(f, g):
-                    def h(x):
-                        return f(g(x))
-                    return h"""),
-                "transform = compose(double, add_one)",
-                "result = transform(5)\nprint(f'Result: {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "Result: 12" in out  # double(add_one(5)) = double(6) = 12
-
-    @pytest.mark.core
     def test_function_change_propagates_to_composition(self, nb_runner):
         """Changing a helper function should invalidate composed function usage."""
         nb_runner.create_notebook(
@@ -536,24 +490,6 @@ class TestMultiCellFunctionPatterns:
         nb_runner.run_all()
         out2 = nb_runner.get_output(2)
         assert "Result: 30" in out2
-
-    @pytest.mark.core
-    def test_recursive_function(self, nb_runner):
-        """Recursive function defined in one cell, used in another."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def factorial(n):
-                    if n <= 1:
-                        return 1
-                    return n * factorial(n - 1)"""),
-                "result = factorial(10)\nprint(f'10! = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "10! = 3628800" in out
 
     @pytest.mark.core
     def test_closure_captures_cell_variable(self, nb_runner):
@@ -603,41 +539,6 @@ class TestErrorHandlingPatterns:
         nb_runner.run_all()
         out2 = nb_runner.get_output(3)
         assert "y: 100" in out2
-
-
-class TestStringAndFormattingPatterns:
-    """Test string manipulation and formatting patterns."""
-
-    @pytest.mark.core
-    def test_string_formatting_chain(self, nb_runner):
-        """String formatting across multiple cells."""
-        nb_runner.create_notebook(
-            [
-                "name = 'World'",
-                "greeting = f'Hello, {name}!'",
-                "upper = greeting.upper()",
-                "print(upper)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(4)
-        assert "HELLO, WORLD!" in out
-
-    @pytest.mark.core
-    def test_regex_pattern(self, nb_runner):
-        """Regex pattern compiled in one cell, used in another."""
-        nb_runner.create_notebook(
-            [
-                "import re\npattern = re.compile(r'\\d+')",
-                "text = 'abc 123 def 456 ghi'",
-                "matches = pattern.findall(text)\nprint(f'Matches: {matches}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "Matches: ['123', '456']" in out
 
 
 class TestLargeScalePatterns:

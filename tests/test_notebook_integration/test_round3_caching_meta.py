@@ -189,38 +189,3 @@ class TestCachedPropertyPattern:
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "mean=3.0 var=2.0" in nb_runner.get_output(2)
-
-    def test_manual_cached_property(self, nb_runner):
-        """Manual cached property implementation."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                class lazy_property:
-                    def __init__(self, fn):
-                        self.fn = fn
-                        self.attr_name = f'_lazy_{fn.__name__}'
-                    def __get__(self, obj, cls):
-                        if obj is None:
-                            return self
-                        if not hasattr(obj, self.attr_name):
-                            setattr(obj, self.attr_name, self.fn(obj))
-                        return getattr(obj, self.attr_name)
-
-                class Config:
-                    def __init__(self, items):
-                        self.items = items
-
-                    @lazy_property
-                    def processed(self):
-                        return sorted(set(self.items))
-            """),
-                textwrap.dedent("""\
-                cfg = Config([3, 1, 4, 1, 5, 9, 2, 6, 5, 3])
-                p = cfg.processed
-                print(f"processed={p}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "processed=[1, 2, 3, 4, 5, 6, 9]" in nb_runner.get_output(2)

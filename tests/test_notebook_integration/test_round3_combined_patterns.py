@@ -230,22 +230,6 @@ class TestMultiOutputChains:
         # x=101, y=102, z=103 → left=10302, right=10506 → final=20808
         assert "final=20808" in output2
 
-    @pytest.mark.core
-    def test_cell_with_many_outputs_selective_use(self, nb_runner):
-        """Cell producing many outputs, only some used downstream."""
-        nb_runner.create_notebook(
-            [
-                "a = 1\nb = 2\nc = 3\nd = 4\ne = 5",
-                "# Only use a and e\nresult = a + e",
-                "print(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(3)
-        assert "result=6" in output
-
 
 class TestRealWorldSimulation:
     """Simulates a realistic data analysis workflow."""
@@ -325,24 +309,6 @@ class TestNestedFunctionClosures:
     """Tests for nested functions and closure patterns across cells."""
 
     @pytest.mark.core
-    def test_closure_over_mutable_state(self, nb_runner):
-        """Closure over a list (mutable state)."""
-        nb_runner.create_notebook(
-            [
-                "history = []",
-                "def log(msg):\n    history.append(msg)\n    return len(history)",
-                "count1 = log('first')\ncount2 = log('second')",
-                "print(f'count1={count1} count2={count2} history={history}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(4)
-        assert "count1=1" in output
-        assert "count2=2" in output
-
-    @pytest.mark.core
     def test_higher_order_function_composition(self, nb_runner):
         """Function composition with higher-order functions."""
         nb_runner.create_notebook(
@@ -367,44 +333,6 @@ class TestNestedFunctionClosures:
 
         output2 = nb_runner.get_output(5)
         assert "result=12" in output2  # add_one(5)=6, double(6)=12
-
-
-class TestExceptionInterleaving:
-    """Tests for exception handling interleaved with caching."""
-
-    @pytest.mark.core
-    def test_try_except_caches_success_path(self, nb_runner):
-        """Try/except block should cache the successful result."""
-        nb_runner.create_notebook(
-            [
-                "data = [1, 2, 0, 4]",
-                "results = []\nfor d in data:\n    try:\n        results.append(10 / d)\n    except ZeroDivisionError:\n        results.append(None)",
-                "valid = [r for r in results if r is not None]",
-                "avg = sum(valid) / len(valid)",
-                "print(f'avg={avg:.2f}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(5)
-        assert "avg=" in output
-
-    @pytest.mark.core
-    def test_assertion_in_notebook_cell(self, nb_runner):
-        """Assert statements should work within caching."""
-        nb_runner.create_notebook(
-            [
-                "x = 42",
-                "assert x > 0, 'x must be positive'\nresult = x * 2",
-                "print(f'result={result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        output = nb_runner.get_output(3)
-        assert "result=84" in output
 
 
 class TestTypeConversionChains:

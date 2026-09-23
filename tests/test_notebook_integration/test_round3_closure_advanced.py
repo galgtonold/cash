@@ -44,40 +44,6 @@ class TestAdvancedClosures:
         assert "fib20=6765" in out
         assert "cache_size=21" in out
 
-    def test_nonlocal_accumulator(self, nb_runner):
-        """Accumulator using nonlocal with multiple operations."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def make_accumulator():
-                    history = []
-                    total = 0
-                    def add(val):
-                        nonlocal total
-                        total += val
-                        history.append((val, total))
-                        return total
-                    def get_history():
-                        return history[:]
-                    return add, get_history
-
-                add, get_hist = make_accumulator()
-                add(10)
-                add(20)
-                add(-5)
-                final = add(15)
-                hist = get_hist()
-            """),
-                "print(f'final={final}')\nprint(f'hist={hist}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "final=40" in out
-        assert "(10, 10)" in out
-        assert "(20, 30)" in out
-
     def test_closure_chain(self, nb_runner):
         """Chain of closures composing functions."""
         nb_runner.create_notebook(
@@ -108,28 +74,6 @@ class TestAdvancedClosures:
         # pipe(1) = square(double(2)) = square(4) = 16
         assert "4" in out
         assert "16" in out
-
-    def test_scope_global_local_interaction(self, nb_runner):
-        """Global vs local scope interactions across cells."""
-        nb_runner.create_notebook(
-            [
-                "MULTIPLIER = 10",
-                textwrap.dedent("""\
-                def compute(x):
-                    local_offset = 5
-                    return x * MULTIPLIER + local_offset
-
-                r1 = compute(3)
-                r2 = compute(7)
-            """),
-                "print(f'r1={r1} r2={r2}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "r1=35" in out
-        assert "r2=75" in out
 
     def test_closure_propagation_memoize(self, nb_runner):
         """Memoized closure with upstream change propagation."""

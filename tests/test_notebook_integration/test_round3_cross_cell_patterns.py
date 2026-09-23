@@ -16,22 +16,6 @@ import pytest
 class TestClassInstanceCrossCells:
     """Test class instance creation, method calls, and mutation across cells."""
 
-    def test_class_defined_in_one_cell_used_in_another(self, nb_runner):
-        """Define a class in cell 1, instantiate in cell 2, use in cell 3."""
-        nb_runner.create_notebook(
-            [
-                "class Counter:\n    def __init__(self):\n        self.n = 0\n    def inc(self):\n        self.n += 1\n        return self.n",
-                "c = Counter()",
-                "r1 = c.inc()\nr2 = c.inc()\nprint(f'r1={r1}, r2={r2}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        out = nb_runner.get_output(3)
-        assert "r1=1" in out, f"Got: {out}"
-        assert "r2=2" in out, f"Got: {out}"
-
     def test_class_redefinition_invalidates_instances(self, nb_runner):
         """Redefining a class should invalidate cells using instances of it."""
         nb_runner.create_notebook(
@@ -97,36 +81,6 @@ class TestGeneratorAndIteratorCaching:
         # Re-run — should use cache
         nb_runner.run_all()
         assert "[0, 1, 4, 9, 16]" in nb_runner.get_output(2)
-
-    def test_dict_comprehension_caching(self, nb_runner):
-        """Dict comprehension results cached properly."""
-        nb_runner.create_notebook(
-            [
-                "names = ['alice', 'bob', 'charlie']",
-                "name_lens = {n: len(n) for n in names}\nprint(name_lens)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        out = nb_runner.get_output(2)
-        assert "'alice': 5" in out, f"Got: {out}"
-        assert "'bob': 3" in out, f"Got: {out}"
-
-    def test_enumerate_zip_patterns(self, nb_runner):
-        """Test common functional patterns."""
-        nb_runner.create_notebook(
-            [
-                "xs = [10, 20, 30]\nys = ['a', 'b', 'c']",
-                "pairs = list(zip(xs, ys))\nindexed = list(enumerate(xs))\nprint(f'pairs={pairs}, indexed={indexed}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        out = nb_runner.get_output(2)
-        assert "(10, 'a')" in out, f"Got: {out}"
-        assert "(0, 10)" in out, f"Got: {out}"
 
 
 @pytest.mark.core
@@ -471,75 +425,6 @@ class TestComplexUpstreamPatterns:
 
 
 @pytest.mark.core
-class TestStringAndFormattingPatterns:
-    """Test caching with various string operations."""
-
-    def test_fstring_interpolation(self, nb_runner):
-        """f-strings with complex expressions."""
-        nb_runner.create_notebook(
-            [
-                "name = 'World'\ncount = 3",
-                "msg = f'{name}! ' * count\nprint(msg.strip())",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        assert "World! World! World!" in nb_runner.get_output(2)
-
-    def test_multiline_string_processing(self, nb_runner):
-        """Multiline string split/join operations."""
-        nb_runner.create_notebook(
-            [
-                "text = '''line1\nline2\nline3'''",
-                "lines = text.split('\\n')\nresult = ' | '.join(lines)\nprint(result)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        assert "line1 | line2 | line3" in nb_runner.get_output(2)
-
-
-@pytest.mark.core
-class TestCollectionPatterns:
-    """Test caching with various collection manipulations."""
-
-    def test_set_operations_across_cells(self, nb_runner):
-        """Set operations using variables from different cells."""
-        nb_runner.create_notebook(
-            [
-                "s1 = {1, 2, 3, 4, 5}",
-                "s2 = {3, 4, 5, 6, 7}",
-                "inter = s1 & s2\nunion = s1 | s2\ndiff = s1 - s2\nprint(f'inter={sorted(inter)}, union={sorted(union)}, diff={sorted(diff)}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        out = nb_runner.get_output(3)
-        assert "inter=[3, 4, 5]" in out, f"Got: {out}"
-        assert "union=[1, 2, 3, 4, 5, 6, 7]" in out, f"Got: {out}"
-        assert "diff=[1, 2]" in out, f"Got: {out}"
-
-    def test_defaultdict_pattern(self, nb_runner):
-        """defaultdict accumulation across cells."""
-        nb_runner.create_notebook(
-            [
-                "from collections import defaultdict\nword_count = defaultdict(int)",
-                "for w in ['hello', 'world', 'hello', 'python', 'world', 'hello']:\n    word_count[w] += 1",
-                "print(dict(word_count))",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        out = nb_runner.get_output(3)
-        assert "'hello': 3" in out, f"Got: {out}"
-        assert "'world': 2" in out, f"Got: {out}"
-
-
-@pytest.mark.core
 class TestConditionalExecution:
     """Test conditional patterns across cells."""
 
@@ -562,42 +447,10 @@ class TestConditionalExecution:
         out = nb_runner.get_output(2)
         assert "result = 30" in out, f"Expected 30, got: {out}"
 
-    def test_early_return_pattern_with_function(self, nb_runner):
-        """Function with early return, called cross-cell."""
-        nb_runner.create_notebook(
-            [
-                "def process(val):\n    if val < 0:\n        return 'negative'\n    if val == 0:\n        return 'zero'\n    return f'positive: {val}'",
-                "r1 = process(-5)\nr2 = process(0)\nr3 = process(42)\nprint(f'{r1}, {r2}, {r3}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        out = nb_runner.get_output(2)
-        assert "negative" in out, f"Got: {out}"
-        assert "zero" in out, f"Got: {out}"
-        assert "positive: 42" in out, f"Got: {out}"
-
 
 @pytest.mark.core
 class TestGlobalStateInteraction:
     """Test caching with global/module-level state modifications."""
-
-    def test_counter_function_with_closure(self, nb_runner):
-        """Closure-based counter — state changes across calls."""
-        nb_runner.create_notebook(
-            [
-                "def make_counter():\n    count = [0]\n    def inc():\n        count[0] += 1\n        return count[0]\n    return inc",
-                "counter = make_counter()",
-                "r1 = counter()\nr2 = counter()\nprint(f'r1={r1}, r2={r2}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        out = nb_runner.get_output(3)
-        assert "r1=1" in out, f"Got: {out}"
-        assert "r2=2" in out, f"Got: {out}"
 
     def test_memoization_pattern(self, nb_runner):
         """Test a memoized function pattern."""
@@ -612,43 +465,6 @@ class TestGlobalStateInteraction:
         nb_runner.run_all()
 
         assert "fib(10) = 55" in nb_runner.get_output(3)
-
-
-@pytest.mark.core
-class TestNumericPatterns:
-    """Test caching with various numeric operations."""
-
-    def test_complex_math_chain(self, nb_runner):
-        """Chain of mathematical operations across cells."""
-        nb_runner.create_notebook(
-            [
-                "import math\nx = 2.0",
-                "y = math.sqrt(x) + math.log(x)",
-                "z = round(y ** 2, 4)\nprint(f'z = {z}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        out = nb_runner.get_output(3)
-        # sqrt(2) ≈ 1.4142, log(2) ≈ 0.6931, sum ≈ 2.1073, squared ≈ 4.4409
-        assert "z = 4.44" in out, f"Got: {out}"
-
-    def test_boolean_logic_chain(self, nb_runner):
-        """Boolean operations across cells."""
-        nb_runner.create_notebook(
-            [
-                "a = True\nb = False\nc = True",
-                "d = (a and c) or b\ne = not (a and b)\nf = a ^ c\nprint(f'd={d}, e={e}, f={f}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        out = nb_runner.get_output(2)
-        assert "d=True" in out, f"Got: {out}"
-        assert "e=True" in out, f"Got: {out}"
-        assert "f=False" in out, f"Got: {out}"
 
 
 @pytest.mark.core

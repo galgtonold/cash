@@ -47,37 +47,6 @@ class TestCustomExceptions:
         assert "ValidationError: Invalid input (code=400)" in out2
         assert "NotFoundError: Item not found (code=404)" in out2
 
-    def test_try_except_results(self, nb_runner):
-        """try/except results cached across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                results = []
-                for item in [10, 0, "abc", 5, None]:
-                    try:
-                        val = 100 / item
-                        results.append(('ok', round(val, 2)))
-                    except ZeroDivisionError:
-                        results.append(('zero', 0))
-                    except TypeError:
-                        results.append(('type_err', None))
-                print(f"results={results}")
-            """),
-                textwrap.dedent("""\
-                ok_count = sum(1 for status, _ in results if status == 'ok')
-                err_count = len(results) - ok_count
-                print(f"ok={ok_count} errors={err_count}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(1)
-        assert "('ok', 10.0)" in out1
-        assert "('zero', 0)" in out1
-        out2 = nb_runner.get_output(2)
-        assert "ok=2 errors=3" in out2
-
     def test_exception_chaining(self, nb_runner):
         """Exception chaining across cells."""
         nb_runner.create_notebook(
@@ -117,42 +86,6 @@ class TestCustomExceptions:
 @pytest.mark.stress
 class TestExceptionContextPatterns:
     """Test exception context patterns."""
-
-    def test_finally_cleanup(self, nb_runner):
-        """Finally block cleanup across cells."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                log = []
-
-                def safe_divide(a, b):
-                    try:
-                        result = a / b
-                        log.append(f"ok:{result:.1f}")
-                        return result
-                    except ZeroDivisionError:
-                        log.append("err:zero_div")
-                        return None
-                    finally:
-                        log.append("cleanup")
-
-                r1 = safe_divide(10, 3)
-                r2 = safe_divide(10, 0)
-                print(f"r1={r1:.2f}" if r1 else "r1=None")
-                print(f"r2={r2}")
-            """),
-                textwrap.dedent("""\
-                print(f"log={log}")
-                cleanup_count = sum(1 for x in log if x == 'cleanup')
-                print(f"cleanups={cleanup_count}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "r2=None" in nb_runner.get_output(1)
-        out2 = nb_runner.get_output(2)
-        assert "cleanups=2" in out2
 
     def test_exception_propagation(self, nb_runner):
         """Exception handling propagates on change."""

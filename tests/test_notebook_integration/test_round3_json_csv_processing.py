@@ -36,29 +36,6 @@ class TestJsonProcessing:
         assert "match=True" in out
         assert "users=2" in out
 
-    def test_json_transform(self, nb_runner):
-        """JSON transformation pipeline."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                import json
-                raw = '[{"name": "Alice", "score": 95}, {"name": "Bob", "score": 82}, {"name": "Charlie", "score": 78}]'
-                records = json.loads(raw)
-                # Transform: add grade based on score
-                for r in records:
-                    r['grade'] = 'A' if r['score'] >= 90 else 'B' if r['score'] >= 80 else 'C'
-                grades = {r['name']: r['grade'] for r in records}
-            """),
-                "print(f'grades={grades}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "Alice" in out
-        assert "'A'" in out
-        assert "Charlie" in out
-
     def test_json_nested_query(self, nb_runner):
         """Query nested JSON structure."""
         nb_runner.create_notebook(

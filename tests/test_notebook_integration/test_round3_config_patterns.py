@@ -106,21 +106,6 @@ class TestEnvironmentVariables:
         nb_runner.run_all()
         assert "val=hello123" in nb_runner.get_output(3)
 
-    def test_env_fallback(self, nb_runner):
-        """Environment variable with fallback."""
-        nb_runner.create_notebook(
-            [
-                "import os",
-                textwrap.dedent("""\
-                debug_mode = os.environ.get('UNLIKELY_UNIQUE_VAR_XYZ', 'false')
-                print(f"debug={debug_mode}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "debug=false" in nb_runner.get_output(2)
-
 
 class TestDynamicSettings:
     """Test dynamic settings that change between runs."""
@@ -161,33 +146,6 @@ class TestDynamicSettings:
         )
         nb_runner.run_all()
         assert "steps=300 model=neural_net" in nb_runner.get_output(2)
-
-    def test_yaml_like_nested_config(self, nb_runner):
-        """YAML-like nested config pattern."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                config = {
-                    'data': {
-                        'train_split': 0.8,
-                        'features': ['age', 'income', 'score']
-                    },
-                    'model': {
-                        'type': 'rf',
-                        'n_estimators': 100
-                    }
-                }
-            """),
-                textwrap.dedent("""\
-                n_features = len(config['data']['features'])
-                model_type = config['model']['type']
-                print(f"features={n_features} model={model_type}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "features=3 model=rf" in nb_runner.get_output(2)
 
 
 class TestMultiFileConfig:

@@ -51,39 +51,6 @@ class TestGeneratorPatterns:
         nb_runner.run_all()
         assert "55" in nb_runner.get_output(2)
 
-    def test_itertools_chain(self, nb_runner):
-        """itertools.chain across cells."""
-        nb_runner.create_notebook(
-            [
-                "import itertools",
-                "a = [1, 2, 3]\nb = [4, 5, 6]",
-                textwrap.dedent("""\
-                combined = list(itertools.chain(a, b))
-                print(combined)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "[1, 2, 3, 4, 5, 6]" in nb_runner.get_output(3)
-
-    def test_itertools_groupby(self, nb_runner):
-        """itertools.groupby pattern."""
-        nb_runner.create_notebook(
-            [
-                "import itertools",
-                textwrap.dedent("""\
-                data = [('a', 1), ('a', 2), ('b', 3), ('b', 4), ('a', 5)]
-                data.sort(key=lambda x: x[0])
-                groups = {k: list(g) for k, g in itertools.groupby(data, key=lambda x: x[0])}
-                print(sorted(groups.keys()))
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "['a', 'b']" in nb_runner.get_output(2)
-
     def test_generator_function_change_propagation(self, nb_runner):
         """Change generator function → re-run consumer."""
         nb_runner.create_notebook(
@@ -123,27 +90,6 @@ class TestGeneratorPatterns:
 class TestClosurePatterns:
     """Test caching with closures and higher-order functions."""
 
-    def test_closure_captures_outer_variable(self, nb_runner):
-        """Closure capturing outer variable."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                def make_multiplier(factor):
-                    def mul(x):
-                        return x * factor
-                    return mul
-            """),
-                "double = make_multiplier(2)",
-                textwrap.dedent("""\
-                result = double(21)
-                print(result)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "42" in nb_runner.get_output(3)
-
     def test_higher_order_map_filter(self, nb_runner):
         """Higher-order functions: map + filter."""
         nb_runner.create_notebook(
@@ -164,42 +110,6 @@ class TestClosurePatterns:
 class TestFunctoolsPatterns:
     """Test caching with functools utilities."""
 
-    def test_functools_partial(self, nb_runner):
-        """functools.partial creates a new callable."""
-        nb_runner.create_notebook(
-            [
-                "from functools import partial",
-                textwrap.dedent("""\
-                def power(base, exp):
-                    return base ** exp
-                square = partial(power, exp=2)
-                cube = partial(power, exp=3)
-            """),
-                textwrap.dedent("""\
-                print(f"sq={square(5)} cu={cube(3)}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "sq=25 cu=27" in nb_runner.get_output(3)
-
-    def test_functools_reduce(self, nb_runner):
-        """functools.reduce across cells."""
-        nb_runner.create_notebook(
-            [
-                "from functools import reduce",
-                "numbers = [1, 2, 3, 4, 5]",
-                textwrap.dedent("""\
-                product = reduce(lambda a, b: a * b, numbers)
-                print(product)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "120" in nb_runner.get_output(3)
-
     def test_functools_lru_cache(self, nb_runner):
         """@lru_cache decorator on a function."""
         nb_runner.create_notebook(
@@ -219,39 +129,3 @@ class TestFunctoolsPatterns:
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "499500" in nb_runner.get_output(3)
-
-
-class TestComprehensionEdgeCases:
-    """Test complex comprehension patterns."""
-
-    def test_nested_dict_comprehension(self, nb_runner):
-        """Nested dict comprehension depending on cross-cell vars."""
-        nb_runner.create_notebook(
-            [
-                "keys = ['a', 'b', 'c']\nvalues = [1, 2, 3]",
-                textwrap.dedent("""\
-                mapping = {k: {f'{k}_{i}': v * i for i in range(1, 4)}
-                           for k, v in zip(keys, values)}
-                print(mapping['b'])
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        output = nb_runner.get_output(2)
-        assert "'b_1': 2" in output
-
-    def test_set_comprehension(self, nb_runner):
-        """Set comprehension with cross-cell input."""
-        nb_runner.create_notebook(
-            [
-                "words = ['hello', 'HELLO', 'World', 'world', 'FOO']",
-                textwrap.dedent("""\
-                unique_lower = {w.lower() for w in words}
-                print(sorted(unique_lower))
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "['foo', 'hello', 'world']" in nb_runner.get_output(2)

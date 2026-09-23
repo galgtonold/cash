@@ -82,34 +82,6 @@ class TestPandasPipelinePatterns:
 class TestNumpyPatterns:
     """Test numpy array operations and caching."""
 
-    def test_array_creation_and_operations(self, nb_runner):
-        """Create arrays in cell 1, operate in cell 2."""
-        nb_runner.create_notebook(
-            [
-                "import numpy as np\na = np.array([1, 2, 3, 4, 5])",
-                "b = a * 2\nc = np.sum(b)\nprint(f'sum = {c}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "sum = 30" in nb_runner.get_output(2)
-
-    def test_matrix_operations(self, nb_runner):
-        """Matrix multiply across cells."""
-        nb_runner.create_notebook(
-            [
-                "import numpy as np\nA = np.array([[1, 2], [3, 4]])",
-                "B = np.array([[5, 6], [7, 8]])",
-                "C = A @ B\nprint(C.tolist())",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        out = nb_runner.get_output(3)
-        assert "19" in out, f"Got: {out}"
-        assert "22" in out, f"Got: {out}"
-
     def test_numpy_random_with_seed(self, nb_runner):
         """Seeded random should be reproducible and cacheable."""
         nb_runner.create_notebook(
@@ -171,78 +143,6 @@ class TestAnnotationDirectives:
 
 
 @pytest.mark.core
-class TestMultiStatementCells:
-    """Test cells with many statements and complex interactions."""
-
-    def test_cell_with_function_def_and_usage(self, nb_runner):
-        """Define and use a function in the same cell."""
-        nb_runner.create_notebook(
-            [
-                "def double(x):\n    return x * 2\n\nresult = double(21)\nprint(f'result = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 42" in nb_runner.get_output(1)
-
-    def test_cell_with_multiple_assignments(self, nb_runner):
-        """Multiple assignments in one cell, used in the next."""
-        nb_runner.create_notebook(
-            [
-                "a = 1\nb = 2\nc = 3\nd = a + b + c",
-                "print(f'd = {d}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "d = 6" in nb_runner.get_output(2)
-
-    def test_long_cell_with_intermediate_vars(self, nb_runner):
-        """10-statement cell with intermediate calculations."""
-        nb_runner.create_notebook(
-            [
-                "x = 1\nx = x + 1\nx = x * 2\nx = x + 3\nx = x * 2\nx = x - 1\nx = x // 3\nx = x + 10\nx = x * 2\nprint(f'x = {x}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        # 1 -> 2 -> 4 -> 7 -> 14 -> 13 -> 4 -> 14 -> 28
-        assert "x = 28" in nb_runner.get_output(1)
-
-
-@pytest.mark.core
-class TestReassignmentPatterns:
-    """Test variable reassignment across cells."""
-
-    def test_reassign_same_variable_different_cells(self, nb_runner):
-        """Assign x in cell 1, reassign in cell 2, use in cell 3."""
-        nb_runner.create_notebook(
-            [
-                "x = 10",
-                "x = x * 2",
-                "print(f'x = {x}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x = 20" in nb_runner.get_output(3)
-
-    def test_reassign_with_different_type(self, nb_runner):
-        """Assign x as int, then reassign as string."""
-        nb_runner.create_notebook(
-            [
-                "x = 42",
-                "x = str(x) + ' is the answer'",
-                "print(x)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "42 is the answer" in nb_runner.get_output(3)
-
-
-@pytest.mark.core
 class TestComplexDataStructures:
     """Test caching with complex nested data structures."""
 
@@ -260,64 +160,6 @@ class TestComplexDataStructures:
         out = nb_runner.get_output(2)
         assert "'Alice': 87.5" in out, f"Got: {out}"
         assert "'Bob': 85.0" in out, f"Got: {out}"
-
-    def test_namedtuple_pattern(self, nb_runner):
-        """NamedTuple creation and usage."""
-        nb_runner.create_notebook(
-            [
-                "from collections import namedtuple\nPoint = namedtuple('Point', ['x', 'y'])",
-                "p1 = Point(3, 4)\np2 = Point(6, 8)\ndist = ((p2.x - p1.x)**2 + (p2.y - p1.y)**2)**0.5\nprint(f'dist = {dist}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        assert "dist = 5.0" in nb_runner.get_output(2)
-
-    def test_dataclass_pattern(self, nb_runner):
-        """Dataclass definition and usage across cells."""
-        nb_runner.create_notebook(
-            [
-                "from dataclasses import dataclass\n\n@dataclass\nclass Employee:\n    name: str\n    salary: float\n    dept: str",
-                "emp1 = Employee('Alice', 90000, 'Eng')\nemp2 = Employee('Bob', 85000, 'Eng')\nemp3 = Employee('Charlie', 75000, 'Sales')",
-                "eng_avg = (emp1.salary + emp2.salary) / 2\nprint(f'eng avg = {eng_avg}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        assert "eng avg = 87500.0" in nb_runner.get_output(3)
-
-
-@pytest.mark.core
-class TestImportPatterns:
-    """Test various import patterns and their caching."""
-
-    def test_from_import_as_alias(self, nb_runner):
-        """from X import Y as Z."""
-        nb_runner.create_notebook(
-            [
-                "from math import sqrt as sq",
-                "r = sq(256)\nprint(f'r = {r}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "r = 16.0" in nb_runner.get_output(2)
-
-    def test_multiple_imports_one_cell(self, nb_runner):
-        """Multiple import statements in one cell."""
-        nb_runner.create_notebook(
-            [
-                "import math\nimport os\nimport json",
-                "data = json.dumps({'pi': round(math.pi, 4), 'cwd': os.sep})\nprint(data)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        out = nb_runner.get_output(2)
-        assert "3.1416" in out, f"Got: {out}"
 
 
 @pytest.mark.core

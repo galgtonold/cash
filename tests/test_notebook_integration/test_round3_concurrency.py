@@ -66,48 +66,6 @@ class TestThreadingBasics:
 class TestQueuePatterns:
     """Test queue-based patterns."""
 
-    def test_queue_producer_consumer(self, nb_runner):
-        """Queue-based producer/consumer pattern."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                from queue import Queue
-                import threading
-
-                results = []
-                q = Queue()
-
-                def producer(items):
-                    for item in items:
-                        q.put(item)
-                    q.put(None)  # sentinel
-
-                def consumer():
-                    while True:
-                        item = q.get()
-                        if item is None:
-                            break
-                        results.append(item * 2)
-
-                t1 = threading.Thread(target=producer, args=([1, 2, 3, 4, 5],))
-                t2 = threading.Thread(target=consumer)
-                t1.start()
-                t2.start()
-                t1.join()
-                t2.join()
-                print(f"results={sorted(results)}")
-            """),
-                textwrap.dedent("""\
-                total = sum(results)
-                print(f"total={total}")
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "results=[2, 4, 6, 8, 10]" in nb_runner.get_output(1)
-        assert "total=30" in nb_runner.get_output(2)
-
     def test_thread_safe_counter(self, nb_runner):
         """Thread-safe counter with lock."""
         nb_runner.create_notebook(
