@@ -119,9 +119,9 @@ from .tracking.file_dep_snapshot import (
 )
 from .tracking.file_tracker import (
     FileAccessTracker,
-    FileDependencyRegistry,
     active_tracker,
     credited_reads,
+    file_registry,
     install_read_watch,
     untracked,
 )
@@ -10988,8 +10988,7 @@ class Cash:
               cache-key computation is automatic.
         """
 
-        registry = FileDependencyRegistry()
-        registry.register(module_name, func_name, handler_factory)
+        file_registry().register(module_name, func_name, handler_factory)
 
     def shutdown(self) -> None:
         """Cleanup resources (e.g. wait for async writes).

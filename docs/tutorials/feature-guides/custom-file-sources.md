@@ -34,7 +34,7 @@ No decorator argument, no manual registration. Cash sees the `read_csv` call, re
 
 ## What's automatically tracked
 
-<!-- claim: cash/tracking/file_tracker.py:FileDependencyRegistry._initialize_defaults @b63601b2, cash/tracking/file_tracker.py:_find_patch_targets @ae820c32, cash/tracking/file_tracker.py:_on_listing @3c97d75d -->
+<!-- claim: cash/tracking/file_tracker.py:FileDependencyRegistry._initialize_defaults @b63601b2, cash/tracking/file_tracker.py:_find_patch_targets @30ce0d87, cash/tracking/file_tracker.py:_on_listing @3c97d75d -->
 The `open` and listing audit events are handled by `_on_open` and `_on_listing`; the wrapped readers are registered in `FileDependencyRegistry._initialize_defaults`:
 
 | Module | Functions |
@@ -132,7 +132,7 @@ Anything that opens a file through Python's `open()` is seen. Reads that go thro
 
 ### Reads that are ignored on purpose
 
-<!-- claim: cash/tracking/file_tracker.py:incidental_read @6a629b76 -->
+<!-- claim: cash/tracking/file_tracker.py:incidental_read @27bfa353 -->
 Some reads happen while your code runs but are not your data, and cash leaves them out: files of the **Python installation itself** (the standard library), **package metadata** lookups (`importlib.metadata`, `importlib.resources`, `pkg_resources` — the import system listing every `sys.path` folder, your working directory included, and reading `entry_points.txt` files), anything a library reads **while it is being imported** (matplotlib's style sheets and font cache), and files that belong to an **installed package other than your own** — matplotlib's fonts on first draw, scikit-learn's HTML template, a zone `zoneinfo` loads from `tzdata` (or from the system time zone database) the first time you use it. They only happen the first time, so recording them gave the same statement a different key on its second run, and a new file anywhere next to a notebook invalidated everything after an `import`. The zone is the case that shows why the reader does not decide: `zoneinfo` is the standard library, so "a library reading its own package" did not cover it, and a load's lineage carried that file after a restart but not on a re-run in the same session — everything below it missed, once, on the first restart.
 
 A library reading a file **for you** is still tracked — `PIL.Image.open(p)`, `torch.load(p)` and `pd.read_csv(p)` read a path outside that library. So is your own module reading its configuration at import, and so is an installed tool reading data from its own package folder when the cached function belongs to that tool.
@@ -262,7 +262,7 @@ A declared file that does not exist yet is recorded as *absent*, like a lookup f
 
 ## Escape hatch 2: registering a custom file source for auto-tracking
 
-<!-- claim: cash/core.py:Cash.register_file_handler @3285c27b, cash/tracking/file_tracker.py:_install_module_patches @55da05c3 -->
+<!-- claim: cash/core.py:Cash.register_file_handler @e2ebcc87, cash/tracking/file_tracker.py:_install_module_patches @03e888c6 -->
 For libraries you use across many cached functions, manually adding `file_depends_on=` to each decorator is repetitive. `Cash.register_file_handler` lets you teach the auto-tracker about a new reader once and have every subsequent call site picked up automatically:
 
 <!-- test:skip reason="illustrative — the handler wraps `my_lib`, which does not exist; executing it only proves a def parses, while shadowing the real load_features above" -->
@@ -397,7 +397,7 @@ The tracker records full absolute paths and stats them on every lookup. There's 
 | `cash.FileDataSource(path)` | Public class | mtime-based change detection for a single file. Use in `depends_on=[...]` for advanced cases or subclass for content-hashing. |
 | `f.explain(*args).reason == 'file_changed'` | Diagnostic | Explanation reason emitted when one or more recorded files changed. `details['changed_files']` maps each path to `'content changed'`, `'size changed'`, or `'file missing'`. |
 | `FileAccessTracker` | Internal | Context manager that records a block's reads, installing the reader wrappers while it is open. Auto-installed around the body by `Cash._body_scope`; not intended for direct use. |
-| `FileDependencyRegistry` | Internal | Singleton holding the registered handler factories. Accessed through `register_file_handler`; direct use is unsupported. |
+| `FileDependencyRegistry` | Internal | The class of the process's one registry of handler factories (`file_registry()`). Accessed through `register_file_handler`; direct use is unsupported. |
 
 ## Related
 

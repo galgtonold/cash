@@ -303,7 +303,7 @@ A thread that mutates data after the cell that created it has finished is outsid
 
 ### Reads through a loader cash cannot see
 
-<!-- claim: cash/tracking/file_tracker.py:_install_module_patches @55da05c3 -->
+<!-- claim: cash/tracking/file_tracker.py:_install_module_patches @03e888c6 -->
 Cash records a file dependency by intercepting the *read*: `pd.read_*`, `np.load`, `joblib.load`, `polars`, `sqlite3.connect`, plain `open()`, and friends — including a read that finds the file MISSING, whichever way it is spelled (`os.path.exists`, or `open()` raising `FileNotFoundError`). A read that goes through none of them — a C extension that opens the file itself, a third-party client, a `subprocess` — is invisible. Two known gaps of that kind: `os.open`/`os.read` (the descriptor-level API, below `open()`), and a SQLite database in **WAL** mode, where a commit lands in the sidecar `-wal` file and the database file cash records may not move.
 
 The consequence is easy to mis-guess, so it is worth stating plainly: cash **does not** refuse to cache such a statement. It caches it exactly like any other, with *no file recorded*. Change the file on disk afterwards and nothing invalidates; you get the old value back with a `CACHED` badge and no warning.

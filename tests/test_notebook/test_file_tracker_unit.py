@@ -11,7 +11,7 @@ import pytest
 
 from cash.tracking.file_tracker import (
     FileAccessTracker,
-    FileDependencyRegistry,
+    file_registry,
 )
 
 # ---------------------------------------------------------------------------
@@ -20,29 +20,27 @@ from cash.tracking.file_tracker import (
 
 
 class TestFileDependencyRegistry:
-    """Test the singleton registry and handler registration."""
+    """Test the process-wide registry and handler registration."""
 
-    def test_singleton_pattern(self):
-        r1 = FileDependencyRegistry()
-        r2 = FileDependencyRegistry()
-        assert r1 is r2
+    def test_one_registry_per_process(self):
+        assert file_registry() is file_registry()
 
     def test_has_default_handlers(self):
-        registry = FileDependencyRegistry()
+        registry = file_registry()
         assert "pandas" in registry.handlers
         assert "sqlite3" in registry.handlers
         # `open` arrives as an audit event, so nothing wraps it.
         assert "builtins" not in registry.handlers
 
     def test_get_handlers_for_module(self):
-        registry = FileDependencyRegistry()
+        registry = file_registry()
         sqlite_handlers = registry.get_handlers_for_module("sqlite3")
         assert len(sqlite_handlers) >= 1
         func_names = [name for name, _ in sqlite_handlers]
         assert "connect" in func_names
 
     def test_get_handlers_for_unknown_module(self):
-        registry = FileDependencyRegistry()
+        registry = file_registry()
         handlers = registry.get_handlers_for_module("nonexistent_module_xyz")
         assert handlers == []
 

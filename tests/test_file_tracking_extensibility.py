@@ -5,7 +5,8 @@ import unittest
 from unittest.mock import MagicMock
 
 from cash.core import Cash
-from cash.tracking.file_tracker import FileAccessTracker, FileDependencyRegistry
+from cash.tracking import file_tracker
+from cash.tracking.file_tracker import FileAccessTracker, FileDependencyRegistry, file_registry
 
 
 class TestFileTrackingExtensibility(unittest.TestCase):
@@ -13,8 +14,9 @@ class TestFileTrackingExtensibility(unittest.TestCase):
         self.mock_shell = MagicMock()
         self.mock_shell.user_ns = {}
 
-        # Reset registry for each test to avoid pollution
-        FileDependencyRegistry._instance = None
+        # A fresh registry for each test, so handlers do not leak between them
+        self._saved_registry = file_tracker._registry
+        file_tracker._registry = FileDependencyRegistry()
 
         # Test helpers
         with tempfile.NamedTemporaryFile(delete=False, mode="w+") as tf:
@@ -26,11 +28,12 @@ class TestFileTrackingExtensibility(unittest.TestCase):
             self.temp_path = os.path.realpath(tf.name).replace(os.sep, "/")
 
     def tearDown(self):
+        file_tracker._registry = self._saved_registry
         if os.path.exists(self.temp_path):
             os.remove(self.temp_path)
 
     def test_registry_basics(self):
-        registry = FileDependencyRegistry()
+        registry = file_registry()
 
         # Check defaults
         handlers = registry.get_handlers_for_module("sqlite3")
@@ -71,7 +74,7 @@ class TestFileTrackingExtensibility(unittest.TestCase):
         del sys.modules["mylib"]
 
     def test_wildcard_registration(self):
-        registry = FileDependencyRegistry()
+        registry = file_registry()
 
         mock_lib = MagicMock()
         sys.modules["wildlib"] = mock_lib
