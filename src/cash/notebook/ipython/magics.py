@@ -31,7 +31,6 @@ from ...utils import safe_text
 from .. import badge_renderer as _badge
 from .. import compute_baselines
 from .._protocols import ShellProtocol, TrackingState
-from ..audit import AuditLogger
 from ..cache_status import CacheStatus
 from ..control_structures import ControlStructureProcessor
 from ..live_cells import install_expiry_hook, register_target
@@ -158,12 +157,11 @@ class CashSession:
     independently addressable.
     """
 
-    __slots__ = ("stats", "provenance", "audit", "measured_compute", "measured_decorator_compute", "baselines")
+    __slots__ = ("stats", "provenance", "measured_compute", "measured_decorator_compute", "baselines")
 
     def __init__(self) -> None:
         self.stats: dict[str, Any] = new_session_stats()
         self.provenance: ProvenanceTracker = ProvenanceTracker()
-        self.audit: AuditLogger = AuditLogger()
         # source -> execution_time measured in THIS session. Bounded by the
         # notebook's statement count; pure in-memory floats, no I/O.
         self.measured_compute: dict[str, float] = {}
@@ -176,13 +174,6 @@ class CashSession:
         # use (``CashMagics._baselines``), not here: the backend is not
         # settled while the magics are being constructed.
         self.baselines: Any = compute_baselines.get_store(None)
-
-
-_OP_MAP = {
-    CacheStatus.COMPUTED: "cache_miss",
-    CacheStatus.RESTORED: "cache_hit",
-    CacheStatus.SKIPPED: "cache_skip",
-}
 
 
 @magics_class
@@ -320,7 +311,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             "status": None,
         }
 
-        # Session-level concerns (statistics, provenance, audit) grouped in one object
+        # Session-level concerns (statistics, provenance) grouped in one object
         self._session = CashSession()
 
         # Benchmark config (one-shot, set by %cash_benchmark)
@@ -1343,7 +1334,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         Tail phase shared by ``_execute_cell`` (hook-driven `%cash_on`) and
         the ``cash`` cell magic (`%%cash`).  Handles analytics flushing,
-        session statistics updates, provenance recording, audit logging,
+        session statistics updates, provenance recording,
         debug output, and the final badge render.
 
         ``delegate_to_run_cell``: when True (the default, used by the hook),
@@ -1416,7 +1407,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # Update session-wide statistics
         self._update_session_stats(all_metrics, hook_total)
 
-        self._record_observability(all_metrics)
+        self._record_provenance(all_metrics)
 
         if self._debug:
             print(f"[TIMING_PROXY] PROXY TOTAL: {hook_total * 1000:.1f}ms")
@@ -1707,15 +1698,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 if (call.get("execution_time", 0.0) or 0.0) >= floor:
                     stats["statements_cacheable_miss"] += 1
 
-    def _record_observability(self, all_metrics: list[ProcessResult]) -> None:
-        """Record provenance + audit entries for each statement in *all_metrics*.
-
-        Walks the metrics list once and fans out to both trackers, sharing
-        the per-statement field extraction.  Provenance records one entry
-        per output variable; audit records one entry per output variable
-        (or a single placeholder keyed by code-prefix when a statement has
-        no string-named outputs).
-        """
+    def _record_provenance(self, all_metrics: list[ProcessResult]) -> None:
+        """Record a provenance entry per output variable of each statement in *all_metrics*."""
         for m in all_metrics:
             code = m.get("code", "")
             status = m.get("status", "computed")
@@ -1724,8 +1708,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             # names — never source variable names from it.
             outputs = m.get("restored_vars", []) or m.get("evaluated_vars", [])
             inputs_list = list(m.get("inputs", []))
-            # Outputs may contain rich-display dicts; provenance/audit only
-            # care about string variable names.
+            # Outputs may contain rich-display dicts; provenance only cares
+            # about string variable names.
             var_names = [o for o in (outputs or []) if isinstance(o, str)]
 
             provenance_status = str(status).lower() if status else "computed"
@@ -1738,15 +1722,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                     duration_ms=duration_ms,
                     lineage_hash=self.tracking_state.variable_lineage.get(out_var, ""),
                     file_deps=list(self.tracking_state.executed_file_deps.get(out_var, [])),
-                )
-
-            audit_op = _OP_MAP.get(status, "cache_operation")
-            for out_var in var_names or [code[:30]]:
-                self._session.audit.log(
-                    operation=audit_op,
-                    variable=out_var,
-                    code=code,
-                    duration_ms=duration_ms,
                 )
 
     def print_text_badge(self, metrics_list: list[ProcessResult], cell_total_time: float | None = None) -> None:

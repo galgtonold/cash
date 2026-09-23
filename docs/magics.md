@@ -2,7 +2,7 @@
 
 Cash registers a suite of IPython magic commands that control caching, inspect
 session state, and move cache data between sessions. This page is the canonical
-reference for all **16** magics — each entry lists the exact signature, every
+reference for all **15** magics — each entry lists the exact signature, every
 parsed flag, and a working example. Behaviour is derived directly from
 `src/cash/notebook/ipython/magics.py` and `src/cash/notebook/ipython/admin.py`.
 
@@ -29,7 +29,6 @@ parsed flag, and a working example. Behaviour is derived directly from
 | [`%cash_provenance`](#cash_provenance) | Variable computation history. |
 | [`%cash_track`](#cash_track) | Watch a local module for source changes. |
 | [`%cash_diff`](#cash_diff) | Diff current session against an exported cache file. |
-| [`%cash_audit`](#cash_audit) | Manage the cache-operation audit log. |
 | [`%cash_export`](#cash_export) | Serialize cache (and/or lineage) to a file. |
 | [`%cash_import`](#cash_import) | Load cache from a file written by `%cash_export`. |
 | [`%cash_benchmark`](#cash_benchmark) | Arm the next cell to run N timed iterations. |
@@ -418,41 +417,6 @@ only-other, changed, identical) and optionally per-variable detail.
 ```python
 %cash_diff teammate_session.cache
 %cash_diff teammate_session.cache --vars
-```
-
-### `%cash_audit`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_audit @8658d479 -->
-
-Log each statement's outcome per output variable: `cache_hit`, `cache_miss`
-or `cache_skip`, with the code and duration.
-Audit entries are kept in memory by default and optionally mirrored to a file.
-
-**Signature:** `%cash_audit [on [--file <path>]|off|show [<operation>] [--json]|summary|clear]`
-
-**Arguments:**
-
-- *(no argument)* — Print `Audit logging: enabled` or `disabled`.
-- `on` — Enable audit logging. Optional `--file <path>` mirrors entries to
-  a file as well.
-- `off` — Disable audit logging.
-- `show` — Show the last 50 entries. Optional positional `<operation>`
-  filters by operation type (e.g. `cache_hit`). Optional `--json` prints as
-  JSON.
-- `summary` — Print totals: entry count, unique variables, time range, and
-  per-operation counts.
-- `clear` — Clear all audit entries.
-
-**Example:**
-
-```python
-%cash_audit on
-%cash_audit on --file audit.log
-%cash_audit show
-%cash_audit show cache_hit
-%cash_audit show --json
-%cash_audit summary
-%cash_audit clear
-%cash_audit off
 ```
 
 ---

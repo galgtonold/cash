@@ -129,58 +129,6 @@ object, and `file` also appends them to the file, one JSON object per line.
 
 The flags are documented in full under [Magic Commands](../magics.md).
 
-## The audit log: every cache operation, in order
-
-The badge shows one cell and `%cash_stats` shows session totals. Between them
-sits `%cash_audit` — an append-only record of each individual cache operation,
-with its variable, timestamp, and the statement that caused it. It answers
-"what did cash actually do, in what order?" rather than "how did this one cell
-end up".
-
-<!-- claim: cash/notebook/ipython/magics.py:_OP_MAP @90522032 -->
-Each notebook statement records exactly one of three operations, named for the
-cache's point of view rather than the statement's: a **restored** statement
-logs `cache_hit`, a **computed** one logs `cache_miss`, and a skipped one logs
-`cache_skip`. There is no separate `cache_restore` or `cache_store` to filter
-on — those names exist in the entry format but nothing in the notebook path
-emits them.
-
-<!-- claim: cash/notebook/audit.py:AuditLogger.__init__ @86911f4a -->
-Audit logging is **off by default**; turn it on and it records from that point:
-
-<!-- test:skip reason="IPython magic command — requires kernel context" -->
-```python
-%cash_audit on                    # start recording (--file <path> also mirrors to disk)
-%cash_audit summary               # totals: entries, unique variables, time range, per-operation counts
-%cash_audit show                  # the last 50 entries
-%cash_audit show cache_hit        # filter to one operation type
-%cash_audit clear                 # drop the entries
-%cash_audit off
-```
-
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin._audit_cmd_summary @c0fbae55, cash/notebook/audit.py:AuditLogger.get_summary @1c4a6aab -->
-A `summary` reads like this — two runs of the same statement, one miss then one
-hit:
-
-```
-Audit Summary:
-  Total entries: 2
-  Unique variables: 1
-  Time range: 2026-07-27 12:34:56.021 to 2026-07-27 12:35:01.884
-  Operations:
-    cache_hit: 1
-    cache_miss: 1
-```
-
-<!-- claim: cash/notebook/audit.py:AuditLogger.__init__ @86911f4a, cash/notebook/audit.py:AuditLogger.log @e8188ae0, cash/notebook/audit.py:AuditLogger.get_entries @3fc9e021 -->
-Reach for it when a *sequence* is the question — a cell that behaves differently
-on the third run, or a session where you want a record of what was served from
-cache versus computed. Entries live in memory unless you pass
-`--file`, and the in-memory buffer keeps only the most recent 5,000 — a long
-session silently drops the oldest, so pass `--file` for anything you need to
-keep. `show` displays the last 50. Full flag reference in
-[Magic Commands](../magics.md#cash_audit).
-
 ## Asking a decorated function directly
 
 <!-- claim: cash/core.py:Cash._explain_call @fb72fb49 -->
