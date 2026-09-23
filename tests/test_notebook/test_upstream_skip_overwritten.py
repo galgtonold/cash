@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from traitlets.config.configurable import Configurable
 
+from cash.analysis.mutation_effects import CellEffects
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook._protocols import TrackingState
@@ -72,7 +73,7 @@ class TestSkipOverwrittenVarUnit:
             current_cell_idx=2,
             notebook_cells=cells,
             required_inputs={"x"},
-            current_cell_outputs=set(),
+            effects=CellEffects(outputs=frozenset()),
         )
 
         # Only the second definition should be scheduled (not the first)
@@ -107,7 +108,7 @@ class TestSkipOverwrittenVarUnit:
             current_cell_idx=2,
             notebook_cells=cells,
             required_inputs={"x"},
-            current_cell_outputs=set(),
+            effects=CellEffects(outputs=frozenset()),
         )
 
         # Both statements should be scheduled: definition AND mutation
@@ -151,7 +152,7 @@ class TestSkipOverwrittenVarUnit:
             current_cell_idx=3,
             notebook_cells=cells,
             required_inputs={"x"},
-            current_cell_outputs=set(),
+            effects=CellEffects(outputs=frozenset()),
         )
 
         # The try/except block should NOT be in the execution list

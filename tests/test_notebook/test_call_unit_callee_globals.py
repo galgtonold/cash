@@ -191,9 +191,7 @@ class TestIdentification:
         assert callee_mutated_globals(appends_to_two_globals) == ("AAA", "ZZZ")
 
     def test_a_module_valued_name_is_never_captured(self):
-        """Mirrors ``_classify_method_mutations`` and
-        ``_function_arg_mutation_receivers``: a module is never a value to
-        serialise. The name IS found by the analysis (an attribute write on a
+        """A module is never a value to serialise. The name IS found by the analysis (an attribute write on a
         free variable) and dropped by the live-namespace filter, so this is a
         real exclusion rather than an unreadable-source no-op."""
         assert callee_mutated_globals(sets_an_attribute_on_a_module) == ()

@@ -34,6 +34,7 @@ from ...analysis.cacheability import (
     statement_read_paths,
 )
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.mutation_effects import CellEffects
 from ...tracking.function_tracker import is_local_module
 from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
@@ -313,15 +314,10 @@ class NotebookSimulator:
     def _mark_stale_value_inputs_broken(
         self,
         required_inputs: set[str] | None,
-        current_cell_reassigned: set[str] | None,
+        effects: CellEffects,
         broken_vars: set[str],
-        current_cell_mutated: set[str] | None = None,
         notebook_cells: list[str] | None = None,
         current_cell_idx: int | None = None,
-        current_cell_method_receivers: set[str] | None = None,
-        current_cell_selfref_vars: set[str] | None = None,
-        current_cell_crossref_reassigned: set[str] | None = None,
-        current_cell_stateful_funcs: set[str] | None = None,
         virtual_lineage: dict[str, str] | None = None,
     ) -> None:
         """Flag self-modifying required inputs whose live value is stale.
@@ -366,17 +362,16 @@ class NotebookSimulator:
         # ``def`` re-run to recreate fresh state — force its producer to re-run by
         # marking it broken. On ``run_all`` the def re-runs to the same fresh
         # object first, so this only adds a cheap redundant redefine (B).
-        if current_cell_stateful_funcs:
-            for fn in current_cell_stateful_funcs:
-                if fn in self.shell.user_ns:
-                    broken_vars.add(fn)
+        for fn in effects.stateful_funcs:
+            if fn in self.shell.user_ns:
+                broken_vars.add(fn)
         if not required_inputs:
             return
-        reassigned = current_cell_reassigned or set()
+        reassigned = effects.reassigned
         # A no-lineage var the current cell mutates in place (``lst.append`` /
         # ``arr += 1`` / ``d.update``) is *self-written* even though it is not a
         # ``Name``-store reassignment.  Treat both as self-modifying inputs.
-        inplace_self = (current_cell_mutated or set()) & required_inputs
+        inplace_self = effects.mutated & required_inputs
         self_written = reassigned | inplace_self
         if not self_written:
             return
@@ -404,7 +399,7 @@ class NotebookSimulator:
             # detector: mark broken and let the producers restore the cell-entry
             # base. On ``run_all`` the producers re-run to the same base first, so
             # this only adds a cheap redundant restore there.
-            if current_cell_crossref_reassigned and var_name in current_cell_crossref_reassigned:
+            if var_name in effects.crossref_reassigned:
                 broken_vars.add(var_name)
                 continue
             live_value = self.shell.user_ns.get(var_name)
@@ -424,7 +419,7 @@ class NotebookSimulator:
                 live_lineage is not None
                 and virtual_lineage is not None
                 and live_lineage == virtual_lineage.get(var_name)
-                and not (current_cell_method_receivers and var_name in current_cell_method_receivers)
+                and var_name not in effects.method_receivers
             ):
                 if lineage_invisible is None:
                     lineage_invisible = self._lineage_invisible_writes(notebook_cells, current_cell_idx)
@@ -461,9 +456,7 @@ class NotebookSimulator:
                 # no-lineage self-writes. Scoped so that a write to a NEW column read
                 # from OTHER columns (``df['VolAdj']=df.groupby('Close')..``) is NOT
                 # included and keeps its per-statement cache (preserved).
-                force_reset = (current_cell_method_receivers and var_name in current_cell_method_receivers) or (
-                    current_cell_selfref_vars and var_name in current_cell_selfref_vars
-                )
+                force_reset = var_name in effects.method_receivers or var_name in effects.selfref
                 if force_reset:
                     before = var_name in broken_vars
                     # The live VALUE's own lineage (``_cash_lineage_hash``) reflects
@@ -561,7 +554,7 @@ class NotebookSimulator:
             # run (no recorded input version yet) and on legitimate forward runs
             # (live == base). Primitives carry no ``_cash_lineage_hash`` and were
             # already skipped above; in-place mutation is excluded via
-            # ``current_cell_reassigned``.
+            # ``effects.reassigned``.
             base_input = self.executed_input_lineages.get(var_name, {}).get(var_name)
             if base_input is not None and live_lineage != base_input:
                 if self.debug:
@@ -1008,16 +1001,13 @@ class NotebookSimulator:
         current_cell_idx: int,
         notebook_cells: list[str],
         required_inputs: set[str] | None = None,
-        current_cell_outputs: set[str] | None = None,
-        current_cell_reassigned: set[str] | None = None,
-        current_cell_mutated: set[str] | None = None,
-        current_cell_method_receivers: set[str] | None = None,
-        current_cell_selfref_vars: set[str] | None = None,
-        current_cell_crossref_reassigned: set[str] | None = None,
-        current_cell_stateful_funcs: set[str] | None = None,
-        current_cell_nocache_vars: set[str] | None = None,
+        effects: CellEffects | None = None,
     ) -> tuple[list[str], list[dict], float]:
         """Simulate notebook execution statement-by-statement.
+
+        *effects* is what the current cell writes (see
+        :func:`~cash.analysis.mutation_effects.cell_effects`); None when it is
+        not known, which is not the same as a cell that writes nothing.
 
         Returns:
             Tuple of ``(statements_to_reexecute, restored_info, total_restore_time)``:
@@ -1025,14 +1015,16 @@ class NotebookSimulator:
             with info about restored statements, and total disk-cache lookup
             time (seconds) accumulated during simulation.
         """
+        current_cell_outputs = set(effects.outputs) if effects is not None else None
+        effects = effects or CellEffects()
         trace_event(
             "simulate_enter",
             cell_idx=current_cell_idx,
-            reassigned=current_cell_reassigned or set(),
-            mutated=current_cell_mutated or set(),
+            reassigned=set(effects.reassigned),
+            mutated=set(effects.mutated),
             required_inputs=required_inputs or set(),
-            selfref=current_cell_selfref_vars or set(),
-            method_receivers=current_cell_method_receivers or set(),
+            selfref=set(effects.selfref),
+            method_receivers=set(effects.method_receivers),
         )
         if getattr(self, "_adopt_untracked_pending", False):
             self._track_modules_bound_before_cash_on()
@@ -1165,15 +1157,10 @@ class NotebookSimulator:
 
         self._mark_stale_value_inputs_broken(
             required_inputs,
-            current_cell_reassigned,
+            effects,
             broken_vars,
-            current_cell_mutated=current_cell_mutated,
             notebook_cells=notebook_cells,
             current_cell_idx=current_cell_idx,
-            current_cell_method_receivers=current_cell_method_receivers,
-            current_cell_selfref_vars=current_cell_selfref_vars,
-            current_cell_crossref_reassigned=current_cell_crossref_reassigned,
-            current_cell_stateful_funcs=current_cell_stateful_funcs,
             virtual_lineage=virtual_lineage,
         )
         trace_event("broken_after_guard", broken=broken_vars)
@@ -1196,8 +1183,8 @@ class NotebookSimulator:
         # would re-execute its producer and reset it -- so drop no-cache-written
         # vars from broken_vars here (the self-write-set exclusion only
         # covered the stale-value guard, not the pass-2 lineage mismatch).
-        if current_cell_nocache_vars:
-            removed = broken_vars & set(current_cell_nocache_vars)
+        if effects.nocache:
+            removed = broken_vars & effects.nocache
             if removed:
                 broken_vars -= removed
                 trace_event("broken_drop_nocache", dropped=removed, broken=broken_vars)

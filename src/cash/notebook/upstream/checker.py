@@ -11,27 +11,10 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from cash.control_markers import strip_markers
 
-from ...analysis.annotations import extract_annotations_for_statements, get_statement_annotations, parse_annotation_line
+from ...analysis.annotations import get_statement_annotations, parse_annotation_line
 from ...analysis.ast_util import called_names
-from ...analysis.cacheability import (
-    alias_mutation_sources,
-    aliased_sources,
-    analyze_statement,
-    callee_global_mutations,
-    crossref_reassigned_vars,
-    function_arg_mutations,
-    mutating_partials,
-    object_protocol_mutations,
-    partial_arg_mutations,
-    reduce_free_mutations,
-    selfref_inplace_write_vars,
-    standalone_call_arg_targets,
-    standalone_method_mutation_receivers,
-    stateful_closure_vars,
-    stateful_self_functions,
-    subscript_view_bindings,
-)
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.mutation_effects import CellEffects, NotebookSources, cell_effects
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import AmbiguousCellError, CashUpstreamSyntaxWarning, ForwardReferenceError, UpstreamStateError
 from ...tracking.randomness import (
@@ -61,13 +44,6 @@ if TYPE_CHECKING:
 __all__ = ["UpstreamChecker", "UpstreamResult"]
 
 
-def _is_live_ndarray(val: Any) -> bool:
-    """True if *val* is a numpy ndarray (so ``v = val[slice]`` is a view, not a
-    copy). Duck-typed by type module/name to avoid importing numpy here."""
-    t = type(val)
-    return t.__name__ == "ndarray" and t.__module__.split(".")[0] == "numpy"
-
-
 class UpstreamResult(NamedTuple):
     """Result of upstream checking and re-execution."""
 
@@ -88,38 +64,6 @@ def _cell_reads(cell_code: str) -> frozenset[str]:
     except (SyntaxError, ValueError, TypeError):
         return frozenset()
     return frozenset(inputs)
-
-
-def _nocache_written_vars(cell_code: str) -> set[str]:
-    """Variables written by a ``# @cash: no-cache`` statement in *cell_code*.
-
-    These must be excluded from the idempotent-rerun self-write restoration:
-    ``no-cache`` means "always run fresh", so a self-modifying var under it
-    (``counter = counter + 1``) is meant to ACCUMULATE on re-run, not be
-    restored to its input. Returns an empty set when the cell has no
-    annotations or can't be parsed.
-    """
-    try:
-        annotations = extract_annotations_for_statements(cell_code)
-        if not annotations:
-            return set()
-        tree = ast.parse(cell_code)
-    except (SyntaxError, ValueError):
-        return set()
-
-    written: set[str] = set()
-    for node in tree.body:
-        ann = annotations.get(getattr(node, "lineno", -1))
-        if ann is None or not ann.no_cache:
-            continue
-        try:
-            stmt_code = ast.unparse(node)
-            _, outputs = CodeAnalyzer.analyze_code_block(stmt_code)
-            written |= outputs
-            written |= set(analyze_statement(stmt_code, None).all_mutated_vars)
-        except (SyntaxError, ValueError):
-            continue
-    return written
 
 
 def _bound_by(fn: "ast.AST") -> set[str]:
@@ -367,346 +311,26 @@ class UpstreamChecker:
         # once per cell check.
         self._notebook_path_for_staleness = notebook_path
 
-        # Compute current cell outputs so Phase 2 can distinguish read-only inputs
-        # from variables the current cell also writes (downstream-advancement case).
-        # Also compute the names the cell REASSIGNS (`name = ...`), distinct from
-        # in-place mutation, so Phase 2 can restore a stale self-reassigned input.
-        # And the names the cell MUTATES in place (`lst.append`, `arr += 1`,
-        # `d.update`) so Phase 2 can restore a no-lineage in-place accumulator.
         # The classifier re-simulates this cell to tell its own earlier run
         # apart from an upstream edit (MismatchClassifier._current_cell_reproduces).
         classifier = getattr(self.simulator, "classifier", None)
         if classifier is not None:
             classifier.current_cell_code = cell_code
-        try:
-            _, current_cell_outputs = CodeAnalyzer.analyze_code_block(cell_code)
-            current_cell_reassigned = CodeAnalyzer.reassigned_names(cell_code)
-            # `resolve_source` folds in globals a CALLEE mutates, so the
-            # idempotent-rerun reset below covers them exactly as it covers an
-            # inline mutation (CAS-265). Resolved lazily: the notebook-wide
-            # source scan is only worth paying for when the cell calls
-            # something by bare name.
-            # One resolver for the mutation set. NOT for `current_cell_outputs`
-            # above: Phase 2 uses that set to decide a name is cell-WRITTEN
-            # rather than an input to restore, so declaring a callee-mutated
-            # global there disables the very reset that makes the statement's
-            # key converge (measured: [1, 1] where inline gives [1]).
-            _cell_resolver = None
-            if called_names(ast.parse(cell_code)):
-                _cell_resolver = self._notebook_function_sources(cell_code, notebook_path).get
-            current_cell_mutated = set(
-                analyze_statement(cell_code, None, resolve_source=_cell_resolver).all_mutated_vars
-            )
-            # A `# @cash: no-cache` statement opts out of caching AND of the
-            # idempotent-rerun input restoration: its self-modifying vars must
-            # accumulate on re-run (the documented "always recompute" contract),
-            # not be reset to their input. Drop them from the self-write sets.
-            nocache_vars = _nocache_written_vars(cell_code)
-            current_cell_reassigned = current_cell_reassigned - nocache_vars
-            current_cell_mutated = current_cell_mutated - nocache_vars
-            # Receivers mutated in place by a bare method call (``b.items.append``).
-            # Such no-output method statements skip the per-statement cache, so a
-            # lineage-carrying receiver accumulates on an isolated re-run unless it
-            # is restored to its cell-entry base. Scoped to METHOD receivers (NOT
-            # subscript/attr writes) so ``df['col']=..`` keeps its per-statement
-            # cache. Same no-cache opt-out as the other self-write sets.
-            current_cell_method_receivers = (
-                set(standalone_method_mutation_receivers(ast.parse(cell_code))) - nocache_vars
-            )
-            # Self-referential in-place subscript/attr writes (``df['a']=df['a']*2``,
-            # ``df['a']+=1``, ``df.iloc[i,j]+=x``) are non-idempotent: re-running
-            # applies the op again, so a lineage-carrying receiver (DataFrame) must
-            # be reset to its cell-entry base or the value accumulates.
-            # New-column writes read from OTHER columns (``df['VolAdj']=...``) are
-            # NOT self-referential and keep their per-statement cache. Same
-            # no-cache opt-out (a no-cache self-write must advance, not reset).
-            current_cell_selfref_vars = set(selfref_inplace_write_vars(ast.parse(cell_code))) - nocache_vars
-            # A variable passed to a user-defined helper that mutates the
-            # corresponding parameter in place (``def add(d): d.append(x)`` +
-            # ``add(data)``) is mutated even though the cell never names the
-            # mutation — static one-level body analysis attributes it back to the
-            # argument so it resets on isolated re-run instead of accumulating
-            # . Treated like a method receiver (force-reset + self-write).
-            # Only resolve the (notebook-wide) function sources when the current
-            # cell actually has a bare-Expr call candidate, so the common case
-            # pays nothing.
-            current_cell_stateful_funcs: set[str] = set()
-            if standalone_call_arg_targets(ast.parse(cell_code)):
-                func_sources = self._notebook_function_sources(cell_code, notebook_path)
-                func_arg_muts = function_arg_mutations(ast.parse(cell_code), func_sources.get) - nocache_vars
-                current_cell_mutated |= func_arg_muts
-                current_cell_method_receivers |= func_arg_muts
-            # Everything that needs the notebook-wide function sources and is
-            # keyed on ANY call in the cell (captured or bare), rather than on a
-            # bare-``Expr`` call the way the argument-mutation block above is.
-            if called_names(ast.parse(cell_code)):
-                func_sources_all = self._notebook_function_sources(cell_code, notebook_path)
-                # A called function that mutates a module GLOBAL / free variable
-                # in place (``def bump(): global g; g += 1`` + ``bump()``) leaves
-                # the global accumulating on an isolated re-run because nothing in
-                # the cell text names it. Attribute the mutation back to the
-                # global and add it to the cell's inputs so the reset loop (which
-                # iterates required_inputs) restores its producer's base (A).
-                #
-                # Every call counts, not only a bare-``Expr`` one
-                # rather than on a bare-``Expr`` one (CAS-260). The reset is what
-                # makes the statement's own cache converge: the statement now
-                # keys on the global's PRE-state, so without a reset the value it
-                # produced becomes the next run's key, which misses, which
-                # produces a third state -- a cell that re-executes forever and
-                # accumulates forever. Measured on ``af = compute_f(1)`` where
-                # ``compute_f`` appends to ``CALLS_F``, re-running the cell::
-                #
-                #     inline    CALLS_I  [1] -> [1]       -> [1]       0 calls
-                #     narrow    CALLS_F  [1] -> [1, 1]    -> [1, 1, 1] 1 call each
-                #     broad     CALLS_F  [1] -> [1]       -> [1]       0 calls
-                #
-                # The narrow gate is not a smaller version of the fix, it is the
-                # half that makes the other half diverge.
-                func_global_muts = callee_global_mutations(ast.parse(cell_code), func_sources_all.get) - nocache_vars
-                current_cell_mutated |= func_global_muts
-                required_inputs = required_inputs | func_global_muts
-                # A called function that carries mutable state on its own object
-                # -- a mutated mutable-default arg (``def collect(x, acc=[]):
-                # acc.append(x)``) or a function-attribute counter -- keeps
-                # accumulating across calls. Force-reset the function so its
-                # ``def`` re-runs and recreates fresh state on an isolated
-                # re-run (B).
-                current_cell_stateful_funcs = (
-                    set(stateful_self_functions(ast.parse(cell_code), func_sources_all.get)) - nocache_vars
-                )
-                # A closure variable (``c = make_counter()``) whose factory returns
-                # an inner function that mutates factory-local state accumulates
-                # across calls; force-reset it so ``c = make_counter()`` re-runs
-                # and rebuilds the closure fresh (B closure case).
-                var_factories = self._notebook_var_factories(cell_code, notebook_path)
+        # What the cell writes, by the channel an isolated re-run resets it
+        # through. A global it changes without naming it joins its inputs, so
+        # the reset below restores that global's producer too.
+        effects = cell_effects(cell_code, self._notebook_sources(cell_code, notebook_path), self.shell.user_ns)
+        required_inputs = required_inputs | effects.hidden_inputs
 
-                def _resolve_var_factory(name, _fs=func_sources_all, _vf=var_factories):
-                    src = _fs.get(_vf.get(name))
-                    if not src:
-                        return None
-                    try:
-                        parsed = ast.parse(src)
-                    except (SyntaxError, ValueError):
-                        return None
-                    if parsed.body and isinstance(parsed.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        return parsed.body[0]
-                    return None
-
-                current_cell_stateful_funcs |= (
-                    set(stateful_closure_vars(ast.parse(cell_code), _resolve_var_factory)) - nocache_vars
-                )
-                # Hidden mutation through functools.partial (a bound mutable arg,
-                # or the target's free var) or a function passed to functools.reduce
-                # — the higher-order caller invokes it, so the mutation happens but
-                # the cell text doesn't name it. Attribute it back and add to the
-                # cell's inputs so its producer's base is restored.
-                partial_bindings = self._notebook_partial_bindings(cell_code, notebook_path)
-                hidden_muts = (
-                    partial_arg_mutations(ast.parse(cell_code), partial_bindings.get, func_sources_all.get)
-                    | reduce_free_mutations(ast.parse(cell_code), func_sources_all.get)
-                ) - nocache_vars
-                current_cell_mutated |= hidden_muts
-                required_inputs = required_inputs | hidden_muts
-                # A partial that binds a MUTATED arg captured the arg's OBJECT, so
-                # resetting the arg name is not enough — force-reset the partial
-                # too so its producer re-binds it to the fresh arg.
-                current_cell_stateful_funcs |= (
-                    set(mutating_partials(ast.parse(cell_code), partial_bindings.get, func_sources_all.get))
-                    - nocache_vars
-                )
-            # Object-protocol hidden state: a with-statement, a
-            # custom-dunder op (``s[k]=v`` / ``del s[k]`` / ``v=s[k]`` / ``a(x)``),
-            # a constructor, a decorated call, or an instance / class method whose
-            # body mutates hidden state. Resolve the class / wrapper / context
-            # manager, analyse the invoked method, and route the mutation to the
-            # matching reset channel: a free var (mutated + inputs, A), the
-            # receiver instance (method-receiver), or the class def (stateful
-            # re-run).
-            op_tree = ast.parse(cell_code)
-            # Cheap current-cell trigger: any call / subscript / del / with can
-            # dispatch to a custom method whose body hides a mutation. The
-            # analysis is a no-op when nothing resolves to a notebook class /
-            # decorated function, so this only gates the (memoised) source scans.
-            has_op_trigger = any(
-                isinstance(n, (ast.Call, ast.Subscript, ast.Delete, ast.With, ast.AsyncWith)) for n in ast.walk(op_tree)
-            )
-            # A top-level ``class Sub(Base):`` defining a subclass triggers the
-            # base's ``__init_subclass__`` hook during CLASS CREATION — a hidden
-            # mutation with no Call/Subscript/etc. node of its own — so gate the
-            # object-protocol scan on a based class def too.
-            has_op_trigger = has_op_trigger or any(isinstance(n, ast.ClassDef) and n.bases for n in op_tree.body)
-            if has_op_trigger:
-                class_sources = self._notebook_class_sources(cell_code, notebook_path)
-                op_func_sources = self._notebook_function_sources(cell_code, notebook_path)
-                op_var_factories = self._notebook_var_factories(cell_code, notebook_path)
-                # ``@ClassName def task`` binds ``task`` to a ClassName INSTANCE
-                # (a class-based decorator), and ``h = g`` aliases one name to
-                # another; both feed the object-protocol resolvers.
-                op_decorated_instances = self._notebook_decorated_instances(cell_code, notebook_path)
-                op_name_aliases = self._notebook_name_aliases(cell_code, notebook_path)
-
-                def _resolve_alias(name, _al=op_name_aliases):
-                    # follow ``h = g = ...`` chains (bounded by the alias count)
-                    for _ in range(len(_al) + 1):
-                        nxt = _al.get(name)
-                        if nxt is None:
-                            return name
-                        name = nxt
-                    return name
-
-                def _instance_class(var, _vf=op_var_factories, _cs=class_sources):
-                    cls = _vf.get(var)
-                    return cls if cls in _cs else None
-
-                def _decorated_class(var, _di=op_decorated_instances, _cs=class_sources):
-                    cls = _di.get(var)
-                    return cls if cls in _cs else None
-
-                def _op_var_factory(name, _fs=op_func_sources, _vf=op_var_factories):
-                    name = _resolve_alias(name)
-                    src = _fs.get(_vf.get(name))
-                    if not src:
-                        return None
-                    try:
-                        parsed = ast.parse(src)
-                    except (SyntaxError, ValueError):
-                        return None
-                    if parsed.body and isinstance(parsed.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        return parsed.body[0]
-                    return None
-
-                op_resets = object_protocol_mutations(
-                    op_tree,
-                    class_sources.get,
-                    _instance_class,
-                    op_func_sources.get,
-                    _op_var_factory,
-                    decorated_class=_decorated_class,
-                )
-                # The free-var channel resets via the A content-base path,
-                # which already suppresses cross-cell accumulators — apply it
-                # directly.
-                op_free = op_resets.free_vars - nocache_vars
-                current_cell_mutated |= op_free
-                required_inputs = required_inputs | op_free
-                # The receiver and class-def channels re-derive the object
-                # (restore the receiver to its cell-entry base / re-run the class
-                # def). That is safe ONLY when the current cell is the SOLE
-                # in-place mutator: if ANOTHER cell also mutates the same receiver
-                # (``dag.add_edge(..)`` in a setup cell builds ``dag`` up across a
-                # loop, then ``dag.topo_sort()`` here) or class var (``w0 =
-                # Widget()`` then ``w = Widget()`` — both bump ``Widget.count``),
-                # the re-derivation loses the other cell's contribution and would
-                # corrupt EVEN THE FIRST run. Suppress those — a cross-cell
-                # accumulator needs a per-cell-base snapshot this reset cannot
-                # provide. The FILED forms construct the receiver
-                # once (no cross-cell in-place build) and are unaffected.
-                op_receivers = op_resets.receivers - nocache_vars
-                op_class_defs = op_resets.class_defs - nocache_vars
-                # A base ``__init_subclass__`` free-var registry hides
-                # its mutation behind class creation, so — unlike an ordinary
-                # free var — the simulator's content-base guard cannot see
-                # that a SIBLING subclass cell also appends to it. Guard it with
-                # the same cross-cell suppression as the receiver / class-def
-                # channels: if another cell also registers into it, this cell is
-                # not the sole mutator and the free-var reset would drop that
-                # cell's contribution on run_all.
-                op_init_free = op_resets.init_subclass_free_vars - nocache_vars
-                if op_receivers or op_class_defs or op_init_free:
-                    other_receivers: set[str] = set()
-                    other_class_defs: set[str] = set()
-                    other_init_free: set[str] = set()
-                    seen_current = False
-                    for _code in self._other_notebook_cells(cell_code, notebook_path):
-                        if not seen_current and _code == cell_code:
-                            seen_current = True
-                            continue
-                        try:
-                            other = object_protocol_mutations(
-                                ast.parse(_code),
-                                class_sources.get,
-                                _instance_class,
-                                op_func_sources.get,
-                                _op_var_factory,
-                            )
-                        except (SyntaxError, ValueError):
-                            continue
-                        other_receivers |= other.receivers
-                        other_class_defs |= other.class_defs
-                        other_init_free |= other.init_subclass_free_vars
-                    op_receivers = op_receivers - other_receivers
-                    op_class_defs = op_class_defs - other_class_defs
-                    op_init_free = op_init_free - other_init_free
-                current_cell_mutated |= op_receivers
-                current_cell_method_receivers |= op_receivers
-                current_cell_stateful_funcs |= op_class_defs
-                # Survivors (sole-mutator subclass cells) join the free-var reset.
-                current_cell_mutated |= op_init_free
-                required_inputs = required_inputs | op_init_free
-            # A bare ``y = x`` alias shares x's object, so an in-place mutation
-            # through y (``y.append``/``y[0]+=1``) also mutates the upstream
-            # holder x. Attribute it back to x so x resets on isolated re-run
-            # instead of accumulating. For a no-lineage source the
-            # content-base guard restores it via ``current_cell_mutated``; for a
-            # lineage-carrying aliased DataFrame the source must also join the
-            # selfref / method-receiver sets so the force-reset fires
-            # (``df2 = df; df2['a'] = df2['a']*2`` doubled). The selfref set is
-            # column-key-scoped, so an aliased NEW-column write (``df2['b'] =
-            # df2['a']*2``) is still excluded and keeps its cache.
-            alias_tree = ast.parse(cell_code)
-            current_cell_mutated |= alias_mutation_sources(alias_tree) - nocache_vars
-            current_cell_selfref_vars |= aliased_sources(alias_tree, current_cell_selfref_vars) - nocache_vars
-            current_cell_method_receivers |= aliased_sources(alias_tree, current_cell_method_receivers) - nocache_vars
-            # A numpy ``v = arr[slice]`` binding is a VIEW sharing arr's memory, so
-            # mutating v (``v += 1``, ``v[i] = x``) mutates arr in place. A list
-            # slice is a COPY, so this is gated on arr being a live ndarray at
-            # runtime. When the view is mutated, attribute it back to arr so arr
-            # resets on isolated re-run instead of accumulating.
-            view_bindings = subscript_view_bindings(alias_tree)
-            if view_bindings:
-                user_ns = self.shell.user_ns
-                mutated_here = analyze_statement(cell_code, None).all_mutated_vars
-                current_cell_mutated |= {
-                    base
-                    for alias, base in view_bindings.items()
-                    if alias in mutated_here and _is_live_ndarray(user_ns.get(base))
-                } - nocache_vars
-            # Names reassigned from a permutation of their own prior values
-            # (``a, b = b, a`` swap / rotate / temp-swap) read their pre-cell base
-            # but on isolated re-run hold the swapped OUTPUT, whose content equals
-            # the recorded output hash -- lineage-invisible, so no reset signal
-            # fires. Force these to reset to their producers' base.
-            current_cell_crossref_reassigned = crossref_reassigned_vars(alias_tree) - nocache_vars
-            nocache_vars = set(nocache_vars)
-        except (SyntaxError, ValueError):
-            logger.debug("[UPSTREAM] Failed to analyze current cell outputs")
-            current_cell_outputs = set()
-            current_cell_reassigned = set()
-            current_cell_mutated = set()
-            current_cell_method_receivers = set()
-            current_cell_selfref_vars = set()
-            current_cell_crossref_reassigned = set()
-            current_cell_stateful_funcs = set()
-            nocache_vars = set()
-
-        # Phase 2 — Notebook-simulation-based staleness check (disk vs. memory).
-        # Simulates the notebook statement-by-statement and compares the resulting
-        # virtual lineage against the actual in-memory state to find changed code.
+        # Simulate the notebook statement by statement and compare the virtual
+        # lineage with the in-memory state to find changed code.
         all_metrics, total_restore_time, total_execution_time = self._check_notebook_based(
             cell_code,
             required_inputs,
             process_statement_callback,
             global_ttl,
+            effects,
             notebook_path=notebook_path,
-            current_cell_outputs=current_cell_outputs,
-            current_cell_reassigned=current_cell_reassigned,
-            current_cell_mutated=current_cell_mutated,
-            current_cell_method_receivers=current_cell_method_receivers,
-            current_cell_selfref_vars=current_cell_selfref_vars,
-            current_cell_crossref_reassigned=current_cell_crossref_reassigned,
-            current_cell_stateful_funcs=current_cell_stateful_funcs,
-            current_cell_nocache_vars=nocache_vars,
             progress_callback=progress_callback,
             control_structure_callback=control_structure_callback,
         )
@@ -746,162 +370,10 @@ class UpstreamChecker:
         except (OSError, ValueError, RuntimeError):
             return []
 
-    def _notebook_function_sources(self, cell_code: str, notebook_path: str | None) -> dict[str, str]:
-        """Map ``{function_name: source}`` for every top-level ``def`` across the
-         notebook cells plus the current cell.
-
-         Resolves from cell SOURCE (the source of truth) rather than
-         ``inspect.getsource`` — the latter fails for cell-defined functions under
-         nbclient (no linecache entry). Used by :func:`function_arg_mutations`
-        . The current cell is included so a helper defined and used in the
-         same cell still resolves; later same-name defs win (last definition).
-        """
-        sources: dict[str, str] = {}
-        cells = self._notebook_cells_for(notebook_path)
-        for code in (*cells, cell_code):
-            try:
-                tree = ast.parse(code)
-            except (SyntaxError, ValueError):
-                continue
-            for node in tree.body:
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    try:
-                        sources[node.name] = ast.unparse(node)
-                    except (ValueError, AttributeError):
-                        continue
-        return sources
-
-    def _other_notebook_cells(self, cell_code: str, notebook_path: str | None) -> list[str]:
-        """The notebook's cell sources (which already include the current cell;
-        the caller skips its first occurrence of *cell_code*). Used to detect a
-        class variable mutated by more than one cell — a cross-cell accumulator
-        whose class-def reset must be suppressed."""
-        return self._notebook_cells_for(notebook_path)
-
-    def _notebook_class_sources(self, cell_code: str, notebook_path: str | None) -> dict[str, str]:
-        """Map ``{class_name: source}`` for every top-level ``class`` across the
-        notebook cells plus the current cell.
-
-        Resolves from cell SOURCE (like :meth:`_notebook_function_sources`) so a
-        class defined in a cell resolves under nbclient, where
-        ``inspect.getsource`` has no linecache entry. Used by
-        :func:`object_protocol_mutations` to analyse a receiver's method /
-        dunder bodies. Later same-name defs win.
-        """
-        sources: dict[str, str] = {}
-        cells = self._notebook_cells_for(notebook_path)
-        for code in (*cells, cell_code):
-            try:
-                tree = ast.parse(code)
-            except (SyntaxError, ValueError):
-                continue
-            for node in tree.body:
-                if isinstance(node, ast.ClassDef):
-                    try:
-                        sources[node.name] = ast.unparse(node)
-                    except (ValueError, AttributeError):
-                        continue
-        return sources
-
-    def _notebook_decorated_instances(self, cell_code: str, notebook_path: str | None) -> dict[str, str]:
-        """Map ``{func_name: decorator_name}`` for every top-level ``@Deco def f``
-        across the notebook. When the decorator is a class, ``f`` is an
-        INSTANCE of it (a class-based decorator: ``@Counter def task`` → ``task``
-        is a ``Counter``). The caller filters to decorators that resolve to a
-        class. Only bare-``Name`` decorators are captured. Last definition wins."""
-        instances: dict[str, str] = {}
-        cells = self._notebook_cells_for(notebook_path)
-        for code in (*cells, cell_code):
-            try:
-                tree = ast.parse(code)
-            except (SyntaxError, ValueError):
-                continue
-            for node in tree.body:
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    for dec in node.decorator_list:
-                        if isinstance(dec, ast.Name):
-                            instances[node.name] = dec.id
-                            break
-        return instances
-
-    def _notebook_name_aliases(self, cell_code: str, notebook_path: str | None) -> dict[str, str]:
-        """Map ``{alias: source}`` for every top-level ``alias = source`` bare-Name
-        binding across the notebook (``h = g``), so a called alias resolves to the
-        decorator/factory of the name it aliases. Last binding wins."""
-        aliases: dict[str, str] = {}
-        cells = self._notebook_cells_for(notebook_path)
-        for code in (*cells, cell_code):
-            try:
-                tree = ast.parse(code)
-            except (SyntaxError, ValueError):
-                continue
-            for node in tree.body:
-                if (
-                    isinstance(node, ast.Assign)
-                    and len(node.targets) == 1
-                    and isinstance(node.targets[0], ast.Name)
-                    and isinstance(node.value, ast.Name)
-                ):
-                    aliases[node.targets[0].id] = node.value.id
-        return aliases
-
-    def _notebook_var_factories(self, cell_code: str, notebook_path: str | None) -> dict[str, str]:
-        """Map ``{var: factory_name}`` for every top-level ``var = factory(...)``
-        assignment across the notebook (``c = make_counter()`` → ``make_counter``).
-
-        Used to resolve a closure variable back to the factory that produced it,
-        so a stateful closure can be reset by re-running the factory call
-        (B closure case). Last assignment wins.
-        """
-        factories: dict[str, str] = {}
-        cells = self._notebook_cells_for(notebook_path)
-        for code in (*cells, cell_code):
-            try:
-                tree = ast.parse(code)
-            except (SyntaxError, ValueError):
-                continue
-            for node in tree.body:
-                if (
-                    isinstance(node, ast.Assign)
-                    and len(node.targets) == 1
-                    and isinstance(node.targets[0], ast.Name)
-                    and isinstance(node.value, ast.Call)
-                    and isinstance(node.value.func, ast.Name)
-                ):
-                    factories[node.targets[0].id] = node.value.func.id
-        return factories
-
-    def _notebook_partial_bindings(self, cell_code: str, notebook_path: str | None) -> dict[str, tuple[str, list]]:
-        """Map ``{var: (target_func, [bound_arg_vars])}`` for every top-level
-        ``var = partial(f, x, ...)`` / ``functools.partial(...)`` across the
-        notebook. Bound args are Name ids (or ``None`` for non-Name),
-        aligned to ``f``'s positional params. Last assignment wins.
-        """
-        bindings: dict[str, tuple[str, list]] = {}
-        cells = self._notebook_cells_for(notebook_path)
-        for code in (*cells, cell_code):
-            try:
-                tree = ast.parse(code)
-            except (SyntaxError, ValueError):
-                continue
-            for node in tree.body:
-                if not (
-                    isinstance(node, ast.Assign)
-                    and len(node.targets) == 1
-                    and isinstance(node.targets[0], ast.Name)
-                    and isinstance(node.value, ast.Call)
-                ):
-                    continue
-                call = node.value
-                func = call.func
-                is_partial = (isinstance(func, ast.Name) and func.id == "partial") or (
-                    isinstance(func, ast.Attribute) and func.attr == "partial"
-                )
-                if is_partial and call.args and isinstance(call.args[0], ast.Name):
-                    f_name = call.args[0].id
-                    bound = [a.id if isinstance(a, ast.Name) else None for a in call.args[1:]]
-                    bindings[node.targets[0].id] = (f_name, bound)
-        return bindings
+    def _notebook_sources(self, cell_code: str, notebook_path: str | None) -> NotebookSources:
+        """Top-level definitions across the notebook's cells plus *cell_code*,
+        read from their text; the notebook is only read if one is asked for."""
+        return NotebookSources(lambda: self._notebook_cells_for(notebook_path), cell_code)
 
     def _resolve_fallback_cache_idx(self, cell_id: str | None) -> int | None:
         """Return the simulation cache index to use for the downstream advancement fallback.
@@ -1418,15 +890,8 @@ class UpstreamChecker:
         required_inputs: set[str],
         process_statement_callback: Callable[..., ProcessResult],
         global_ttl: int | None,
+        effects: CellEffects | None = None,
         notebook_path: str | None = None,
-        current_cell_outputs: set[str] | None = None,
-        current_cell_reassigned: set[str] | None = None,
-        current_cell_mutated: set[str] | None = None,
-        current_cell_method_receivers: set[str] | None = None,
-        current_cell_selfref_vars: set[str] | None = None,
-        current_cell_crossref_reassigned: set[str] | None = None,
-        current_cell_stateful_funcs: set[str] | None = None,
-        current_cell_nocache_vars: set[str] | None = None,
         progress_callback: Callable[..., None] | None = None,
         control_structure_callback: Callable[..., Any] | None = None,
     ) -> UpstreamResult:
@@ -1439,7 +904,7 @@ class UpstreamChecker:
         """
         try:
             notebook_cells, current_cell_idx = self._load_notebook_and_find_cell(
-                cell_code, required_inputs, current_cell_outputs, notebook_path
+                cell_code, required_inputs, set(effects.outputs) if effects is not None else None, notebook_path
             )
             if notebook_cells is None or current_cell_idx is None:
                 return UpstreamResult([], 0.0, 0.0)
@@ -1479,14 +944,7 @@ class UpstreamChecker:
                 current_cell_idx,
                 notebook_cells,
                 required_inputs,
-                current_cell_outputs=current_cell_outputs,
-                current_cell_reassigned=current_cell_reassigned,
-                current_cell_mutated=current_cell_mutated,
-                current_cell_method_receivers=current_cell_method_receivers,
-                current_cell_selfref_vars=current_cell_selfref_vars,
-                current_cell_crossref_reassigned=current_cell_crossref_reassigned,
-                current_cell_stateful_funcs=current_cell_stateful_funcs,
-                current_cell_nocache_vars=current_cell_nocache_vars,
+                effects,
             )
 
             if self.debug:

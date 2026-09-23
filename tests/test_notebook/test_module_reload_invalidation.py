@@ -219,11 +219,11 @@ class TestModuleReloadInvalidation:
 
         # Compute cache key WITHOUT module lineage
         code = f"result = {module_name}.increment(5)"
-        inputs1, outputs1, _, key1, _, _ = sp._analyze_and_hash(code)
+        _, _, key1, _, _ = sp._analyze_and_hash(code)
 
         # Now set a module lineage and recompute
         sp.variable_lineage[module_name] = hashlib.sha256(b"version_1").hexdigest()
-        inputs2, outputs2, _, key2, _, _ = sp._analyze_and_hash(code)
+        _, _, key2, _, _ = sp._analyze_and_hash(code)
 
         # Keys should differ because module lineage is now included
         assert key1 != key2
@@ -241,11 +241,11 @@ class TestModuleReloadInvalidation:
 
         # Version 1
         sp.variable_lineage[module_name] = hashlib.sha256(b"version_1").hexdigest()
-        _, _, _, key_v1, _, _ = sp._analyze_and_hash(code)
+        _, _, key_v1, _, _ = sp._analyze_and_hash(code)
 
         # Version 2
         sp.variable_lineage[module_name] = hashlib.sha256(b"version_2").hexdigest()
-        _, _, _, key_v2, _, _ = sp._analyze_and_hash(code)
+        _, _, key_v2, _, _ = sp._analyze_and_hash(code)
 
         assert key_v1 != key_v2
 

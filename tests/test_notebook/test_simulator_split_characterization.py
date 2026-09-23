@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 from traitlets.config.configurable import Configurable
 
+from cash.analysis.mutation_effects import CellEffects
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
@@ -89,7 +90,7 @@ def test_clean_notebook_no_changes_returns_empty_plan(magics_fixture):
         current_cell_idx=2,
         notebook_cells=["x = 1", "y = x + 1", "z = y"],
         required_inputs={"y"},
-        current_cell_outputs={"z"},
+        effects=CellEffects(outputs=frozenset({"z"})),
     )
 
     assert stmts == []
@@ -113,7 +114,7 @@ def test_modified_upstream_cell_schedules_reexecution(magics_fixture):
         current_cell_idx=2,
         notebook_cells=["x = 99", "y = x + 1", "z = y"],
         required_inputs={"y"},
-        current_cell_outputs={"z"},
+        effects=CellEffects(outputs=frozenset({"z"})),
     )
 
     # At least one of the upstream statements must be scheduled.
@@ -133,7 +134,7 @@ def test_simulate_upstream_return_types(magics_fixture):
         current_cell_idx=1,
         notebook_cells=["data = [1, 2, 3]", "x = data[0]"],
         required_inputs={"data"},
-        current_cell_outputs={"x"},
+        effects=CellEffects(outputs=frozenset({"x"})),
     )
 
     # No upstream modification — early-exit returns the empty triple.
@@ -154,7 +155,7 @@ def test_reset_caches_clears_simulator_state(magics_fixture):
         current_cell_idx=1,
         notebook_cells=["x = 1", "y = x"],
         required_inputs={"x"},
-        current_cell_outputs={"y"},
+        effects=CellEffects(outputs=frozenset({"y"})),
     )
 
     simulator.reset_caches()

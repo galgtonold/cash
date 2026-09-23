@@ -95,8 +95,8 @@ def test_run_all_of_cells_bounded_probes(failing_discovery):
     n_cells = 13
     for _ in range(n_cells):
         path = uc._resolve_notebook_path()
-        uc._notebook_function_sources("z = 1 + 1", path)
-        uc._notebook_class_sources("z = 1 + 1", path)
+        sources = uc._notebook_sources("z = 1 + 1", path)
+        assert sources.functions == {} and sources.classes == {}
 
     # Old code: >= 3 probes/cell (2 helpers + phase-2 doubling) -> ~39-52.
     # New code: bounded to ~1 per TTL window (these run well within one window).

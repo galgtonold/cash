@@ -34,14 +34,11 @@ from ...analysis.cacheability import (
     assigned_method_call_receivers,
     bare_call_argument_names,
     bare_call_arguments,
-    callee_global_mutations,
     chain_is_pure,
     fits_its_receiver,
-    function_arg_mutations,
     is_pandas_plot_call,
     module_setting_receivers,
     selfref_reassignment_targets,
-    standalone_call_arg_targets,
     standalone_method_call_inner_methods,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
@@ -50,6 +47,7 @@ from ...analysis.cacheability import (
 )
 from ...analysis.cacheability_decision import receiver_is_identity_coupled
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.mutation_effects import statement_effects
 from ...source_norm import source_identity_digest
 from ...tracking import file_dep_snapshot as _fds
 from ...tracking.file_dep_snapshot import LISTING_MIN_FILES, FreshnessMemo, snapshot_is_fresh, stats_from_listings
@@ -382,18 +380,6 @@ class VirtualLineage:
                 return True
             return bool(virtual_modules) and name not in user_ns and name in virtual_modules
 
-        # Bare FUNCTION-arg mutations (``proc(d)`` whose body mutates its
-        # parameter) mirror bare method calls: no Store target, so the mutated
-        # arg must be surfaced as an output or the backward restore scan resolves
-        # the var from its constructor (pre-mutation). Detected statically from
-        # the called function's source, matching the runtime's inspect-based
-        # detect (see ``_resolve_sim_function_source`` for cell-vs-import).
-        fam: set[str] = set()
-        try:
-            if standalone_call_arg_targets(tree):
-                fam = {v for v in function_arg_mutations(tree, self._resolve_sim_function_source) if not is_module(v)}
-        except (SyntaxError, ValueError, RecursionError):
-            fam = set()
         candidates = standalone_method_call_receivers(tree)
         # captured-return draws are assignments, absent from the
         # bare-``Expr`` candidate set; keep the guard from short-circuiting them.
@@ -424,7 +410,7 @@ class VirtualLineage:
         # `heapq.heapify(xs)` a silently wrong `xs[0]` (round 30, r30s4).
         absent_args = {n for n in bare_call_argument_names(tree) if n not in self.shell.user_ns} - drawn_args
         if not candidates and not assigned and not drawn_args and not arg_candidates and not absent_args:
-            return fam
+            return set()
         tier1 = standalone_method_mutation_receivers(tree)
         inner = standalone_method_call_inner_methods(tree)
         settings = module_setting_receivers(tree)
@@ -474,7 +460,7 @@ class VirtualLineage:
                 continue
             if receiver_is_identity_coupled(receiver) or fits_its_receiver(_method, receiver):
                 receivers.add(base)
-        return receivers | drawn_args | fam
+        return receivers | drawn_args
 
     def reset_caches(self) -> None:
         """Clear simulation and AST caches."""
@@ -2629,25 +2615,28 @@ class VirtualLineage:
             if virtual_modules is None:
                 virtual_modules = set()
 
-            # Analyze statement
-            # Mirrors the runtime's `_analyze_and_hash`: a global the CALLEE
-            # mutates is declared as both an input and an output here too,
-            # or the two engines disagree about what the statement reads and
-            # writes and ADR-007's identical-key rule breaks (CAS-265).
-            inputs, outputs = CodeAnalyzer.analyze_code_block(
-                stmt_code, resolve_source=self._resolve_sim_function_source, user_ns=self.shell.user_ns
-            )
-
-            # Mirror the runtime: a top-level bare-Expr method call
-            # (lst.append(x), bus.on(fn)) carries no Store target, so
-            # analyze_code_block never surfaces the receiver as an output. Union
-            # in the receivers the runtime treats as mutated (statically known,
-            # or per the recorded broad-precise verdict) so the simulated lineage
-            # is bumped with the SAME source-based formula -- keeping the engines
-            # in sync (a runtime-only bump desyncs cross-cell restore).
+            # The same analysis the runtime's `_analyze_and_hash` runs, with the
+            # notebook's cell text as the source of called functions: the two
+            # engines must agree on what a statement reads and writes, or they
+            # mint different keys.
             mutation_tree = self.get_cached_ast(stmt_code)
+            effects = statement_effects(
+                stmt_code,
+                mutation_tree,
+                namespace=self.shell.user_ns,
+                resolve_source=self._resolve_sim_function_source,
+                control_body=is_control_body(stmt_code),
+                virtual_modules=virtual_modules,
+            )
+            inputs, outputs = set(effects.inputs), set(effects.outputs)
+
+            # A bare method call (``lst.append(x)``) or a bare call to a helper
+            # that mutates its argument has no Store target: add the receivers
+            # the runtime treats as mutated, so the simulated lineage is bumped
+            # by the same source-based formula.
             if mutation_tree is not None:
                 outputs = outputs | self._mutation_receivers(stmt_code, mutation_tree, virtual_modules)
+                outputs |= effects.arg_mutations
 
                 # Model bare-name ``del x`` as a namespace removal so the
                 # position-scoped liveness check downstream reconstructs an
@@ -2702,13 +2691,7 @@ class VirtualLineage:
             # simulated lineage is bumped with the same source-based formula
             # the runtime uses. The runtime ALSO skip-caches such a statement;
             # that half is runtime-only, exactly like ``mut_pre_route``.
-            if not is_control_body(stmt_code):
-                outputs = outputs | callee_global_mutations(
-                    mutation_tree,
-                    self._resolve_sim_function_source,
-                    scope="no_control_bodies",
-                    namespace=self.shell.user_ns,
-                )
+            outputs = outputs | effects.callee_globals
 
             if not outputs:
                 return set(), 0.0, False, {}

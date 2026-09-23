@@ -509,13 +509,10 @@ from ...analysis.cacheability import (
     analyze_statement,
     assigned_method_call_receivers,
     bare_call_arguments,
-    callee_global_mutations,
     chain_is_pure,
     fits_its_receiver,
-    function_arg_mutations,
     is_pandas_plot_call,
     module_setting_receivers,
-    standalone_call_arg_targets,
     standalone_method_call_inner_methods,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
@@ -527,6 +524,7 @@ from ...analysis.cacheability_decision import (
     receiver_is_identity_coupled,
 )
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.mutation_effects import StatementEffects, statement_effects
 from ...analytics import AnalyticsManager
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import (
@@ -1169,10 +1167,11 @@ class StatementProcessor:
         except SyntaxError:
             _parsed_tree = None
 
-        callee_globals = self._callee_mutated_globals(code, _parsed_tree)
-        inputs, outputs, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(
+        effects, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(
             code, occurrence_index=occurrence_index, tree=_parsed_tree
         )
+        inputs, outputs = set(effects.inputs), set(effects.outputs)
+        callee_globals = set(effects.callee_globals)
         # Caller-forced outputs (accumulator-loop fast path): capture
         # and restore these on top of the AST-discovered outputs, and mark them
         # as expected writes so an in-place accumulator mutation (``out.append``)
@@ -1295,7 +1294,7 @@ class StatementProcessor:
         # ``est_fit`` also threads to the cache-hit path so its restore is IN
         # PLACE. Without the directive ``est_fit`` is empty and every
         # site below degrades to the pre-existing skip-cache behaviour.
-        fam = self._function_arg_mutation_receivers(_parsed_tree, outputs)
+        fam = effects.arg_mutations - outputs
         skip_pre_route = mut_pre_route - est_fit
         if mut_pre_route or est_fit or fam:
             outputs = outputs | mut_pre_route | est_fit | fam
@@ -1532,10 +1531,11 @@ class StatementProcessor:
         except SyntaxError:
             _parsed_tree = None
 
-        callee_globals = self._callee_mutated_globals(code, _parsed_tree)
-        inputs, outputs, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(
+        effects, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(
             code, occurrence_index=occurrence_index, tree=_parsed_tree
         )
+        inputs, outputs = set(effects.inputs), set(effects.outputs)
+        callee_globals = set(effects.callee_globals)
         if callee_globals:
             outputs = outputs | callee_globals
         metrics["cache_key"] = cache_key
@@ -1605,7 +1605,7 @@ class StatementProcessor:
         # ``est_fit`` also threads to the cache-hit path so its restore is IN
         # PLACE. Without the directive ``est_fit`` is empty and every
         # site below degrades to the pre-existing skip-cache behaviour.
-        fam = self._function_arg_mutation_receivers(_parsed_tree, outputs)
+        fam = effects.arg_mutations - outputs
         skip_pre_route = mut_pre_route - est_fit
         if mut_pre_route or est_fit or fam:
             outputs = outputs | mut_pre_route | est_fit | fam
@@ -3616,39 +3616,6 @@ class StatementProcessor:
                     continue
         return None
 
-    def _callee_mutated_globals(self, code: str, tree: ast.Module | None) -> set[str]:
-        """Notebook globals a callee of this statement mutates in place.
-
-        ``x = compute(v)`` where ``compute`` appends to ``CALLS`` mutates
-        ``CALLS`` exactly as ``CALLS.append(v)`` written inline would, so it gets
-        the same treatment: the name joins the outputs (its lineage is bumped)
-        and the statement re-executes. A control-structure body statement is
-        left to its loop or branch, which owns its body's writes.
-        """
-        if is_control_body(code):
-            return set()
-        return set(
-            callee_global_mutations(
-                tree, self._resolve_live_function_source, scope="no_control_bodies", namespace=self.shell.user_ns
-            )
-        )
-
-    def _function_arg_mutation_receivers(
-        self,
-        tree: ast.Module | None,
-        outputs: set[str],
-    ) -> set[str]:
-        """Variables mutated in place by a bare FUNCTION call (``proc(d)``)."""
-        if tree is None:
-            return set()
-        try:
-            if not standalone_call_arg_targets(tree):
-                return set()
-            muts = function_arg_mutations(tree, self._resolve_live_function_source)
-        except (SyntaxError, ValueError, RecursionError):
-            return set()
-        return {var for var in muts if not isinstance(self.shell.user_ns.get(var), types.ModuleType)} - outputs
-
     def _estimator_fit_receivers(
         self,
         tree: ast.Module | None,
@@ -5023,29 +4990,31 @@ class StatementProcessor:
 
     def _analyze_and_hash(
         self, code: str, occurrence_index: int = 0, tree: ast.Module | None = None
-    ) -> tuple[set[str], set[str], str, str, float, float]:
-        """Analyze code and compute hashes.
+    ) -> tuple[StatementEffects, str, str, float, float]:
+        """Analyze *code* and compute its cache key.
 
-        Delegates cache key computation to the unified ``compute_cache_key``
-        function in ``cash.notebook.cache_key`` to ensure key consistency
-        across runtime and simulation.
+        Returns ``(effects, source_hash, cache_key, analysis_time, hash_time)``.
+        The key comes from the unified ``compute_cache_key``, the effects from
+        :func:`~cash.analysis.mutation_effects.statement_effects` -- the same
+        two functions the upstream simulation uses, with the live namespace as
+        the source of called functions.
 
         Args:
             code: Python source code to analyze.
             occurrence_index: Index for disambiguating duplicate code blocks.
-            tree: Optional pre-parsed AST to avoid redundant parsing.
+            tree: ``ast.parse(code.strip())``, or None when that fails.
         Raises:
             CacheKeyComputationError: If the cache key cannot be computed.
         """
         t1 = time.time()
-        # `resolve_source`: a global the CALLEE mutates is declared as both an
-        # input and an output, exactly as the inline spelling declares it
-        # (CAS-265). The simulator passes its own equivalent resolver at the
-        # mirrored site, or the two engines disagree about what a statement
-        # reads and writes -- which is an ADR-007 key divergence.
-        inputs, outputs = CodeAnalyzer.analyze_code_block(
-            code, tree=tree, resolve_source=self._resolve_live_function_source, user_ns=self.shell.user_ns
+        effects = statement_effects(
+            code,
+            tree,
+            namespace=self.shell.user_ns,
+            resolve_source=self._resolve_live_function_source,
+            control_body=is_control_body(code),
         )
+        inputs, outputs = set(effects.inputs), set(effects.outputs)
         self._log_statement_reads(code, inputs)
         analysis_time = time.time() - t1
 
@@ -5105,7 +5074,7 @@ class StatementProcessor:
             self._rng_seed_epochs[module] = entropy_write_lineage() if module in entropy_modules else cache_key
 
         hash_time = time.time() - t2
-        return inputs, outputs, source_hash, cache_key, analysis_time, hash_time
+        return effects, source_hash, cache_key, analysis_time, hash_time
 
     def _print_cache_debug(
         self,

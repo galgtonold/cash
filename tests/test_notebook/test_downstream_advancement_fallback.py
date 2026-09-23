@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from traitlets.config.configurable import Configurable
 
+from cash.analysis.mutation_effects import CellEffects
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
@@ -129,7 +130,7 @@ class TestDownstreamAdvancementFallback:
                 required_inputs,
                 MagicMock(),  # process_statement_callback
                 None,  # global_ttl
-                current_cell_outputs=current_cell_outputs,
+                effects=CellEffects(outputs=frozenset(current_cell_outputs)),
             )
 
         # The key assertion: df's lineage should be reset to the virtual hash,
@@ -173,7 +174,7 @@ class TestDownstreamAdvancementFallback:
                 # return None so the auto-executed statement reports cleanly.
                 MagicMock(return_value=None),
                 None,
-                current_cell_outputs={"y"},  # x is NOT an output
+                effects=CellEffects(outputs=frozenset({"y"})),  # x is NOT an output
             )
 
         # x should NOT be reset — it's only an input, not an output
@@ -204,7 +205,7 @@ class TestDownstreamAdvancementFallback:
                 {"df"},
                 MagicMock(),
                 None,
-                current_cell_outputs={"df"},
+                effects=CellEffects(outputs=frozenset({"df"})),
             )
 
         # No cache → no reset
@@ -238,7 +239,7 @@ class TestDownstreamAdvancementFallback:
                 {"df"},
                 MagicMock(),
                 None,
-                current_cell_outputs={"df"},
+                effects=CellEffects(outputs=frozenset({"df"})),
             )
 
         # Lineage should remain the same (it was already correct)
@@ -278,7 +279,7 @@ class TestDownstreamAdvancementFallback:
                 {"df1", "df2"},
                 MagicMock(),
                 None,
-                current_cell_outputs={"df1", "df2"},
+                effects=CellEffects(outputs=frozenset({"df1", "df2"})),
             )
 
         assert upstream.variable_lineage["df1"] == virtual_df1
@@ -363,7 +364,7 @@ class TestDownstreamAdvancementFallback:
                 {"df"},  # required_inputs
                 MagicMock(),  # process_statement_callback
                 None,  # global_ttl
-                current_cell_outputs={"df"},
+                effects=CellEffects(outputs=frozenset({"df"})),
             )
 
         # df's lineage should be reset to the pre-cell value
