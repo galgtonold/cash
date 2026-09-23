@@ -1,12 +1,12 @@
 """MEASUREMENT: what does a call-unit store actually cost?
 
-CAS-261 proposes letting the call unit store in aggregate (N sub-floor
+One proposal was to let the call unit store in aggregate (N sub-floor
 calls whose total clears a floor). That trades ONE whole-loop store for N
 individual stores. Whether it pays depends on a number nobody has measured:
 the per-call store + hit cost.
 
 n=124 at 5ms = 0.62s of body work, and n=124 is below the single-unit
-threshold (125), so this is exactly CAS-261's band.
+threshold (125), so this is exactly the band that proposal targets.
 
 `_COST_FLOOR_S` is read as a module global at call time, so arm C flips it
 IN-KERNEL -- no source edit, and the full real path (key build, _storable,

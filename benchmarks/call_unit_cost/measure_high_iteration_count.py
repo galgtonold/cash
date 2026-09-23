@@ -1,6 +1,6 @@
 """High iteration count, sub-millisecond body, seconds of total work.
 
-CAS-264's case is n=124 x 0.1ms = 12ms total, where cash's fixed overhead
+The reported case is n=124 x 0.1ms = 12ms total, where cash's fixed overhead
 dominates. The regime that actually matters is many iterations of a cheap
 body summing to seconds: does cash's overhead stay CONSTANT (fine) or scale
 with n (a problem)?
