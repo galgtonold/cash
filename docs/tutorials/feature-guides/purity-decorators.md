@@ -366,7 +366,7 @@ what to cache based on purity). The same machinery now runs on
 cleanly to "I want a warning", "I want it silent", and "I want it to
 fail CI".
 
-<!-- claim: cash/core.py:Cash._surface_purity @fde18ea3, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @7e6b3c9c, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 ### Default: warn at first call
 
 <!-- test:expect-warning reason="this section exists to demonstrate the first-call impurity warning" -->
@@ -374,15 +374,15 @@ fail CI".
 import cash
 
 @cash.cache
-def fetch_user(uid):
-    return requests.get(f"https://api/{uid}").json()
+def save_user(uid, record):
+    return requests.post(f"https://api/{uid}", json=record).json()
 
-fetch_user(42)
+save_user(42, {"name": "Ada"})
 # CashImpurityWarning: [IMPURE-SIDE-EFFECTS] @cash.cache on
-# __main__.fetch_user: reading the source found likely side effects or scope
+# __main__.save_user: reading the source found likely side effects or scope
 # mutations, so cached results may not reflect what the body does.
-#   in __main__.fetch_user (/home/me/app.py):
-#     line 5: [impure_call] requests.get() — known I/O / side-effecting
+#   in __main__.save_user (/home/me/app.py):
+#     line 5: [impure_call] requests.post() - known I/O / side-effecting
 #   Fix: go down the list and put `# @cash:assume-safe` on each line you have
 #   audited, or refactor; @cash.cache(assume_safe=True) waives the whole
 #   function instead, including anything added to it later. The first
@@ -396,10 +396,16 @@ The function is still cached. The warning is one-shot per
 emitted warning is also stored on the wrapper:
 
 ```python
-fetch_user.cache_info()["warnings"]
+save_user.cache_info()["warnings"]
 # [{'category': 'CashImpurityWarning', 'code': 'IMPURE-SIDE-EFFECTS',
 #   'message': '[IMPURE-SIDE-EFFECTS] ...', 'timestamp': ...}]
 ```
+
+A network **read** — `requests.get(url)`, `urlopen(url)` — writes nothing, so
+it gets its own warning instead,
+[`KEY-NETWORK-READ`](../../warnings.md#key-network-read): what the server
+returns is not in the key, so the first answer is served until the key
+changes. A `ttl=` on the decorator answers that and silences it.
 
 !!! warning "Untrackable dependencies *raise*, they don't warn"
     Warn-and-cache is for ordinary side effects (I/O, mutations, discarded
@@ -530,8 +536,11 @@ fetch_user(42)
 # __main__.fetch_user: purity issues detected. Either fix the function,
 # mark callees with @pure / @stateful, or relax to assume_safe=True.
 #   in __main__.fetch_user (/home/me/app.py):
-#     line 3: [impure_call] requests.get() — known I/O / side-effecting
+#     line 3: [network_read] requests.get() - what the server returns is not in the cache key
 ```
+
+A network read passes under `strict=True` once the decorator has a `ttl=`:
+that is the answer to the question it raises.
 
 In strict mode, opaque callees (functions whose source we can't read)
 also count as issues — the paranoid setting.
@@ -646,7 +655,7 @@ won't flag on it, and any function whose body calls
 
 ### What the analyzer looks at
 
-<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @da1ef772 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @a557e11f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
+<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @fa555f87 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @a557e11f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
 The decorator-side analyzer walks the function body AND
 **module-bounded helpers** (functions defined in the same top-level
 package, or any non-installed-library code) and any **closure-bound
@@ -693,6 +702,10 @@ it flags:
   `# @cash:assume-safe` on that line. A read that only feeds a `print`, a
   `logging` call or `warnings.warn` — a timer for an elapsed-time line — is
   not flagged: it cannot reach the result.
+- **Network reads** — `requests.get`, `requests.head`, `urlopen(url)` without
+  data. Also an input rather than a side effect, with its own warning
+  ([`KEY-NETWORK-READ`](../../warnings.md#key-network-read)); a `ttl=` on the
+  decorator bounds how old the served answer may get and silences it.
 - **Discarded calls** — `f(x)` as a statement (return thrown away)
   when `f` isn't known-pure
 - **Scope mutations** — `global`/`nonlocal`, attribute/subscript

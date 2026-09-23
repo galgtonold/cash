@@ -188,6 +188,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # after it was returned; keyed by content now
         "KEY-INSTANCE-STATE",  # a bound method's instance could not be hashed;
         # falling back to its process-local identity
+        "KEY-NETWORK-READ",  # the body fetches from a server; its answer is not
+        # in the key, so it is served until a ttl= expires it
         "KEY-DYNAMIC-DEPENDENCY",  # code reached through an argument resolves a
         # dependency at runtime (getattr(m, name)(), eval)
         "KEY-OPAQUE-CALLABLE",  # a callable reached the call but its code could

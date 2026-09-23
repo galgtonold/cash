@@ -81,6 +81,7 @@ from .purity_analyzer import (
     ISSUE_AMBIENT_READ,
     ISSUE_IMPURE_CALL,
     ISSUE_MUTABLE_GLOBAL,
+    ISSUE_NETWORK_READ,
     ISSUE_UNTRACKABLE_DEP,
     REPORTED_METHODS,
     PurityIssue,
@@ -789,7 +790,7 @@ def _static_effect_kinds(report: Any) -> set[str]:
     for issue in getattr(report, "issues", ()) or ():
         if "changes the argument" in getattr(issue, "description", ""):
             kinds.add("argument mutation")
-        if getattr(issue, "kind", None) != "impure_call":
+        if getattr(issue, "kind", None) not in (ISSUE_IMPURE_CALL, ISSUE_NETWORK_READ):
             continue
         label = observed_label(getattr(issue, "effect_kind", None))
         if label is not None:
@@ -10736,6 +10737,14 @@ class Cash:
           callees count as issues in this mode (paranoid).
         """
         issues = [i for i in report.issues if not self._mutable_global_is_keyed(func_name, report, i)]
+        if any(getattr(i, "kind", None) == ISSUE_NETWORK_READ for i in issues):
+            # Named statically, so the observer does not report the same read
+            # as a connection -- whether or not the advisory below is shown.
+            self._purity_static_flagged.add(func_name)
+            if self._effective_ttl(func_name, self._func_ttls.get(func_name)) is not None:
+                # `ttl=` is the answer to "how old may a fetched answer be":
+                # once one is set, the question has been answered.
+                issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_NETWORK_READ]
         if mode == "strict" and report.opaque_callees:
             opaque_list = ", ".join(report.opaque_callees[:5])
             if len(report.opaque_callees) > 5:
@@ -10798,6 +10807,30 @@ class Cash:
                 "-- so it reaches the cache key and a new value means a new "
                 "entry. If freezing it is what you want, say so with "
                 "`# @cash:assume-safe` on that line.",
+                once_per_version=True,
+            )
+        # A network read gets its own advisory too, for the same reason as an
+        # ambient read: nothing is skipped, an input the key cannot see is
+        # frozen. Unlike the clock it has a knob made for it, `ttl=`, which
+        # silences it (above). strict=True keeps it in the one exception.
+        remote = [i for i in issues if getattr(i, "kind", None) == ISSUE_NETWORK_READ]
+        if remote and mode != "strict":
+            issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_NETWORK_READ]
+            self._warn_once(
+                CashImpurityWarning,
+                func_name,
+                "network_read",
+                f"@cash.cache on {func_name}: the result depends on what a "
+                f"server returned, and that answer is not part of the cache "
+                f"key. The first call's answer is what every later call gets "
+                f"back -- in this process and in every process after it -- "
+                f"until something changes the key.\n{_format_issues_summary(func_name, remote)}",
+                code="KEY-NETWORK-READ",
+                fix="bound how old a served answer may be with ttl= -- "
+                "`@cash.cache(ttl=3600)` -- or pass what makes the answer new "
+                "(a date, a version) as an argument, so it reaches the key. If "
+                "the answer never changes, say so with `# @cash:assume-safe` "
+                "on that line.",
                 once_per_version=True,
             )
         if not issues:

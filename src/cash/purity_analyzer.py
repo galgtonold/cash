@@ -107,6 +107,7 @@ __all__ = [
     "ISSUE_SCOPE_MUTATION",
     "ISSUE_MUTABLE_GLOBAL",
     "ISSUE_AMBIENT_READ",
+    "ISSUE_NETWORK_READ",
 ]
 
 ISSUE_IMPURE_CALL = "impure_call"
@@ -128,6 +129,12 @@ ISSUE_MUTABLE_GLOBAL = "mutable_global"
 # sometimes exactly what the user wants -- but it is never what they want by
 # accident, and it is invisible without this.
 ISSUE_AMBIENT_READ = "ambient_read"
+# Fetching from a server: `requests.get(url)`. Also not a side effect -- the
+# hazard is that the server's answer is an input the key cannot see, so the
+# first answer is served until something changes the key. Unlike the clock,
+# there is a knob made for exactly this: `ttl=` bounds how old a served answer
+# may be, and setting one silences the advisory.
+ISSUE_NETWORK_READ = "network_read"
 
 #: Builtins whose whole job is to run code chosen at runtime. Reaching one of
 #: these through `getattr(x, "<name>")` is the same hazard as calling it
@@ -144,7 +151,9 @@ _DYNAMIC_BUILTIN_NAMES = frozenset({"eval", "exec", "compile", "__import__"})
 DECORATOR_POLICY: dict[EffectKind, Action] = {
     EffectKind.FILE_WRITE: Action.WARN,
     EffectKind.FILE_READ: Action.CACHE_AS_INPUT,
-    EffectKind.NETWORK_READ: Action.WARN,
+    # What the server returns is an input the key cannot see: advise `ttl=`,
+    # which silences it (KEY-NETWORK-READ).
+    EffectKind.NETWORK_READ: Action.SUGGEST_TTL,
     EffectKind.NETWORK_WRITE: Action.WARN,
     EffectKind.NETWORK: Action.WARN,
     EffectKind.DB_READ: Action.CACHE,
@@ -874,6 +883,18 @@ class _PurityVisitor(ast.NodeVisitor):
                 return  # a diagnostic line: a hit skipping it is what caching means
 
             effect = classify_call(node, self._namespace)
+            if effect is not None and DECORATOR_POLICY[effect.kind] is Action.SUGGEST_TTL:
+                self.issues.append(
+                    PurityIssue(
+                        kind=ISSUE_NETWORK_READ,
+                        description=f"{dotted}() - what the server returns is not in the cache key",
+                        where=self._qualname,
+                        line=line,
+                        effect_kind=effect.kind,
+                    )
+                )
+                self.impure_call_nodes.append(node)
+                return
             if (
                 effect is not None
                 and effect.kind not in _AMBIENT_KINDS
@@ -960,7 +981,7 @@ class _PurityVisitor(ast.NodeVisitor):
     def _reports_effect(self, call: ast.Call) -> bool:
         """Is *call* reported by the effect rule (`plt.plot(...)`, say)?"""
         effect = classify_call(call, self._namespace)
-        return effect is not None and DECORATOR_POLICY[effect.kind] is Action.WARN
+        return effect is not None and DECORATOR_POLICY[effect.kind] in (Action.WARN, Action.SUGGEST_TTL)
 
     def _is_module_function_named_like_a_mutator(self, func_node: ast.Attribute) -> bool:
         if func_node.attr not in MUTATOR_METHODS or not self._namespace:

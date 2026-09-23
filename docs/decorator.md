@@ -974,13 +974,19 @@ adding or tightening a predicate, drop what was stored under the old rule with
 
 ### `strict=` and `assume_safe=` — purity gates
 
-<!-- claim: cash/core.py:Cash._surface_purity @fde18ea3, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @7e6b3c9c, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 By default, `@cash.cache` runs a static analyzer on the function body
 (and module-bounded helpers) on first call. What it does depends on what it finds:
 
-- **Impure calls, scope mutations, discarded-return calls** (`requests.get`,
-  `model.fit(...)`, …) → a `CashImpurityWarning` fires and the
+- **Impure calls, scope mutations, discarded-return calls** (`requests.post`,
+  `df.to_csv(...)`, `model.fit(...)`, …) → a `CashImpurityWarning` fires and the
   function is **still cached**.
+- **Network reads** (`requests.get`, `requests.head`, `urlopen(url)` without
+  data) → a `CashImpurityWarning` coded
+  [`KEY-NETWORK-READ`](warnings.md#key-network-read), and the function is
+  **still cached**. A GET writes nothing; what the server returns is an input
+  the key cannot see, so the first answer is served until the key changes.
+  Setting `ttl=` bounds how old that answer may get and silences the warning.
 - **Ambient reads** — the clock, the environment, the working directory, a
   fresh UUID (`datetime.now()`, `date.today()`, `os.environ["..."]`,
   `os.getenv`, `os.getcwd()`, `uuid.uuid4()`) → a `CashImpurityWarning` coded
@@ -1015,9 +1021,9 @@ of yours that led to it. A hit repeats none of those. See
 
 ```python
 @cash.cache
-def fetch_user(uid):
-    return requests.get(f"https://api/{uid}").json()
-# First call: CashImpurityWarning fires (requests.get is impure) — still cached.
+def save_user(uid, record):
+    return requests.post(f"https://api/{uid}", json=record).json()
+# First call: CashImpurityWarning fires (requests.post is impure) — still cached.
 ```
 
 Three modes:
@@ -1543,18 +1549,21 @@ The purity analyzer warns by default if your function calls
 behavior is: the side effect runs on the **first** call only. Every
 hit replays the return value without the side effect.
 
-If that's what you want (memoizing an API call where the network
-roundtrip is the "side effect"), `assume_safe=True` silences the
-warning. If it isn't, refactor: separate the pure compute from the
-side effect, and only cache the pure part.
+If that's what you want (an idempotent write that is harmless to skip),
+`# @cash:assume-safe` on the line silences the warning for that statement,
+and `assume_safe=True` for the whole function. If it isn't, refactor:
+separate the pure compute from the side effect, and only cache the pure part.
+A network **read** is not in this group; see the next section.
 
 ### A cached GET goes stale
 
-`requests.get(url)` is reported with the side effects, but for a read that is
-the smaller half of the story: what the server returns is an **input**, and
-it is not in the key. The first answer is stored and served on every later
-call, in every later process, until something changes the key. Give a cached
-network read a freshness plan before it ships:
+<!-- claim: cash/core.py:Cash._surface_purity @7e6b3c9c, cash/purity_analyzer.py:DECORATOR_POLICY @64c9bb30 -->
+`requests.get(url)` writes nothing, so it is not reported with the side
+effects. What the server returns is an **input**, and it is not in the key:
+the first answer is stored and served on every later call, in every later
+process, until something changes the key. That is what
+[`KEY-NETWORK-READ`](warnings.md#key-network-read) says on the first call.
+Give a cached network read a freshness plan before it ships:
 
 <!-- test:skip reason="illustrative: needs a live endpoint" -->
 ```python
@@ -1566,6 +1575,12 @@ def rates():
 def rates_on(day):                       # or: what makes it new is an argument
     return requests.get(f"https://api.example.com/rates/{day}").json()
 ```
+
+A `ttl=` — the function's own, or a shorter one inherited from a cached
+function it calls — answers the question and silences the warning; so does
+`# @cash:assume-safe` on the line, for an answer that never changes. An
+argument does not silence it, because cash cannot tell which argument makes
+the answer new.
 
 `ttl=` suits data that drifts; an argument that changes (a date, a version, an
 ETag you fetched cheaply) suits data that is published in versions. A file read

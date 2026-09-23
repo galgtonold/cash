@@ -58,10 +58,11 @@ ROWS = [
     # The network, named in full: the decorator named requests.get but not
     # requests.head or urlopen; the notebook refused requests.post but not the
     # same POST spelled requests.request("POST", ...) or urlopen(url, data).
-    # A read is cached in a notebook, like reading a file.
-    ("requests.head(u)", "cache", "impure_call"),
-    ("urllib.request.urlopen(u)", "cache", "impure_call"),
-    ("requests.request('GET', u)", "cache", "impure_call"),
+    # A read is cached in a notebook, like reading a file, and gets the TTL
+    # advisory (KEY-NETWORK-READ) in a decorated function.
+    ("requests.head(u)", "cache", "network_read"),
+    ("urllib.request.urlopen(u)", "cache", "network_read"),
+    ("requests.request('GET', u)", "cache", "network_read"),
     ("requests.request('POST', u)", "refuse", "impure_call"),
     ("urllib.request.urlopen(u, b'x=1')", "refuse", "impure_call"),
     # A database: a notebook cache hit skipped `cur.execute("INSERT ...")` and

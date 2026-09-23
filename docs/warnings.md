@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @171ee026 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @008fc437 -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 
@@ -829,7 +829,7 @@ ways to mute it.
 
 ## IMPURE-SIDE-EFFECTS {#impure-side-effects}
 
-<!-- claim: cash/core.py:Cash._surface_purity @fde18ea3 -->
+<!-- claim: cash/core.py:Cash._surface_purity @7e6b3c9c -->
 **What happened.** Before the first call, Cash reads the source of your function
 and of the helpers it calls, looking for shapes that make a cached result
 questionable. It found some. The message lists each one with its line number and
@@ -862,7 +862,8 @@ much to care:
   and `sys.stderr.write(...)` are what a hit is supposed to skip, since the
   work they report on did not happen. A `print` to stdout is still reported:
   stdout may be the program's output. A literal `execute("SELECT ...")` is a
-  read, not a write.
+  read, not a write. A network read (`requests.get(url)`) is not listed here
+  either: it has its own warning, [KEY-NETWORK-READ](#key-network-read).
 - `scope_mutation` — a `global` or `nonlocal` statement, or an assignment to
   someone else's attribute or subscript: `obj.attr = ...`, `d[k] = ...`.
 - `discarded_call` — a call whose return value is thrown away, which usually
@@ -1258,6 +1259,53 @@ instance. A service that builds its object at startup and calls the method for
 hours gets the full benefit of the cache, and has nothing to share it with. Do
 not ignore it in a script that runs repeatedly: that is the case where the
 cache looks healthy and is silently doing nothing.
+
+## KEY-NETWORK-READ {#key-network-read}
+
+<!-- claim: cash/core.py:Cash._surface_purity @7e6b3c9c, cash/purity_analyzer.py:DECORATOR_POLICY @64c9bb30, cash/effects.py:MODULE_CALLS @c6f9471b -->
+**What happened.** Reading the source of the function you decorated found a
+call that fetches from a server: `requests.get(...)`, `requests.head(...)`,
+`requests.request("GET", ...)`, the same calls on `httpx`, or
+`urllib.request.urlopen(url)` without a request body. The named line ran, and
+the result was cached as normal.
+
+A call that sends something — `requests.post`, `requests.request("POST",
+...)`, `urlopen(url, data)`, `session.post(...)` — is not this: a cache hit
+skips it, and it is reported as [IMPURE-SIDE-EFFECTS](#impure-side-effects).
+
+**Why it matters.** What the server returns is an *input* to your result, and
+it is not one Cash can see: it is not an argument, so it is not in the cache
+key. The first answer is stored and every later call gets it back — in this
+process and in every process afterwards, because the cache is on disk. An
+exchange rate fetched on Monday is still Monday's rate on Friday.
+
+Nothing a hit skips is lost, which is why this is not
+[IMPURE-SIDE-EFFECTS](#impure-side-effects): a GET changes nothing on the
+server. The question is only how old a served answer may be.
+
+**What to do.** Say how old it may be:
+
+```python
+import cash
+import requests
+
+@cash.cache(ttl=3600)            # an hour at most
+def rates():
+    return requests.get("https://api.example.com/rates").json()
+```
+
+A `ttl=` silences this warning, and so does a shorter one a cached function
+you call passes down. If the answer is
+published in versions, pass what makes it new — a date, a version, an ETag you
+fetched cheaply — as an argument instead; that does not silence the warning,
+since Cash cannot tell which argument does that job, so add
+`# @cash:assume-safe` on the line as well.
+
+**When it is safe to ignore.** When the answer never changes for the
+arguments you pass — a fetch by content hash or by a pinned version. Put
+`# @cash:assume-safe` on the line to say so; `assume_safe=True` on the
+decorator silences every finding in the function instead. Under
+`strict=True` the call raises unless a `ttl=` is set.
 
 ## KEY-OPAQUE-CALLABLE {#key-opaque-callable}
 
