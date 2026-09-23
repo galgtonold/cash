@@ -98,7 +98,7 @@ method is `state_token()`, which must return a **value that
 changes when the data changes** — a version, a config digest, a tenant id. Cash
 folds that value into the cache key, so the entry invalidates when it moves.
 
-<!-- claim: cash/data_source.py:state_token_of @fd85369f -->
+<!-- claim: cash/data_source.py:state_token_of @6c008991 -->
 > **Return a value, not a `bool`.** `state_token()` is what goes into the key
 > — not a yes/no flag. A `bool` only has two
 > states and cannot track changes, so the cache would never invalidate. Cash
@@ -169,8 +169,8 @@ The warning text reads:
 
 A transiently failing resolver (e.g. a temporary `OSError`) therefore does not break your pipeline, and it never widens the cache either: without the dependency there is no key that could be trusted, so the call pays full compute until the resolver works again.
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies_silent @dff56944 -->
-`f.explain()` uses a different variant — `Cash._resolve_dynamic_dependencies_silent` — which re-raises instead of warning, so introspection never emits warnings as a side effect. The resulting `CacheExplanation` carries `reason='key_uncomputable'` with the error type in `details`.
+<!-- claim: cash/core.py:Cash._explain_call @d9b240c2 -->
+`f.explain()` builds the key with the same code a real call uses (`Cash._build_key`), with its warnings held back, so introspection never emits warnings as a side effect. A resolver the real call would refuse gives a `CacheExplanation` with `reason='key_uncomputable'` and the reason in `details`.
 
 ## Performance
 
@@ -194,7 +194,7 @@ Two things to watch:
 | `cash.DataSource` | Public ABC | Subclass to track anything other than file mtime. Implement `get_id` and `state_token`. |
 | `cash.FileDataSource(path)` | Public class | mtime-based source for a single file. The canonical thing to return from a resolver. |
 | `CashCacheIneffectiveWarning` | Warning | Fires once per function when a resolver raises or returns something that is not a `DataSource`; the call runs uncached. |
-| `f.explain(*args).reason == 'key_uncomputable'` | Diagnostic | What `explain()` reports when the resolver itself raises (the silent variant re-raises and is caught upstream). |
+| `f.explain(*args).reason == 'key_uncomputable'` | Diagnostic | What `explain()` reports when the resolver raises or returns something that is not a `DataSource`. |
 
 ## Related
 

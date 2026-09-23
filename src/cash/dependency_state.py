@@ -36,7 +36,20 @@ if TYPE_CHECKING:
     from .graph import DependencyGraph
     from .purity_analyzer import PurityReport
 
-__all__ = ["DependencyStateHasher", "HelperResolver", "SysModulesHelperResolver", "STATE_LEDGER", "ledger_note"]
+__all__ = [
+    "EXPLAINING",
+    "DependencyStateHasher",
+    "HelperResolver",
+    "SysModulesHelperResolver",
+    "STATE_LEDGER",
+    "ledger_note",
+]
+
+#: Set while ``explain()`` builds a key: the same steps a real call takes, with
+#: every warning they would give held back, because inspecting a call must not
+#: warn. ``Cash._warn_once``, the carrier warnings and ``state_token_of`` check
+#: it.
+EXPLAINING: contextvars.ContextVar[bool] = contextvars.ContextVar("_cash_explaining", default=False)
 
 #: What the state segment of the key being built is made of, by name: the
 #: function's own source, each cached function and helper it calls, the

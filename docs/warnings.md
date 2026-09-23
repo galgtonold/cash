@@ -1026,7 +1026,7 @@ to it later.
 
 ## KEY-BOOL-STATE-TOKEN {#key-bool-state-token}
 
-<!-- claim: cash/data_source.py:state_token_of @fd85369f -->
+<!-- claim: cash/data_source.py:state_token_of @6c008991 -->
 **What happened.** You wrote a `DataSource` subclass, and Cash asked its
 `state_token()` for the value to fold into the cache key — and yours returned
 `True` or `False`. What Cash needs there is a *token*, not a yes/no.
@@ -1054,7 +1054,7 @@ returned its real result; only the caching was skipped. Cash never builds the
 key without the part that failed, because that key could not see a change to
 it.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @b7a3d596 -->
+<!-- claim: cash/core.py:Cash._resolve_cache_key @94b036f8 -->
 **Why it matters.** That call did not cache. Correctness is not at risk — with
 no key, nothing is written and nothing is read, so this cannot produce a stale
 answer — but you are paying full compute every time it happens.
@@ -1133,7 +1133,7 @@ seriously only when the opaque target is code you compile yourself.
 
 ## KEY-DYNAMIC-DEPENDENCY {#key-dynamic-dependency}
 
-<!-- claim: cash/core.py:Cash._warn_untrackable_in_carrier_once @1272a6b1 -->
+<!-- claim: cash/core.py:Cash._warn_untrackable_in_carrier_once @293ba0f4 -->
 **What happened.** An object you passed to a cached function carries code — a
 method of its class, or the function itself — and that code picks what it calls
 from a value at runtime: `getattr(module, name)()` with `name` in a variable,
@@ -1232,7 +1232,7 @@ nothing worth saving.
 
 ## KEY-INSTANCE-STATE {#key-instance-state}
 
-<!-- claim: cash/core.py:Cash._fold_bound_self @6122ec55 -->
+<!-- claim: cash/core.py:Cash._fold_bound_self @00b9d2f5 -->
 **What happened.** You cached an already-bound method — `c.cache(obj.method)`.
 Cash folds the instance into the key so that two objects in different states do
 not share results, but this instance could not be hashed, so it fell back to
@@ -1367,7 +1367,7 @@ type when it can identify one; when the offending value is nested inside a
 container it says so instead, because it cannot see which element is to blame.
 The call ran and returned normally.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @b7a3d596 -->
+<!-- claim: cash/core.py:Cash._resolve_cache_key @94b036f8 -->
 **Why it matters.** That call did not cache, and calls like it will not cache
 either — this is not first-call warm-up. Every call passing that argument pays
 full compute. Nothing can go stale, because nothing is being stored.
@@ -1401,7 +1401,7 @@ that is fine.
 `def` line, not something a caller passed — could not be fingerprinted, so Cash
 declined to cache the call. The message names the type.
 
-<!-- claim: cash/core.py:Cash._defaults_unhashable @d4f98537 -->
+<!-- claim: cash/core.py:Cash._defaults_unhashable @3cc2a9a2 -->
 **Why it matters.** Cash folds defaults into the key so that `build()` and
 `build(Schema)` are recognised as the same call, and so that changing a default
 invalidates. It cannot tell whether an unhashable default has changed, and it

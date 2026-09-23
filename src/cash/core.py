@@ -29,7 +29,7 @@ import weakref
 from collections import Counter, OrderedDict, deque
 from collections.abc import Callable, Iterator, Sized
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
+from typing import TYPE_CHECKING, Any, NamedTuple, ParamSpec, TypeVar, overload
 
 from . import _plain_data
 from .backends import CacheBackend, CacheMetadata, TieredBackend
@@ -41,6 +41,9 @@ from ._clock import perf_counter as _perf_counter
 from .backends.serialization import get_serializer
 from .config import CashConfig, get_config
 from .data_source import DataSource, state_token_of
+from .dependency_state import (
+    EXPLAINING as _EXPLAINING,
+)
 from .dependency_state import (
     STATE_LEDGER,
     DependencyStateHasher,
@@ -278,7 +281,7 @@ def _tag_subtype(value: Any, base: type, canon: Any) -> Any:
 class _KeyBuildFailed(Exception):
     """Building a key met something it cannot key, and says what to tell the user.
 
-    Raised from inside a key build; `_resolve_cache_key_now` warns once with
+    Raised from inside a key build; `_resolve_cache_key` warns once with
     *code*, *message* and *fix*, and runs the call uncached -- never keys it
     without the part that failed, which would serve a stale result silently.
     """
@@ -288,6 +291,24 @@ class _KeyBuildFailed(Exception):
         self.code = code
         self.message = message
         self.fix = fix
+
+
+class _UnhashableDefault(Exception):
+    """A parameter default could not be hashed; `_fold_defaults` has warned."""
+
+
+class _UnhashableArgs(Exception):
+    """The call's arguments could not be hashed."""
+
+
+class _BuiltKey(NamedTuple):
+    """What `Cash._build_key` built: the key, two of its segments, and the
+    canonicalised arguments explain() reads frozen producers off."""
+
+    cache_key: str
+    state_hash: str
+    args_hash: str
+    normalized_args: tuple[tuple, dict]
 
 
 class CyclicValueError(TypeError):
@@ -1314,7 +1335,7 @@ MISS_RAISED = "raised"
 #: summary tallies on its own line.
 _WHAT_CHANGED = " -- "
 
-#: What each link of the state chain folds (`_resolve_cache_key_now`), for a
+#: What each link of the state chain folds (`_build_key`), for a
 #: change that no named part of the ledger accounts for.
 _STATE_STAGES = (
     "its code",
@@ -2334,6 +2355,8 @@ class Cash:
         silence. ``# @cash:assume-safe`` on the line waives it, as it does in
         the function itself.
         """
+        if _EXPLAINING.get():
+            return
         from .purity_analyzer import ISSUE_UNTRACKABLE_DEP, get_analyzer
         from .source_norm import _class_functions
 
@@ -2379,6 +2402,8 @@ class Cash:
         covered printed the same line -- a new hole looked like a handled one.
         Once per (object, function, parameter) for the same reason.
         """
+        if _EXPLAINING.get():
+            return
         name = self._carrier_name(carrier)
         inner = getattr(carrier, "func", None) or getattr(carrier, "__wrapped__", None)
         inner_name = (
@@ -2596,9 +2621,7 @@ class Cash:
         _seen.add(id(cls))
         return cls if self._is_user_code_object(cls) else None
 
-    def _fold_code_args(
-        self, args: tuple, kwargs: dict, state_hash: str, warn: bool = True, func_name: str = "?"
-    ) -> str:
+    def _fold_code_args(self, args: tuple, kwargs: dict, state_hash: str, func_name: str = "?") -> str:
         """Fold user code reached through the arguments into the key.
 
         ``args_hash`` is a digest of the PICKLED arguments, and pickle
@@ -2609,9 +2632,6 @@ class Cash:
         Folded into ``state_hash`` rather than ``args_hash`` because this is
         code, and ``state_hash`` is already where code lives: function source,
         ``depends_on``, transitive helpers, module globals read.
-
-        ``warn=False`` for ``_explain_call``, whose contract is that inspecting
-        an explanation emits no warnings.
         """
         parts: list[str] = []
         seen_carriers: set[int] = set()
@@ -2642,9 +2662,8 @@ class Cash:
                     # or in the cached function itself, invalidated.
                     if self._is_user_code_carrier(carrier):
                         parts.extend(self._carrier_read_global_parts(carrier, func_name))
-                        if warn:
-                            self._warn_untrackable_in_carrier_once(carrier, func_name, param)
-                elif warn and self._is_user_code_carrier(carrier):
+                        self._warn_untrackable_in_carrier_once(carrier, func_name, param)
+                elif self._is_user_code_carrier(carrier):
                     # User code we could not hash: a C-extension type, an
                     # exotic descriptor, a ``functools.partial`` (whose
                     # wrapped function pickles by reference like any
@@ -3296,199 +3315,207 @@ class Cash:
         kwargs: dict,
         call_start: float,
     ) -> Any:
-        """`_resolve_cache_key_now`, with one plain-data census per argument
-        shared across the key it builds (`_plain_census`), and a ledger of
-        what its state segment is made of (`STATE_LEDGER`).
+        """The key for a real call, or the call's result when it has none.
 
-        Returns ``(resolved, capture_watch)``: what `_resolve_cache_key_now`
-        returned, and this key's `_CAPTURE_WATCH`."""
-        previous = getattr(_PLAIN_CENSUS, "memo", None)
-        _PLAIN_CENSUS.memo = {}
-        ledger: dict = {}
-        ledger_token = STATE_LEDGER.set(ledger)
-        watch: dict = {}
-        watch_token = _CAPTURE_WATCH.set(watch)
-        try:
-            resolved = self._resolve_cache_key_now(func, func_name, dynamic_depends_on, args, kwargs, call_start)
-        finally:
-            _CAPTURE_WATCH.reset(watch_token)
-            STATE_LEDGER.reset(ledger_token)
-            _PLAIN_CENSUS.memo = previous
-        if resolved[0] is not _CACHE_MISS and ledger:
-            # resolved[1] is the state segment of the key (`_compute_cache_key`).
-            slot = (func_name, resolved[1])
-            if slot not in self._state_ledgers:
-                self._keep_state_ledger(slot, ledger)
-        return resolved, watch
+        `_build_key`, with a ledger of what the state segment is made of
+        (`STATE_LEDGER`) and this key's `_CAPTURE_WATCH`. Returns
+        ``(resolved, capture_watch)``, where *resolved* is one of:
 
-    def _resolve_cache_key_now(
-        self,
-        func: Callable,
-        func_name: str,
-        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
-        args: tuple,
-        kwargs: dict,
-        call_start: float,
-    ) -> Any:
-        """Build the key for this call, or run the call uncached when there is none.
-
-        Returns one of:
           - ``(cache_key, state_hash, args_hash)`` - the key was built
           - ``(_CACHE_MISS, result, 'unkeyable')`` - a mocked helper, no code to key
           - ``(_CACHE_MISS, result, 'unhashable')`` - an argument or default could not be hashed
           - ``(_CACHE_MISS, result, 'error')`` - building the key raised
 
         In the last three, *result* is what ``func(*args, **kwargs)`` returned:
-        the call already ran, uncached, and was logged. The body's own
-        exceptions propagate.
+        the call already ran, uncached, was warned about once and logged. The
+        body's own exceptions propagate.
         """
-        # Outside the try below, which catches TypeError/ValueError from key
-        # building: an exception from the user's own body must not be caught
-        # there and the body run a second time.
+        # Outside the key build below, which turns any exception into "no
+        # key": an exception from the user's own body must not be caught there
+        # and the body run a second time.
         unkeyable = self._refresh_helper_bindings(func, func_name)
         if unkeyable is not None:
-            result = func(*args, **kwargs)
-            self._log_decorator_call(
-                func_name,
-                cache_hit=False,
-                execution_time=_perf_counter() - call_start,
-                args_hash="unkeyable",
-                cache_key="",
-                miss_detail=unkeyable,
-            )
-            return (_CACHE_MISS, result, "unkeyable")
+            return self._run_uncached(func, func_name, args, kwargs, call_start, "unkeyable", unkeyable), {}
+        ledger: dict = {}
+        ledger_token = STATE_LEDGER.set(ledger)
+        watch: dict = {}
+        watch_token = _CAPTURE_WATCH.set(watch)
+        failure: tuple[str, str] | None = None
+        try:
+            built = self._build_key(func, func_name, dynamic_depends_on, args, kwargs)
+        except _UnhashableDefault:
+            # `_fold_defaults` has warned: an unhashable default means cash
+            # cannot tell whether it changed, so caching at all risks a stale
+            # result.
+            failure = ("unhashable", "")
+        except _UnhashableArgs:
+            self._warn_unhashable_args(func_name, args, kwargs)
+            failure = ("unhashable", "")
+        except _KeyBuildFailed as e:
+            self._warn_once(CashCacheIneffectiveWarning, func_name, e.code, e.message, code=e.code, fix=e.fix)
+            failure = ("error", "")
+        except Exception as e:  # noqa: BLE001 - any failure building the key means no key
+            self._warn_key_build_failed(func_name, args, kwargs, e)
+            failure = ("error", "")
+        finally:
+            _CAPTURE_WATCH.reset(watch_token)
+            STATE_LEDGER.reset(ledger_token)
+        if failure is not None:
+            return self._run_uncached(func, func_name, args, kwargs, call_start, *failure), watch
+        if ledger:
+            slot = (func_name, built.state_hash)
+            if slot not in self._state_ledgers:
+                self._keep_state_ledger(slot, ledger)
+        return (built.cache_key, built.state_hash, built.args_hash), watch
+
+    def _run_uncached(
+        self,
+        func: Callable,
+        func_name: str,
+        args: tuple,
+        kwargs: dict,
+        call_start: float,
+        why: str,
+        detail: str,
+    ) -> tuple:
+        """Run a call that has no key, log it as a miss, and hand back its result."""
+        result = func(*args, **kwargs)
+        self._log_decorator_call(
+            func_name,
+            cache_hit=False,
+            execution_time=_perf_counter() - call_start,
+            args_hash=why,
+            cache_key="",
+            miss_detail=detail,
+        )
+        return (_CACHE_MISS, result, why)
+
+    def _build_key(
+        self,
+        func: Callable,
+        func_name: str,
+        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
+        args: tuple,
+        kwargs: dict,
+    ) -> _BuiltKey:
+        """The cache key for calling *func* with these arguments.
+
+        The ONE key build: a real call (`_resolve_cache_key`) and ``explain()``
+        (`_explain_call`) both use it, so the key explain() predicts is the key
+        the call looks up. It used to be written out twice, and the copy in
+        explain() lacked the random-seed epoch and the class members of a
+        method's arguments, so it reported ``no_entry`` for calls that hit.
+
+        Raises when there is no key: `_UnhashableDefault`, `_UnhashableArgs`,
+        `_KeyBuildFailed`, or whatever else a step raised. Never keys the call
+        without a part that failed. Warnings from the steps are silent while
+        `_EXPLAINING` is set.
+        """
+        # One plain-data census per argument, shared across the key
+        # (`_plain_census`).
+        previous = getattr(_PLAIN_CENSUS, "memo", None)
+        _PLAIN_CENSUS.memo = {}
         try:
             # The state after each fold, in `_STATE_STAGES` order: when no
             # named part moved, the first stage whose output did is the one
             # that changed (`_describe_state_change`).
             chain: list[str] = []
             ledger_note("@chain", chain)
-            current_state_hash = self._state_hasher.compute(
+            state_hash = self._state_hasher.compute(
                 func_name,
                 own_source_override=self._pin_own_source(func),
                 note=True,
             )
-            current_state_hash = self._fold_declared_files(func_name, current_state_hash)
-            chain.append(current_state_hash)
-            current_state_hash = self._fold_closure(func, func_name, current_state_hash)
-            chain.append(current_state_hash)
-            folded_defaults = self._fold_defaults(func, func_name, current_state_hash)
+            state_hash = self._fold_declared_files(func_name, state_hash)
+            chain.append(state_hash)
+            state_hash = self._fold_closure(func, func_name, state_hash)
+            chain.append(state_hash)
+            folded_defaults = self._fold_defaults(func, func_name, state_hash)
             if folded_defaults is None:
-                # An unhashable default: we cannot tell whether it changed, so
-                # caching at all risks a stale result. Run uncached.
-                result = func(*args, **kwargs)
-                self._log_decorator_call(
-                    func_name,
-                    cache_hit=False,
-                    execution_time=_perf_counter() - call_start,
-                    args_hash="unhashable",
-                    cache_key="",
-                )
-                return (_CACHE_MISS, result, "unhashable")
-            current_state_hash = folded_defaults
-            chain.append(current_state_hash)
-            current_state_hash = self._fold_bound_self(func, func_name, current_state_hash)
-            chain.append(current_state_hash)
-            current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
-            current_state_hash = self._fold_helper_read_globals(func, func_name, current_state_hash)
-            current_state_hash = self._fold_dependency_read_globals(
-                func,
-                func_name,
-                current_state_hash,
-            )
-            chain.append(current_state_hash)
-            current_state_hash = self._fold_rng_epoch(func_name, current_state_hash)
-            chain.append(current_state_hash)
-            current_state_hash = self._fold_method_class_deps(func, args, current_state_hash)
-            chain.append(current_state_hash)
+                raise _UnhashableDefault
+            state_hash = folded_defaults
+            chain.append(state_hash)
+            state_hash = self._fold_bound_self(func, func_name, state_hash)
+            chain.append(state_hash)
+            state_hash = self._fold_read_globals(func, func_name, state_hash)
+            state_hash = self._fold_helper_read_globals(func, func_name, state_hash)
+            state_hash = self._fold_dependency_read_globals(func, func_name, state_hash)
+            chain.append(state_hash)
+            state_hash = self._fold_rng_epoch(func_name, state_hash)
+            chain.append(state_hash)
+            state_hash = self._fold_method_class_deps(func, args, state_hash)
+            chain.append(state_hash)
             # ONE canonicalisation, fed to both the code channel and the value
             # channel. `_fold_code_args` on the RAW arguments saw a class
             # passed explicitly but not the identical class arriving as a
             # parameter DEFAULT, so `build()` and `build(Schema)` -- the same
-            # logical call -- produced two cache keys and two executions,
-            # breaking the unification invariant stated at the top of this
-            # class. Measured: 2 executions before, 1 after, with a primitive
-            # default (`add(k=7)`) as the control that always was 1.
+            # logical call -- produced two cache keys and two executions.
             normalized_args = self._normalize_call_args(func_name, args, kwargs)
             if func_name in self._seed_params:
                 self._warn_if_seed_is_none(func, func_name, args, kwargs)
-            current_state_hash = self._fold_code_args(*normalized_args, current_state_hash, func_name=func_name)
-            chain.append(current_state_hash)
+            state_hash = self._fold_code_args(*normalized_args, state_hash, func_name=func_name)
+            chain.append(state_hash)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._serialize_args(func_name, args, kwargs, normalized=normalized_args)
             self._note_arg_cost(func_name)
-            if args_hash is None:
-                arg_type_name = self._first_unhashable_arg_type(args, kwargs)
-                if arg_type_name == "<unknown>":
-                    which = (
-                        "an argument could not be hashed, and cash cannot say "
-                        "which -- the value is nested inside a container"
-                    )
-                    suggestion = (
-                        "find the nested value, then register a hasher for its "
-                        "type with cash.register_hasher(SomeType, ...) or pass "
-                        "something hashable in its place."
-                    )
-                else:
-                    which = f"an argument of type {arg_type_name} could not be hashed"
-                    suggestion = _unhashable_arg_fix(self._first_unhashable_arg(args, kwargs), arg_type_name)
-                self._warn_once(
-                    CashCacheIneffectiveWarning,
-                    func_name,
-                    arg_type_name,
-                    f"@cash.cache on {func_name}: {which}, so this call and every call like it does not cache.",
-                    code="KEY-UNHASHABLE-ARG",
-                    fix=suggestion,
-                )
-                result = func(*args, **kwargs)
-                self._log_decorator_call(
-                    func_name,
-                    cache_hit=False,
-                    execution_time=_perf_counter() - call_start,
-                    args_hash="unhashable",
-                    cache_key="",
-                )
-                return (_CACHE_MISS, result, "unhashable")
-            cache_key = self._compute_cache_key(func_name, current_state_hash, dynamic_state_hash, args_hash)
-            return (cache_key, current_state_hash, args_hash)
-        except _KeyBuildFailed as e:
-            self._warn_once(CashCacheIneffectiveWarning, func_name, e.code, e.message, code=e.code, fix=e.fix)
-            result = func(*args, **kwargs)
-            self._log_decorator_call(
-                func_name, cache_hit=False, execution_time=_perf_counter() - call_start, args_hash="error", cache_key=""
+        finally:
+            _PLAIN_CENSUS.memo = previous
+        if args_hash is None:
+            raise _UnhashableArgs
+        cache_key = self._compute_cache_key(func_name, state_hash, dynamic_state_hash, args_hash)
+        return _BuiltKey(cache_key, state_hash, args_hash, normalized_args)
+
+    def _warn_unhashable_args(self, func_name: str, args: tuple, kwargs: dict) -> None:
+        """KEY-UNHASHABLE-ARG, naming the argument when one can be singled out."""
+        arg_type_name = self._first_unhashable_arg_type(args, kwargs)
+        if arg_type_name == "<unknown>":
+            which = (
+                "an argument could not be hashed, and cash cannot say which -- the value is nested inside a container"
             )
-            return (_CACHE_MISS, result, "error")
-        except Exception as e:  # noqa: BLE001 - any failure building the key means no key
-            arg_type_name = self._first_unhashable_arg_type(args, kwargs)
-            if arg_type_name == "<unknown>":
-                hint = (
-                    "check the function's arguments -- cash could not identify "
-                    "the offending type; if the exception does not belong to "
-                    "your code, report it as a bug with the traceback."
-                )
-            elif isinstance(self._first_unhashable_arg(args, kwargs), _CODE_VALUE_TYPES):
-                hint = _CODE_ARG_FIX
-            else:
-                hint = (
-                    f"register a hasher with "
-                    f"cash.register_hasher({arg_type_name}, ...) if "
-                    f"{arg_type_name} is the unhashable argument."
-                )
-            self._warn_once(
-                CashCacheIneffectiveWarning,
-                func_name,
-                arg_type_name,
-                f"@cash.cache on {func_name}: cache-key generation raised "
-                f"{type(e).__name__} ({e}) somewhere it did not anticipate, so "
-                f"this call does not cache.",
-                code="KEY-BUILD-FAILED",
-                fix=hint,
+            suggestion = (
+                "find the nested value, then register a hasher for its "
+                "type with cash.register_hasher(SomeType, ...) or pass "
+                "something hashable in its place."
             )
-            result = func(*args, **kwargs)
-            self._log_decorator_call(
-                func_name, cache_hit=False, execution_time=_perf_counter() - call_start, args_hash="error", cache_key=""
+        else:
+            which = f"an argument of type {arg_type_name} could not be hashed"
+            suggestion = _unhashable_arg_fix(self._first_unhashable_arg(args, kwargs), arg_type_name)
+        self._warn_once(
+            CashCacheIneffectiveWarning,
+            func_name,
+            arg_type_name,
+            f"@cash.cache on {func_name}: {which}, so this call and every call like it does not cache.",
+            code="KEY-UNHASHABLE-ARG",
+            fix=suggestion,
+        )
+
+    def _warn_key_build_failed(self, func_name: str, args: tuple, kwargs: dict, e: Exception) -> None:
+        """KEY-BUILD-FAILED: a step of the key build raised where it did not expect to."""
+        arg_type_name = self._first_unhashable_arg_type(args, kwargs)
+        if arg_type_name == "<unknown>":
+            hint = (
+                "check the function's arguments -- cash could not identify "
+                "the offending type; if the exception does not belong to "
+                "your code, report it as a bug with the traceback."
             )
-            return (_CACHE_MISS, result, "error")
+        elif isinstance(self._first_unhashable_arg(args, kwargs), _CODE_VALUE_TYPES):
+            hint = _CODE_ARG_FIX
+        else:
+            hint = (
+                f"register a hasher with "
+                f"cash.register_hasher({arg_type_name}, ...) if "
+                f"{arg_type_name} is the unhashable argument."
+            )
+        self._warn_once(
+            CashCacheIneffectiveWarning,
+            func_name,
+            arg_type_name,
+            f"@cash.cache on {func_name}: cache-key generation raised "
+            f"{type(e).__name__} ({e}) somewhere it did not anticipate, so "
+            f"this call does not cache.",
+            code="KEY-BUILD-FAILED",
+            fix=hint,
+        )
 
     def _explain_call(
         self,
@@ -3503,8 +3530,9 @@ class Cash:
 
         Pure introspection - does NOT call ``func``, does NOT touch
         `Cash` stats, does NOT emit warnings, and does NOT
-        mutate the backend. Mirrors the logic of `_resolve_cache_key`
-        + `_try_get_cached` so that the answer reflects what would
+        mutate the backend. The key comes from `_build_key`, the same
+        build a real call uses, and the entry is judged by the rules
+        `_try_get_cached` applies, so the answer reflects what would
         actually happen on the next real call.
 
         See `CacheExplanation` for the return shape.
@@ -3536,109 +3564,26 @@ class Cash:
                 },
             )
 
-        # Build cache key (silently - explain() does not warn).
+        # The key a real call builds, built the same way, with every warning
+        # a step would give held back: explain() must stay silent.
+        token = _EXPLAINING.set(True)
         try:
-            current_state_hash = self._state_hasher.compute(
-                func_name,
-                own_source_override=self._pin_own_source(func),
-            )
-            current_state_hash = self._fold_declared_files(func_name, current_state_hash)
-            current_state_hash = self._fold_closure(func, func_name, current_state_hash)
-            folded_defaults = self._fold_defaults(
-                func,
-                func_name,
-                current_state_hash,
-                warn=False,
-            )
-            if folded_defaults is None:
-                return CacheExplanation(
-                    would_hit=False,
-                    reason=EXPLAIN_KEY_UNCOMPUTABLE,
-                    func_name=func_name,
-                    details={
-                        "error": "unhashable parameter default",
-                        "hint": (
-                            "A parameter default could not be hashed, so cash "
-                            "cannot detect a change to it and will not cache "
-                            "this call."
-                        ),
-                    },
-                )
-            current_state_hash = folded_defaults
-            current_state_hash = self._fold_bound_self(func, func_name, current_state_hash, warn=False)
-            current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
-            current_state_hash = self._fold_helper_read_globals(func, func_name, current_state_hash)
-            current_state_hash = self._fold_dependency_read_globals(
-                func,
-                func_name,
-                current_state_hash,
-            )
-            # Mirrors `_resolve_cache_key`: without this the predicted key
-            # would differ from the one a real call builds for exactly the
-            # arguments this feature exists for, so `explain()` would report
-            # `no_entry` for a call that in fact hits. `warn=False` because
-            # inspecting an explanation must stay silent. Canonicalised once
-            # and reused below, exactly as `_resolve_cache_key` does.
-            normalized_args = self._normalize_call_args(func_name, args, kwargs)
-            current_state_hash = self._fold_code_args(
-                *normalized_args,
-                current_state_hash,
-                warn=False,
-                func_name=func_name,
-            )
-        except (TypeError, ValueError, RuntimeError) as e:
+            built = self._build_key(func, func_name, dynamic_depends_on, args, kwargs)
+        except _UnhashableDefault:
             return CacheExplanation(
                 would_hit=False,
                 reason=EXPLAIN_KEY_UNCOMPUTABLE,
                 func_name=func_name,
                 details={
-                    "error": f"{type(e).__name__}: {e}",
-                    "hint": "Dependency state hash computation raised.",
-                },
-            )
-
-        try:
-            dynamic_state_hash = self._resolve_dynamic_dependencies_silent(
-                dynamic_depends_on,
-                args,
-                kwargs,
-            )
-        except (TypeError, ValueError, RuntimeError, AttributeError, OSError) as e:
-            return CacheExplanation(
-                would_hit=False,
-                reason=EXPLAIN_KEY_UNCOMPUTABLE,
-                func_name=func_name,
-                details={
-                    "error": f"{type(e).__name__}: {e}",
-                    "hint": "dynamic_depends_on resolver raised.",
-                },
-            )
-
-        try:
-            args_hash = self._serialize_args(
-                func_name,
-                args,
-                kwargs,
-                normalized=normalized_args,
-            )
-        except (TypeError, ValueError, pickle.PicklingError, AttributeError) as e:
-            arg_type_name = self._first_unhashable_arg_type(args, kwargs)
-            return CacheExplanation(
-                would_hit=False,
-                reason=EXPLAIN_KEY_UNCOMPUTABLE,
-                func_name=func_name,
-                details={
-                    "arg_type": arg_type_name,
-                    "error": f"{type(e).__name__}: {e}",
+                    "error": "unhashable parameter default",
                     "hint": (
-                        _unhashable_arg_fix(self._first_unhashable_arg(args, kwargs), arg_type_name)
-                        if arg_type_name != "<unknown>"
-                        else "Could not identify the offending argument."
+                        "A parameter default could not be hashed, so cash "
+                        "cannot detect a change to it and will not cache "
+                        "this call."
                     ),
                 },
             )
-
-        if args_hash is None:
+        except _UnhashableArgs:
             arg_type_name = self._first_unhashable_arg_type(args, kwargs)
             return CacheExplanation(
                 would_hit=False,
@@ -3653,14 +3598,27 @@ class Cash:
                     ),
                 },
             )
-
-        cache_key = self._compute_cache_key(
-            func_name,
-            current_state_hash,
-            dynamic_state_hash,
-            args_hash,
-        )
-        frozen_args = self._frozen_arg_names(normalized_args)
+        except _KeyBuildFailed as e:
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_KEY_UNCOMPUTABLE,
+                func_name=func_name,
+                details={"error": e.code, "hint": f"{e.message} {e.fix}"},
+            )
+        except Exception as e:  # noqa: BLE001 - explain() reports, never raises
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_KEY_UNCOMPUTABLE,
+                func_name=func_name,
+                details={
+                    "error": f"{type(e).__name__}: {e}",
+                    "hint": "Building the cache key raised, so the call would run uncached.",
+                },
+            )
+        finally:
+            _EXPLAINING.reset(token)
+        cache_key = built.cache_key
+        frozen_args = self._frozen_arg_names(built.normalized_args)
 
         # Looking, not reading: `get` would count this as a use (USES / LAST
         # USED in `cash inspect`) and make the file backend rewrite the entry.
@@ -3778,31 +3736,6 @@ class Cash:
                 )
                 names.append(f"{name} (the result of {producer}, declared frozen)")
         return names
-
-    def _resolve_dynamic_dependencies_silent(
-        self,
-        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
-        args: tuple,
-        kwargs: dict,
-    ) -> str:
-        """Variant of `_resolve_dynamic_dependencies` that re-raises
-        instead of warning - used by `_explain_call` so introspection
-        never emits warnings as a side effect."""
-        if not dynamic_depends_on:
-            return ""
-        dynamic_state_parts = []
-        resolvers = dynamic_depends_on if isinstance(dynamic_depends_on, list) else [dynamic_depends_on]
-        for resolver in resolvers:
-            ds_result = resolver(*args, **kwargs)
-            dss = ds_result if isinstance(ds_result, list) else [ds_result]
-            for ds in dss:
-                if isinstance(ds, DataSource):
-                    # state_token() is the source's change token (mtime /
-                    # version / digest); it warns on a bool that can't track.
-                    dynamic_state_parts.append(str(ds.state_token()))
-        if dynamic_state_parts:
-            return hashlib.sha256(":".join(sorted(dynamic_state_parts)).encode("utf-8")).hexdigest()
-        return ""
 
     def _describe_dynamic_dependencies(
         self,
@@ -6140,7 +6073,6 @@ class Cash:
         func: Callable,
         func_name: str,
         state_hash: str,
-        warn: bool = True,
     ) -> str | None:
         """Mix the callee's parameter defaults into the state hash.
 
@@ -6202,7 +6134,7 @@ class Cash:
                     {k: self._fingerprint_callable_default(v) for k, v in kwd.items()},
                 )
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
-                return self._defaults_unhashable(func_name, pos, kwd, e, warn)
+                return self._defaults_unhashable(func_name, pos, kwd, e)
         return self._finish_defaults_fold(func, state_hash, digest, pos, kwd, pinnable)
 
     @staticmethod
@@ -6267,30 +6199,26 @@ class Cash:
         pos: tuple,
         kwd: dict,
         e: Exception,
-        warn: bool,
     ) -> None:
         """Warn (once) that a default is unhashable; ``None`` = refuse to cache."""
         bad_type = self._first_unhashable_arg_type(pos, kwd)
-        if warn:
-            self._warn_once(
-                CashCacheIneffectiveWarning,
-                func_name,
-                bad_type,
-                f"@cash.cache on {func_name}: a parameter default of type "
-                f"{bad_type} could not be hashed ({type(e).__name__}), so the "
-                f"function does not cache for any caller rather than risk "
-                f"serving a result computed under a default that changed.",
-                code="KEY-UNHASHABLE-DEFAULT",
-                fix="get the value out of the signature -- build it in the body "
-                "or require it at the call site"
-                + (
-                    "."
-                    if isinstance(self._first_unhashable_arg(pos, kwd), _CODE_VALUE_TYPES)
-                    else f" -- or register a hasher with cash.register_hasher({bad_type}, ...)."
-                ),
-            )
-        else:
-            logger.debug("defaults hash failed for %s: %s", func_name, e)
+        self._warn_once(
+            CashCacheIneffectiveWarning,
+            func_name,
+            bad_type,
+            f"@cash.cache on {func_name}: a parameter default of type "
+            f"{bad_type} could not be hashed ({type(e).__name__}), so the "
+            f"function does not cache for any caller rather than risk "
+            f"serving a result computed under a default that changed.",
+            code="KEY-UNHASHABLE-DEFAULT",
+            fix="get the value out of the signature -- build it in the body "
+            "or require it at the call site"
+            + (
+                "."
+                if isinstance(self._first_unhashable_arg(pos, kwd), _CODE_VALUE_TYPES)
+                else f" -- or register a hasher with cash.register_hasher({bad_type}, ...)."
+            ),
+        )
         return None
 
     def _finish_defaults_fold(
@@ -6334,7 +6262,6 @@ class Cash:
         func: Callable,
         func_name: str,
         state_hash: str,
-        warn: bool = True,
     ) -> str:
         """Mix a bound method's instance state into the key.
 
@@ -6357,26 +6284,20 @@ class Cash:
             self_hash = self._hash_arg_payload((owner,), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
             owner_type = type(owner).__name__
-            if warn:
-                self._warn_once(
-                    CashCacheIneffectiveWarning,
-                    func_name,
-                    owner_type,
-                    f"@cash.cache on bound method {func_name}: the instance's state "
-                    f"could not be hashed ({type(e).__name__}), so cash fell back "
-                    f"to the instance's identity - entries are not shared across "
-                    f"equal instances and do not survive the process.",
-                    code="KEY-INSTANCE-STATE",
-                    fix=f"register a hasher with "
-                    f"cash.register_hasher({owner_type}, ...), returning "
-                    f"something derived from the state that affects the "
-                    f"result.",
-                    # Explicit: ``_warn_once``'s default of 5 stops one frame
-                    # short and blames the key-resolution code inside core.py.
-                    # Measured against a known call line.,
-                )
-            else:
-                logger.debug("bound-self hash failed for %s: %s", func_name, e)
+            self._warn_once(
+                CashCacheIneffectiveWarning,
+                func_name,
+                owner_type,
+                f"@cash.cache on bound method {func_name}: the instance's state "
+                f"could not be hashed ({type(e).__name__}), so cash fell back "
+                f"to the instance's identity - entries are not shared across "
+                f"equal instances and do not survive the process.",
+                code="KEY-INSTANCE-STATE",
+                fix=f"register a hasher with "
+                f"cash.register_hasher({owner_type}, ...), returning "
+                f"something derived from the state that affects the "
+                f"result.",
+            )
             self_hash = f"selfid:{id(owner)}"
         return hashlib.sha256(f"{state_hash}:boundself:{self_hash}".encode("utf-8")).hexdigest()
 
@@ -10134,6 +10055,8 @@ class Cash:
         in both directions. The parameter survives only as an override for a
         site that needs one; none does.
         """
+        if _EXPLAINING.get():
+            return
         rendered = format_diagnostic(code, message, fix)  # raises on a bad code
         key = (category, func_name, arg_type_name)
         with self._decorator_call_log_lock:

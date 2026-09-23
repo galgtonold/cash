@@ -310,7 +310,7 @@ for the cases this model *can't* see.
 
 ### What else is in the key — the ones that cost a recompute
 
-<!-- claim: cash/core.py:Cash._fold_defaults @5760bcd5, cash/core.py:Cash._hash_arg_payload @6cf42ecf, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
+<!-- claim: cash/core.py:Cash._fold_defaults @9e3f82f2, cash/core.py:Cash._hash_arg_payload @6cf42ecf, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
 None of these gives a wrong answer. Each one costs a recompute you might not
 expect, measured across fresh processes:
 
@@ -629,7 +629,7 @@ def build(schema):
 build(Schema)                    # edit Schema, call again -> used to return the old answer
 ```
 
-<!-- claim: cash/core.py:Cash._fold_code_args @e1da8f21, cash/core.py:Cash._iter_code_carriers @ef2a0021 -->
+<!-- claim: cash/core.py:Cash._fold_code_args @ba57fd9c, cash/core.py:Cash._iter_code_carriers @ef2a0021 -->
 Your code reached through the arguments now folds into `state_hash`, so editing
 it invalidates. cash finds it in a class, a function, an instance (through its
 class), any of those nested in a list/tuple/set/dict, and an instance whose
@@ -720,7 +720,7 @@ flowchart TD
     F -->|Yes| G[Return cached value]
 ```
 
-<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @e1da8f21 -->
+<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @ba57fd9c -->
 The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
 
 - `state_hash` folds in the function's own source hash + every
@@ -1227,7 +1227,7 @@ dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/core.py:Cash._explain_call @59088f69 -->
+<!-- claim: cash/core.py:Cash._explain_call @d9b240c2 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 
