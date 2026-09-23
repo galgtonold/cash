@@ -21,15 +21,12 @@ The single public entry point is :meth:`ModuleInvalidator.invalidate`.
 
 from __future__ import annotations
 
-import hashlib
 import logging
-import os
 import sys
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
-from ..source_norm import read_code_file
-from .lineage_formula import imported_from, module_source_component
+from .lineage_formula import imported_from, module_source_component, read_module_source_hash
 from .upstream.mismatch_classifier import import_only
 
 if TYPE_CHECKING:
@@ -523,33 +520,18 @@ class ModuleInvalidator:
         file_path: str,
         ft: FunctionTracker,
     ) -> str:
-        """Compute a lineage hash for a module including transitive deps.
+        """The lineage a changed module takes when no import is known to give
+        it one: its source identity (``read_module_source_hash``) together with
+        every local file it transitively depends on -- the same identity the
+        module's source component of an import's lineage carries, so a comment
+        or a reformat moves neither.
 
-        The hash incorporates the module's own source file concatenated
-        with every local file it transitively depends on (sorted by path
-        for determinism).
+        A module whose file cannot be read gets a fixed marker for that, which
+        no readable version of it can share.
         """
-        hasher = hashlib.sha256()
-
-        if file_path and os.path.isfile(file_path):
-            try:
-                hasher.update(read_code_file(file_path))
-            except OSError as e:
-                logger.debug("[MODULE] Could not read module file %r for hash: %s", file_path, e)
-
-        dep_files: set = set()
-        for dep_path, parent_mods in ft.dep_file_to_parents.items():
-            if mod_name in parent_mods:
-                dep_files.add(dep_path)
-
-        for dep_path in sorted(dep_files):
-            if os.path.isfile(dep_path):
-                try:
-                    hasher.update(read_code_file(dep_path))
-                except OSError as e:
-                    logger.debug("[MODULE] Could not read dep file %r for hash: %s", dep_path, e)
-
-        digest = hasher.hexdigest()
-        if not digest or digest == hashlib.sha256(b"").hexdigest():
-            digest = hashlib.sha256(os.urandom(32)).hexdigest()
+        dep_files = {dep_path for dep_path, parent_mods in ft.dep_file_to_parents.items() if mod_name in parent_mods}
+        digest = read_module_source_hash(file_path, dep_files) if file_path else None
+        if digest is None:
+            logger.debug("[MODULE] Could not read module file %r for its lineage", file_path)
+            return f"unreadable-module:{mod_name}"
         return digest

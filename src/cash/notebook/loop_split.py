@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import ast
 import contextlib
-import hashlib
 import json
 import logging
 import os
@@ -47,6 +46,7 @@ import os
 from cash.backends.file_backend import recreate_cache_dir
 from cash.utils import replace_with_retry
 
+from .cache_key import statement_source_hash
 from .statement.miss_guard import resolve_cache_dir
 
 logger = logging.getLogger(__name__)
@@ -56,14 +56,15 @@ _STORE_VERSION = 1
 
 
 def loop_source_hash(node: ast.AST) -> str:
-    """Identity of a loop for split purposes: sha256 of its unparsed source.
+    """Identity of a loop for split purposes: the statement source hash
+    (``statement_source_hash``) of its unparsed source.
 
     ``ast.unparse`` rather than raw cell text, so formatting and comments
     cannot change a loop's identity -- and so the runtime (holding an AST
     node) and the simulator (parsing cell source) agree without either
     needing the other's representation.
     """
-    return hashlib.sha256(ast.unparse(node).encode("utf-8")).hexdigest()
+    return statement_source_hash(ast.unparse(node))
 
 
 def is_split_half(node: ast.AST) -> bool:

@@ -13,7 +13,6 @@ Issue 2: Exceptions during cell execution (e.g., import nonexistent_module, rais
 
 import hashlib
 import importlib
-import os
 import sys
 import time
 from unittest.mock import MagicMock
@@ -109,10 +108,10 @@ class TestModuleReloadInvalidation:
         # Lineage should have changed
         new_lineage = sp.variable_lineage[module_name]
         assert new_lineage != old_lineage
-        # It should be a hash of the file content
-        with open(module_file, "rb") as f:
-            expected = hashlib.sha256(f.read()).hexdigest()
-        assert new_lineage == expected
+        # It is the module's source identity, the one an import's lineage carries
+        from cash.notebook.lineage_formula import read_module_source_hash
+
+        assert new_lineage == read_module_source_hash(module_file)
 
     def test_invalidate_module_lineages_clears_dependent_vars(self, magics_fixture, temp_module):
         """Variables computed from a changed module should have their lineage cleared."""
@@ -624,22 +623,13 @@ class TestTransitiveDependencyTracking:
         new_lineage = sp.variable_lineage["metrics"]
         assert new_lineage != old_lineage
 
-        # Compute expected: hash of metrics.py + helpers.py
-        import hashlib as hl
+        # Expected: the source identity of metrics.py together with helpers.py
+        from cash.notebook.lineage_formula import read_module_source_hash
 
-        hasher = hl.sha256()
-        with open(info["metrics_file"], "rb") as f:
-            hasher.update(f.read())
-        # Find the helpers dep path in dep_file_to_parents
-        dep_files = sorted(
-            dp for dp, parents in sp.function_tracker.dep_file_to_parents.items() if "metrics" in parents
-        )
-        for dp in dep_files:
-            if os.path.isfile(dp):
-                with open(dp, "rb") as f:
-                    hasher.update(f.read())
-        expected = hasher.hexdigest()
-        assert new_lineage == expected
+        dep_files = {dp for dp, parents in sp.function_tracker.dep_file_to_parents.items() if "metrics" in parents}
+        assert dep_files, "helpers.py was not discovered as a dependency"
+        assert new_lineage == read_module_source_hash(info["metrics_file"], dep_files)
+        assert new_lineage != read_module_source_hash(info["metrics_file"])
 
     def test_three_level_transitive_deps(self, tmp_path):
         """Three-level chain: app -> service -> utils. Changing utils should invalidate app."""

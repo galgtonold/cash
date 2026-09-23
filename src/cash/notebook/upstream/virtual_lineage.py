@@ -1744,11 +1744,9 @@ class VirtualLineage:
         if not mutated_vars:
             return extra_outputs
         source_hash = statement_source_hash(stmt_code)
-        input_lineages_sorted = sorted(input_hashes.values())
         for mv in mutated_vars:
             if mv not in outputs and mv in inputs:
-                combined = source_hash + ":" + ":".join(input_lineages_sorted)
-                new_lineage = hashlib.sha256(combined.encode("utf-8")).hexdigest()
+                new_lineage = output_lineage(source_hash, input_hashes.values())
                 virtual_lineage[mv] = new_lineage
                 extra_outputs.add(mv)
                 if self.debug:
@@ -2349,25 +2347,25 @@ class VirtualLineage:
         return ("miss", cache_lookup_time, files_stale, stmt_file_deps, file_deps_to_check)
 
     def _build_file_hash_component(self, file_deps_to_check: set[str], stmt_file_deps: dict[str, float]) -> str:
-        """Build the file hash component string from file dependencies.
+        """The file component of a statement's lineage when the runtime's own
+        record of what it read is not available: the files its outputs depend
+        on, valued by the runtime's formula (``compute_file_hash_component``).
 
         Also updates stmt_file_deps with current mtimes for tracked files.
         """
         if not file_deps_to_check:
             return ""
 
-        file_components = []
+        present: set[str] = set()
         current = _stats_this_run(file_deps_to_check)
-        for file_path in sorted(file_deps_to_check):
+        for file_path in file_deps_to_check:
             resolved, stat = current[file_path]
             # Only a file that is where it was recorded, as before: the
             # relocation fallbacks would put a different path's state in a key.
             if stat is not None and resolved == file_path:
-                file_components.append(f"{file_path}:{stat.st_mtime}:{stat.st_size}")
+                present.add(file_path)
                 stmt_file_deps[file_path] = stat.st_mtime
-        if file_components:
-            return ":" + hashlib.sha256(",".join(file_components).encode("utf-8")).hexdigest()
-        return ""
+        return compute_file_hash_component(present) if present else ""
 
     #: See ``_virtual_callables``.
     _VIRTUAL_CALLABLES_MAX = 4096
