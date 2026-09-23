@@ -61,6 +61,34 @@ def test_lookup_key_equals_store_key_first_call(tmp_path):
     assert top.explain(5).reason == "hit"
 
 
+def test_a_captured_cached_function_is_keyed_without_reading_cash_itself(tmp_path, monkeypatch):
+    """``top`` captures ``mid``, which is cash's wrapper: its closure holds the
+    Cash instance and ``mid``'s spec. Folding that closure content-hashed the
+    instance, backend included, on every key build, while the write thread
+    changed the backend's dicts -- about one run in twelve under load, the key
+    build raised "dictionary changed size during iteration", ``explain()``
+    said ``key_uncomputable`` and a call would have run uncached."""
+    from cash import object_hashing
+    from cash.backends import CacheBackend
+    from cash.decorator.cached_function import CachedFunction
+
+    c = Cash(backend=FileBackend(cache_dir=str(tmp_path / "c")))
+    top = _build_chain(c)
+    walked = []
+    real = object_hashing.object_state
+
+    def spy(value):
+        walked.append(type(value))
+        return real(value)
+
+    monkeypatch.setattr(object_hashing, "object_state", spy)
+    top.explain(5)
+    top(5)
+
+    cash_own = sorted({t.__name__ for t in walked if issubclass(t, (Cash, CacheBackend, CachedFunction))})
+    assert not cash_own, f"building a key hashed cash's own objects: {cash_own}"
+
+
 def test_fresh_instance_hits_on_first_call(tmp_path):
     """A second Cash instance on the same persistent backend restores on the
     FIRST call to each function - zero warm-up recomputes."""

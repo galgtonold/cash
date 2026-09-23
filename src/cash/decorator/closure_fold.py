@@ -250,6 +250,17 @@ class ClosureFoldMixin:
                 v = cell.cell_contents
             except ValueError:
                 continue
+            if getattr(v, "_cash_cached", False):
+                # A captured CACHED function is what it computes: its
+                # dependency state, as a registry holding one counts it
+                # (`_data_callable_identity_of`). Not cash's wrapper around
+                # it, whose closure holds this Cash instance and the
+                # function's spec: those were content-hashed into the key on
+                # every call, backend and all, while the write thread changed
+                # the backend's dicts -- "dictionary changed size during
+                # iteration", and the call ran uncached.
+                captures.append((name, self._data_callable_identity_of(v)))
+                continue
             # A captured FUNCTION is its code, so fold its source. Reaching
             # this before the `unsafe` check is the point: a capture the body
             # PASSES TO A CALL is marked unsafe and skipped (watch it, don't
