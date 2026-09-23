@@ -306,21 +306,21 @@ definitively a replay rather than a fresh draw.
 
 The badge carries the same information as a text pill on the statement row:
 
-<!-- claim: cash/notebook/badge_renderer/renderers/html.py:_rng_pill @ec2cf983, cash/notebook/statement/processor.py:StatementProcessor._stamp_random_effect @99346d2f -->
+<!-- claim: cash/notebook/badge_renderer/renderers/html.py:_rng_pill @ec2cf983, cash/notebook/statement/randomness.py:StatementRandomness.stamp_random_effect @cc319efd -->
 | Pill | Meaning |
 |------|---------|
 | `seed` | The statement sets an RNG seed |
 | `random` | The statement draws, from a seeded (reproducible) source |
 | `unseeded` | The statement draws unseeded — the cached value is a frozen replay |
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_unseeded_randomness @3f83c19f, cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @a4042c14 -->
+<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @41fe639f, cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @a4042c14 -->
 To silence the warning deliberately, annotate the statement with
 `@cash:allow-random` (see [Annotations](../annotations.md)). That is *advisory
 only* — it suppresses the message and changes no caching decision. To actually
 redraw on every run, use `@cash:no-cache`, which switches off both the cache and
 the RNG rewind.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_unseeded_estimator_fit @b718963d, cash/notebook/statement/processor.py:StatementProcessor._unseeded_estimator_fits @be0f2fba -->
+<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded_estimator_fit @d5d4ca20, cash/notebook/statement/randomness.py:StatementRandomness.unseeded_estimator_fits @6c1cfeff -->
 One hazard the AST cannot see: an sklearn-style `estimator.fit()` draws its
 randomness inside compiled code, with no Python call to scan. When a fit is
 cached (under `# @cash:cache-fit`) and the estimator has `random_state=None`,

@@ -618,7 +618,7 @@ nb_runner can reproduce this bug class: it writes a real `.ipynb`, and `set_cell
 
 Do not build the virtual variable. The global RNG is handled by four mechanisms, each covering a case the others do not:
 
-- **Key:** `_rng_seed_epochs` and `seed_epoch_component` key a draw on the seed that governs it.
+- **Key:** `StatementRandomness.seed_epochs` and `seed_epoch_component` key a draw on the seed that governs it.
 - **Value:** `rng_post_states` and `checker._restore_position_rng_state` restore the nearest upstream random cell's post-state before a drawing cell re-executes (`66e32dc`).
 - **Chain rebuild:** when an upstream seed is stale, `_prepend_stale_seed_cells` re-runs the seed and the intervening draws in order (`c27d44f`).
 - **Observer:** each cell's RNG state is snapshotted before and after, and `observed_rng_cells` records which modules it advanced, so a draw inside a called function is treated like a direct draw on re-run.

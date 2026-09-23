@@ -1704,7 +1704,7 @@ answers a different question without saying so.
 
 ## RANDOM-SEED-NONE {#random-seed-none}
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_entropy_reseed @cac9f7e6 -->
+<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_entropy_reseed @23925b73 -->
 **What happened.** A statement called `seed(None)` — `np.random.seed(None)`,
 `random.seed()` with no argument, or the same on another supported module. That
 asks for a different, entropy-derived random stream on every run, and Cash
