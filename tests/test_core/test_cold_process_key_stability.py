@@ -1,16 +1,16 @@
-"""Regressions for the cold-process cache-key bug (#7) and the decorator-line
-purity false-positive (#9).
+"""Regressions for two decorator bugs: a cache key that changed after the first
+call in a cold process, and a purity false positive from the decorator line.
 
-#7: the cache key folds in transitive purity-report helper hashes, which used to
-be populated lazily on each dependency's first call. So the key deepened after
-the chain warmed and a fresh process missed the first call to every cached
-function. The fix eagerly analyzes the whole dependency closure before the first
-key is computed, making the key identical on the lookup and store paths and
-across processes.
+Cold-process keys: the cache key folds in transitive purity-report helper
+hashes, which used to be populated lazily on each dependency's first call. So
+the key deepened after the chain warmed and a fresh process missed the first
+call to every cached function. The fix eagerly analyzes the whole dependency
+closure before the first key is computed, making the key identical on the
+lookup and store paths and across processes.
 
-#9: ``inspect.getsource`` includes the ``@c.cache(...)`` decorator line; the
-analyzer used to treat that call as a body statement and walk into cash's own
-decorator machinery, flagging its internal mutations as the user's.
+Decorator line: ``inspect.getsource`` includes the ``@c.cache(...)`` decorator
+line; the analyzer used to treat that call as a body statement and walk into
+cash's own decorator machinery, flagging its internal mutations as the user's.
 """
 
 from __future__ import annotations
