@@ -12,6 +12,10 @@ from .serialization import PickleSerializer, Serializer
 
 _UNSEEN = object()
 
+#: Promotion thresholds a `TieredBackend` uses unless it is given others.
+DEFAULT_MIN_PERSIST_COMPUTE_S = 1.0
+DEFAULT_MIN_PERSIST_SAVINGS_PCT = 0.20
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["TieredBackend"]
@@ -49,8 +53,8 @@ class TieredBackend(CacheBackend):
         backends: list[CacheBackend],
         promotion_policy: Callable[[float, int], bool] | None = None,
         *,
-        min_persist_compute_s: float = 1.0,
-        min_persist_savings_pct: float = 0.20,
+        min_persist_compute_s: float = DEFAULT_MIN_PERSIST_COMPUTE_S,
+        min_persist_savings_pct: float = DEFAULT_MIN_PERSIST_SAVINGS_PCT,
     ) -> None:
         """
         Args:

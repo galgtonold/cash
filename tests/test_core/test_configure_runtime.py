@@ -52,6 +52,40 @@ class TestHotFields:
         assert backend_before is backend_after, "hot field reconfigure should not rebuild the backend"
 
 
+class TestPersistencePolicyFields:
+    """``smart_persistence`` and ``min_cache_savings_pct`` are read into the
+    running backend's promotion policy when it is built. Changing them has to
+    reach that policy, or the change silently does nothing."""
+
+    @staticmethod
+    def _persists(backend, key):
+        metadata = {"execution_time": 0.5, "size": 10}
+        backend.set(key, 1, metadata)
+        return metadata["storage"] != ["RAM"]
+
+    def test_min_cache_savings_pct_reaches_the_running_backend(self, tmp_path):
+        import cash
+
+        cash.configure(cache_dir=str(tmp_path / ".cash"))
+        backend = cash._get_global_cash().backend
+        assert self._persists(backend, "before"), "a 0.5 s result should persist by default"
+        cash.configure(min_cache_savings_pct=0.999)
+        assert cash._get_global_cash().backend is backend
+        assert not self._persists(backend, "after")
+
+    def test_smart_persistence_off_reaches_the_running_backend(self, tmp_path):
+        import cash
+
+        cash.configure(cache_dir=str(tmp_path / ".cash"))
+        backend = cash._get_global_cash().backend
+        assert self._persists(backend, "before")
+        # Off, the backend falls back to its 1.0 s compute floor.
+        cash.configure(smart_persistence=False)
+        assert not self._persists(backend, "after")
+        cash.configure(smart_persistence=True)
+        assert self._persists(backend, "again")
+
+
 # ---------------------------------------------------------------------------
 # Backend-affecting fields — rebuild + swap
 # ---------------------------------------------------------------------------

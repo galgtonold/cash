@@ -137,14 +137,11 @@ cash.configure(min_cache_savings_pct=0.10)        # promote when a hit saves >10
 cash.configure(smart_persistence=False)           # fall back to the default policy
 ```
 
-<!-- claim: cash/__init__.py:configure @03abf751 -->
-Neither `smart_persistence` nor `min_cache_savings_pct` is in the
-`BACKEND_AFFECTING` set that `cash.configure` consults, so changing either at
-runtime updates the dataclass but does not rebuild the active backend's policy
-closure — `TieredBackend` reads both once, at construction. To make a runtime
-change stick on the decorator path, restart the process or reconstruct the
-`Cash` instance. (The notebook's own promotion gate re-reads the config live,
-so the two paths differ here.)
+<!-- claim: cash/__init__.py:configure @72f9b7fe, cash/backends/factory.py:apply_persistence_settings @463e0c5d -->
+`cash.configure` hands a change to either setting straight to the running
+backend (`apply_persistence_settings`), so it applies from the next write
+without rebuilding the backend or dropping what the RAM tier holds. The
+notebook's own promotion gate reads the config live as well.
 
 ## Inspecting where a value actually landed
 
@@ -232,7 +229,7 @@ See [Choosing a Backend](choosing-a-backend.md) for how to wire `TieredBackend` 
 
 ## Built-in `_default_promotion_policy` fallback
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._default_promotion_policy @c919ec7c, cash/backends/tiered_backend.py:TieredBackend.__init__ @7647a573 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._default_promotion_policy @c919ec7c, cash/backends/tiered_backend.py:TieredBackend.__init__ @694d21ad -->
 When `smart_persistence=False` (so the factory wires in no cost-model closure), or when a user constructs `TieredBackend(..., promotion_policy=None)` directly, the backend falls back to its own bound method `_default_promotion_policy`:
 
 ```python
@@ -252,7 +249,6 @@ It applies the same restore-vs-recompute rule as the smart policy, just with a 1
 - **First call to a new function.** There's no history-tracking — every call's policy is decided from that call's own `execution_time` and `size_bytes`. Cold-start times that happen to be slow get promoted; cold-start times that happen to be fast (e.g. JIT not warmed up) skip disk and are recomputed on the next process.
 - **`size_bytes` comes from the backend's serializer.** A pre-serialization size estimate isn't always accurate for objects that pickle to dramatically different sizes than their in-memory footprint (compressed numpy arrays, sparse matrices, dicts of small primitives).
 - **No `@cash.cache(persist=True)` knob.** The only force-persist mechanism is the `# @cash:persist` notebook annotation. If you need to guarantee persistence for a decorator-wrapped function, either disable smart persistence globally or pick a single-tier backend.
-- **Runtime `cash.configure(smart_persistence=...)` doesn't rebuild the backend.** It updates the dataclass field but the active `TieredBackend`'s `promotion_policy` closure is set at build time and not reread. Restart the process or reconstruct the `Cash` instance to apply.
 - **Don't trust the heuristic blindly for production caches.** If a specific entry's freshness is critical (a tier 0 RAM-only entry disappears on restart), use a single-tier persistent backend or a `# @cash:persist` annotation.
 
 ## API reference

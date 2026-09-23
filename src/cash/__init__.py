@@ -237,9 +237,10 @@ def configure(**overrides: Any) -> None:
         2. Build a fresh backend from the updated config.
         3. Swap it in atomically.
 
-    Hot fields (debug, smart-persistence policy knobs) are applied to
-    the dataclass in place and read by the next operation. They do not
-    rebuild the backend.
+    Hot fields (debug, verbose, ...) are applied to the dataclass in place
+    and read by the next operation. ``smart_persistence`` and
+    ``min_cache_savings_pct`` are applied to the running backend's
+    promotion policy in place, so they take effect without a rebuild.
 
     Stale fields (e.g. ``redis_host`` when there's no Redis tier
     currently active) are stored silently — the next switch to a Redis
@@ -320,6 +321,11 @@ def configure(**overrides: Any) -> None:
             from .core import _enable_cash_logging
 
             _enable_cash_logging(logging.INFO)
+
+    if not needs_rebuild and {"smart_persistence", "min_cache_savings_pct"} & set(overrides) and c._backend is not None:
+        from .backends.factory import apply_persistence_settings
+
+        apply_persistence_settings(c._backend, c.config)
 
     if needs_rebuild:
         from .backends.factory import build_backend_from_config

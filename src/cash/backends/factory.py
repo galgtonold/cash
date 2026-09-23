@@ -30,14 +30,14 @@ from ._base import CacheBackend
 from .file_backend import FileBackend
 from .memory_backend import InMemoryBackend
 from .sqlite_backend import SQLiteBackend
-from .tiered_backend import TieredBackend
+from .tiered_backend import DEFAULT_MIN_PERSIST_COMPUTE_S, DEFAULT_MIN_PERSIST_SAVINGS_PCT, TieredBackend
 
 if TYPE_CHECKING:
     from cash.config import CashConfig, TierConfig
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["build_backend_from_config"]
+__all__ = ["apply_persistence_settings", "build_backend_from_config"]
 
 
 def build_backend_from_config(config: "CashConfig") -> CacheBackend:
@@ -183,9 +183,7 @@ def _build_default_tiered(config: "CashConfig") -> TieredBackend:
         adaptive_cap=_disk_cap_is_adaptive(config),
     )
 
-    if not config.smart_persistence:
-        return TieredBackend([ram, disk])
-    return _build_smart_tiered([ram, disk], config)
+    return _build_tiered([ram, disk], config)
 
 
 # Compute floor for the smart-persistence stack: nothing under this many
@@ -227,15 +225,33 @@ def _config_number(config: "CashConfig", attr: str, default: float) -> float:
     return float(value)
 
 
-def _build_smart_tiered(backends: list[CacheBackend], config: "CashConfig") -> TieredBackend:
-    """Wrap *backends* in a serialization-aware smart-persistence policy."""
-    min_savings = _config_number(config, "min_cache_savings_pct", 0.20)
-    return TieredBackend(
-        backends,
-        promotion_policy=_build_smart_persistence_policy(config),
-        min_persist_compute_s=_SMART_PERSIST_COMPUTE_FLOOR_S,
-        min_persist_savings_pct=min_savings,
-    )
+def _build_tiered(backends: list[CacheBackend], config: "CashConfig") -> TieredBackend:
+    tiered = TieredBackend(backends)
+    apply_persistence_settings(tiered, config)
+    return tiered
+
+
+def apply_persistence_settings(backend: CacheBackend, config: "CashConfig") -> None:
+    """Give a `TieredBackend` the promotion policy *config* asks for.
+
+    ``smart_persistence`` picks the serialization-aware policy with its 0.1 s
+    compute floor, and ``min_cache_savings_pct`` sets the savings it requires;
+    with ``smart_persistence`` off the backend keeps its own defaults. Called
+    when the stack is built and again by ``cash.configure`` when either
+    setting changes, so a change applies to the running backend without
+    rebuilding it (which would drop the RAM tier). Any other backend has no
+    promotion policy and is left alone.
+    """
+    if not isinstance(backend, TieredBackend):
+        return
+    if config.smart_persistence:
+        backend.promotion_policy = _build_smart_persistence_policy(config)
+        backend._min_persist_compute_s = _SMART_PERSIST_COMPUTE_FLOOR_S
+        backend._min_persist_savings_pct = _config_number(config, "min_cache_savings_pct", 0.20)
+    else:
+        backend.promotion_policy = backend._default_promotion_policy
+        backend._min_persist_compute_s = DEFAULT_MIN_PERSIST_COMPUTE_S
+        backend._min_persist_savings_pct = DEFAULT_MIN_PERSIST_SAVINGS_PCT
 
 
 def _build_smart_persistence_policy(config: "CashConfig"):
@@ -271,9 +287,7 @@ def _build_tiered_from_tier_list(config: "CashConfig") -> TieredBackend:
     backends: list[CacheBackend] = []
     for tier in config.tiers:
         backends.append(_build_tier(tier, config))
-    if not config.smart_persistence:
-        return TieredBackend(backends)
-    return _build_smart_tiered(backends, config)
+    return _build_tiered(backends, config)
 
 
 def _build_tier(tier: "TierConfig", config: "CashConfig") -> CacheBackend:

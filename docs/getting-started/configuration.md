@@ -370,7 +370,7 @@ configures a tool — a `tests/pyproject.toml` holding `[tool.ruff]` — does no
 so running from `tests/` still finds the repository's project and its
 `[tool.cash]`.
 
-<!-- claim: cash/__init__.py:configure @03abf751 -->
+<!-- claim: cash/__init__.py:configure @72f9b7fe -->
 ## Runtime mutation: `cash.configure()`
 
 Change the active configuration of the default singleton at runtime
@@ -398,10 +398,13 @@ file. The function is in-memory only — persistence requires editing
 those files directly.
 
 **What gets rebuilt**: the function distinguishes "hot" fields (debug,
-smart-persistence policy knobs) from "backend-affecting" fields
+verbose, persist_all, ...) from "backend-affecting" fields
 (cache_dir, compress, max_cache_size, max_memory_entries,
 flush_interval, backend, tiers, all connection details). Hot fields just update the
-dataclass. Backend-affecting fields drain the old backend's pending
+dataclass. The two persistence-policy fields, `smart_persistence` and
+`min_cache_savings_pct`, are handed to the running backend's promotion
+policy in place, so they apply from the next write without a rebuild.
+Backend-affecting fields drain the old backend's pending
 writes via `shutdown()`, build a fresh backend from the new config,
 and swap it in.
 
