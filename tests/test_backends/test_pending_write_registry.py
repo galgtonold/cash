@@ -118,7 +118,7 @@ def test_the_registry_does_not_grow_across_many_keys(writes):
 
 
 def test_has_pending_sees_an_in_flight_write(writes):
-    """`_check_and_evict` asks this before evicting, and must get it right.
+    """`FileEvictor.evict` asks this before evicting, and must get it right.
 
     Evicting a key with a queued write deadlocks the single worker -- the
     delete drains a write that cannot start until the delete returns.

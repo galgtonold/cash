@@ -13,8 +13,9 @@ from __future__ import annotations
 import glob
 import os
 
+from cash.backends.cache_dir import CACHE_FORMAT_VERSION
 from cash.backends.entry_format import ENTRY_SUFFIX
-from cash.backends.file_backend import CACHE_FORMAT_VERSION, FileBackend
+from cash.backends.file_backend import FileBackend
 
 VERSION_FILENAME = "CACHE_VERSION"
 

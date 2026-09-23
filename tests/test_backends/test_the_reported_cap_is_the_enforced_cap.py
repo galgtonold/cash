@@ -40,6 +40,7 @@ import pytest
 import cash.backends.adaptive_caps as caps
 from cash.backends import FileBackend
 from cash.backends.adaptive_caps import adaptive_disk_cap, adaptive_disk_cap_for
+from cash.backends.file_eviction import FileEvictor
 
 GIB = 1024**3
 
@@ -60,7 +61,7 @@ def volume(tmp_path, monkeypatch):
     state = {"free": 118 * GIB, "own": 0}
 
     monkeypatch.setattr(caps, "free_bytes_on_volume", lambda path: state["free"])
-    monkeypatch.setattr(FileBackend, "_scan_size_bytes", lambda self: state["own"])
+    monkeypatch.setattr(FileEvictor, "scan_size_bytes", lambda self: state["own"])
     return cache, state
 
 
@@ -78,17 +79,17 @@ def test_a_long_lived_kernel_does_not_keep_a_two_day_old_cap(volume):
     cache, state = volume
 
     b = _backend(cache)
-    b._ensure_size_scanned()
-    opened_with = b._max_size_bytes
+    b.evictor.ensure_size_scanned()
+    opened_with = b.evictor.max_size_bytes
     assert opened_with == adaptive_disk_cap(118 * GIB), "fixture did not take"
 
     # Two days pass; four other sessions take the volume down to 48 GB free,
     # and this cache is holding 21.19 GiB of that.
     state["free"] = 48 * GIB
     state["own"] = int(21.19 * GIB)
-    b._current_size_bytes = state["own"]
-    b._refresh_adaptive_cap(force=True)
-    now = b._max_size_bytes
+    b.evictor.current_bytes = state["own"]
+    b.evictor.refresh_adaptive_cap(force=True)
+    now = b.evictor.max_size_bytes
     b.shutdown()
 
     assert now == adaptive_disk_cap_for(str(cache), state["own"]), (
@@ -106,16 +107,16 @@ def test_a_write_re_derives_the_cap_when_the_volume_has_moved(volume):
     b = _backend(cache)
     b.set("k", {"variables": {"v": b"x" * 1024}}, {"execution_time": 1.0, "size": 1024, "key": "k"})
     b._writes.wait_all()
-    assert b._max_size_bytes == adaptive_disk_cap(118 * GIB)
+    assert b.evictor.max_size_bytes == adaptive_disk_cap(118 * GIB)
 
     state["free"] = 48 * GIB
-    b._cap_derived_at = 0.0  # the throttle, not the behaviour, under test
+    b.evictor.cap_derived_at = 0.0  # the throttle, not the behaviour, under test
     b.set("k2", {"variables": {"v": b"x" * 1024}}, {"execution_time": 1.0, "size": 1024, "key": "k2"})
     b._writes.wait_all()
-    derived = b._max_size_bytes
+    derived = b.evictor.max_size_bytes
     b.shutdown()
 
-    assert derived == adaptive_disk_cap_for(str(cache), b._current_size_bytes), (
+    assert derived == adaptive_disk_cap_for(str(cache), b.evictor.current_bytes), (
         "writing did not re-derive the cap after the volume moved"
     )
 
@@ -126,12 +127,12 @@ def test_an_explicit_cap_is_still_never_re_derived(volume):
     chosen = 3 * GIB
 
     b = _backend(cache, adaptive=False, cap=chosen)
-    b._ensure_size_scanned()
+    b.evictor.ensure_size_scanned()
     state["free"] = 4 * GIB
-    b._refresh_adaptive_cap(force=True)
+    b.evictor.refresh_adaptive_cap(force=True)
     b.set("k", {"variables": {"v": b"x" * 1024}}, {"execution_time": 1.0, "size": 1024, "key": "k"})
     b._writes.wait_all()
-    assert b._max_size_bytes == chosen
+    assert b.evictor.max_size_bytes == chosen
     b.shutdown()
 
 

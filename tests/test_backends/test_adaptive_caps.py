@@ -147,10 +147,10 @@ class TestFactoryCapWiring:
 
         backend = self._build(CashConfig(cache_dir=str(tmp_path / "c")))
         ram, disk = backend.backends[0], backend.backends[1]
-        assert disk._max_size_bytes > _GIB, "the core fix: disk tier no longer 1 GiB"
-        assert disk._max_size_bytes == 100 * _GIB  # 0.25·500 → ceiling
+        assert disk.evictor.max_size_bytes > _GIB, "the core fix: disk tier no longer 1 GiB"
+        assert disk.evictor.max_size_bytes == 100 * _GIB  # 0.25·500 → ceiling
         assert ram._max_size_bytes == int(0.20 * 16 * _GIB)
-        assert ram._max_size_bytes != disk._max_size_bytes
+        assert ram._max_size_bytes != disk.evictor.max_size_bytes
         backend.shutdown()
 
     def test_explicit_max_cache_size_pins_disk_not_ram(self, monkeypatch, tmp_path):
@@ -161,7 +161,7 @@ class TestFactoryCapWiring:
 
         backend = self._build(CashConfig(cache_dir=str(tmp_path / "c"), max_cache_size=777_000))
         ram, disk = backend.backends[0], backend.backends[1]
-        assert disk._max_size_bytes == 777_000  # explicit value honored
+        assert disk.evictor.max_size_bytes == 777_000  # explicit value honored
         # RAM tier keeps its own modest auto cap regardless.
         assert ram._max_size_bytes == int(0.20 * 16 * _GIB)
         backend.shutdown()

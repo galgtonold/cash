@@ -141,14 +141,14 @@ The disk tier has a size cap (`max_cache_size`; by default a quarter of the
 room on the disk). Going over it is what makes Cash delete entries, and this
 section is about when and how that happens.
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @0e010aaf, cash/backends/file_backend.py:FileBackend._check_and_evict @b43d8c05 -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @39e0412a, cash/backends/file_eviction.py:FileEvictor.evict @27bf1fea -->
 **Only a write can trigger eviction.** Each time an entry lands on disk, the
 background write thread adds its size to a running total and compares that
 total to the cap. If the cache is over, it deletes entries until the cache is
 back under **90%** of the cap. The extra 10% of room means the next few writes
 fit without each one starting another round.
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._ensure_size_scanned @1ec3940e, cash/backends/file_backend.py:FileBackend.get @81a74ffd -->
+<!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @d2b3cc61, cash/backends/file_backend.py:FileBackend.get @cc5c8a6e -->
 **Reading never evicts.** A cache hit deletes nothing from disk to make room, however
 full the cache is. A process that only reads, such as a kernel restart that
 replays everything from cache, never even adds up the directory's size. That
@@ -166,7 +166,7 @@ of about equal worth go least recently used first.
 [Choosing a Backend](../tutorials/feature-guides/choosing-a-backend.md#filebackend)
 covers how that ranking is kept cheap on a directory of 100k files.
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._touched_since @7f4b852e -->
+<!-- claim: cash/backends/file_eviction.py:FileEvictor.touched_since @89a9925f -->
 A few entries are passed over in a round:
 
 - **One that was read since the ranking was made.** The ranking is reused

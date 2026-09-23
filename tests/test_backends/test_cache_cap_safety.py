@@ -182,7 +182,7 @@ class TestNoThrashAcceptance:
 
         backend = build_backend_from_config(CashConfig(cache_dir=str(tmp_path / "c")))
         disk = backend.backends[1]
-        assert disk._max_size_bytes > 1024**3  # no longer the 1 GiB that thrashed
+        assert disk.evictor.max_size_bytes > 1024**3  # no longer the 1 GiB that thrashed
 
         frame = "x" * 5000
         # force_persist clears the compute floor deterministically; the frames

@@ -324,7 +324,7 @@ def test_a_damaged_index_is_ignored_not_fatal(tmp_path):
     for i in range(12):
         _put(b, f"k-{i}", MB, 1.0)
 
-    assert b._current_size_bytes <= CAP
+    assert b.evictor.current_bytes <= CAP
     assert _held(b, "k-11")
     b.shutdown()
 
@@ -341,7 +341,7 @@ def test_the_index_does_not_grow_without_bound(tmp_path):
     for rnd in range(25):
         for i in range(12):
             _put(b, f"k-{i}", 100_000 + rnd, 1.0)
-    b._rebuild_evict_queue()
+    b.evictor.rebuild_queue()
 
     with open(cache / INDEX, encoding="utf-8") as fh:
         lines = fh.readlines()
@@ -355,7 +355,7 @@ def test_clear_removes_the_index(tmp_path):
     cache = tmp_path / "c"
     b = _backend(cache)
     _put(b, "k", MB, 1.0)
-    b._rank_index.flush()
+    b.evictor.rank_index.flush()
     assert (cache / INDEX).exists(), "precondition: a write records a rank"
     _put(b, "buffered", MB, 1.0)  # a record still in the buffer
     b.clear()

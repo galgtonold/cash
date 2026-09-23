@@ -302,19 +302,19 @@ def _writes_die_halfway():
     # failure has to be injected at cash's own write helper rather than at
     # ``open``; patching ``os.write`` itself would break every unrelated write
     # in the process for the duration.
-    real_write_all = fb._write_all
+    real_write_all = fb.write_all
 
     def failing_write_all(fd, data):
         real_write_all(fd, data[: len(data) // 2])
         raise OSError("No space left on device")
 
     fb.open = failing_open
-    fb._write_all = failing_write_all
+    fb.write_all = failing_write_all
     try:
         yield
     finally:
         del fb.open
-        fb._write_all = real_write_all
+        fb.write_all = real_write_all
 
 
 class TestAFailedWriteDoesNotDestroyWhatWasThere:
@@ -404,7 +404,7 @@ class TestAFailedWriteDoesNotDestroyWhatWasThere:
         backend._writes.wait_all()
         assert backend.get("k")[1] == "v1"
 
-        real_write_all = fb._write_all
+        real_write_all = fb.write_all
         armed = {"on": False}
 
         # Every entry byte goes out through `_write_all`, on the descriptor the
@@ -417,7 +417,7 @@ class TestAFailedWriteDoesNotDestroyWhatWasThere:
             real_write_all(fd, data[: len(data) // 2])
             raise OSError("No space left on device")
 
-        monkeypatch.setattr(fb, "_write_all", dies_halfway)
+        monkeypatch.setattr(fb, "write_all", dies_halfway)
         armed["on"] = True
         backend.set("k", "v2")
         backend._writes.wait_all()

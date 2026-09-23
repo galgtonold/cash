@@ -53,7 +53,7 @@ class TestSimpleModeDefault:
     def test_default_threads_max_size_to_file_tier(self, tmp_path):
         cfg = CashConfig(cache_dir=str(tmp_path / "c"), max_cache_size=12345)
         backend = _build(cfg)
-        assert backend.backends[1]._max_size_bytes == 12345
+        assert backend.backends[1].evictor.max_size_bytes == 12345
 
     def test_default_threads_compress(self, tmp_path):
         cfg = CashConfig(cache_dir=str(tmp_path / "c"), compress=True)

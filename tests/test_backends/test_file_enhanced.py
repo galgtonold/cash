@@ -50,14 +50,14 @@ class TestFileBackendEnhanced:
         backend = FileBackend(str(tmp_path), max_size_bytes=1500, flush_interval=0)  # No async flush for this test
 
         # Check empty size
-        assert backend._current_size_bytes == 0
+        assert backend.evictor.current_bytes == 0
 
         # Insert items items approx 300-400 bytes each (Pickle overhead is significant)
         large_val = "x" * 400
 
         backend.set("k1", large_val)
         backend._writes.wait_all()  # async write — size only known after it lands
-        s1 = backend._current_size_bytes
+        s1 = backend.evictor.current_bytes
         assert s1 > 400
 
         time.sleep(0.1)
@@ -66,7 +66,7 @@ class TestFileBackendEnhanced:
         # Access k1 to make it fresh.
         #
         # The sleep is load-bearing: without it this get() lands ~0.4ms after
-        # the set("k2") above, and _check_and_evict sorts by last_access with a
+        # the set("k2") above, and FileEvictor.evict sorts by last_access with a
         # STABLE sort. On a clock coarse enough to round both to the same tick
         # — Windows, especially under CI load — k1 and k2 tie, insertion order
         # wins, and eviction takes k1 instead of k2. The test then fails as
@@ -82,7 +82,7 @@ class TestFileBackendEnhanced:
 
         # Insert k3, forcing eviction if sum > 1000
         backend.set("k3", large_val)
-        backend._writes.wait_all()  # let the async write + _check_and_evict settle
+        backend._writes.wait_all()  # let the async write + FileEvictor.evict settle
 
         # Total size without eviction would be s1 + (s2-s1) + ... ~ 3 * size
         # If 3 * size > 1000, eviction happens.
@@ -114,7 +114,7 @@ class TestFileBackendEnhanced:
         b1 = FileBackend(str(tmp_path))
         b1.set("k1", "v1")
         b1.shutdown()  # drain async write — size is only known once it lands
-        size = b1._current_size_bytes
+        size = b1.evictor.current_bytes
 
         assert size > 0
 
@@ -124,8 +124,8 @@ class TestFileBackendEnhanced:
         b2._writes.wait_all()
 
         on_disk = sum(f.stat().st_size for f in tmp_path.iterdir() if f.suffix == ENTRY_SUFFIX)
-        assert b2._current_size_bytes == on_disk
-        assert b2._current_size_bytes > size, "k1's bytes were not counted"
+        assert b2.evictor.current_bytes == on_disk
+        assert b2.evictor.current_bytes > size, "k1's bytes were not counted"
         b2.shutdown()
 
 

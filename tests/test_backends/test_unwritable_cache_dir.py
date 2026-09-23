@@ -41,7 +41,9 @@ import warnings
 import pytest
 
 from cash.backends._writes import PendingWrites, discarded_writes
-from cash.backends.file_backend import _TEMP_NAME_ATTEMPTS, FileBackend, _create_temp_file
+from cash.backends.cache_dir import _TEMP_NAME_ATTEMPTS
+from cash.backends.cache_dir import create_temp_file as _create_temp_file
+from cash.backends.file_backend import FileBackend
 
 # --------------------------------------------------------------------------- #
 # Making a directory unwritable, on either platform                           #

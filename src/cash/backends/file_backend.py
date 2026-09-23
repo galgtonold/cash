@@ -1,18 +1,20 @@
-"""File-based cache backend with value-per-byte eviction and optional compression."""
+"""File-based cache backend: one file per entry, written in the background.
+
+`FileBackend` reads and writes entries. Keeping the directory under its byte
+cap is `file_eviction.FileEvictor`'s job, and the format stamp and the other
+directory-wide files are `cache_dir`'s.
+"""
 
 from __future__ import annotations
 
-import glob
 import gzip
 import hashlib
-import heapq
 import logging
 import os
 import pickle
 import threading
 import time
 import weakref
-from collections import deque
 from collections.abc import Callable
 from typing import Any
 
@@ -20,112 +22,39 @@ from cash.exceptions import CacheBackendError
 from cash.utils import replace_with_retry
 
 from ..diagnostics import warn_diagnostic
-from ..exceptions import CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
+from ..exceptions import CashCacheStoreFailedWarning
 from ..tracking.file_tracker import register_cache_dir, untracked
-from ._base import CacheBackend, MetadataDict, gdsf_value, ttl_expired
+from ._base import CacheBackend, MetadataDict, ttl_expired
 from ._writes import PendingWrites
-from .adaptive_caps import adaptive_disk_cap_for, free_bytes_on_volume, human_bytes
-from .entry_format import (
-    ENTRY_SUFFIX,
-    MAGIC,
-    metadata_span,
-    pack_entry,
-    read_entry,
-    update_metadata_in_place,
+from .cache_dir import (
+    CACHE_FORMAT_VERSION,
+    CacheDirStamp,
+    create_temp_file,
+    recreate_cache_dir,
+    warn_if_unwritable,
+    write_all,
 )
-from .rank_index import RankIndex
+from .entry_format import ENTRY_SUFFIX, metadata_span, pack_entry, read_entry, update_metadata_in_place
+from .file_eviction import FileEvictor
 from .serialization import PickleSerializer, Serializer
 from .versions import VersionIndex, superseded_to_drop
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["FileBackend", "CACHE_FORMAT_VERSION", "recreate_cache_dir"]
 
-# Every live write queue, grouped by the cache directory it writes into.
-#
-# A cache directory IS the cache; two FileBackend instances pointing at one
-# directory are two views of the same store, not two stores. But each carries
-# its OWN PendingWrites, and ``get()`` only ever waited on its own queue -- so a
-# second instance reading a directory the first was still writing saw a
-# half-populated cache and reported clean misses. In the regression that
-# exposed this, only 2-3 of 19 entries had reached disk when the second
-# instance started reading.
-#
-# WeakSet: a backend that goes out of scope must not keep its queue (or itself)
-# alive, and must stop being waited on.
+
+# Every live write queue, grouped by the cache directory it writes into. Two
+# FileBackends over one directory are two views of one store, but each has its
+# own queue; a read waits on all of them (``_wait_for_writes``), or a second
+# instance reading a directory the first is still writing reports clean misses.
+# Weak, so a backend going out of scope is neither kept alive nor waited on.
 _WRITERS_BY_DIR: dict[str, weakref.WeakSet] = {}
 _WRITERS_LOCK = threading.Lock()
 
 
-#: How many names ``_create_temp_file`` will try before giving up. Each attempt
-#: costs one ``os.open``; the only reason a fresh 96-bit random name collides is
-#: a name we just created, so more than a handful means something is wrong that
-#: retrying cannot fix.
-_TEMP_NAME_ATTEMPTS = 8
-
-
-def _create_temp_file(
-    directory: str,
-    prefix: str = ".tmp-",
-    suffix: str = ".part",
-) -> tuple[int, str]:
-    """Create a new file in *directory* and return ``(fd, path)``.
-
-    This is ``tempfile.mkstemp`` minus one behaviour that turns an unwritable
-    cache directory into a hung process. CPython's ``_mkstemp_inner`` SWALLOWS
-    ``PermissionError`` and tries the next name -- a deliberate workaround for a
-    Windows directory-deletion race -- guarded by ``os.access(dir, W_OK)``,
-    which on Windows reports only the read-only attribute and knows nothing
-    about ACLs. Against a directory denied by ACL (a read-only mount, a service
-    account without write permission, a container volume) the guard says
-    "writable", every attempt raises, and the loop runs ``TMP_MAX`` = 10,000
-    times per write. Measured: a job whose work took 24s was still running at
-    420s, in a background writer thread the interpreter then waits on at exit --
-    the work done and printed, the process never returning. Round-15 gate, 5/5.
-
-    A cache write is best-effort by design in this codebase: a failure warns
-    (``CashCacheStoreFailedWarning``) and the value the user already computed is
-    returned. Retrying a permission error thousands of times cannot reach that
-    contract, so this does not retry it at all -- ``PermissionError`` propagates
-    on the first attempt and takes the ordinary failed-write path.
-
-    ``FileExistsError`` IS retried, because that is the one failure another name
-    can fix, and bounded because nothing else should be producing our names.
-    ``os.urandom`` rather than the ``random`` module: cash watches the process
-    RNG to decide whether a cached statement drew from it, and drawing from it
-    here to name a file would be cash poisoning its own instrument.
-
-    Six bytes, so the name is the same LENGTH as the one ``mkstemp`` produced
-    (48 bits against its ~47.6). Longer names would be free entropy nobody needs
-    and would push a deep cache directory over Windows' 260-character path limit
-    that used to fit.
-    """
-    flags = os.O_CREAT | os.O_EXCL | os.O_RDWR | getattr(os, "O_BINARY", 0)
-    last: OSError | None = None
-    for _ in range(_TEMP_NAME_ATTEMPTS):
-        candidate = os.path.join(directory, f"{prefix}{os.urandom(6).hex()}{suffix}")
-        try:
-            return os.open(candidate, flags, 0o600), candidate
-        except FileExistsError as exc:
-            last = exc
-            continue
-    raise FileExistsError(
-        f"could not find an unused temporary name in {directory!r} after {_TEMP_NAME_ATTEMPTS} attempts"
-    ) from last
-
-
-def _write_all(fd: int, data: bytes) -> None:
-    """``os.write`` until every byte is out; it may write fewer than asked."""
-    view = memoryview(data)
-    while view:
-        view = view[os.write(fd, view) :]
-
-
 def _writer_scope(cache_dir: str) -> str:
-    """Normalized identity of a cache directory.
-
-    ``realpath`` so ``/var/...`` and ``/private/var/...`` (the macOS symlink)
-    or a relative path and its absolute form resolve to one scope.
-    """
+    """Normalized identity of a cache directory (symlinks and relative paths resolved)."""
     try:
         return os.path.realpath(cache_dir)
     except OSError:
@@ -136,10 +65,7 @@ def _register_writer(cache_dir: str, writes: PendingWrites) -> str:
     """Register *writes* under *cache_dir*'s scope, and return the scope."""
     scope = _writer_scope(cache_dir)
     # Tell the file tracker this directory is cash's own storage, so its entry
-    # files never become dependencies of the user's code. The tracker's other
-    # guard matches the NAME `.cash` or `_global_cash`; any other cache_dir
-    # needs telling. Imported here rather than at module scope: the backends
-    # must stay importable without the notebook layer.
+    # files never become dependencies of the user's code whatever it is called.
     try:
         register_cache_dir(cache_dir)
     except Exception:  # noqa: BLE001 - tracking is best-effort, storage is not
@@ -150,8 +76,7 @@ def _register_writer(cache_dir: str, writes: PendingWrites) -> str:
             bucket = weakref.WeakSet()
             _WRITERS_BY_DIR[scope] = bucket
         bucket.add(writes)
-        # Opportunistically drop scopes whose backends have all been collected,
-        # so a long test session doesn't accumulate an entry per temp dir.
+        # Drop scopes whose backends have all been collected.
         if len(_WRITERS_BY_DIR) > 64:
             for dead in [s for s, b in _WRITERS_BY_DIR.items() if not b]:
                 del _WRITERS_BY_DIR[dead]
@@ -161,98 +86,28 @@ def _register_writer(cache_dir: str, writes: PendingWrites) -> str:
 def _sibling_writers(scope: str, own: PendingWrites) -> list[PendingWrites]:
     """Live write queues over the directory *scope* names, other than *own*.
 
-    Takes the scope ``_register_writer`` returned, not the directory: resolving
-    it is a ``realpath``, ~60us on Windows, and every read of the backend asks
-    (round 23: 2.7% of a loop over a thousand files)."""
+    Takes the scope `_register_writer` returned: resolving the directory again
+    is a ``realpath`` on every read."""
     with _WRITERS_LOCK:
         bucket = _WRITERS_BY_DIR.get(scope)
         return [w for w in bucket if w is not own] if bucket else []
 
 
-__all__ = ["FileBackend", "CACHE_FORMAT_VERSION"]
-
-# Live entries. One file each; see ``entry_format``.
-_ENTRY_GLOB = f"*{ENTRY_SUFFIX}"
-
-# Version of the on-disk cache format (the ``*.entry`` layout described in
-# ``entry_format``). Bump this **whenever a change makes caches written by an
-# older build undecodable or liable to be misread** by a newer one. On init,
-# FileBackend compares this against the stamp it finds in the cache dir and
-# auto-invalidates a mismatched cache rather than silently decoding a stale
-# layout, so nobody has to remember to clear the cache after upgrading.
-CACHE_FORMAT_VERSION = 2
-
-# Filename of the per-directory format stamp. Has no entry extension so it
-# is invisible to entry globs (listing, sizing, clearing).
-_VERSION_FILENAME = "CACHE_VERSION"
-_GITIGNORE_TEXT = "# Created by cash: this directory is a cache.\n*\n"
-
-
 def _untracked() -> Any:
-    """cash's own scan of its cache directory, kept out of every dependency.
+    """cash's own I/O on its cache directory, kept out of every dependency.
 
-    A nested cached call's first store scans the directory (its size, what to
-    evict) while the OUTER call's file tracker is live, and the directory
-    itself became the outer entry's dependency: in each worker of a process
-    pool, the first outer call recomputed on the next run, "file changed:
-    <cache dir> (size changed)" (round 19). The storage filters cannot tell a
-    listing of the cache directory from a user's listing of a directory that
-    `cache_dir` may also be, so the scan says so where it happens.
+    A nested cached call's store scans the directory while the OUTER call's
+    file tracker is live, and the file filters cannot tell that listing from a
+    user's listing of a directory ``cache_dir`` may also be.
     """
-
     return untracked()
 
 
-def _glob_untracked(pattern: str) -> list[str]:
-    with _untracked():
-        return glob.glob(pattern)
-
-
-def recreate_cache_dir(cache_dir: str) -> bool:
-    """Create *cache_dir* as the file backend would, if it is missing.
-
-    Anything that writes a sidecar into the cache directory -- the stored-key
-    record, the notebook's verdict stores -- re-created a directory `cash
-    clear` had just removed with a bare ``os.makedirs``, and the entry written
-    next found it there: no ``.gitignore`` and no format stamp, 1 run in 3-6
-    after a clear during a write (round 19). Returns whether it created it.
-    Raises what ``os.makedirs`` raises.
-    """
-    if os.path.isdir(cache_dir):
-        return False
-    os.makedirs(cache_dir, exist_ok=True)
-    for name, text in ((".gitignore", _GITIGNORE_TEXT), (_VERSION_FILENAME, str(CACHE_FORMAT_VERSION))):
-        path = os.path.join(cache_dir, name)
-        try:
-            if not os.path.exists(path):
-                with open(path, "w", encoding="utf-8") as fh:
-                    fh.write(text)
-        except OSError:
-            logger.debug("Could not write %s", path, exc_info=True)
-    return True
-
-
-#: What reading a cache entry's metadata can raise, and why every one of them
-#: means the same thing: this entry is not readable HERE, so treat it as absent.
-#:
-#: ``pickle.load`` fails for far more reasons than a corrupt file. The one that
-#: bit in practice was ``ModuleNotFoundError`` -- an entry written by an
-#: environment that had numpy, read by one that does not, because a metadata
-#: field held a ``numpy.int64`` instead of a plain ``int``. A narrow
-#: ``(OSError, pickle.PickleError)`` guard let that escape out of ``%cash_on``
-#: and killed the user's cell.
-#:
-#: ``get()`` (the VALUE read path) already encodes this policy, listing
-#: AttributeError/ImportError/EOFError with the comment "the entry is
-#: unrestorable here - report it absent so callers recompute". The metadata
-#: paths simply never learned it. This is that lesson, applied consistently.
-#:
-#: Deliberately ``Exception`` rather than a tuple of the known ones. These
-#: sites SCAN every entry in the cache, so one poisoned file must never take
-#: the process down whatever the cause -- and metadata can now legitimately
-#: contain user objects (a callee's captured globals), whose ``__setstate__``
-#: can raise anything at all. A skipped entry costs a recompute; an escaped
-#: exception costs the session.
+#: What reading an entry's metadata can raise, all meaning "not readable here,
+#: treat as absent". ``Exception`` on purpose: these sites scan every entry, and
+#: unpickling can raise anything -- a missing module for a numpy scalar written
+#: by another environment, a user object's ``__setstate__``. A skipped entry
+#: costs a recompute; an escaped exception costs the session.
 UNREADABLE_ENTRY = Exception
 
 
@@ -291,101 +146,63 @@ class FileBackend(CacheBackend):
                 backend directly, so an explicit cap (or an explicit ``None``,
                 meaning unlimited) is never second-guessed.
         """
-        # Resolve to absolute path at init time so os.chdir() won't break file paths
+        # Absolute, so a later os.chdir() cannot move the cache.
         self.cache_dir = os.path.abspath(cache_dir)
         self.compress = compress
-        self._max_size_bytes = max_size_bytes
-        # True when max_size_bytes came from the adaptive policy rather than
-        # the user. Only then may it be re-derived once the cache's own size
-        # is known -- an explicit cap is the user's number and stays put.
-        self._adaptive_cap = adaptive_cap
-        # When the adaptive cap was last sized from the volume. A notebook
-        # kernel outlives the free-space reading it opened with (r26s4 ran two
-        # days), so the cap is re-derived as the volume moves -- throttled,
-        # because it is re-derived on the write path. 0.0 means "never".
-        self._cap_derived_at = 0.0
         self._default_ttl = default_ttl
-        self._current_size_bytes = 0
-        # Evict-after-write detection: a monotonic write counter and
-        # the seq at which each key was last written, so eviction can tell when
-        # it is discarding something written only a couple of ops ago — the
-        # signature of a cache too small to retain the working set. Warned
-        # about once per session (per instance = per Cash session).
-        self._write_seq = 0
-        self._write_seq_by_key: dict[str, int] = {}
-        self._warned_evict_after_write = False
+        #: Keys read since their metadata was last written back.
         self._dirty_metadata: set[str] = set()
-        # key -> when its access stamp was last written, for the periodic
-        # flusher's rate limit.
+        #: key -> when its access stamp was last written, for the flusher's rate limit.
         self._access_flushed: dict[str, float] = {}
-        # Metadata for the keys THIS process has touched. Not every entry on
-        # disk: eviction used to need that and no longer does, so this stays
-        # bounded by the session's working set rather than the directory.
+        #: Metadata for the keys this process has touched, and the way back from
+        #: an entry's path to its key (a filename is a SHA-256 of the key).
         self._metadata_cache: dict[str, dict] = {}
-        # The way back from a filename to its key, for the entries above. A
-        # filename is a SHA-256 of the key, so eviction -- which ranks by
-        # walking the directory -- cannot recover the key any other way.
         self._paths: dict[str, str] = {}
-        # Eviction candidates, least valuable per byte first, consumed across
-        # passes and rebuilt when empty: see _rebuild_evict_queue. Items are
-        # (path, size, ranked_at); each one's GDSF priority is in _rank_h.
-        self._evict_queue: deque[tuple[str, int, float]] = deque()
-        self._rank_h: dict[str, float] = {}
-        # Entries this process wrote AFTER the ranking was taken, as a heap
-        # of (priority, seq, path, size, ranked_at). Under LRU the newest
-        # entry was never a candidate; under GDSF a cheap 4 MB value can be
-        # the least valuable thing in the cache the moment it lands.
-        self._evict_fresh: list[tuple[float, int, str, int, float]] = []
-        self._ranked = False
-        # GreedyDual's clock L, and each touched key's L as of its last write
-        # (None: read since, re-based at next use). The clock is resumed from
-        # the rank index on first need, so a new process does not restart it
-        # at zero and rank everything it writes below everything on disk.
-        self._gdsf_clock = 0.0
-        self._clock_loaded = False
-        self._gdsf_base: dict[str, float | None] = {}
-        self._rank_index = RankIndex(self.cache_dir, _untracked)
-        # Each statement's versions, pruned as they are written (versions.py).
-        # A key this process has read is in use and never pruned.
+        #: Each statement's versions, pruned as they are written (versions.py).
+        #: A key this process has read is in use and never pruned.
         self._versions = VersionIndex(self.cache_dir, _untracked)
         self._read_keys: set[str] = set()
-        # Whether _current_size_bytes is an absolute on-disk total (True) or
-        # only this process's running delta (False). See _ensure_size_scanned.
-        self._size_scanned = False
         self._lock = threading.RLock()
         self._flush_interval = flush_interval
         self._stop_event = threading.Event()
 
-        # Per-backend async writes: serialization happens on the calling
-        # thread, the actual disk I/O runs in this executor so a slow
-        # write doesn't block cell execution.
+        # Values are serialized on the caller's thread; the disk I/O runs here.
         self._writes = PendingWrites()
         self._writer_scope = _register_writer(self.cache_dir, self._writes)
+        self.stamp = CacheDirStamp(self.cache_dir, _untracked)
+        self.evictor = FileEvictor(
+            self.cache_dir,
+            max_size_bytes,
+            adaptive_cap,
+            metadata=self._metadata_cache,
+            paths=self._paths,
+            dirty=self._dirty_metadata,
+            writes=self._writes,
+            lock=self._lock,
+            untracked=_untracked,
+        )
 
-        # Lazy initialization: defer directory creation, stat scanning,
-        # and background thread to first actual use.
+        # Directory creation, the stamp check and the flusher wait for first use.
         self._initialized = False
         self._init_lock = threading.Lock()
         #: Set when the cache directory turned out to be unusable. Every public
         #: operation then answers as an empty cache would: a miss, a no-op write.
         self._unusable = False
-        #: The format stamp this process last wrote, and how many it has
-        #: written: a process that started cold saw no stamp, then wrote one,
-        #: and without this could not tell a later clear from "still new"
-        #: (`TieredBackend._drop_ram_if_cleared`).
-        self.written_stamp: tuple | None = None
-        self.stamp_writes = 0
+
+    @property
+    def written_stamp(self) -> tuple | None:  # type: ignore[override]
+        return self.stamp.written
+
+    @property
+    def stamp_writes(self) -> int:  # type: ignore[override]
+        return self.stamp.writes
 
     def _ensure_initialized(self) -> None:
-        """Lazily create cache directory, check the format stamp, start the flusher.
+        """Create the directory, check its format stamp and start the flusher,
+        once, on the first cache operation.
 
-        Thread-safe via double-checked locking so this only happens once, on
-        the first real cache operation.
-
-        Deliberately O(1) in the number of entries. This runs on the CALLER's
-        thread -- the first ``get`` of the session waits for it -- so nothing
-        that walks the directory belongs here. The byte total that used to be
-        computed at this point is now deferred to ``_ensure_size_scanned``.
+        O(1) in the number of entries: it runs on the caller's thread, so
+        nothing that walks the directory belongs here.
         """
         if self._initialized:
             return
@@ -396,23 +213,16 @@ class FileBackend(CacheBackend):
                 created = not os.path.isdir(self.cache_dir)
                 os.makedirs(self.cache_dir, exist_ok=True)
                 if created:
-                    self._ignore_in_git()
+                    self.stamp.ignore_in_git()
             except OSError as exc:
-                # The directory cannot even be CREATED: a read-only volume, a
-                # drive that did not mount, a path that is a file, a locked-down
-                # host. This used to raise straight out of ``get()`` and kill
-                # the caller's program before its own work ran -- exit 1, no
-                # result, from a component whose entire contract is
-                # best-effort. Measured on three shapes, 3/3: "cash cannot
-                # cache" became "your job does not run".
-                #
-                # So the tier turns itself off instead, loudly, and the process
-                # carries on computing uncached. In a tiered stack the RAM tier
-                # is unaffected, so an in-process repeat still hits.
+                # A directory that cannot even be created (read-only volume, a
+                # path that is a file) turns this tier off, loudly, instead of
+                # failing the caller's program: caching is best effort, and in
+                # a tiered stack the RAM tier still works.
                 self._disable(exc)
                 return
-            self._check_format_version()
-            self._warn_if_unwritable()
+            self.stamp.check()
+            warn_if_unwritable(self.cache_dir)
             if self._flush_interval > 0:
                 self._flusher_thread = threading.Thread(
                     target=self._flush_periodically,
@@ -441,272 +251,10 @@ class FileBackend(CacheBackend):
         except Exception:  # noqa: BLE001 - a diagnostic must not become the failure
             logger.warning("Cash disabled its file tier at %s: %s", self.cache_dir, exc)
 
-    def _warn_if_unwritable(self) -> None:
-        """Say at once, and at the path, if this directory cannot be written.
-
-        Every write here is asynchronous and best-effort, so an unwritable cache
-        directory otherwise produces *no symptom at all*: every call recomputes,
-        every run is slow, and nothing anywhere names the directory. A tester hit
-        this as an eleven-minute mystery, and the operator's version is worse --
-        a nightly job that never gets faster and never says why.
-
-        One create-and-delete at init, on the caller's first cache operation.
-        Cheap enough not to think about (~200us) next to the ``scandir`` this
-        object already does, and it answers the question for a directory that is
-        merely READ-only too -- one already stamped with the current format
-        writes nothing else at startup, so nothing else would find out.
-        """
-        try:
-            fd, probe = _create_temp_file(self.cache_dir, prefix=".probe-", suffix=".tmp")
-        except OSError as exc:
-            warn_diagnostic(
-                CashCacheStoreFailedWarning,
-                "CACHE-DIR-UNWRITABLE",
-                f"cash cannot write to its cache directory {self.cache_dir} "
-                f"({type(exc).__name__}: {exc}). Nothing will be cached to disk "
-                f"this run, so every call recomputes.",
-                "point cash somewhere writable -- cash.configure(cache_dir=...), "
-                "CASH_CACHE_DIR, or the cache_dir= argument -- or grant this "
-                "user write permission on that path.",
-            )
-            return
-        os.close(fd)
-        try:
-            os.remove(probe)
-        except OSError:
-            logger.debug("Could not remove writability probe %s", probe, exc_info=True)
-
-    def _check_format_version(self) -> None:
-        """Enforce on-disk cache-format compatibility.
-
-        Compares the format stamp in the cache directory against
-        :data:`CACHE_FORMAT_VERSION`. If they differ — including a cache
-        written by a pre-stamp build (no marker) that still holds entries —
-        the existing entry files are removed so a stale layout can never be
-        decoded as if it were current. The marker is then
-        (re)written with the current version.
-
-        A fresh or empty directory is simply stamped: no entries means there
-        is nothing incompatible to clear. Runs under ``_init_lock`` (held by
-        the caller) and never calls back into ``clear()`` to avoid recursing
-        through ``_ensure_initialized``.
-        """
-        version_path = os.path.join(self.cache_dir, _VERSION_FILENAME)
-
-        stored: int | None = None
-        if os.path.exists(version_path):
-            try:
-                with open(version_path, encoding="utf-8") as fh:
-                    stored = int(fh.read().strip())
-            except (OSError, ValueError):
-                stored = None  # unreadable/corrupt marker → treat as mismatch
-
-        if stored != CACHE_FORMAT_VERSION:
-            entry_files = _glob_untracked(os.path.join(self.cache_dir, _ENTRY_GLOB))
-            if stored is None and self._entries_are_current_format(entry_files):
-                # Unstamped, but the entries say what they are. A directory
-                # cleared under a live process and refilled by it is exactly
-                # this; so is one whose stamp was deleted by hand. Keep them.
-                entry_files = []
-            if entry_files:
-                logger.warning(
-                    "Cash cache at %s was written in format v%s but this build "
-                    "expects v%s; clearing %d stale file(s). Cache formats are not "
-                    "compatible across this change.",
-                    self.cache_dir,
-                    "<unstamped>" if stored is None else stored,
-                    CACHE_FORMAT_VERSION,
-                    len(entry_files),
-                )
-                for f in entry_files:
-                    try:
-                        os.remove(f)
-                    except OSError:
-                        logger.debug(
-                            "Could not remove stale cache file %s during format migration",
-                            f,
-                            exc_info=True,
-                        )
-            self._stamp_format_version()
-
-    #: How many entries `_entries_are_current_format` reads. A sample, because
-    #: init must stay O(1)-ish in the number of entries; an old-format cache
-    #: fails on its first entry, so the sample is not what keeps it out.
-    _FORMAT_SAMPLE = 16
-
-    @classmethod
-    def _entries_are_current_format(cls, entry_files: list[str]) -> bool:
-        """Do these unstamped entries carry the current format's magic?
-
-        Relies on a format change also changing ``entry_format.MAGIC`` -- bump
-        both together.
-        """
-        if not entry_files:
-            return False
-        for path in entry_files[: cls._FORMAT_SAMPLE]:
-            try:
-                with open(path, "rb") as fh:
-                    if fh.read(len(MAGIC)) != MAGIC:
-                        return False
-            except OSError:
-                return False
-        return True
-
     def generation_token(self) -> tuple | None:
-        """What identifies this directory's current contents as a whole.
-
-        The format stamp's identity: `cash clear --all` removes it with the
-        directory (the next write stamps a new one), and a clear of some
-        entries rewrites it. A process holding results in RAM compares this to
-        notice the cache was cleared under it. None when there is no stamp.
-        """
-        try:
-            st = os.stat(os.path.join(self.cache_dir, _VERSION_FILENAME))
-        except OSError:
-            return None
-        return (st.st_mtime_ns, st.st_size, st.st_ino)
-
-    def _stamp_format_version(self) -> None:
-        """Write the current format stamp into the cache directory."""
-        version_path = os.path.join(self.cache_dir, _VERSION_FILENAME)
-        try:
-            with open(version_path, "w", encoding="utf-8") as fh:
-                fh.write(str(CACHE_FORMAT_VERSION))
-        except OSError:
-            logger.debug(
-                "Could not write cache format marker at %s",
-                version_path,
-                exc_info=True,
-            )
-            return
-        self.written_stamp = self.generation_token()
-        self.stamp_writes += 1
-
-    def _scan_size_bytes(self) -> int:
-        """Total the directory's bytes with ``scandir`` + ``stat``.
-
-        This is the one operation whose cost still scales with the number of
-        entries: about 3.5us each, so ~70ms at 20k, ~0.35s at 100k and ~3.5s
-        at 1M. It reads no file *contents* -- an earlier version unpickled
-        every entry's metadata here, which was 30x slower again (2037ms vs
-        65ms at 20k) and built a metadata cache nothing had asked for.
-        """
-        total_size = 0
-        try:
-            with _untracked(), os.scandir(self.cache_dir) as entries:
-                for entry in entries:
-                    if not entry.name.endswith(ENTRY_SUFFIX):
-                        continue
-                    try:
-                        total_size += entry.stat().st_size
-                    except OSError:
-                        # Vanished between the listing and the stat, or
-                        # unreadable. One entry missing from the total is a
-                        # slightly-late eviction, not a wrong answer.
-                        continue
-        except OSError:
-            logger.debug("Could not scan %s for size", self.cache_dir, exc_info=True)
-        return total_size
-
-    def _ensure_size_scanned(self) -> None:
-        """Establish the on-disk byte total, once, for the size cap.
-
-        ``_check_and_evict`` is the only thing that ever reads that total, so
-        only a process that WRITES needs it. It used to be computed at open
-        time, by every process, on the calling thread of its first cache
-        operation -- so a read-only run (the kernel-restart replay that cash
-        exists to make fast) paid a full directory walk for a number it never
-        consulted: ~0.35s at 100k entries, ~3.5s at 1M, before the first cell
-        could return.
-
-        Deferring it here moves that cost twice over: it is paid only when
-        something is actually written, and it is paid on the ``PendingWrites``
-        worker rather than the caller, so no cell blocks on it either way.
-
-        The walk runs OUTSIDE ``_lock`` -- holding that across seconds of stat
-        calls would stall every concurrent ``get``. The result therefore
-        supersedes the running delta rather than adding to it: by the time
-        ``_check_and_evict`` calls this the write that triggered it is already
-        on disk, so the directory is the truth and whatever this process had
-        counted so far is a subset of it. A ``delete`` landing mid-walk may be
-        counted as still present, leaving the total high by that entry until
-        the next one -- the same slightly-early-eviction direction the
-        per-entry ``stat`` failure above already accepts.
-        """
-        if self._size_scanned:
-            return
-        scanned = self._scan_size_bytes()
-        with self._lock:
-            if self._size_scanned:
-                return
-            self._current_size_bytes = scanned
-            self._size_scanned = True
-
-        # The footprint is now known, which is what the cap the caller was
-        # constructed with was missing. Size it.
-        self._refresh_adaptive_cap(force=True)
-
-    #: Seconds between re-readings of the volume's free space for the adaptive
-    #: cap. `shutil.disk_usage` is ~15us on a local disk but a network or
-    #: cloud-synced cache directory is a different order, and this sits on the
-    #: write path -- so a long session pays this once a minute, not once a
-    #: write.
-    _CAP_REFRESH_INTERVAL = 60.0
-
-    def _refresh_adaptive_cap(self, force: bool = False) -> None:
-        """Re-size an adaptive cap from the volume as it is NOW.
-
-        The cap used to be derived once, on the first write of the process,
-        and never again. That is wrong for the process cash mostly runs in: a
-        notebook kernel. Round 26's r26s4 opened a kernel when the machine had
-        ~118 GB free -- a 29.5 GiB cap -- and was still enforcing that number
-        two days later with 48 GB free, holding 21.19 GiB. Nothing was over
-        ITS cap, so nothing evicted; the restart the next morning re-derived
-        17.3 GiB and dropped 4.75 GiB in one go. Tracking the volume spreads
-        that over the session instead of saving it up for a restart.
-
-        `adaptive_disk_cap_for` sizes from free space PLUS the cache's own
-        bytes, because free space excludes what the cache has already written
-        -- without that the cap shrinks as the cache fills, and the cache is
-        over a cap its own contents caused. That part is unchanged; only how
-        often the volume is consulted is new.
-
-        Costs one `disk_usage` call, throttled to `_CAP_REFRESH_INTERVAL`:
-        `_current_size_bytes` is maintained incrementally after the initial
-        scan, so no directory walk is involved. *force* is for the first
-        derivation, which must not be skipped by the throttle.
-
-        An explicit `max_cache_size` is the user's number and is never touched.
-        """
-        if not self._adaptive_cap:
-            return
-        now = time.monotonic()
-        if not force and now - self._cap_derived_at < self._CAP_REFRESH_INTERVAL:
-            return
-
-        self._cap_derived_at = now
-        self._max_size_bytes = adaptive_disk_cap_for(
-            self.cache_dir,
-            self._current_size_bytes,
-        )
-
-    def _ignore_in_git(self) -> None:
-        """Keep a cache directory cash just created out of version control.
-
-        `.cash` sits next to the project, so `git add .` committed it: 66 MB
-        in one round-18 tester's repository. A `.gitignore` of `*` inside it
-        ignores the directory from within, the way `.pytest_cache` does, with
-        no edit to the project's own `.gitignore`. Only for a directory cash
-        created -- never in a directory that already existed, which could be
-        anything, a project root included -- and never over an existing file.
-        """
-        path = os.path.join(self.cache_dir, ".gitignore")
-        try:
-            if not os.path.exists(path):
-                with open(path, "w", encoding="utf-8") as fh:
-                    fh.write(_GITIGNORE_TEXT)
-        except OSError:
-            logger.debug("Could not write %s", path, exc_info=True)
+        """The format stamp's identity: it moves when the directory is cleared
+        under this process (see `CacheDirStamp`). None when there is no stamp."""
+        return self.stamp.token()
 
     def _flush_periodically(self) -> None:
         while not self._stop_event.is_set():
@@ -715,33 +263,23 @@ class FileBackend(CacheBackend):
             self._flush_metadata(periodic=True)
             # Buffered rank records reach the file within one interval, so
             # another process ranking this directory sees them.
-            self._rank_index.flush()
+            self.evictor.rank_index.flush()
 
     #: Seconds between persisted access stamps for one entry, while the
     #: process runs; everything outstanding is flushed at shutdown.
     _ACCESS_FLUSH_MIN_INTERVAL = 600.0
 
     def _flush_metadata(self, periodic: bool = False) -> None:
-        """Write dirty metadata back into each entry, in place.
+        """Write the access stamps of recently read entries back, in place.
 
-        Every ``get`` bumps ``last_access`` and ``access_count`` and marks the
-        key dirty, so this runs over recently-read entries every
-        ``flush_interval`` seconds. With metadata and payload sharing a file,
-        rewriting the whole entry to record an access would mean rewriting the
-        payload: a session that reads a 100MB frame would rewrite 100MB every
-        few seconds. ``update_metadata_in_place`` writes only the header and
-        the metadata region, which is what the reserved slack is for.
-
-        If metadata has outgrown that slack the update is skipped rather than
-        forced. What is lost is LRU precision for one entry until it is next
-        written -- never a value, and never correctness.
+        ``update_metadata_in_place`` rewrites only the header and metadata
+        region, so recording a read never rewrites the payload. Metadata that
+        outgrew its reserved slack is skipped: what is lost is ranking
+        precision for one entry, never a value.
 
         *periodic* (the flusher thread) writes an entry's stamp at most once
-        per `_ACCESS_FLUSH_MIN_INTERVAL`: a hot entry was modified every few
-        seconds for as long as it kept being read, and where the cache sits in
-        a synced folder, each modification re-uploads the whole file (round
-        18: an 89 MB entry rewritten after every hit). The rest wait for the
-        next due flush or for shutdown, which flushes everything.
+        per `_ACCESS_FLUSH_MIN_INTERVAL`: each modification of a file in a
+        synced folder re-uploads the whole file. Shutdown flushes everything.
         """
         now = time.time()
         with self._lock:
@@ -758,12 +296,11 @@ class FileBackend(CacheBackend):
                 keys_to_flush = list(self._dirty_metadata)
                 self._dirty_metadata.clear()
 
-        # A read raises an entry's priority, so each flushed access is also a
-        # rank-index record -- which is how an entry written before the index
-        # existed, and still in use, gets ranked by what it is worth.
-        ranked = bool(self._max_size_bytes)
+        # A read raises an entry's priority, so a flushed access is also a
+        # rank-index record; that is how an old entry still in use gets ranked.
+        ranked = self.evictor.capped
         if ranked and keys_to_flush:
-            self._ensure_clock()
+            self.evictor.ensure_clock()
         records: list[tuple[str, float]] = []
         for key in keys_to_flush:
             try:
@@ -778,14 +315,10 @@ class FileBackend(CacheBackend):
                 if meta and meta.get("version_slot"):
                     self._versions.touch(key, meta.get("last_access", now))
                 if meta and ranked:
-                    with self._lock:
-                        base = self._gdsf_base.get(key)
-                        if base is None:
-                            base = self._gdsf_base[key] = self._gdsf_clock
-                    records.append((self._stem(path), self._priority(meta, os.path.getsize(path), base)))
+                    records.append(self.evictor.access_record(key, meta, path))
             except (OSError, pickle.PickleError) as exc:
                 logger.debug("Failed to flush metadata for key %r: %s", key, exc)
-        self._rank_index.append(records)
+        self.evictor.rank_index.append(records)
 
     def _remember(self, key: str, metadata: dict) -> None:
         """Cache one entry's metadata, and the way back from its filename.
@@ -909,10 +442,7 @@ class FileBackend(CacheBackend):
             with self._lock:
                 self._dirty_metadata.add(key)
                 self._read_keys.add(key)
-                # Re-based at the clock of its next use (a ranking or the
-                # access flush), so a read never loads the rank index on the
-                # caller's thread.
-                self._gdsf_base[key] = None
+            self.evictor.note_read(key)
 
             if metadata.get("compressed", False):
                 try:
@@ -928,18 +458,10 @@ class FileBackend(CacheBackend):
             metadata.setdefault("source", self.source_label)
             return metadata, value
         except (OSError, pickle.PickleError, ValueError, AttributeError, ImportError, EOFError) as exc:
-            # AttributeError/ImportError: the pickled value references a
-            # binding that doesn't exist in this process (e.g. a __main__
-            # class from a previous kernel session). The entry is
-            # unrestorable here - report it absent so callers recompute
-            # instead of crashing the user's cell.
-            #
-            # EOFError: a truncated file. ``_atomic_write`` now prevents cash
-            # from producing one, but a cache directory can still hold a
-            # partial file written by an older version, a killed process, or a
-            # full disk. EOFError subclasses Exception directly - not OSError,
-            # not ValueError - so it used to escape this handler and crash the
-            # caller with "Ran out of input" instead of degrading to a miss.
+            # Unrestorable here, so absent: AttributeError/ImportError for a
+            # value naming a binding this process lacks (a __main__ class from
+            # an earlier kernel), EOFError for a file truncated by a killed
+            # process or a full disk.
             logger.debug("Cache get failed for key %r: %s", key, exc)
             return None, None
 
@@ -970,49 +492,27 @@ class FileBackend(CacheBackend):
 
     @staticmethod
     def _replace_with_retry(tmp_path: str, path: str) -> None:
-        """Delegates to :func:`cash.utils.replace_with_retry`.
-
-        Kept as a method because this backend's call site reads better for it,
-        and because the shared helper now also serves
-        ``notebook.loop_split.LoopSplitStore`` -- which had the same
-        tmp-then-replace shape and lost a verdict silently when the
-        destination was held open.
-        """
+        """`cash.utils.replace_with_retry`, as a method so tests can stub it."""
         replace_with_retry(tmp_path, path)
 
     def _atomic_write(self, path: str, payload: bytes) -> None:
         """Write *payload* to *path* so no reader can observe a partial file.
 
-        A plain ``open(path, 'wb')`` makes the file visible the instant it is
-        created — while it still holds zero or half its bytes. Any concurrent
-        reader (a second Cash instance, or another process sharing the cache
-        directory) can pass ``get()``'s existence check and then unpickle a
-        truncated file. That is what surfaced on the macOS CI runners as
-        ``EOFError: Ran out of input``.
-
-        Writing to a temp file in the SAME directory and renaming makes the
-        entry appear all at once: a reader sees either the previous contents or
-        the complete new ones, never a torn mixture. ``os.replace`` is atomic on
-        POSIX and on Windows, and same-directory keeps it a rename rather than a
-        cross-filesystem copy.
-
-        Takes no compression flag. Compression applies to the payload region
-        of an entry, not to the file: the header and metadata must stay
-        readable without inflating anything, or a metadata read would have to
-        decompress the value it exists to avoid touching.
+        A temp file in the same directory, renamed into place: a concurrent
+        reader sees the previous contents or the complete new ones, never a
+        truncated file. Compression, if any, is already in *payload*'s value
+        region; the header and metadata stay readable without inflating it.
         """
         directory = os.path.dirname(path) or "."
         # A temp file in the target directory; the leading dot keeps the
         # partial out of the ``*.entry`` glob the backend scans.
-        fd, tmp_path = _create_temp_file(directory)
+        fd, tmp_path = create_temp_file(directory)
         try:
-            # Through the descriptor it was created with, as
-            # `_write_new_in_place` does. Closing it and reopening the name
-            # went through the file tracker's patched ``open`` and opened a
-            # file created a moment before -- on Windows the slowest open there
-            # is, ~2 ms against 0.25 ms for the whole write (round 23).
+            # Through the descriptor it was created with: reopening the name
+            # goes through the file tracker's patched ``open``, and on Windows
+            # opening a file created a moment before is slow.
             try:
-                _write_all(fd, payload)
+                write_all(fd, payload)
             finally:
                 os.close(fd)
             self._replace_with_retry(tmp_path, path)
@@ -1026,33 +526,17 @@ class FileBackend(CacheBackend):
     def _write_new_in_place(self, path: str, blob: bytes) -> bool:
         """Write a BRAND NEW entry directly, header last. False if one exists.
 
-        Writing through a temp file and renaming costs ~470us of syscalls per
-        entry against ~174us writing straight to the destination -- create the
-        temp (123us), write it (133us), rename it (156us) -- and that lands on
-        the user's clock, not on a background thread: ``%cash_on`` drains every
-        write queue at the end of every cell, so a cell caching 200 entries
-        waits ~116ms for them. Roughly 470us of each 578us is this protocol.
+        Temp-and-rename costs about three times a direct write, and the
+        notebook waits for its writes at the end of every cell. What it buys --
+        the previous entry untouched until the swap -- means nothing for a key
+        that does not exist yet. ``O_EXCL`` makes "does not exist yet" true: two
+        processes racing to create one entry cannot both take this path, and
+        the loser falls back to the safe one.
 
-        What the temp-and-rename buys is a single guarantee: **the destination
-        is untouched until the swap**, so a write that dies halfway leaves
-        whatever was cached before exactly where it was. A key that does not
-        exist yet has nothing to preserve, so the guarantee is vacuous for it
-        and the cost is pure. ``O_EXCL`` is what makes "does not exist yet"
-        true rather than hoped-for: it tests and claims the name in one
-        syscall, so two processes racing to create the same new entry cannot
-        both take this path -- the loser gets ``FileExistsError`` and falls
-        back to the safe one.
-
-        The header goes LAST. Seeking past it leaves those bytes zero, so the
-        magic does not match and a concurrent reader gets a clean miss rather
-        than a half-entry; by the time the header is readable the payload is
-        already there. ``BufferedWriter.seek`` flushes, so the two writes
-        cannot reach a reader out of order.
-
-        A process killed mid-write leaves a headerless ``.entry`` behind. It
-        reads as a miss, and the next write of that key finds it, fails
-        ``O_EXCL``, and replaces it through the safe path -- so it heals
-        itself rather than needing a repair pass.
+        The header goes LAST, so until the payload is there the magic does not
+        match and a concurrent reader gets a clean miss. A process killed
+        mid-write leaves a headerless entry that reads as a miss, and the next
+        write of that key replaces it through the safe path.
         """
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
         try:
@@ -1064,25 +548,15 @@ class FileBackend(CacheBackend):
 
         split = metadata_span(blob)
         try:
-            # Raw fd writes. The file tracker and the effect observer watch
-            # the ``open`` audit event, which every Python-level open of a
-            # named file raises (``open``, ``io.open``, ``pathlib``): a read
-            # there becomes a dependency of the user's function, and a write
-            # an effect of it. ``os.open`` raises the event with no mode,
-            # which neither watches, so the entry file never reaches them. The
-            # guard that would otherwise catch cash's own storage matches on
-            # the directory being named `.cash` or `_global_cash`, so any
-            # other `cache_dir` would go unprotected.
-            #
-            # Writing the fd directly keeps cash's storage out of the watched
-            # surface entirely, which is the property that should hold whatever
-            # the directory is called. It also removes the buffering, so the
-            # payload and the header reach the page cache in program order
-            # without depending on when a BufferedWriter chooses to flush.
+            # Raw fd writes: ``os.open`` raises the ``open`` audit event with
+            # no mode, which neither the file tracker nor the effect observer
+            # watches, so the entry never becomes a dependency or an effect of
+            # the user's code whatever the directory is called. Unbuffered, the
+            # payload and the header reach the page cache in program order.
             os.lseek(fd, split, os.SEEK_SET)
-            _write_all(fd, blob[split:])  # payload
+            write_all(fd, blob[split:])  # payload
             os.lseek(fd, 0, os.SEEK_SET)
-            _write_all(fd, blob[:split])  # header + metadata, last
+            write_all(fd, blob[:split])  # header + metadata, last
             os.close(fd)
         except BaseException:
             try:
@@ -1101,24 +575,15 @@ class FileBackend(CacheBackend):
     def _write_cache_files(self, key: str, path: str, metadata: dict, serialized_value: bytes) -> None:
         """Write one entry -- metadata and payload -- and update size tracking.
 
-        One file, one atomic rename. The two-file version had to write the
-        data first and the metadata second, and reason about a reader that
-        caught the gap; there is no gap to reason about now.
-
         Raises:
             OSError, pickle.PickleError, ValueError: on write failure (caller handles cleanup).
         """
         payload = gzip.compress(serialized_value) if self.compress else serialized_value
-        # ``size`` means the bytes the value occupies, post-compression --
-        # what the old code learned by stat-ing the data file it had just
-        # written. We already know it, so the stat is gone.
+        # The bytes the value occupies on disk, after compression.
         metadata["size"] = len(payload)
         blob = pack_entry(metadata, payload)
 
-        # Exact, and one syscall: what this entry costs today, so a rewrite
-        # subtracts what was really there. The old code subtracted the cached
-        # ``size`` plus the NEW metadata size as a proxy, and subtracted
-        # nothing at all for a key this process had never written.
+        # What this entry occupies now, so a rewrite subtracts what was there.
         try:
             old_entry_bytes = os.path.getsize(path)
         except OSError:
@@ -1133,35 +598,24 @@ class FileBackend(CacheBackend):
             if not self._write_new_in_place(path, blob):
                 self._atomic_write(path, blob)
         except FileNotFoundError:
-            # The cache dir vanished under a live process. The README suggests
-            # deleting ./.cash to wipe the cache, and doing that with the kernel
-            # still running used to fail the next write with CacheBackendError
-            # instead of simply recreating the directory. Recreate + retry once;
-            # costs nothing on the normal path.
+            # The cache directory was deleted under a live process (``cash
+            # clear --all``, or by hand): recreate it, stamped first so the next
+            # process does not discard these entries as an unknown format, and
+            # retry once.
             os.makedirs(self.cache_dir, exist_ok=True)
-            self._ignore_in_git()
-            # Stamp it first. `cash clear` against a live process removes the
-            # stamp with the directory, and entries written into an unstamped
-            # directory used to be discarded by the next process as an
-            # unknown format -- with a message that read like corruption.
-            self._stamp_format_version()
+            self.stamp.ignore_in_git()
+            self.stamp.write()
             if not self._write_new_in_place(path, blob):
                 self._atomic_write(path, blob)
 
         with self._lock:
-            self._current_size_bytes -= old_entry_bytes
             self._remember(key, metadata)
-            self._current_size_bytes += len(blob)
+            self.evictor.note_write(key, old_entry_bytes, len(blob))
 
-            # Stamp the write order so _check_and_evict can spot a just-written
-            # entry being evicted almost immediately (the treadmill signature).
-            self._write_seq += 1
-            self._write_seq_by_key[key] = self._write_seq
-
-        # Only a capped tier ever ranks, so only a capped tier keeps the
-        # rank index: uncapped, it would be a file that only grows.
-        if self._max_size_bytes:
-            self._record_rank(key, path, metadata, len(blob))
+        # Only a capped tier ranks, so only a capped tier keeps the rank index:
+        # uncapped, it would be a file that only grows.
+        if self.evictor.capped:
+            self.evictor.record_rank(key, path, metadata, len(blob))
 
     def set(
         self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None
@@ -1253,22 +707,14 @@ class FileBackend(CacheBackend):
     def _do_set_sync(self, key: str, path: str, metadata: dict, serialized_value: bytes) -> None:
         """The actual disk write — runs in the PendingWrites worker thread.
 
-        A failure re-raises and touches nothing. The exception is stored on
-        the future and surfaces on the next ``get(key)`` (or ``shutdown()``).
-
-        It used to ``os.remove(path)`` first, to clear a partial write. That
-        was right when an entry was two files and a failure could leave one of
-        them behind. With one file written through a temp and renamed, the
-        destination is either the PREVIOUS entry -- untouched, because the
-        rename never happened -- or absent, and ``_atomic_write`` removes its
-        own temp on the way out. So the cleanup had nothing to clean and
-        deleted a value that was still good, which is precisely the guarantee
-        writing through a temp file exists to provide.
+        A failure re-raises and touches nothing: the destination is the
+        previous entry, untouched because the rename never happened, or absent.
+        The exception surfaces on the next ``get(key)`` (or ``shutdown()``).
         """
         try:
             self._write_cache_files(key, path, metadata, serialized_value)
-            if self._max_size_bytes:
-                self._check_and_evict()
+            if self.evictor.capped:
+                self.evictor.evict()
         except (OSError, pickle.PickleError, ValueError) as exc:
             logger.debug("Cache set failed for key %r: %s", key, exc)
             raise CacheBackendError(f"Cache set failed for key {key!r}: {exc}") from exc
@@ -1295,11 +741,9 @@ class FileBackend(CacheBackend):
         path = self._get_path(key)
 
         # What this process last wrote there, when it was metadata only, needs
-        # no disk read to know: reading an entry written moments before is the
-        # slowest open on Windows, ~5 ms, and a cheap statement re-run in every
-        # cell run rewrites its entry every time (round 23). If another process
-        # has put a full entry there since, this overwrites it -- a later miss,
-        # never a wrong value.
+        # no disk read (slow on Windows, and a cheap statement rewrites its
+        # entry on every run). If another process has put a full entry there
+        # since, this overwrites it -- a later miss, never a wrong value.
         known = self._metadata_cache.get(key)
         if known is not None and known.get("metadata_only"):
             existing = known
@@ -1321,10 +765,7 @@ class FileBackend(CacheBackend):
 
         try:
             blob = pack_entry(metadata, b"")
-            # A new key takes the in-place write, as a new full entry does
-            # (`_write_new_in_place`): a loop's statements each write one of
-            # these, on the user's clock, and the temp-and-rename was most of
-            # the 0.65 ms each cost (round 23).
+            # A new key takes the cheaper in-place write, as a full entry does.
             if existing is not None or not self._write_new_in_place(path, blob):
                 self._atomic_write(path, blob)
             with self._lock:
@@ -1341,10 +782,8 @@ class FileBackend(CacheBackend):
         self._writes.drain(key)
         path = self._get_path(key)
 
-        # Measured from the file rather than taken from the metadata cache.
-        # The cached figure is only present for keys THIS process has touched,
-        # so with metadata loaded lazily an uncached key would have subtracted
-        # 0 and drifted the total upward forever.
+        # Measured from the file: the metadata cache only knows the keys this
+        # process touched.
         try:
             size_to_remove = os.path.getsize(path)
         except OSError:
@@ -1353,10 +792,8 @@ class FileBackend(CacheBackend):
         with self._lock:
             self._metadata_cache.pop(key, None)
             self._dirty_metadata.discard(key)
-            self._write_seq_by_key.pop(key, None)
-            self._gdsf_base.pop(key, None)
             self._paths.pop(path, None)
-            self._current_size_bytes -= size_to_remove
+            self.evictor.forget(key, size_to_remove)
 
         try:
             os.remove(path)
@@ -1364,502 +801,20 @@ class FileBackend(CacheBackend):
             pass
         except OSError as exc:
             logger.debug("Failed to remove cache entry %s: %s", path, exc)
-
-    # Evict-after-write is only a treadmill signal if the evicted entry was
-    # written within roughly this many writes — something older getting
-    # evicted is healthy turnover, not thrash. Only writes bump the counter.
-    _EVICT_WARN_RECENT_OPS = 3
-
-    @staticmethod
-    def _stem(path: str) -> str:
-        return os.path.basename(path)[: -len(ENTRY_SUFFIX)]
-
-    @staticmethod
-    def _priority(metadata: dict, size: int, base: float) -> float:
-        """GDSF: ``H = L + hits * execution_time / size``, L as of *base*.
-        An entry with nothing recorded about it ranks at `UNKNOWN_COST_S`."""
-        return base + gdsf_value(metadata, size)
-
-    def _ensure_clock(self) -> None:
-        """Resume the GDSF clock from the rank index, once per process.
-
-        Only writers and the access flush need it, and both run off the
-        caller's thread. A read-only process never pays for the file.
-        """
-        if self._clock_loaded:
-            return
-        _ranks, clock, _count = self._rank_index.load()
-        with self._lock:
-            self._gdsf_clock = max(self._gdsf_clock, clock)
-            self._clock_loaded = True
-
-    def _record_rank(self, key: str, path: str, metadata: dict, size: int) -> None:
-        """A write: store its priority, and make it a candidate at once.
-
-        It is ranked at the recency `_rebuild_evict_queue` would give it --
-        its own mtime, or its ``last_access`` if newer -- not at ``time.time()``.
-        `_touched_since` compares a candidate's mtime against that stamp, and
-        mtime is the FILESYSTEM's clock: on Windows before Python 3.13
-        ``time.time()`` steps every 15.6 ms and the file's stamp is not on that
-        grid, so the write's own mtime read as newer than the moment it was
-        ranked. Every fresh entry looked read-since, was dropped as a
-        candidate, and eviction was left with only the newest few -- ordinary
-        LRU turnover reported as CACHE-THRASH.
-        """
-        self._ensure_clock()
-        # Only once a ranking exists: before that there is no heap to join,
-        # and a ranking taken after this point walked the directory after
-        # this write landed, so it already holds the entry.
-        ranked_at = None
-        if self._ranked:
-            try:
-                ranked_at = os.path.getmtime(path)
-            except OSError:
-                ranked_at = time.time()
-            last_access = metadata.get("last_access")
-            if last_access is not None and last_access > ranked_at:
-                ranked_at = last_access
-        with self._lock:
-            clock = self._gdsf_clock
-            self._gdsf_base[key] = clock
-            priority = self._priority(metadata, size, clock)
-            if self._ranked and ranked_at is not None:
-                heapq.heappush(
-                    self._evict_fresh,
-                    (
-                        priority,
-                        self._write_seq_by_key.get(key, 0),
-                        path,
-                        size,
-                        ranked_at,
-                    ),
-                )
-        self._rank_index.append([(self._stem(path), priority)])
-
-    def _rebuild_evict_queue(self) -> None:
-        """Rank every entry for eviction, least valuable per byte first.
-
-        **What it ranks by.** GreedyDual-Size-Frequency: the lowest
-        ``H = L + hits * execution_time / size`` goes first, and the clock L
-        rises to each victim's H (`_check_and_evict`), so an entry that stops
-        being read drops below newer ones and ages out, however valuable it
-        was. It used to be LRU plus a size split: entries under 0.1% of the cap
-        were taken first whenever they alone could close the gap. That split
-        ignored recency across the two classes, and its threshold grew with
-        the cap -- in the eviction simulator (benchmarks/eviction_sim) the
-        policy lost 18% of the achievable savings at a cap of twice the live
-        set, against 7.5% for plain LRU and 1.7% for GDSF.
-
-        **Where H comes from.** One ``scandir`` for sizes and mtimes, plus the
-        rank index (`rank_index.RankIndex`): one line per write and access
-        flush, read here in one pass. Not from the entries themselves --
-        opening every entry to read its header cost 111 us an entry warm and
-        5.7 ms cold on Windows (antivirus scans each open), 2.2 s to 113 s per
-        ranking at 20k entries, against ~2 us for the walk. Entries this
-        process has written or read are ranked from what it knows in memory,
-        which is fresher than any flushed line. An entry with no record at all (written
-        before the index existed, or with the index lost) ranks as if its cost
-        were unknown and small. An old entry that is still used gets a record
-        on its first access flush, so what stays unranked is what nobody reads.
-
-        **Ties** -- equal cost and size, the common case for untouched
-        entries -- go to the least recently used, then to the older write.
-        mtime is last access (recording a read rewrites the header in place),
-        overridden by an unflushed in-memory ``last_access``, and broken by the
-        write order because a filesystem stamps mtimes in steps (~0.57 ms
-        on ext4, a 4 ms kernel tick on Linux): a burst of writes shares one
-        mtime, and ``sorted`` then keeps ``scandir`` order, which is a hash.
-        The write order is the rank index's line order, because a new process
-        has no in-memory sequence for the entries an earlier one wrote:
-        measured, a restarted process evicted such a burst in hash order, the
-        oldest entry and then the sixth.
-
-        The ranking is a QUEUE, consumed across many eviction passes and
-        rebuilt only when it runs out: a full cache evicts on most writes, so a
-        walk per pass would put one on nearly every write. Entries this process
-        writes after it was taken join `_evict_fresh` instead (see
-        `_record_rank`). The index is compacted here when it has grown past
-        twice the directory.
-        """
-        ranks: dict[str, tuple[float, int]] = {}
-        try:
-            with _untracked(), os.scandir(self.cache_dir) as entries:
-                for entry in entries:
-                    if not entry.name.endswith(ENTRY_SUFFIX):
-                        continue
-                    try:
-                        st = entry.stat()
-                    except OSError:
-                        # Vanished between the listing and the stat. One
-                        # missing candidate is a slightly-late eviction.
-                        continue
-                    ranks[entry.path] = (st.st_mtime, st.st_size)
-        except OSError:
-            logger.debug("Could not scan %s to rank evictions", self.cache_dir, exc_info=True)
-
-        indexed, index_clock, index_lines = self._rank_index.load()
-
-        prio: dict[str, float] = {}
-        recency: dict[str, float] = {}
-        stamps: dict[str, float] = {}
-        seqs: dict[str, int] = {}
-        with self._lock:
-            self._gdsf_clock = max(self._gdsf_clock, index_clock)
-            self._clock_loaded = True
-            clock = self._gdsf_clock
-            for path, (mtime, size) in ranks.items():
-                recency[path] = stamps[path] = mtime
-                key = self._paths.get(path)
-                meta = self._metadata_cache.get(key) if key is not None else None
-                if meta is not None:
-                    last_access = meta.get("last_access")
-                    if last_access is not None and last_access > mtime:
-                        # What `_touched_since` compares against later, so a
-                        # ``last_access`` already known here never reads as
-                        # a read since.
-                        stamps[path] = last_access
-                        # But only a read not yet on disk ORDERS by it. Once
-                        # written, mtime is the entry's recency, as it is for
-                        # every entry this process has not touched. The
-                        # header's own ``last_access`` is ``time.time()`` taken
-                        # just before the write; mtime is the filesystem's
-                        # clock, which on Linux ticks in 4 ms steps behind it.
-                        # Ordered by the first, an entry whose metadata was
-                        # merely looked at (`get_metadata`) outranked
-                        # neighbours written a tick after it, and survived
-                        # them: measured, 13 runs in 60 in the metadata test.
-                        if key in self._dirty_metadata:
-                            recency[path] = last_access
-                    seqs[path] = self._write_seq_by_key.get(key, 0)
-                # Only a write or a read in this process re-bases an entry.
-                # Metadata merely LOOKED AT (`get_metadata`, which freshness
-                # checks call on a statement's producers) is not a use, and
-                # re-basing it would protect exactly the entries nobody reads.
-                if meta is not None and key in self._gdsf_base:
-                    base = self._gdsf_base[key]
-                    if base is None:
-                        base = self._gdsf_base[key] = clock
-                    prio[path] = self._priority(meta, size, base)
-                    continue
-                recorded = indexed.get(self._stem(path))
-                if recorded is not None:
-                    prio[path] = recorded
-                else:
-                    # Unrecorded: rank by what is known of its cost (nothing,
-                    # for an entry this process has not even looked at) from
-                    # the start of the clock -- as old as anything can be.
-                    prio[path] = self._priority(meta or {}, size, 0.0)
-
-        # The index's order is the write order ACROSS processes; an entry with
-        # no record there sorts first, as old as anything. The in-process
-        # sequence only covers this process's writes, and only decides when
-        # the index could not be written.
-        recorded_at = {stem: i for i, stem in enumerate(indexed)}
-        ordered = sorted(
-            ranks,
-            key=lambda p: (
-                prio[p],
-                recency[p],
-                recorded_at.get(self._stem(p), -1),
-                seqs.get(p, 0),
-            ),
-        )
-        # A deque: drained from the front across many passes, and list.pop(0)
-        # would make that quadratic in a large cache. Each item carries the
-        # recency it was RANKED at, so `_touched_since` can tell whether the
-        # entry has been read in the meantime.
-        self._evict_queue = deque((p, ranks[p][1], stamps[p]) for p in ordered)
-        self._rank_h = prio
-        self._evict_fresh = []
-        self._ranked = True
-
-        if index_lines > 2 * len(ranks) + 64:
-            self._rank_index.compact({self._stem(p): prio[p] for p in ordered}, clock)
-
-    def _pop_candidate(self) -> tuple[str, int, float, float] | None:
-        """The next victim, ``(path, size, ranked_at, priority)``: the lower
-        of the ranking's head and the freshest writes' head."""
-        head = self._evict_queue[0] if self._evict_queue else None
-        fresh = self._evict_fresh[0] if self._evict_fresh else None
-        if head is None and fresh is None:
-            return None
-        if head is not None:
-            head_key = (self._rank_h.get(head[0], 0.0), head[2])
-        if fresh is None or (head is not None and head_key <= (fresh[0], fresh[4])):
-            path, size, ranked_at = self._evict_queue.popleft()
-            return path, size, ranked_at, self._rank_h.pop(path, 0.0)
-        priority, _seq, path, size, ranked_at = heapq.heappop(self._evict_fresh)
-        return path, size, ranked_at, priority
-
-    def _touched_since(self, path: str, key: str | None, ranked_at: float) -> bool:
-        """Has this entry been read or rewritten since it was ranked?
-
-        The ranking is a snapshot, drained across many eviction passes, so an
-        entry can be read AFTER it was queued and before it is reached. Without
-        this check that read does not protect it: measured, an entry read
-        moments earlier -- with a strictly newer mtime than its neighbour --
-        was still evicted first, because the queue had it at the head from
-        before the read. A read raises an entry's priority, so the snapshot's
-        value is stale either way.
-
-        Dropped rather than re-ranked: the next rebuild ranks it properly, and
-        re-queueing risks a loop over an entry that keeps being read.
-
-        Both signals, because they cover different readers. A read in THIS
-        process updates ``last_access`` in memory at once but only reaches
-        mtime when the flusher writes it back; a read in another process over
-        the same directory shows up only as mtime. Checking one would miss the
-        other.
-        """
-        meta = self._metadata_cache.get(key) if key else None
-        last_access = meta.get("last_access") if meta else None
-        if last_access is not None and last_access > ranked_at:
-            return True
-        try:
-            return os.path.getmtime(path) > ranked_at
-        except OSError:
-            # Gone, or unreadable. Not "touched" -- let the eviction proceed
-            # and no-op, which also cleans the entry out of the bookkeeping.
-            return False
-
-    def _forget_path(self, path: str) -> int:
-        """Remove one entry BY PATH, returning the bytes freed.
-
-        Eviction ranks by path because that is what a directory walk yields;
-        a filename is a SHA-256 of the key and does not lead back to it. The
-        in-process bookkeeping is keyed by key, so ``_paths`` carries the way
-        back for the entries this process has actually touched -- which is
-        every entry whose bookkeeping there is anything to clean up.
-        """
-        try:
-            freed = os.path.getsize(path)
-        except OSError:
-            freed = 0
-
-        key = self._paths.get(path)
-        with self._lock:
-            if key is not None:
-                self._metadata_cache.pop(key, None)
-                self._dirty_metadata.discard(key)
-                self._write_seq_by_key.pop(key, None)
-                self._gdsf_base.pop(key, None)
-                self._paths.pop(path, None)
-            self._current_size_bytes -= freed
-
-        try:
-            os.remove(path)
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            logger.debug("Failed to remove cache entry %s: %s", path, exc)
-        return freed
-
-    def _check_and_evict(self) -> None:
-        """Evict the least valuable entries per byte while over the cap."""
-        if not self._max_size_bytes:
-            return
-
-        # The byte total is established HERE, not at open time: this is the
-        # only thing that reads it, so a process that never writes must never
-        # pay the directory walk that produces it. Latched, so a write-heavy
-        # session pays one walk, not one per write.
-        self._ensure_size_scanned()
-        # ...and re-sized from the volume as it is now, not as it was when
-        # this process opened. Throttled; see `_refresh_adaptive_cap`.
-        self._refresh_adaptive_cap()
-
-        if self._current_size_bytes <= self._max_size_bytes:
-            return
-
-        target = self._max_size_bytes * 0.9
-        evicted_recent = False
-        n_evicted = 0
-        rebuilt = False
-        own_key = self._writes.current_worker_key()
-
-        while self._current_size_bytes > target:
-            candidate = self._pop_candidate()
-            if candidate is None:
-                if rebuilt:
-                    # Every candidate that existed when this pass began has
-                    # been considered, and the cache is still over its cap --
-                    # everything left is either in flight or newer than the
-                    # ranking. Rebuilding again would rank the same entries
-                    # and skip them the same way, forever; the next write
-                    # re-examines with a fresh ranking.
-                    break
-                self._rebuild_evict_queue()
-                rebuilt = True
-                if not self._evict_queue and not self._evict_fresh:
-                    break
-                continue
-
-            path, _size, ranked_at, priority = candidate
-            key = self._paths.get(path)
-
-            if self._touched_since(path, key, ranked_at):
-                continue
-
-            # Never evict a key that has ANOTHER write in flight.
-            #
-            # `delete` drains that write, and this loop runs ON the single
-            # PendingWrites worker -- so draining a write QUEUED BEHIND the
-            # one currently executing waits for a task that cannot start until
-            # this one returns. The write thread hangs permanently, and the
-            # atexit flush behind it hangs with it. Reproduced against a 6KB
-            # cap; the process never exited. A path this process has never
-            # touched cannot have a write in flight here.
-            #
-            # The write running right now is the exception: it has already
-            # landed (this loop runs after it), nothing is left to wait for,
-            # and by value per byte the value it stored may well be the first
-            # thing that ought to go.
-            if key is not None and key != own_key and self._writes.has_pending(key):
-                continue
-
-            # Was this entry written only a couple of ops ago?
-            written_at = self._write_seq_by_key.get(key) if key else None
-            if written_at is not None and self._write_seq - written_at <= self._EVICT_WARN_RECENT_OPS:
-                evicted_recent = True
-
-            if self._forget_path(path):
-                n_evicted += 1
-                with self._lock:
-                    self._gdsf_clock = max(self._gdsf_clock, priority)
-
-        if n_evicted:
-            # The clock is what lets the next process resume the ranking
-            # instead of restarting it at zero.
-            self._rank_index.append([], clock=self._gdsf_clock)
-        if evicted_recent:
-            self._warn_evict_after_write(n_evicted)
 
     def promotion_size_cap(self) -> int | None:
-        """Refuse (skip) any single object larger than this tier's WHOLE cap.
+        """Refuse (skip) only an object larger than this tier's WHOLE cap.
 
-        The threshold was half the cap, to keep one big entry from leaving less
-        than half the cache for everything else and starting a write-and-evict
-        treadmill (CAS-142). A round-15 tester showed what that costs in the
-        field: ``CASH_MAX_CACHE_SIZE=500MB`` on a job whose working set is
-        263 MB cached **nothing at all** -- three of four stages recomputed
-        every night, the directory held 29 KB, and the operator's reading of
-        their own setting ("cap it, so it evicts") was the opposite of what
-        happened. 5/5, and silent apart from one warning that named neither the
-        cap nor the threshold.
-
-        Refusing an entry that cannot fit is defensible; refusing one that
-        fits comfortably is not. The user asked for "keep at most N bytes", and
-        the least surprising reading of that is to store what fits and evict
-        the rest. The treadmill is still detected when it actually happens --
-        ``_warn_if_thrashing`` fires ``CACHE-THRASH`` on eviction within a
-        couple of writes -- rather than pre-empted by refusing everything large.
-
-        Falls back to the class-level hint when no cap is configured (a bare,
-        unbounded FileBackend accepts anything).
+        "Keep at most N bytes" reads as: store what fits and evict the rest. A
+        lower threshold (it was half the cap) refused values that fit
+        comfortably, and a job whose working set was half its cap cached
+        nothing. A write-and-evict treadmill is reported when it happens
+        (``CACHE-THRASH``) rather than pre-empted. Uncapped, the class-level
+        hint applies.
         """
-        if self._max_size_bytes:
-            return self._max_size_bytes
+        if self.evictor.max_size_bytes:
+            return self.evictor.max_size_bytes
         return type(self).max_size_bytes
-
-    #: Below roughly this many entries fitting the cap, the cache is holding a
-    #: handful of large results rather than many small ones, and the useful
-    #: advice changes: not "raise the cap" but "cache something smaller".
-    _FEW_ENTRIES_FIT = 20
-
-    def _dominant_entry_size(self) -> int | None:
-        """The size at which cumulative bytes cross half the ranked cache.
-
-        Answers "how big are the things actually FILLING this cache", which
-        the mean does not. Measured on a cache of 3000 x 2KB plus one 64MB
-        entry: the mean is ~24KB and reports 3437 fitting the cap, while that
-        single entry is 91% of the cache. Byte-weighting reports 64MB, and 1.
-        Real caches are mixtures -- notebook statement crumbs beside big
-        frames -- so the mean would misfire exactly where the advice matters.
-
-        Computed HERE rather than when the queue is ranked, so the normal path
-        pays nothing at all: no per-write cost, no per-rebuild cost, no extra
-        syscalls. This runs at most once per session, from the sizes already
-        in memory, and only when the cache is already thrashing -- a state
-        whose cost dwarfs a sort. Measured at 13ms for 100k entries.
-
-        A sample rather than a census: the queues have been partly drained by
-        now. Good enough for "roughly how many of these fit", which is all the
-        message claims.
-        """
-        sizes = [s for _p, s, _m in self._evict_queue]
-        sizes.extend(s for _h, _seq, _p, s, _m in self._evict_fresh)
-        if not sizes:
-            return None
-        sizes.sort()
-        half = sum(sizes) / 2
-        run = 0
-        for size in sizes:
-            run += size
-            if run >= half:
-                return size
-        return sizes[-1]
-
-    def _warn_evict_after_write(self, n_evicted: int) -> None:
-        """Warn once/session that the cache evicted freshly-written entries.
-
-        The disk cache is too small to retain what is being written to it, so
-        entries are evicted within a couple of ops of landing — cash keeps
-        re-writing and re-evicting instead of caching anything durably, which
-        can make it slower than not caching at all. Deduped to once per
-        session (per instance) so a churning workload doesn't spam.
-
-        The message names the free space, and stops short of prescribing a
-        remedy it cannot know is affordable. The old wording ended "Raise
-        max_cache_size so the working set fits" — but a workload that has
-        outgrown the cap may not fit in what is left on the volume either, and
-        cash is the one holding that number: the cap was derived from it.
-        Measuring it costs one `disk_usage` call, once per session.
-
-        When only a handful of entries fit the cap, the more useful lever is
-        not a bigger cache but a smaller value -- so the message says that
-        too, and only then. There is no separate "you are caching something
-        large" warning on purpose: size alone is not a problem, and one would
-        fire on every healthy setup that has big data and a big disk. Size
-        RELATIVE TO CAPACITY is the problem, and this warning already fires
-        exactly when that bites.
-        """
-        if self._warned_evict_after_write:
-            return
-        self._warned_evict_after_write = True
-
-        cap = human_bytes(self._max_size_bytes)
-        free = free_bytes_on_volume(self.cache_dir)
-        if free >= (self._max_size_bytes or 0):
-            room = f"raise max_cache_size -- there is {human_bytes(free)} free on that volume, so there is room for it."
-        else:
-            room = (
-                f"cache fewer or smaller results, or point cache_dir at a "
-                f"roomier volume: only {human_bytes(free)} is free on this "
-                f"one, so raising max_cache_size may not help."
-            )
-
-        shape = ""
-        dominant = self._dominant_entry_size()
-        if dominant and self._max_size_bytes:
-            fits = max(1, self._max_size_bytes // dominant)
-            if fits < self._FEW_ENTRIES_FIT:
-                how_many = "only one fits" if fits == 1 else f"only about {fits} fit"
-                shape = (
-                    f" Most of it is entries of around {human_bytes(dominant)}, "
-                    f"so {how_many} at once; if what you need downstream is a "
-                    f"summary of those results rather than the results "
-                    f"themselves, caching that instead would fit far more."
-                )
-
-        warn_diagnostic(
-            CashCacheIneffectiveWarning,
-            "CACHE-THRASH",
-            f"the cache is full at its {cap} cap and is evicting entries within "
-            f"a couple of writes of storing them, so it is re-writing and "
-            f"re-evicting rather than caching durably -- which is slower than "
-            f"no cache at all.{shape}",
-            room,
-        )
 
     def clear(self) -> None:
         self._ensure_initialized()
@@ -1868,27 +823,19 @@ class FileBackend(CacheBackend):
         # Drain pending writes so they don't fire after the clear and
         # resurrect entries we just removed from disk.
         self._writes.wait_all()
-        for f in _glob_untracked(os.path.join(self.cache_dir, _ENTRY_GLOB)):
+        for f in self.stamp.entry_files():
             try:
                 os.remove(f)
             except OSError:
                 # Best-effort removal during cache clear; file may be locked
                 logger.debug("Could not remove cache file %s during clear", f, exc_info=True)
-        # The priorities describe entries that no longer exist.
-        self._rank_index.remove()
+        # The priorities and versions describe entries that no longer exist.
+        self.evictor.clear()
         self._versions.remove()
         with self._lock:
             self._metadata_cache.clear()
             self._dirty_metadata.clear()
-            self._write_seq_by_key.clear()
             self._paths.clear()
-            self._evict_queue.clear()
-            self._rank_h.clear()
-            self._evict_fresh = []
-            self._ranked = False
-            self._gdsf_base.clear()
-            self._gdsf_clock = 0.0
-            self._current_size_bytes = 0
 
     def shutdown(self) -> None:
         # Drain any in-flight async writes before stopping the flusher,
@@ -1899,7 +846,7 @@ class FileBackend(CacheBackend):
             self._flusher_thread.join(timeout=1.0)
         if self._initialized:
             self._flush_metadata()
-            self._rank_index.flush()
+            self.evictor.rank_index.flush()
 
     def list_entries(self) -> list[dict[str, Any]]:
         self._ensure_initialized()
@@ -1910,7 +857,7 @@ class FileBackend(CacheBackend):
         # flight would be invisible.
         self._writes.wait_all()
         entries = []
-        for path in _glob_untracked(os.path.join(self.cache_dir, _ENTRY_GLOB)):
+        for path in self.stamp.entry_files():
             try:
                 metadata, _ = read_entry(path, with_payload=False)
                 entries.append(metadata)
@@ -1922,14 +869,14 @@ class FileBackend(CacheBackend):
         """Entry files in the cache directory: one listing, no entry opened.
 
         Counts an unreadable entry that `list_entries` would skip; the number
-        is for display, and reading every header to rule those out is the
-        cost this method exists to avoid (``%cash_on``: 22.7 s on r23s2).
+        is for display, and reading every header to rule those out takes
+        seconds on a large cache.
         """
         self._ensure_initialized()
         if self._unusable:
             return 0
         self._writes.wait_all()
-        return len(_glob_untracked(os.path.join(self.cache_dir, _ENTRY_GLOB)))
+        return len(self.stamp.entry_files())
 
     def cleanup_expired(self, is_expired: Callable[[dict[str, Any]], bool]) -> int:
         self._ensure_initialized()
@@ -1937,7 +884,7 @@ class FileBackend(CacheBackend):
             return 0
         self._writes.wait_all()
         count = 0
-        for path in _glob_untracked(os.path.join(self.cache_dir, _ENTRY_GLOB)):
+        for path in self.stamp.entry_files():
             try:
                 metadata, _ = read_entry(path, with_payload=False)
                 if is_expired(metadata):

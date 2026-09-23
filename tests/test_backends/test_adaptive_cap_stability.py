@@ -22,6 +22,7 @@ import pytest
 import cash.backends.adaptive_caps as caps
 from cash.backends import FileBackend
 from cash.backends.adaptive_caps import adaptive_disk_cap, adaptive_disk_cap_for
+from cash.backends.file_eviction import FileEvictor
 
 GIB = 1024**3
 
@@ -60,7 +61,7 @@ def volume(tmp_path, monkeypatch):
     # The directory walk is what turns bytes on disk into `_current_size_bytes`;
     # it is exercised in its own tests. Here it is only the courier for the
     # footprint, and paying 12 GiB of I/O to move one integer is what broke CI.
-    monkeypatch.setattr(FileBackend, "_scan_size_bytes", lambda self: used["bytes"])
+    monkeypatch.setattr(FileEvictor, "scan_size_bytes", lambda self: used["bytes"])
 
     def occupy(nbytes):
         used["bytes"] = nbytes
@@ -75,8 +76,8 @@ def test_the_cap_does_not_shrink_as_the_cache_fills(volume):
     empty = FileBackend(
         str(cache), max_size_bytes=adaptive_disk_cap(free_when_empty), adaptive_cap=True, flush_interval=0
     )
-    empty._ensure_size_scanned()
-    cap_when_empty = empty._max_size_bytes
+    empty.evictor.ensure_size_scanned()
+    cap_when_empty = empty.evictor.max_size_bytes
     empty.shutdown()
 
     occupy(cap_when_empty)  # the cache fills to that cap
@@ -87,8 +88,8 @@ def test_the_cap_does_not_shrink_as_the_cache_fills(volume):
         adaptive_cap=True,
         flush_interval=0,
     )
-    full._ensure_size_scanned()
-    cap_when_full = full._max_size_bytes
+    full.evictor.ensure_size_scanned()
+    cap_when_full = full.evictor.max_size_bytes
     full.shutdown()
 
     assert cap_when_full == cap_when_empty, (
@@ -107,8 +108,8 @@ def test_an_explicit_cap_is_never_re_derived(volume):
     chosen = 3 * GIB
 
     b = FileBackend(str(cache), max_size_bytes=chosen, adaptive_cap=False, flush_interval=0)
-    b._ensure_size_scanned()
-    assert b._max_size_bytes == chosen
+    b.evictor.ensure_size_scanned()
+    assert b.evictor.max_size_bytes == chosen
     b.shutdown()
 
 
@@ -117,8 +118,8 @@ def test_an_empty_cache_gets_the_same_cap_as_before(volume):
     cache, free_when_empty, _ = volume
 
     b = FileBackend(str(cache), max_size_bytes=None, adaptive_cap=True, flush_interval=0)
-    b._ensure_size_scanned()
-    assert b._max_size_bytes == adaptive_disk_cap(free_when_empty)
+    b.evictor.ensure_size_scanned()
+    assert b.evictor.max_size_bytes == adaptive_disk_cap(free_when_empty)
     b.shutdown()
 
 

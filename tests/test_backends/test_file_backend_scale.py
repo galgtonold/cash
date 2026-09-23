@@ -38,8 +38,8 @@ from collections import deque
 import pytest
 
 from cash.backends import FileBackend
+from cash.backends.cache_dir import CACHE_FORMAT_VERSION
 from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry
-from cash.backends.file_backend import CACHE_FORMAT_VERSION
 
 
 def _seed(cache_dir, n, payload=b"x" * 256):
@@ -82,7 +82,7 @@ def test_opening_a_cache_does_not_read_every_entry(tmp_path):
         f"init loaded {len(backend._metadata_cache)} metadata entries; it should "
         f"load none, and `get` should have cached only the key it was asked for"
     )
-    assert not backend._evict_queue, (
+    assert not backend.evictor.queue, (
         "opening a cache ranked it for eviction; only a write that trips the cap should pay for that"
     )
 
@@ -101,7 +101,7 @@ def test_the_size_total_is_still_right(tmp_path):
     backend.set("trigger", b"z" * 100, {"size": 100, "created_at": time.time(), "last_access": time.time()})
     backend._writes.wait_all()
 
-    assert backend._current_size_bytes == _on_disk(cache)
+    assert backend.evictor.current_bytes == _on_disk(cache)
 
 
 def test_a_key_is_still_readable_without_being_preloaded(tmp_path):
@@ -147,7 +147,7 @@ def test_eviction_reaches_entries_this_process_never_touched(tmp_path):
         f"eviction pulled {len(tight._metadata_cache)} entries into memory; it "
         f"ranks from the directory now and should hold nothing extra"
     )
-    assert tight._current_size_bytes <= 100_000 * 1.1
+    assert tight.evictor.current_bytes <= 100_000 * 1.1
 
 
 def test_deleting_an_untouched_key_updates_the_size(tmp_path):
@@ -162,18 +162,18 @@ def test_deleting_an_untouched_key_updates_the_size(tmp_path):
 
     backend = FileBackend(str(cache))
     backend.get("mod.f:state:0:args")  # cache exactly one key
-    before = backend._current_size_bytes
+    before = backend.evictor.current_bytes
 
     victim = "mod.f:state:3:args"  # never touched by this process
 
     on_disk = os.path.getsize(backend._get_path(victim))
 
     backend.delete(victim)
-    assert backend._current_size_bytes == before - on_disk, "the size total did not drop by what was actually removed"
+    assert backend.evictor.current_bytes == before - on_disk, "the size total did not drop by what was actually removed"
 
 
 def _count_scans(backend):
-    """Wrap ``_scan_size_bytes`` so a test can count walks, not time them.
+    """Wrap ``FileEvictor.scan_size_bytes`` so a test can count walks, not time them.
 
     Counted rather than timed on purpose. A wall-clock assertion here would be
     a threshold test, and every residual flake in this suite has been one --
@@ -181,13 +181,13 @@ def _count_scans(backend):
     ~13ms against ~0.13ms warm.
     """
     calls = []
-    real = backend._scan_size_bytes
+    real = backend.evictor.scan_size_bytes
 
     def counted():
         calls.append(1)
         return real()
 
-    backend._scan_size_bytes = counted
+    backend.evictor.scan_size_bytes = counted
     return calls
 
 
@@ -198,7 +198,7 @@ def _on_disk(cache_dir):
 def test_a_read_only_process_never_walks_the_directory(tmp_path):
     """Opening a cache and reading from it must not cost a directory walk.
 
-    The byte total exists only for the size cap, and ``_check_and_evict`` is
+    The byte total exists only for the size cap, and ``FileEvictor.evict`` is
     the only thing that reads it -- so a process that opens a 100k-entry cache
     and reads a few keys was paying ~0.3s (3.1us/entry, measured linear from
     1k to 100k) to compute a number it never consulted. That process is the
@@ -254,7 +254,7 @@ def test_the_first_write_establishes_the_total_exactly_once(tmp_path):
     backend._writes.wait_all()
 
     assert len(scans) == 1, f"the first write walked the directory {len(scans)}x"
-    assert backend._current_size_bytes == _on_disk(cache), (
+    assert backend.evictor.current_bytes == _on_disk(cache), (
         "the total counts only this process's own write, so eviction would "
         "never see the 20 entries that were already there"
     )
@@ -263,7 +263,7 @@ def test_the_first_write_establishes_the_total_exactly_once(tmp_path):
     backend._writes.wait_all()
 
     assert len(scans) == 1, "the walk repeated; it is supposed to latch"
-    assert backend._current_size_bytes == _on_disk(cache)
+    assert backend.evictor.current_bytes == _on_disk(cache)
 
 
 def test_eviction_frees_what_it_needs_and_not_much_more(tmp_path):
@@ -303,7 +303,7 @@ def test_eviction_frees_what_it_needs_and_not_much_more(tmp_path):
 def test_eviction_never_waits_on_a_write_it_cannot_reach(tmp_path):
     """Evicting a key with a queued write used to hang the process forever.
 
-    `_check_and_evict` runs ON the single PendingWrites worker, and evicting
+    `FileEvictor.evict` runs ON the single PendingWrites worker, and evicting
     calls `delete`, which drains that key's pending write. A write QUEUED
     BEHIND the one currently executing can only run on that same worker -- so
     the worker waits for a task that cannot start until it returns. The write
@@ -381,11 +381,11 @@ def test_ranking_reads_no_entry_files(tmp_path):
 
     ef.read_entry = counting_read
     try:
-        backend._rebuild_evict_queue()
+        backend.evictor.rebuild_queue()
     finally:
         ef.read_entry = real
 
-    assert len(backend._evict_queue) == 40, f"{len(backend._evict_queue)} ranked"
+    assert len(backend.evictor.queue) == 40, f"{len(backend.evictor.queue)} ranked"
     assert opened == [], f"ranking opened {len(opened)} entry files"
     assert backend._metadata_cache == {}, "ranking pulled metadata into memory"
 
@@ -399,15 +399,15 @@ def test_ranking_is_oldest_first(tmp_path):
         backend._writes.wait_all()
         time.sleep(0.02)
 
-    backend._rebuild_evict_queue()
-    order = [backend._paths[p] for p, _size, _m in backend._evict_queue]
+    backend.evictor.rebuild_queue()
+    order = [backend._paths[p] for p, _size, _m in backend.evictor.queue]
     assert order == ["old", "mid", "new"], order
 
     # Reading the oldest must move it to the back.
     time.sleep(0.02)
     backend.get("old")
-    backend._rebuild_evict_queue()
-    order = [backend._paths[p] for p, _size, _m in backend._evict_queue]
+    backend.evictor.rebuild_queue()
+    order = [backend._paths[p] for p, _size, _m in backend.evictor.queue]
     assert order == ["mid", "new", "old"], f"a read did not refresh the ranking: {order}"
     backend.shutdown()
 
@@ -432,13 +432,13 @@ def test_the_ranking_is_reused_across_eviction_passes(tmp_path):
     cache2 = tmp_path / "cache2"
     backend = FileBackend(str(cache2), flush_interval=0, max_size_bytes=entry_bytes * 40)
     rebuilds = []
-    real = backend._rebuild_evict_queue
+    real = backend.evictor.rebuild_queue
 
     def counted():
         rebuilds.append(1)
         return real()
 
-    backend._rebuild_evict_queue = counted
+    backend.evictor.rebuild_queue = counted
 
     for i in range(200):
         backend.set(f"k{i}", payload, {"size": len(payload)})
@@ -489,8 +489,8 @@ def test_crumbs_are_not_shredded_to_free_space_they_cannot_free(tmp_path):
 
     total = sum(sizes.values())
     b = FileBackend(str(cache), max_size_bytes=int(total * 0.75), flush_interval=0)
-    b._ensure_size_scanned()
-    b._check_and_evict()
+    b.evictor.ensure_size_scanned()
+    b.evictor.evict()
 
     survivors = {f.name for f in os.scandir(cache) if f.name.endswith(ENTRY_SUFFIX)}
     big_gone = os.path.basename(path_of("big")) not in survivors
@@ -535,8 +535,8 @@ def test_uniform_sizes_are_plain_lru(tmp_path):
 
     total = sum(sizes.values())
     b = FileBackend(str(cache), max_size_bytes=int(total * 0.8), flush_interval=0)
-    b._ensure_size_scanned()
-    b._check_and_evict()
+    b.evictor.ensure_size_scanned()
+    b.evictor.evict()
 
     survivors = {f.name for f in os.scandir(cache) if f.name.endswith(ENTRY_SUFFIX)}
     # the oldest went, the newest stayed
@@ -581,9 +581,9 @@ def test_a_read_protects_an_entry_already_queued_for_eviction(tmp_path):
     _seed_equal(cache, 6, size)
 
     b = FileBackend(str(cache), max_size_bytes=10 * size, flush_interval=0)
-    b._ensure_size_scanned()
-    b._rebuild_evict_queue()
-    assert b._paths.get(b._evict_queue[0][0]) is None or True  # queue is built
+    b.evictor.ensure_size_scanned()
+    b.evictor.rebuild_queue()
+    assert b._paths.get(b.evictor.queue[0][0]) is None or True  # queue is built
 
     b.get("e0")  # the oldest, and at the head of the queue
     b._flush_metadata()
@@ -609,12 +609,12 @@ def test_an_unread_entry_is_still_evicted(tmp_path):
     _seed_equal(cache, 6, size)
 
     b = FileBackend(str(cache), max_size_bytes=6 * size, flush_interval=0)
-    b._ensure_size_scanned()
+    b.evictor.ensure_size_scanned()
     for i in range(3):
         b.set(f"new{i}", b"x" * size, {"size": size})
     b._writes.wait_all()
 
-    assert b._current_size_bytes <= 6 * size, "the cache stayed over its cap: nothing could be evicted"
+    assert b.evictor.current_bytes <= 6 * size, "the cache stayed over its cap: nothing could be evicted"
     b.shutdown()
 
 
@@ -629,8 +629,8 @@ def test_an_in_process_read_protects_before_the_flusher_runs(tmp_path):
     _seed_equal(cache, 6, size)
 
     b = FileBackend(str(cache), max_size_bytes=10 * size, flush_interval=0)
-    b._ensure_size_scanned()
-    b._rebuild_evict_queue()
+    b.evictor.ensure_size_scanned()
+    b.evictor.rebuild_queue()
     before = os.path.getmtime(b._get_path("e0"))
 
     b.get("e0")  # NO flush: only the in-memory signal moves
@@ -658,8 +658,8 @@ def test_another_processs_read_protects_through_mtime(tmp_path):
     _seed_equal(cache, 6, size)
 
     b = FileBackend(str(cache), max_size_bytes=10 * size, flush_interval=0)
-    b._ensure_size_scanned()
-    b._rebuild_evict_queue()
+    b.evictor.ensure_size_scanned()
+    b.evictor.rebuild_queue()
 
     victim = b._get_path("e0")
     b._metadata_cache.clear()  # nothing known in-process
@@ -686,8 +686,8 @@ def _warning_text(backend):
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        backend._warned_evict_after_write = False
-        backend._warn_evict_after_write(1)
+        backend.evictor.warned_thrash = False
+        backend.evictor.warn_thrash()
     msgs = [str(w.message) for w in caught if "evicting entries" in str(w.message)]
     return msgs[0] if msgs else ""
 
@@ -701,9 +701,9 @@ def test_dominant_size_is_byte_weighted_not_the_mean(tmp_path):
     would stay quiet precisely where the advice matters.
     """
     b = FileBackend(str(tmp_path / "c"), max_size_bytes=80 * 1024 * 1024)
-    b._evict_queue = deque([("/big", 64 * 1024 * 1024, 0.0)] + [(f"/c{i}", 2 * 1024, 0.0) for i in range(3000)])
+    b.evictor.queue = deque([("/big", 64 * 1024 * 1024, 0.0)] + [(f"/c{i}", 2 * 1024, 0.0) for i in range(3000)])
 
-    dominant = b._dominant_entry_size()
+    dominant = b.evictor.dominant_entry_size()
     mean = (64 * 1024 * 1024 + 3000 * 2 * 1024) / 3001
     assert dominant == 64 * 1024 * 1024, (
         f"got {dominant}, expected the 64MB entry that IS the cache; the mean would have said {mean:.0f}"
@@ -720,13 +720,13 @@ def test_dominant_size_is_byte_weighted_not_the_mean(tmp_path):
 
 def test_dominant_size_is_none_with_nothing_ranked(tmp_path):
     b = FileBackend(str(tmp_path / "c"), max_size_bytes=10**9)
-    assert b._dominant_entry_size() is None
+    assert b.evictor.dominant_entry_size() is None
     b.shutdown()
 
 
 def test_a_handful_of_large_entries_gets_the_advice(tmp_path):
     b = FileBackend(str(tmp_path / "c"), max_size_bytes=12 * 1024 * 1024)
-    b._evict_queue = deque([(f"/e{i}", 3 * 1024 * 1024, 0.0) for i in range(4)])
+    b.evictor.queue = deque([(f"/e{i}", 3 * 1024 * 1024, 0.0) for i in range(4)])
 
     text = _warning_text(b)
     assert "summary of those results" in text, text
@@ -744,7 +744,7 @@ def test_many_entries_fitting_gets_no_shape_advice(tmp_path):
     rather than by contriving a thrash that cannot happen.
     """
     b = FileBackend(str(tmp_path / "c"), max_size_bytes=1024 * 1024 * 1024)
-    b._evict_queue = deque([(f"/e{i}", 64 * 1024, 0.0) for i in range(5000)])
+    b.evictor.queue = deque([(f"/e{i}", 64 * 1024, 0.0) for i in range(5000)])
 
     text = _warning_text(b)
     assert text, "the warning itself should still fire"
@@ -781,7 +781,7 @@ def test_a_coarse_process_clock_does_not_make_fresh_writes_look_read(tmp_path, m
     Before Python 3.13, ``time.time()`` on Windows advances every 15.6 ms,
     and a file's mtime is not on that grid. A fresh write was queued at
     ``time.time()``, so its own mtime read as NEWER than the moment it was
-    ranked, `_touched_since` took that for a read, and the entry was dropped
+    ranked, `FileEvictor.touched_since` took that for a read, and the entry was dropped
     as a candidate. With every recent write dropped, eviction reached the
     newest few and CACHE-THRASH fired -- only on Windows runners, and only
     on 3.10-3.12.
@@ -813,7 +813,7 @@ def test_a_coarse_process_clock_does_not_make_fresh_writes_look_read(tmp_path, m
 def test_eviction_breaks_mtime_ties_by_write_order(tmp_path):
     """A burst that lands inside one filesystem timestamp tick is still LRU.
 
-    ``_rebuild_evict_queue`` ranks on mtime, and a sort on equal keys falls
+    ``FileEvictor.rebuild_queue`` ranks on mtime, and a sort on equal keys falls
     back to ``scandir`` order -- a hash, not a time. So a burst of small
     writes that shares one tick is ranked arbitrarily and the entry written
     moments ago is evicted as if it were the coldest.
@@ -846,8 +846,8 @@ def test_eviction_breaks_mtime_ties_by_write_order(tmp_path):
     for path in glob.glob(os.path.join(str(cache), "*.entry")):
         os.utime(path, (stamp, stamp))
 
-    b._rebuild_evict_queue()
-    order = [b._paths.get(p) for p, _s, _m in b._evict_queue]
+    b.evictor.rebuild_queue()
+    order = [b._paths.get(p) for p, _s, _m in b.evictor.queue]
 
     assert order == [f"k{i}" for i in range(10)], (
         f"eviction ranked a tied-mtime burst by directory order, not by when the entries were written; got {order}"

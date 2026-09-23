@@ -156,7 +156,7 @@ the caching.
 
 ## CACHE-DIR-UNWRITABLE {#cache-dir-unwritable}
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._warn_if_unwritable @ed86e53d -->
+<!-- claim: cash/backends/cache_dir.py:warn_if_unwritable @ca7bc994 -->
 **What happened.** On its first cache operation, cash tried to create a file in
 its cache directory and could not: a read-only mount, a directory this account
 has no write permission on, a container volume, a path owned by another user
@@ -391,7 +391,7 @@ warning on this page most worth reading, and the last one to filter.
 
 ## CACHE-THRASH {#cache-thrash}
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._warn_evict_after_write @1b66980f -->
+<!-- claim: cash/backends/file_eviction.py:FileEvictor.warn_thrash @9c41f109 -->
 **What happened.** The cache reached its size cap and is evicting entries
 within a couple of writes of storing them, so it re-writes and re-evicts
 instead of caching durably. The message names the cap, how much room is left on
@@ -508,7 +508,7 @@ rather than leaving it to chance.
 
 ## CACHE-VALUE-TOO-BIG {#cache-value-too-big}
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @a641a652, cash/backends/file_backend.py:FileBackend.promotion_size_cap @5572dc82 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @a641a652, cash/backends/file_backend.py:FileBackend.promotion_size_cap @ef38a34e -->
 **What happened.** A single value is larger than every persistent tier's whole
 cap, so there is nowhere durable to put it and Cash offered it to the RAM tier
 instead. The message names the value's size and the cap it was measured
