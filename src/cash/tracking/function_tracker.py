@@ -15,7 +15,7 @@ import types
 from typing import Any
 
 from ..install_paths import is_user_path
-from ..source_norm import callable_identity, module_identity, read_code_text
+from ..source_norm import bytecode_identity, callable_identity, module_identity, read_code_text, source_digest
 from .module_symbols import analysis_for
 
 __all__ = ["FunctionTracker", "is_local_module"]
@@ -132,7 +132,8 @@ class FunctionTracker:
         """Get the source hash for a callable.
 
         Returns None for a non-callable, a built-in or C-extension function,
-        or a lambda. Anything else gets its `callable_identity`.
+        a lambda, or a callable with neither source nor code (a class defined
+        in a cell, a partial). Anything else gets its `callable_identity`.
 
         For functions from tracked modules, bypasses the id-based cache to
         always read fresh source from disk — this ensures that module file
@@ -172,7 +173,13 @@ class FunctionTracker:
         # raw text meant a comment added to any referenced function
         # recomputed the statement. A function whose source cannot be read
         # (defined in a cell cash intercepted) is keyed by its bytecode.
-        source_hash = callable_identity(func)
+        # A callable with neither -- a class defined in a cell, a partial --
+        # has only its name, which the upstream simulation cannot rebuild
+        # after a restart before the cell that defines it runs again, so it
+        # gets no digest rather than one the restored lineage never matches.
+        source_hash = source_digest(func)
+        if source_hash is None and bytecode_identity(func) is not None:
+            source_hash = callable_identity(func)
         _evict_source_cache(self._source_cache, self.MAX_CACHE_SIZE)
         self._source_cache[cache_key] = source_hash
         return source_hash

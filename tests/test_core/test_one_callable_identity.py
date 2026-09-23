@@ -98,3 +98,14 @@ def test_two_functions_one_decorator_do_not_share_an_identity(tmp_path, identiti
 def test_the_same_code_keeps_its_identity(tmp_path, identities, path):
     """The control: a fresh definition of identical code is the same identity."""
     assert identities[path](_load(tmp_path, "same_a")["area"]) == identities[path](_load(tmp_path, "same_b")["area"])
+
+
+def test_the_notebook_tracker_gives_a_class_with_no_source_no_digest():
+    """A class defined in a cell has neither source nor code, only its name.
+    After a restart the upstream simulation meets ``b = Box(3)`` before
+    ``class Box`` runs again and cannot rebuild a name-only digest, so a
+    digest here put a component in ``b``'s lineage the restored run never
+    matched, and every statement over ``b`` re-ran."""
+    ns: dict = {"__name__": "__main__"}
+    exec("class Box:\n    def __init__(self, n):\n        self.n = n\n", ns)
+    assert FunctionTracker().get_function_source_hash(ns["Box"]) is None
