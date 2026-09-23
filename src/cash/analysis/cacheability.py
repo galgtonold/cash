@@ -467,7 +467,9 @@ NOTEBOOK_POLICY: dict[EffectKind, Action] = {
     EffectKind.DB_WRITE: Action.REFUSE,
     EffectKind.SUBPROCESS: Action.REFUSE,
     EffectKind.CLOCK: Action.REFUSE,
-    EffectKind.ENVIRONMENT: Action.CACHE,
+    # The value of a read whose name is written out goes into the key
+    # (`compute_cache_key`), so a new value is a new entry.
+    EffectKind.ENVIRONMENT: Action.CACHE_AS_INPUT,
     # The captured output is replayed on a hit.
     EffectKind.CONSOLE: Action.CACHE,
     EffectKind.DISPLAY: Action.REFUSE,

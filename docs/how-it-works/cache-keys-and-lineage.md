@@ -6,7 +6,7 @@ Every cached result is stored under a key that captures exactly what was compute
 
 A cache key is a deterministic fingerprint of a computation: the same source code over the same inputs always produces the same key, so a hit means the result can be reused without re-executing anything. Any relevant change — edited code, a recomputed upstream variable, a changed helper function — produces a different key and causes a miss.
 
-<!-- claim: cash/notebook/cache_key.py:compute_cache_key @fd02e4dc -->
+<!-- claim: cash/notebook/cache_key.py:compute_cache_key @54721829 -->
 The statement-level key is built by `compute_cache_key()` in `cash.notebook.cache_key`:
 
 ```
@@ -16,9 +16,16 @@ combined  = source_hash                      # SHA256 of the statement's own tex
           + [":" + module_source_hashes]     # "name:hash" per tracked module read, sorted
           + ":occ" + occurrence_index        # 0-based; disambiguates a repeated statement
           + [":callees:" + callee_globals]   # "name:lineage" per global a callee reaches for
+          + [":env:" + environment_reads]    # "env:NAME=digest" per os.getenv("NAME") / os.environ["NAME"],
+                                             # "cwd:=digest" for os.getcwd(), written in the statement
 
 cache_key = namespace + ":" + SHA256(combined)
 ```
+
+The environment component is also folded into the lineage of every output, by the
+same function (`statement_environment_component` in `cash.notebook.lineage_formula`),
+so what is built on `tenant = os.getenv("TENANT")` misses when the variable changes
+too. It holds a digest of each value, never the value.
 
 Five details of that formula are load-bearing:
 
@@ -60,7 +67,7 @@ already loaded, and otherwise from what that import bound when it last ran, whic
 Cash records. Without them the key never matched, and every statement that called
 a notebook function was re-run after a restart, along with everything it needed.
 
-<!-- claim: cash/notebook/upstream/virtual_lineage.py:VirtualLineage._propagate_import_lineage @4e7082a9 -->
+<!-- claim: cash/notebook/upstream/virtual_lineage.py:VirtualLineage._propagate_import_lineage @0fbd7dde -->
 A module's lineage is the lineage of the import that bound it. Some imports run
 without Cash: the cell that turns Cash on is already running when `%cash_on`
 executes, so the imports after it in that cell run uncached. The upstream check
@@ -248,7 +255,7 @@ Content beats the lineage attribute, and that ordering is the fix for a real bug
 `compute_hash` itself ends at `sha256(str(id(obj)))` for an object that cannot be pickled. That does not corrupt anything — the statement executes normally and the result is stored — but the key is then tied to a memory address, so the entry is effectively per-session and will not restore after a kernel restart.
 
 ??? note "Under the hood"
-    <!-- claim: cash/notebook/statement/lineage.py:StatementLineageBuilder.capture_and_track_variables @1104b490, cash/notebook/lineage_formula.py:output_lineage @fb93048a, cash/notebook/lineage_formula.py:module_source_component @22694512 -->
+    <!-- claim: cash/notebook/statement/lineage.py:StatementLineageBuilder.capture_and_track_variables @2f792035, cash/notebook/lineage_formula.py:output_lineage @9c114ecd, cash/notebook/lineage_formula.py:module_source_component @22694512 -->
     All statement keys are built by `compute_cache_key()` in
     `cash.notebook.cache_key`, and every output lineage by the functions in
     `cash.notebook.lineage_formula` — both shared by runtime execution

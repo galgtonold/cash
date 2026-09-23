@@ -23,7 +23,7 @@ from typing import Any, NamedTuple, Protocol, runtime_checkable
 from cash.notebook.lineage_store import LineageStore
 from cash.source_norm import unparse_without_docstrings
 
-from .lineage_formula import module_read_lineage
+from .lineage_formula import module_read_lineage, statement_environment_component
 
 __all__ = [
     "CacheKeyContext",
@@ -759,9 +759,13 @@ def compute_cache_key(
     callee_deps = called_function_dependencies(sorted_inputs, user_ns, variable_lineage, virtual)
     callee_component = f":callees:{':'.join(callee_deps)}" if callee_deps else ""
 
+    # What the environment reads in the statement return now: a new value is a
+    # new entry. Empty when it reads none, so every other key is unchanged.
+    environment = statement_environment_component(code, user_ns)
+
     combined_hash_str = (
         f"{source_hash}:{':'.join(input_hashes)}{func_component}{module_component}"
-        f"{occurrence_component}{callee_component}"
+        f"{occurrence_component}{callee_component}{environment}"
     )
     combined_hash = hashlib.sha256(combined_hash_str.encode("utf-8")).hexdigest()
     cache_key = f"{namespace}:{combined_hash}"

@@ -4,7 +4,10 @@ A decorated function whose body called
 ``datetime.now()`` cached the first call's timestamp and handed it back for
 ever -- across processes, because the cache is on disk -- and said nothing.
 ``os.environ["TENANT"]`` did the same, which is the version that returns one
-tenant's numbers to another tenant and exits 0.
+tenant's numbers to another tenant and exits 0; an environment read whose
+name is written out is now folded into the key instead
+(``test_environment_is_an_input.py``), and only one whose name is known at
+run time is still announced.
 
 The behaviour is unchanged and deliberate: freezing is what a cache does to any
 input it cannot see. What was missing is the sentence saying so. These reads are
@@ -121,19 +124,24 @@ def _wall_clock(c):
     [
         _clock,
         _today,
-        _env_subscript,
-        _env_getenv,
-        _cwd,
         _fresh_uuid,
         _wall_clock,
     ],
-    ids=["datetime.now", "date.today", "os.environ[]", "os.getenv", "os.getcwd", "uuid4", "time.time"],
+    ids=["datetime.now", "date.today", "uuid4", "time.time"],
 )
 def test_each_ambient_read_is_announced(cash_instance, factory):
     got = _warnings_for(cash_instance, factory)
     assert got, "the ambient read was cached with no warning at all"
     text = "\n".join(str(w.message) for w in got)
     assert "KEY-AMBIENT-READ" in text, f"wrong diagnostic code:\n{text}"
+
+
+@pytest.mark.parametrize("factory", [_env_subscript, _env_getenv, _cwd], ids=["os.environ[]", "os.getenv", "os.getcwd"])
+def test_an_environment_read_is_keyed_not_announced(cash_instance, factory):
+    """Its value is folded into the key (test_environment_is_an_input.py),
+    so nothing is frozen and there is nothing to announce."""
+    text = "\n".join(str(w.message) for w in _warnings_for(cash_instance, factory))
+    assert "KEY-AMBIENT-READ" not in text, text
 
 
 def test_the_advice_is_about_the_key_not_about_side_effects(cash_instance):
@@ -147,27 +155,24 @@ def test_the_frozen_value_is_what_the_warning_is_about(cash_instance, monkeypatc
     """The hazard itself, so the warning is pinned to a real failure.
 
     Without this the tests above pass on a warning that describes nothing.
-    The environment is the right instrument here: a captured dict does NOT
-    reproduce it -- a closure capture reaches the cache key, so changing one
-    correctly recomputes. Only a value cash cannot see freezes, which is the
-    whole point of the warning.
+    A fresh id is the instrument here: a captured dict does NOT reproduce it
+    -- a closure capture reaches the cache key, so changing one correctly
+    recomputes, and so does an environment variable now. Only a value cash
+    cannot see freezes, which is the whole point of the warning.
     """
-    import os
-
-    monkeypatch.setenv("CASH_TEST_TENANT", "acme")
+    import uuid
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
 
         @cash_instance.cache
         def bill(rows):
-            return f"{os.environ['CASH_TEST_TENANT']}:{rows}"
+            return f"{uuid.uuid4()}:{rows}"
 
         first = bill(3)
-        monkeypatch.setenv("CASH_TEST_TENANT", "globex")
         second = bill(3)
 
-    assert first == "acme:3"
+    assert first.endswith(":3")
     assert second == first, "the frozen read is the documented hazard"
 
 

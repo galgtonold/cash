@@ -655,7 +655,7 @@ won't flag on it, and any function whose body calls
 
 ### What the analyzer looks at
 
-<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @d5c12ecf broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @a557e11f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
+<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @45302c12 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @a557e11f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
 The decorator-side analyzer walks the function body AND
 **module-bounded helpers** (functions defined in the same top-level
 package, or any non-installed-library code) and any **closure-bound
@@ -692,9 +692,9 @@ it flags:
     transitively through the helpers they call. Where cash genuinely cannot
     hash one — `functools.partial` — it warns at that argument instead, naming
     `depends_on=` or `cash.opaque()`.
-- **Ambient reads** — the clock (`datetime.now`, `time.time`), the
-  environment (`os.getenv`, `os.environ[...]`), the working directory, a
-  fresh `uuid4()`. These are hidden *inputs* rather than side effects, so
+- **Ambient reads** — the clock (`datetime.now`, `time.time`), a fresh
+  `uuid4()`, an environment variable whose name is only known at run time
+  (`os.getenv(name)`). These are hidden *inputs* rather than side effects, so
   they get their own warning ([`KEY-AMBIENT-READ`](../../warnings.md#key-ambient-read)):
   the value is not part of the cache key, so the first call's answer is what
   every later call gets back. Pass it in as an argument
@@ -702,6 +702,10 @@ it flags:
   `# @cash:assume-safe` on that line. A read that only feeds a `print`, a
   `logging` call or `warnings.warn` — a timer for an elapsed-time line — is
   not flagged: it cannot reach the result.
+- **Environment reads with the name written out** — `os.getenv("TENANT")`,
+  `os.environ["TENANT"]`, and the working directory (`os.getcwd()`). Not
+  flagged: the current value is folded into the key on every call, so a new
+  value is a new entry.
 - **Network and database reads** — `requests.get`, `requests.head`,
   `urlopen(url)` without data, a literal `SELECT` through `execute`,
   `pd.read_sql`. Also an input rather than a side effect, with its own warning

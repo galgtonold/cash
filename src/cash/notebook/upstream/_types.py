@@ -43,6 +43,10 @@ class SimulationCacheEntry(NamedTuple):
     cell_file_deps: dict[str, float]
     """``{filepath: mtime}`` for files read during this cell's simulation."""
 
+    cell_environment: str = ""
+    """What the environment reads written in the cell returned when it was
+    simulated (``statement_environment_component``): empty when it reads none."""
+
 
 class _TraceFields(NamedTuple):
     stmt_code: str

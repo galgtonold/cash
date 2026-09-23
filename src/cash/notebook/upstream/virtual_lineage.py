@@ -83,6 +83,7 @@ from ..lineage_formula import (
     module_read_lineage,
     module_source_component,
     output_lineage,
+    statement_environment_component,
 )
 from ..loop_split import is_split_half, loop_source_hash, split_nodes, store_for_backend
 from ..statement.derivation_edges import bump_derived_lineages
@@ -670,6 +671,11 @@ class VirtualLineage:
                         cached.cell_code_hash[:12],
                         cell_hash[:12],
                     )
+                break
+            if cached.cell_environment != self._cell_environment(cell_code):
+                # An environment variable the cell reads has another value:
+                # its outputs' lineages fold it, so re-simulate from here --
+                # like a changed file, not like edited code.
                 break
             cached_file_deps = cached.cell_file_deps
             if cached_file_deps and self._check_cell_file_deps(cached_file_deps, idx):
@@ -1630,8 +1636,15 @@ class VirtualLineage:
                 vars_mutated_by_loops=set(vars_mutated_by_loops),
                 vars_with_stale_files=set(vars_with_stale_files),
                 cell_file_deps=dict(cell_file_deps),
+                cell_environment=self._cell_environment(cell_code),
             )
         )
+
+    def _cell_environment(self, cell_code: str) -> str:
+        """What the environment reads written in *cell_code* return now
+        (``statement_environment_component``), for telling a cell simulated
+        under another value from one that may be reused."""
+        return statement_environment_component(CodeAnalyzer.strip_magics(cell_code), self.shell.user_ns)
 
     def simulate_cells_pass1(
         self,
@@ -2551,6 +2564,7 @@ class VirtualLineage:
         except (TypeError, ValueError, AttributeError):
             logger.debug("[UPSTREAM] Failed to compute function source hashes for capture")
             func_component = ""
+        environment = statement_environment_component(stmt_code, user_ns)
         return {
             out: output_lineage(
                 source_hash,
@@ -2558,6 +2572,7 @@ class VirtualLineage:
                 file_hash_component,
                 func_component,
                 module_source_component(function_tracker, user_ns.get(out), out, stmt_code, tree),
+                environment,
             )
             for out in outputs
         }

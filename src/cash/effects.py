@@ -34,9 +34,11 @@ from __future__ import annotations
 
 import ast
 import builtins
+import hashlib
+import os
 import sys
 import types
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from enum import Enum
 from typing import Any, NamedTuple
 
@@ -54,6 +56,9 @@ __all__ = [
     "PYPLOT_MODULE_ALIASES",
     "classify_call",
     "dotted_name",
+    "environment_component",
+    "environment_input",
+    "environment_label",
     "is_environ_read",
     "is_open_write_mode",
     "is_read_only_sql",
@@ -484,6 +489,71 @@ def is_environ_read(node: ast.AST) -> bool:
     return (
         isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load) and dotted_name(node.value) in ENVIRON_NAMES
     )
+
+
+#: One environment read the key can fold: ``("env", NAME)`` for a variable,
+#: ``("cwd", "")`` for the working directory.
+EnvironmentInput = tuple[str, str]
+
+
+def environment_input(node: ast.AST, namespace: Mapping[str, Any] | None = None) -> EnvironmentInput | None:
+    """What an environment read reads, when its value can go into a key.
+
+    ``os.getenv("NAME")``, ``os.environ.get("NAME")`` and
+    ``os.environ["NAME"]`` with the name written out give ``("env", "NAME")``;
+    ``os.getcwd()`` gives ``("cwd", "")``. Anything else is None -- including a
+    read whose name is only known at run time, which no key can fold.
+    """
+    if is_environ_read(node):
+        key = node.slice  # type: ignore[attr-defined]
+        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+            return ("env", key.value)
+        return None
+    if not isinstance(node, ast.Call):
+        return None
+    effect = classify_call(node, namespace)
+    if effect is None or effect.kind is not EffectKind.ENVIRONMENT:
+        return None
+    if effect.name == "os.getcwd":
+        return ("cwd", "")
+    name = _literal_arg(node, 0, "key")
+    if isinstance(name, ast.Constant) and isinstance(name.value, str):
+        return ("env", name.value)
+    return None
+
+
+def environment_label(entry: EnvironmentInput) -> str:
+    """How a folded environment read is named when it is why a key changed."""
+    kind, name = entry
+    return "the working directory" if kind == "cwd" else f"environment variable {name}"
+
+
+def _environment_digest(entry: EnvironmentInput) -> str:
+    kind, name = entry
+    if kind == "cwd":
+        try:
+            value: str | None = os.getcwd()
+        except OSError:  # the directory was removed under the process
+            value = None
+    else:
+        value = os.environ.get(name)
+    # A digest, never the value: an environment variable is where secrets live,
+    # and a key component can end up in a log line or an explain() report.
+    return "unset" if value is None else hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
+def environment_component(entries: Iterable[EnvironmentInput], note: Callable[[str, str], None] | None = None) -> str:
+    """The key component for the environment reads *entries*: their current
+    values, digested. Empty when there are none, so a key that reads no
+    environment is exactly what it was. *note* is told each read's label and
+    digest, for the account of why a key changed."""
+    parts = []
+    for entry in sorted(set(entries)):
+        digest = _environment_digest(entry)
+        if note is not None:
+            note(environment_label(entry), digest)
+        parts.append(f"{entry[0]}:{entry[1]}={digest}")
+    return f":env:{':'.join(parts)}" if parts else ""
 
 
 def _reads_clock_when_omitted(name: str, call: ast.Call) -> bool:

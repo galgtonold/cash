@@ -64,6 +64,7 @@ from .diagnostics import (
 )
 from .effect_observer import EffectObserver, line_waived, observed_label
 from .effectiveness import EffectivenessLedger
+from .effects import environment_component
 from .exceptions import (
     SOURCE_RETRIEVAL_ERRORS,
     CacheBackendError,
@@ -1092,6 +1093,7 @@ _STATE_STAGES = (
     "the instance it is bound to",
     "a global it reads",
     "the random-seed epoch",
+    "the environment it reads",
     "the class of an argument",
     "a function or class passed as an argument",
 )
@@ -2876,6 +2878,37 @@ class Cash:
                 self._own_pins_unverified.add(key)
         return pin
 
+    def _fold_environment(self, func_name: str, state_hash: str) -> str:
+        """Fold the current value of every environment read into the key.
+
+        ``os.environ["TENANT"]`` in a cached body served the first tenant's
+        answer to every other tenant: the value is an input that never reached
+        the key. The analyzer lists the reads whose name is written out
+        (`PurityReport.environment_reads`), in the function, its helpers and
+        the cached functions it calls -- a dependency's own key moves with
+        the variable, but this function's stored result would not. Each is
+        read again on every call, and a new value is a new entry.
+
+        Nothing is added when there are none, so such a key is unchanged.
+        """
+        entries = self._environment_reads(func_name, set())
+        if not entries:
+            return state_hash
+        component = environment_component(entries, note=lambda label, digest: ledger_note(("env", label), digest))
+        return hashlib.sha256(f"{state_hash}{component}".encode("utf-8")).hexdigest()
+
+    def _environment_reads(self, func_name: str, visited: set[str]) -> set[tuple[str, str]]:
+        """The environment reads of *func_name* and every cached function it
+        (transitively) depends on (cycle-guarded)."""
+        if func_name in visited:
+            return set()
+        visited.add(func_name)
+        report = self._purity_reports.get(func_name)
+        found = set(getattr(report, "environment_reads", ()) or ())
+        for dep in self.graph.get_dependencies(func_name):
+            found |= self._environment_reads(dep, visited)
+        return found
+
     def _fold_rng_epoch(self, func_name: str, state_hash: str) -> str:
         """Fold the current seed epoch into the key, for RNG-drawing functions.
 
@@ -3123,6 +3156,8 @@ class Cash:
             state_hash = self._fold_dependency_read_globals(func, func_name, state_hash)
             chain.append(state_hash)
             state_hash = self._fold_rng_epoch(func_name, state_hash)
+            chain.append(state_hash)
+            state_hash = self._fold_environment(func_name, state_hash)
             chain.append(state_hash)
             state_hash = self._fold_method_class_deps(func, args, state_hash)
             chain.append(state_hash)
@@ -3724,6 +3759,9 @@ class Cash:
                 for name, digest in value:
                     # `X#carried`, `X#cls:C`: more of what global X is.
                     grouped.setdefault(f"global {name.split('#', 1)[0]}{via}", []).append((name, digest))
+            elif isinstance(label, tuple) and label[0] == "env":
+                # Already worded: "environment variable TENANT".
+                flat[label[1]] = short(value)
             elif isinstance(label, tuple):
                 kind = "cached function" if label[0] == "calls" else label[0]
                 flat[f"{kind} {label[1]}"] = short(value)

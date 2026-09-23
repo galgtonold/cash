@@ -38,6 +38,7 @@ from ..lineage_formula import (
     module_read_lineage,
     module_source_component,
     output_lineage,
+    statement_environment_component,
 )
 from .derivation_edges import (
     bump_derived_lineages,
@@ -129,6 +130,9 @@ class StatementLineageBuilder:
         # yet another model, so a consumer never agrees with the value recorded
         # beside it -- measured, it broke even the first clean run.
         lineage_inputs = inputs | hidden_lineage_reads(code)
+        # The environment it read, as its key folds it: a new value is a new
+        # lineage, so what is built on an output misses too.
+        environment = statement_environment_component(code, user_ns)
 
         # Derivation-alias edges. A fresh rebind (``g = ...`` — output not also
         # read as an input) drops the var's stale edges before we re-detect; an
@@ -159,6 +163,7 @@ class StatementLineageBuilder:
                 file_hash_component,
                 callable_source_component(self.function_tracker, inputs, user_ns),
                 self._compute_module_lineage_component(tracking_state, value, var_name, code, tree),
+                environment,
             )
 
             # Record via LineageStore so the dict entry and ``_cash_lineage_hash``
@@ -374,6 +379,7 @@ class StatementLineageBuilder:
             "",
             callable_source_component(self.function_tracker, inputs, user_ns),
             module_source_component(self.function_tracker, value, var_name, code),
+            statement_environment_component(code, user_ns),
         )
 
     def _compute_module_lineage_component(

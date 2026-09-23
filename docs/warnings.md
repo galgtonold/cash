@@ -945,14 +945,22 @@ that moved — shows it again.
 
 ## KEY-AMBIENT-READ {#key-ambient-read}
 
-<!-- claim: cash/effects.py:MODULE_CALLS @c6f9471b, cash/purity_analyzer.py:_PurityVisitor.visit_Subscript @41979fda -->
+<!-- claim: cash/effects.py:MODULE_CALLS @c6f9471b, cash/purity_analyzer.py:_PurityVisitor.visit_Subscript @f19bc8dc -->
 **What happened.** Reading the source of the function you decorated found a
-call that asks the world what time it is, what the environment says, where the
-process is running, or for a fresh UUID: `datetime.now()`, `date.today()`,
-`time.time()`, `os.getenv(...)`, `os.environ["..."]`, `os.getcwd()`,
-`uuid.uuid4()`, and pandas' `pd.Timestamp.now()`, `pd.Timestamp.today()`,
-`pd.to_datetime("today")`. The named line ran, and the result was cached as
-normal.
+call that asks the world what time it is or for a fresh UUID:
+`datetime.now()`, `date.today()`, `time.time()`, `uuid.uuid4()`, and pandas'
+`pd.Timestamp.now()`, `pd.Timestamp.today()`, `pd.to_datetime("today")` — or
+an environment read whose variable name is only known at run time,
+`os.getenv(name)`. The named line ran, and the result was cached as normal.
+
+<!-- claim: cash/effects.py:environment_input @bed3e42a, cash/core.py:Cash._fold_environment @36b7c6d0 -->
+An environment read with the name written out — `os.getenv("TENANT")`,
+`os.environ["TENANT"]`, `os.environ.get("TENANT", "x")` — and `os.getcwd()`
+are not reported: the variable's current value (a digest of it, never the
+value itself) is folded into the key on every call, in the function, in the
+helpers it calls and in the cached functions it depends on. A new value is a
+new entry, and going back to an old value hits the entry made for it. A
+notebook statement does the same with the reads written in it.
 
 <!-- claim: cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511, cash/effects.py:_reads_clock_when_omitted @b543a896 -->
 `time.strftime("%Y-%m")`, `time.asctime()`, `time.ctime()`,
@@ -991,8 +999,9 @@ The first call's value is therefore baked into the stored result, and every
 later call gets it back — in this process and in every process afterwards,
 because the cache is on disk. A nightly report stamped with `date.today()`
 keeps the date of the night it first ran. A job that reads
-`os.environ["TENANT"]` serves the first tenant's answer to every other tenant.
-Nothing raises; the run exits 0 with the wrong number in it.
+`os.getenv(var)`, with the variable chosen at run time, serves the first
+answer for every variable. Nothing raises; the run exits 0 with the wrong
+number in it.
 
 This is not the same as [IMPURE-SIDE-EFFECTS](#impure-side-effects), which is
 about work a cache hit *skips*. Here nothing is skipped — a hidden input is
@@ -1014,9 +1023,10 @@ report([1, 2, 3], as_of=date.today())
 ```
 
 Read the clock at the call site, where it is obvious, rather than inside the
-body, where it is invisible. If the value genuinely never changes for the
-program's lifetime (`os.getcwd()` in a job that never chdirs, a build ID read
-once from the environment), hoist it to a module-level constant computed at
+body, where it is invisible. For an environment read, writing the name out
+(`os.getenv("TENANT")`) is enough: the value then reaches the key by itself.
+If the value genuinely never changes for the program's lifetime (a start time
+recorded once per run), hoist it to a module-level constant computed at
 import.
 
 **When it is safe to ignore.** When the frozen value is the point — a timestamp
@@ -1263,7 +1273,7 @@ cache looks healthy and is silently doing nothing.
 
 ## KEY-NETWORK-READ {#key-network-read}
 
-<!-- claim: cash/core.py:Cash._surface_purity @970a41cf, cash/purity_analyzer.py:DECORATOR_POLICY @648d6d15, cash/effects.py:MODULE_CALLS @c6f9471b -->
+<!-- claim: cash/core.py:Cash._surface_purity @970a41cf, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @c6f9471b -->
 **What happened.** Reading the source of the function you decorated found a
 call that fetches from a server: `requests.get(...)`, `requests.head(...)`,
 `requests.request("GET", ...)`, the same calls on `httpx`, or
@@ -2039,7 +2049,7 @@ every later call would be a cache hit with the old answer — silently, for as
 long as the entry lived. Not caching is the only honest option: nothing can say
 which version of the file the result came from.
 
-<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @8624e84e, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @25737028 -->
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @8624e84e, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @66c193a7 -->
 A writer that moves neither the size nor a timestamp — an `np.memmap` write on
 Windows — does not trigger this warning. A file under the full-hash cap is
 fingerprinted by its content **when the function first reads it**, so the entry

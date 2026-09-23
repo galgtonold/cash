@@ -223,14 +223,14 @@ final value straight from cache:
 # Cash restores the final 'df' directly:  ~0.1s (deserialization only)
 ```
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @6fe3d5eb -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @0f43abb4 -->
 That holds for values computed *from* a loop too. A loop's outputs get lineages
 derived from the values it built, which the upstream simulation cannot derive
 from code, so Cash writes down what a loop left behind when it runs, and the
 simulation in a later kernel uses that record to find the entries computed
 from it. The record is trusted instead of running the loop, so Cash keeps one only for a
 `for` loop whose outcome is all it did: no file written, no draw from the global
-random generators, no clock or `uuid` read, no global changed in place by a
+random generators, no clock, `uuid` or environment read, no global changed in place by a
 function it calls. It is used only while everything the loop and its functions
 read, down to a helper called through another helper, is unchanged. Anything
 else, and the loop runs again. The loop's own variables (`parts`, `d` in

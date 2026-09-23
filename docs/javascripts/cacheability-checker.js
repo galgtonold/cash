@@ -71,6 +71,12 @@
       verdict: "ok",
       title: "Cached",
       why: "A read-style request changes nothing on the server, so it is cached like reading a file. What the server returns later is not checked: bound how old the answer may get with # @cash:ttl=N, or use # @cash:no-cache to fetch every run."
+    },
+    {
+      code: "tenant = os.getenv('TENANT')",
+      verdict: "ok",
+      title: "Cached",
+      why: "An environment read is an input. Its current value goes into the key and into tenant's lineage, so a new value runs the statement again and everything built on tenant follows. The same holds for os.environ['TENANT'] and os.getcwd(). The name must be written out: os.getenv(name) cannot be keyed, and a read inside a function the statement calls is not seen."
     }
   ];
 

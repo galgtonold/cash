@@ -93,6 +93,13 @@ ROWS = [
     ("time.process_time()", "refuse", "ambient_read"),
     ("time.localtime(1.0)", "cache", "silent"),
     ("time.strftime('%Y', time.localtime(1.0))", "cache", "silent"),
+    # The environment: an input whose value both keys now fold, so a new
+    # value is a new entry (the notebook cached it frozen, the decorator
+    # warned). A name known only at run time cannot be folded, and warns.
+    ("os.getenv('HOME')", "cache", "silent"),
+    ("os.environ.get('HOME', a)", "cache", "silent"),
+    ("os.getcwd()", "cache", "silent"),
+    ("os.getenv(a)", "cache", "ambient_read"),
     # pyplot's current figure: a notebook statement drawing on it runs every
     # time, and a decorated function that draws on it was silent.
     ("plt.plot([1, 2])", "refuse", "impure_call"),

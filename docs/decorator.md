@@ -523,7 +523,7 @@ normally.
 The same rule applies to variables a closure captures, not just module
 globals.
 
-<!-- claim: cash/core.py:Cash._carried_global_hash @55330164 -->
+<!-- claim: cash/core.py:Cash._carried_global_hash @12149ac8 -->
 **A callable built from data counts as that data.** A global that is a
 library callable carrying values — `SMOOTH = partial(ndimage.gaussian_filter,
 sigma=SIGMA)`, `POLY = np.poly1d(COEFFS)`, `CAL = interp1d(X, Y)`,
@@ -989,9 +989,14 @@ By default, `@cash.cache` runs a static analyzer on the function body
   the key cannot see, so the first answer is served until the key changes.
   Setting `ttl=` bounds how old that answer may get and silences the warning.
   A SQLite file the body opens itself is tracked as a file read instead.
-- **Ambient reads** — the clock, the environment, the working directory, a
-  fresh UUID (`datetime.now()`, `date.today()`, `os.environ["..."]`,
-  `os.getenv`, `os.getcwd()`, `uuid.uuid4()`) → a `CashImpurityWarning` coded
+- **Environment reads** — `os.getenv("NAME")`, `os.environ["NAME"]`,
+  `os.environ.get("NAME")` with the name written out, and `os.getcwd()` → no
+  warning: the current value is folded into the key on every call (a digest,
+  never the value), in the body, its helpers and the cached functions it
+  depends on. A new value is a new entry.
+- **Ambient reads** — the clock or a fresh UUID (`datetime.now()`,
+  `date.today()`, `uuid.uuid4()`), or an environment read whose name is only
+  known at run time (`os.getenv(name)`) → a `CashImpurityWarning` coded
   [`KEY-AMBIENT-READ`](warnings.md#key-ambient-read), and the function is
   **still cached**. Not a side effect: the value is a hidden *input*, so the
   first call's reading is frozen into every later result, in this process and
@@ -1559,7 +1564,7 @@ A network **read** is not in this group; see the next section.
 
 ### A cached GET goes stale
 
-<!-- claim: cash/core.py:Cash._surface_purity @970a41cf, cash/purity_analyzer.py:DECORATOR_POLICY @648d6d15 -->
+<!-- claim: cash/core.py:Cash._surface_purity @970a41cf, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03 -->
 `requests.get(url)` writes nothing, so it is not reported with the side
 effects. What the server returns is an **input**, and it is not in the key:
 the first answer is stored and served on every later call, in every later

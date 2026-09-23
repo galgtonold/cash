@@ -190,7 +190,7 @@ Replaying them from cache would skip the action (a file never gets written, a
 request never gets sent). Cash's side-effect analysis flags these statements as
 **uncacheable** so they always run:
 
-<!-- claim: cash/effects.py:MODULE_CALLS @c6f9471b, cash/analysis/cacheability.py:NOTEBOOK_POLICY @86811d37, cash/analysis/cacheability.py:_SideEffectVisitor @ab719d0c broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
+<!-- claim: cash/effects.py:MODULE_CALLS @c6f9471b, cash/analysis/cacheability.py:NOTEBOOK_POLICY @5ffd29f3, cash/analysis/cacheability.py:_SideEffectVisitor @ab719d0c broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
 | Pattern | Examples | Why it's unsafe to replay |
 |---------|----------|---------------------------|
 | File writes | `open('f', 'w')`, `df.to_csv()`, `df.to_parquet()`, `Path(p).write_text()` | The file wouldn't be written on a cache hit |
@@ -226,6 +226,18 @@ is the same list a `@cash.cache` function is checked against
 So does a statement that asks the person at the keyboard — `input()`,
 `getpass.getpass()`, `breakpoint()` — since a hit would replay the first answer
 without asking again.
+
+<!-- claim: cash/notebook/lineage_formula.py:statement_environment_component @d70a1c80 -->
+A statement that reads the environment is cached, with what it read as part of
+its key: `os.getenv("TENANT")`, `os.environ["TENANT"]`,
+`os.environ.get("TENANT")` and `os.getcwd()` add a digest of the current value
+(never the value itself) to the key and to the lineage of what the statement
+binds. A new value runs the statement again, and what is built on its outputs
+follows; going back to an old value restores the entry made for it. The name
+has to be written out — `os.getenv(name)` cannot be keyed — and a read inside
+a function the statement calls is not seen, so such a function's answer stays
+what it was when the statement first ran. A `@cash.cache` function folds the
+same reads, its helpers' included.
 
 <!-- claim: cash/effects.py:METHOD_VERBS @49934ce1, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @c6f9471b -->
 Detection is by call shape, so it works without importing anything, with two
@@ -383,6 +395,7 @@ side effect → always re-run; unseeded randomness → cache but say so; otherwi
       <tr><td><code>r = requests.post(url, json=payload)</code></td><td>Not cached — network side effect</td></tr>
       <tr><td><code>r = session.post(url, json=payload)</code></td><td>Not cached — the same write through a client object</td></tr>
       <tr><td><code>r = requests.get(url)</code></td><td>Cached — a read, like reading a file</td></tr>
+      <tr><td><code>tenant = os.getenv('TENANT')</code></td><td>Cached — the value is part of the key</td></tr>
     </tbody>
   </table>
 </div>

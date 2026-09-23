@@ -49,6 +49,7 @@ from ...object_hashing import compute_hash_full
 from ...value_types import IMMUTABLE_PRIMS
 from ..cache_key import called_function_globals, control_outcome_key
 from ..cache_status import CacheStatus
+from ..lineage_formula import statement_environment_reads
 from ..statement.file_deps import compute_file_hash_component
 from ..write_observer import observe_writes
 from . import helpers as _helpers
@@ -572,6 +573,9 @@ class ControlStructureProcessor:
           the loop would skip the write;
         * no clock or uuid read, in it or in a function it calls: its
           outcome is not a function of its inputs;
+        * no environment read, in it or in a function it calls: a statement
+          folds the value into its key and lineage, which a trusted record
+          would skip;
         * no global mutated in place by a function it calls, and no RNG
           object read: effects the entry lineages do not show.
 
@@ -597,9 +601,13 @@ class ControlStructureProcessor:
             if not isinstance(user_ns.get(name), types.FunctionType):
                 continue
             source = resolve(name)
-            if source is None or CodeAnalyzer.scan_for_forbidden_functions(source, user_ns):
+            if (
+                source is None
+                or CodeAnalyzer.scan_for_forbidden_functions(source, user_ns)
+                or statement_environment_reads(source, user_ns)
+            ):
                 return None
-        if CodeAnalyzer.scan_for_forbidden_functions(code, user_ns):
+        if CodeAnalyzer.scan_for_forbidden_functions(code, user_ns) or statement_environment_reads(code, user_ns):
             return None
         if called_function_global_mutations(ast.parse(code), resolve, include_control_bodies=True):
             return None

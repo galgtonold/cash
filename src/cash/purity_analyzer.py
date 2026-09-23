@@ -71,6 +71,7 @@ from .effects import (
     EffectKind,
     classify_call,
     dotted_name,
+    environment_input,
 )
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
 from .purity import (
@@ -187,7 +188,10 @@ DECORATOR_POLICY: dict[EffectKind, Action] = {
     # These two are reported as ambient reads (KEY-AMBIENT-READ), not as
     # side effects: a hidden input is frozen, nothing is skipped.
     EffectKind.CLOCK: Action.WARN,
-    EffectKind.ENVIRONMENT: Action.WARN,
+    # A read whose name is written out is folded into the key by value
+    # (`Cash._fold_environment`); one whose name is only known at run time
+    # still warns, as an ambient read.
+    EffectKind.ENVIRONMENT: Action.CACHE_AS_INPUT,
     # A hit drops what the first call printed. A log line (`is_log_line`) is
     # exempt: a hit skipping it is what caching means.
     EffectKind.CONSOLE: Action.WARN,
@@ -314,6 +318,10 @@ class PurityReport:
     #: followed; the data the bound object carries is not keyed, because the
     #: audited effect is what moves it (a ledger's count, a client's stats).
     waived_bindings: frozenset[tuple[str, tuple[str, ...]]] = frozenset()
+    #: Environment reads, in the function and its helpers, whose current value
+    #: the key folds on every call: ``("env", NAME)`` or ``("cwd", "")``
+    #: (`cash.effects.environment_input`).
+    environment_reads: frozenset[tuple[str, str]] = frozenset()
 
     @property
     def is_clean(self) -> bool:
@@ -557,6 +565,8 @@ class _PurityVisitor(ast.NodeVisitor):
         #: the file tracker records as a read of that file: what a query on it
         #: returns IS in the key, so its reads are not advised on.
         self.opens_tracked_database = False
+        #: Environment reads whose value the key folds (`environment_input`).
+        self.environment_reads: set[tuple[str, str]] = set()
         # Bare names read (Load context) in this body - used to detect reads of
         # mutable module globals.
         self.read_names: set[str] = set()
@@ -619,7 +629,11 @@ class _PurityVisitor(ast.NodeVisitor):
         Load context only. ``os.environ["KEY"] = ...`` is a side effect rather
         than a frozen input, a different issue with a different fix.
         """
-        if (
+        env = environment_input(node)
+        if env is not None and DECORATOR_POLICY[EffectKind.ENVIRONMENT] is Action.CACHE_AS_INPUT:
+            if id(node) not in self._log_only:
+                self.environment_reads.add(env)
+        elif (
             isinstance(node.ctx, ast.Load)
             and get_base_name(node.value) in ENVIRON_NAMES
             and id(node) not in self._log_only
@@ -880,6 +894,12 @@ class _PurityVisitor(ast.NodeVisitor):
             # matched DOTTED, or through what a name is bound to: every entry
             # carries its module, so a method named `now` on the user's own
             # object is not this.
+            if DECORATOR_POLICY[EffectKind.ENVIRONMENT] is Action.CACHE_AS_INPUT:
+                env = environment_input(node, self._namespace)
+                if env is not None:
+                    if id(node) not in self._log_only:
+                        self.environment_reads.add(env)
+                    return
             ambient = _ambient_call(node, self._namespace)
             if (
                 ambient is not None
@@ -1595,7 +1615,11 @@ def _clock_helper_read(value: Any) -> str | None:
                 isinstance(s, ast.Expr) and isinstance(s.value, ast.Call) and is_log_line(s.value) for s in body[:-1]
             )
         ):
-            found = _ambient_call(body[-1].value, _build_namespace(value))
+            namespace = _build_namespace(value)
+            # A read the key folds (`environment_input`) is an input, not a
+            # frozen value: the helper's own walk lists it.
+            if environment_input(body[-1].value, namespace) is None:
+                found = _ambient_call(body[-1].value, namespace)
     except SOURCE_RETRIEVAL_ERRORS + (SyntaxError, ValueError):
         found = None
     if len(_CLOCK_HELPER_CACHE) >= 4096:
@@ -1872,6 +1896,7 @@ class PurityAnalyzer:
         caller_paths: dict[int, tuple[str, tuple[str, ...]]] = {}
         waived_paths: set[tuple[str, tuple[str, ...]]] = set()
         unwaived_paths: set[tuple[str, tuple[str, ...]]] = set()
+        environment_reads: set[tuple[str, str]] = set()
 
         def _note_binding(callee: Any, path: tuple[str, tuple[str, ...]] | None) -> None:
             if path is None or path in seen_bindings:
@@ -2093,6 +2118,7 @@ class PurityAnalyzer:
                 # Judged where it is called (`_clock_helper_read`).
                 visitor.issues = [i for i in visitor.issues if i.kind != ISSUE_AMBIENT_READ]
             all_issues.extend(visitor.issues)
+            environment_reads |= visitor.environment_reads
 
             # Flag reads of module globals that are reassigned/mutated somewhere
             # in the module - a silent staleness footgun (the cached result won't
@@ -2255,6 +2281,7 @@ class PurityAnalyzer:
             helper_bindings=tuple(bindings),
             waived_bindings=frozenset(waived_paths - unwaived_paths),
             unkeyable=tuple(unkeyable),
+            environment_reads=frozenset(environment_reads),
         )
 
     def _flag_mutable_global_reads(

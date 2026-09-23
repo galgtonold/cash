@@ -38,8 +38,6 @@ SPELLINGS = {
     "date-alias": "Day.today()",
     "time-alias": "_time.time()",
     "function-alias": "now_ts()",
-    "os-alias-getcwd": "_os.getcwd()",
-    "os-alias-environ": '_os.environ.get("HOME")',
     "canonical": "datetime.datetime.now()",
     # These read the clock when the time argument is left out.
     "strftime": '_time.strftime("%Y-%m")',
@@ -90,6 +88,24 @@ def _ambient_warnings(tmp_path, fn):
 def test_an_aliased_ambient_read_warns(tmp_path, monkeypatch, spelling):
     mod = _load(tmp_path, monkeypatch, SPELLINGS[spelling])
     assert _ambient_warnings(tmp_path, mod.stamp), f"{SPELLINGS[spelling]} froze silently"
+
+
+#: Environment reads with the name written out: folded into the key by value,
+#: so they are keyed however `os` was imported, and not announced.
+ENVIRONMENT_SPELLINGS = {
+    "os-alias-getcwd": ("_os.getcwd()", ("cwd", "")),
+    "os-alias-environ": ('_os.environ.get("HOME")', ("env", "HOME")),
+}
+
+
+@pytest.mark.parametrize("spelling", sorted(ENVIRONMENT_SPELLINGS))
+def test_an_aliased_environment_read_is_keyed(tmp_path, monkeypatch, spelling):
+    from cash.purity_analyzer import PurityAnalyzer
+
+    body, entry = ENVIRONMENT_SPELLINGS[spelling]
+    mod = _load(tmp_path, monkeypatch, body)
+    assert PurityAnalyzer().analyze(mod.stamp).environment_reads == {entry}
+    assert not _ambient_warnings(tmp_path, mod.stamp)
 
 
 @pytest.mark.parametrize("spelling", sorted(PANDAS_SPELLINGS))

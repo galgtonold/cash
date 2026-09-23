@@ -23,8 +23,10 @@ import logging
 import os
 import sys
 import types
+from collections.abc import Mapping
 from typing import Any, Callable, Iterable
 
+from ..effects import environment_component, environment_input
 from ..tracking.module_symbols import closure_digest, static_attribute_reads
 
 logger = logging.getLogger(__name__)
@@ -89,10 +91,55 @@ def output_lineage(
     file_component: str = "",
     func_component: str = "",
     module_component: str = "",
+    environment: str = "",
 ) -> str:
     """The lineage hash of one output of a statement."""
-    lineage_str = f"{source_hash}:{':'.join(sorted(input_lineages))}{file_component}{func_component}{module_component}"
+    lineage_str = (
+        f"{source_hash}:{':'.join(sorted(input_lineages))}{file_component}{func_component}{module_component}"
+        f"{environment}"
+    )
     return hashlib.sha256(lineage_str.encode("utf-8")).hexdigest()
+
+
+#: Spellings a statement must contain to read the environment at all: the
+#: cheap test before parsing it (`statement_environment_reads`).
+_ENVIRONMENT_MARKERS = ("environ", "getenv", "getcwd")
+
+
+def statement_environment_reads(code: str, user_ns: Mapping[str, Any] | None = None) -> set[tuple[str, str]]:
+    """The environment reads written in *code* whose value a key can fold
+    (`cash.effects.environment_input`): ``os.getenv("NAME")``,
+    ``os.environ["NAME"]``, ``os.getcwd()``.
+
+    Only the statement's own text: a read inside a function it calls is not
+    seen here.
+    """
+    if not code or not any(marker in code for marker in _ENVIRONMENT_MARKERS):
+        return set()
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return set()
+    found = set()
+    for node in ast.walk(tree):
+        entry = environment_input(node, user_ns)
+        if entry is not None:
+            found.add(entry)
+    return found
+
+
+def statement_environment_component(code: str, user_ns: Mapping[str, Any] | None = None) -> str:
+    """What the environment reads in *code* return now, digested: empty when
+    it reads none.
+
+    ONE function for the cache key (``cache_key``), the output lineage the
+    runtime records (``statement/lineage.py``) and the one the simulation
+    recomputes (``upstream/virtual_lineage.py``). The key alone was not
+    enough: ``t = os.getenv("TENANT")`` re-ran for a new tenant, but ``t``
+    kept its lineage, so ``u = t.upper()`` below it hit and returned the
+    first tenant's answer.
+    """
+    return environment_component(statement_environment_reads(code, user_ns))
 
 
 def callable_source_component(function_tracker: Any, inputs: set[str], user_ns: dict) -> str:
