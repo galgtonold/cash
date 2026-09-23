@@ -57,8 +57,8 @@ Baseline: commit `99e873efe6` on Linux-6.18.44-fc-v37-x86_64-with-glibc2.39, 4 C
 - `tests/test_notebook_integration/test_a_statement_depends_on_the_symbols_it_reads.py::TestAnUnrelatedEditIsFree::test_and_nothing_built_on_it_re_runs_either`
 - `tests/test_notebook_integration/test_a_statement_depends_on_the_symbols_it_reads.py::TestAnUnrelatedEditIsFree::test_editing_another_function_does_not_re_run_this_one[import symlib as sl-sl]`
 - `tests/test_notebook_integration/test_a_statement_depends_on_the_symbols_it_reads.py::TestAnUnrelatedEditIsFree::test_editing_another_function_does_not_re_run_this_one[import symlib-symlib]`
-- `tests/test_notebook_integration/test_cas187_global_savefig_guard.py::test_healthy_plt_savefig_writes_the_real_chart_and_does_not_refuse`
-- `tests/test_notebook_integration/test_cas187_global_savefig_guard.py::test_orphaned_plt_savefig_is_refused_not_blanked`
+- `tests/test_notebook_integration/test_global_savefig_guard.py::test_healthy_plt_savefig_writes_the_real_chart_and_does_not_refuse`
+- `tests/test_notebook_integration/test_global_savefig_guard.py::test_orphaned_plt_savefig_is_refused_not_blanked`
 - `tests/test_notebook_integration/test_interaction_async_edit.py::TestAsyncPatterns::test_async_function_edit`
 - `tests/test_notebook_integration/test_interaction_async_edit.py::TestAsyncPatterns::test_async_gather_edit`
 - `tests/test_notebook_integration/test_round3_async_patterns.py::TestAsyncBasics::test_async_function_change_propagates`

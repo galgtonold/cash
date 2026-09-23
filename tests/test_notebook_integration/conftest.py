@@ -960,7 +960,7 @@ class _WarmKernel:
         #
         # persist bypasses the cost floors, so the leak makes later tests cache
         # statements that are far too cheap to cache -- which is exactly what
-        # test_zzverify_cas160_persist_loop_amplification measures. One
+        # test_zzverify_persist_loop_amplification measures. One
         # persist-enabling test ahead of it turned its 3 passes into 3
         # failures, reproduced in 9s.
         #
@@ -973,7 +973,7 @@ class _WarmKernel:
         # several conditions, so on a warm kernel only the FIRST test to
         # provoke a given warning sees it and every later one reads silence.
         #
-        # Measured: test_zzverify_cas160_persist_loop_amplification's three
+        # Measured: test_zzverify_persist_loop_amplification's three
         # tests each provoke the same persist-amplification warning. The first
         # passed and the other two failed on "cache was bounded but the user
         # was never told why" -- the guard had worked, only the warning was
@@ -1914,7 +1914,7 @@ except Exception:
             #
             # Measured: test_restart_persist_then_edit_upstream_recomputes does
             # exactly this, and behind it the last two tests of
-            # test_zzverify_cas160_persist_loop_amplification failed with every
+            # test_zzverify_persist_loop_amplification failed with every
             # statement RESTORED from a cache they never wrote -- so the
             # amplification guard never engaged and its warning never fired.
             # The sibling test that restarts WITHOUT persist did not poison

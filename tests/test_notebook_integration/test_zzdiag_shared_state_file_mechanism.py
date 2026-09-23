@@ -5,7 +5,7 @@ the measurement problem that makes it hard to see.
 
 RULED OUT
   * Sharing one state file  — four private files amplify byte-identically
-                              (test_zzverify_cas176_shared_state_file).
+                              (test_zzverify_shared_state_file).
   * `# @cash:persist`       — present and absent behave the same.
   * In-place vs rebind      — `st[k] = ...` and `st = {**st, ...}` both
                               amplify 4/3/2/1 with an identical file write
