@@ -22,7 +22,6 @@ def test_core_exports_stable():
         "stateful",
         "is_pure",
         "is_stateful",
-        "analyze_function_purity",
         # Code-surface opt-out
         "opaque",  # public since 06c2bd6 (the code-surface escape hatch)
         # Configuration

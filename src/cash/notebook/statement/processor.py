@@ -33,7 +33,7 @@ from cash.notebook.cache_key import (
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.file_dep_snapshot import snapshot_dependencies, snapshot_file_deps
 from cash.notebook.object_hashing import estimate_object_size, mutation_fingerprint
-from cash.notebook.purity import is_known_pure, is_pure, is_stateful
+from cash.notebook.purity import is_known_pure, is_stateful
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
@@ -59,7 +59,6 @@ _LOG_MUTATION = "[MUTATION]"
 _LOG_CACHE_HIT = "[CACHE_HIT_DEBUG]"
 _LOG_CACHE = "[CACHE]"
 _LOG_CACHE_DEBUG = "[CACHE DEBUG]"
-_LOG_PURITY = "[PURITY]"
 _LOG_OPTIMIZATION = "[OPTIMIZATION]"
 _LOG_FORBIDDEN = "[FORBIDDEN]"
 _LOG_ANNOTATION = "[ANNOTATION]"
@@ -513,7 +512,6 @@ from ..call_interception import HELPER_NAME, CallCache, wrap_eligible_calls
 from ..call_unit import call_site_is_cacheable
 from ..compiled_source import is_cash_filename, register_cell_source
 from ..function_tracker import FunctionTracker
-from ..purity import analyze_function_purity
 from ..randomness import (
     RandomnessDetector,
     capture_object_rng_states,
@@ -3835,17 +3833,7 @@ class StatementProcessor:
         if is_known_pure(name):
             return False
         func_obj = self.shell.user_ns.get(name)
-        if func_obj is None:
-            return False
-        if is_stateful(func_obj):
-            return True
-        if is_pure(func_obj):
-            return False
-        if callable(func_obj) and analyze_function_purity(func_obj, self.shell.user_ns):
-            if self.debug:
-                logger.debug("%s Auto-detected '%s' as pure function", _LOG_PURITY, name)
-            return False
-        return False
+        return func_obj is not None and is_stateful(func_obj)
 
     def _handle_cache_hit(
         self,

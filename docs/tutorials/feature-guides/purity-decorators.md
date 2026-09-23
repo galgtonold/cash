@@ -48,9 +48,9 @@ introspect is a judgement call, and it can be wrong in either direction:
   stop warning" — the warning is advisory, so this is about noise, not
   correctness.
 
-Cash also runs a fallback heuristic (`analyze_function_purity`) on undeclared
-functions, so you don't have to mark everything. The markers matter when you
-know something the analyzer cannot.
+You don't have to mark everything: an undeclared function is not treated as
+stateful in a notebook, and the `@cash.cache` analyzer reads helpers on its
+own. The markers matter when you know something the analyzer cannot.
 
 ## Quick start
 
@@ -149,23 +149,20 @@ def euclidean(p, q):
 
 ### What it actually does
 
-<!-- claim: cash/notebook/purity.py:pure @b3cd5bc3, cash/notebook/statement/processor.py:StatementProcessor._check_callable_stateful @328208d8 -->
+<!-- claim: cash/notebook/purity.py:pure @b3cd5bc3, cash/notebook/statement/processor.py:StatementProcessor._check_callable_stateful @0f704647 -->
 `@pure` is a one-line marker. It sets `_cash_pure = True` on both the original function and the wrapper.
 
 When the statement processor evaluates a cell, it looks at every bare-name call (`foo(x)`, not `obj.foo(x)`). For each name, it consults `_check_callable_stateful`, which:
 
 1. Returns `False` (not stateful) if the name is a known-pure builtin like `len` or `sum`.
 2. Returns `True` if the resolved object has `_cash_stateful = True`.
-3. Returns `False` if the resolved object has `_cash_pure = True` — the path `@pure` activates.
-4. Otherwise falls back to `analyze_function_purity`, and returns `False` regardless.
+3. Otherwise returns `False`.
 
-Read steps 3 and 4 together and the consequence is clear: **only step 2 changes
-the outcome.** `@pure` short-circuits to the same "not stateful" answer the
-fallthrough already gives, so in the statement path it is a performance and
-predictability nicety — Cash never peeks inside and never runs the AST heuristic
-— not a switch that turns caching on. The one exception is a helper that
-writes a file, which `decide_cacheability` refuses after this check unless the
-helper is marked `@pure`. Its load-bearing use is on the decorator, below.
+So **only step 2 changes the outcome**, and `@pure` does not take part in this
+check at all: it is not a switch that turns caching on. The one place it
+matters in the statement path is a helper that writes a file, which
+`decide_cacheability` refuses after this check unless the helper is marked
+`@pure`. Its load-bearing use is on the decorator, below.
 
 ### When NOT to use it
 
@@ -219,57 +216,7 @@ Now any cell that calls `log_to_dashboard(...)` or `send_alert(...)` runs fresh 
 <!-- claim: cash/notebook/purity.py:stateful @d2b97ef0, cash/notebook/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
 `@stateful` sets `_cash_stateful = True` on the wrapped function. When the statement processor walks the bare-name calls in a cell and finds one whose resolved callable has that attribute, `_check_callable_stateful` returns `True`. The caller (in `decide_cacheability`) then refuses to cache the cell and records the reason "Calls @stateful function".
 
-`@stateful` is checked *before* `@pure` in `_check_callable_stateful`, so if you ever (accidentally) stack both decorators on the same function, stateful wins. Don't rely on that — see the [caveats](#mixing-markers).
-
-## Auto-detection (`analyze_function_purity`)
-
-<!-- claim: cash/notebook/purity.py:analyze_function_purity @7323a225, cash/notebook/purity.py:_ImpurityVisitor @9a9dd9e9 broad="the flag list is a claim about every branch of the visitor", cash/notebook/purity.py:_IMPURE_FUNCTION_CALLS @9f39b579, cash/notebook/purity.py:_IMPURE_MODULE_CALLS @9e90768d, cash/notebook/purity.py:_WRITE_METHODS @a1c8cf66 -->
-You won't decorate everything. For undecorated functions, Cash falls back to an AST-based heuristic — `analyze_function_purity`. It:
-
-1. Grabs the function's source via `inspect.getsource`.
-2. Parses it with `ast`.
-3. Walks the body with `_ImpurityVisitor`.
-
-The visitor flags the function as impure if it sees any of:
-
-- A `global` or `nonlocal` declaration.
-- A `yield` or `yield from` (generators are not safe to memoize as plain values).
-- A call to a known-impure builtin: `print`, `input`, `open`, `exec`, `eval`, `compile`, `exit`, `quit`, `breakpoint`.
-- A dotted call to a known-impure module function: `os.system`, `os.remove`, `subprocess.run`, `shutil.move`, `requests.get`, `requests.post`, `json.dump`, `pickle.dump`, `logging.info`, and friends.
-- A method call to a name in the "write-ish" set: `write`, `writelines`, `append`, `extend`, `insert`, `pop`, `remove`, `sort`, `reverse`, `clear`, `update`, `add`, `discard`, `to_csv`, `to_excel`, `to_parquet`, `to_json`, `to_pickle`, `savefig`, `save`, `send`, `sendall`, `sendto`, pathlib's `write_text` / `write_bytes`, and the verbs that mean a client object just changed something remote — `post`, `put`, `patch`, `execute`, `executemany`, `executescript`, `commit`, `rollback`, `upload`, `upload_file`, `upload_fileobj`, `put_object`, `publish`.
-
-    That last group is matched on **any** receiver, and it is the only static
-    handle on a side effect inside an installed library, because the analyzer
-    does not walk into one. `get` is deliberately absent: `dict.get` would
-    match it, so a *read* through a client object cannot be reached by name at
-    all — that case is covered at runtime instead (see
-    [Observed effects](#observed-effects-what-the-first-call-actually-did)).
-- Any assignment whose target is an attribute (`self.x = ...`) or subscript (`d[k] = ...`).
-- Any `+=`/`del` on an attribute or subscript.
-
-The full set lives in `_IMPURE_FUNCTION_CALLS`, `_IMPURE_MODULE_CALLS`, and `_WRITE_METHODS` in `cash/notebook/purity.py`.
-
-<!-- claim: cash/notebook/purity.py:_PURITY_CACHE_MAX_SIZE == 200 -->
-Results are cached by source-SHA-256 to keep repeated analyses cheap — the cache holds up to 200 entries and evicts oldest-first.
-
-You can call this directly if you want to inspect a function programmatically:
-
-```python
-from cash import analyze_function_purity
-
-def helper(x):
-    return x * 2
-
-def writer(x):
-    with open("/tmp/log", "w") as f:
-        f.write(str(x))
-    return x
-
-analyze_function_purity(helper)   # True
-analyze_function_purity(writer)   # False — `open` and `write` flagged
-```
-
-The heuristic is intentionally conservative. False positives (declaring something impure when it isn't) are recoverable: slap on `@pure`. False negatives (declaring something pure when it isn't) would be catastrophic, so the bias is "if in doubt, impure".
+`_check_callable_stateful` looks only for `@stateful`, so if you ever (accidentally) stack both decorators on the same function, stateful wins. Don't rely on that — see the [caveats](#mixing-markers).
 
 ## Known-pure builtins
 
@@ -384,7 +331,7 @@ If you want the cell to opt out, mark `update_everything` as `@stateful` too. (O
 
 ### Mixing markers
 
-Both `_cash_pure` and `_cash_stateful` can technically coexist on the same function. The check order in `_check_callable_stateful` happens to look at stateful first, so stateful wins:
+Both `_cash_pure` and `_cash_stateful` can technically coexist on the same function. `_check_callable_stateful` only looks for the stateful marker, so stateful wins:
 
 ```python
 from cash import pure, stateful
@@ -395,7 +342,7 @@ def confused(x):
     return x * 2
 ```
 
-This works (the cell will refuse to cache), but it's a check-order artifact, not a language-level guarantee. Treat it as undefined behavior and never stack the two decorators on the same function.
+This works (the cell will refuse to cache), but it's an implementation detail, not a language-level guarantee. Treat it as undefined behavior and never stack the two decorators on the same function.
 
 <!-- claim: cash/notebook/purity.py:is_known_pure @a40e4d3e -->
 ### `is_known_pure` takes a string
@@ -410,40 +357,6 @@ is_known_pure("len")     # True
 ```
 
 It's checking membership in a `frozenset[str]`. Always pass the name, not the callable. If you have a callable and want the name, use `func.__name__`.
-
-<!-- claim: cash/notebook/purity.py:clear_purity_cache @8ad1b066 -->
-### Source-hash cached analysis
-
-`analyze_function_purity` keys its result cache on the SHA-256 of the function's source. Two byte-identical functions share a verdict — fine in 99% of cases, but it bites in one specific pattern: redefining a function with the *same body* but different surrounding globals or different intent.
-
-```python
-from cash import analyze_function_purity
-from cash.notebook.purity import clear_purity_cache
-
-DASHBOARD = None
-
-def push(metrics):
-    return {k: v * 2 for k, v in metrics.items()}
-
-analyze_function_purity(push)   # True — looks pure
-
-# Later, you monkey-patch the body via globals to add a side effect.
-# Source bytes unchanged, verdict still in cache.
-DASHBOARD = some_real_client
-def push(metrics):                                # exact same source bytes
-    return {k: v * 2 for k, v in metrics.items()}
-
-analyze_function_purity(push)   # Still True — cached verdict sticks
-```
-
-In practice you'll mostly hit this when stubbing functions in tests. The fix is one line:
-
-```python
-# test:inject: from cash.notebook.purity import clear_purity_cache
-clear_purity_cache()
-```
-
-`clear_purity_cache` is a public helper — call it in `setUp` / a pytest fixture / wherever you redefine functions and want fresh analysis.
 
 ## Purity on the decorator (`@cash.cache`)
 
@@ -837,10 +750,8 @@ notebook cell), and the parent's cache invalidates automatically.
 | `stateful` | `from cash import stateful` | decorator | Sets `_cash_stateful = True` on *func* and on the wrapper. Cash refuses to cache any cell that calls this by bare name. |
 | `is_pure(func)` | `from cash import is_pure` | bool | Marker-only check. Does not analyze source. |
 | `is_stateful(func)` | `from cash import is_stateful` | bool | Marker-only check. |
-| `analyze_function_purity(func, user_ns=None)` | `from cash import analyze_function_purity` | bool | AST-based heuristic. Result is SHA-256-cached. |
 | `is_known_pure(name)` | `from cash.notebook.purity import is_known_pure` | bool | Membership check against the builtin allow-list. **Takes a string.** |
 | `KNOWN_PURE_BUILTINS` | `from cash.notebook.purity import KNOWN_PURE_BUILTINS` | `frozenset[str]` | The stdlib allow-list. |
-| `clear_purity_cache()` | `from cash.notebook.purity import clear_purity_cache` | `None` | Clears the SHA-256 result cache. Testing/debug use. |
 | `CashImpurityWarning` | `from cash import CashImpurityWarning` | warning class | Emitted by `@cash.cache` (default mode) when the analyzer finds issues. Subclasses `CashCacheIneffectiveWarning`. |
 | `CashImpureFunctionError` | `from cash import CashImpureFunctionError` | exception class | Raised by `@cash.cache(strict=True)` on any purity issue, **and by a plain `@cash.cache` on untrackable-dependency patterns** (`eval`/`exec`, dynamic `getattr(...)()`, `importlib`). `assume_safe=True` suppresses it. |
 

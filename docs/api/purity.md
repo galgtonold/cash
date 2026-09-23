@@ -1,9 +1,8 @@
 # Purity & annotations
 
-<!-- claim: cash/notebook/purity.py:pure @b3cd5bc3, cash/notebook/purity.py:stateful @d2b97ef0, cash/notebook/purity.py:analyze_function_purity @7323a225 -->
+<!-- claim: cash/notebook/purity.py:pure @b3cd5bc3, cash/notebook/purity.py:stateful @d2b97ef0 -->
 The decorators and helpers that control what Cash considers safe to
-cache. For a walkthrough — when to use each, the auto-detection
-heuristic, common footguns — see the [Purity tutorial](../tutorials/feature-guides/purity-decorators.md).
+cache. For a walkthrough — when to use each, common footguns — see the [Purity tutorial](../tutorials/feature-guides/purity-decorators.md).
 
 ## Imports
 
@@ -11,7 +10,6 @@ heuristic, common footguns — see the [Purity tutorial](../tutorials/feature-gu
 from cash import (
     pure, stateful,           # decorators; also mark a third-party callable in place
     is_pure, is_stateful,     # introspection
-    analyze_function_purity,  # AST-based heuristic (returns bool)
 )
 
 # For richer programmatic analysis:
@@ -53,23 +51,19 @@ cash.stateful(pd.DataFrame.to_sql)   # tell it this writes
 
 ## Introspection
 
-The three helpers below let you query the marker state or run the
-auto-detection heuristic directly.
+The two helpers below query the marker state.
 
 ::: cash.is_pure
 
 ::: cash.is_stateful
 
-::: cash.analyze_function_purity
-
 ---
 
 ## Programmatic analysis
 
-The richer analyzer behind `@cash.cache`'s purity warnings. Use it
-when `analyze_function_purity` (which returns a bool) isn't enough
-— e.g. to surface specific issues in a custom lint tool, to drive a
-pre-commit hook, or to walk a function's helper hierarchy yourself.
+The analyzer behind `@cash.cache`'s purity warnings. Use it to
+surface specific issues in a custom lint tool, to drive a pre-commit
+hook, or to walk a function's helper hierarchy yourself.
 
 ```python
 from cash.purity_analyzer import get_analyzer

@@ -40,7 +40,7 @@
     "audited": "2026-07-27"
   },
   "docs/api/purity.md": {
-    "anchors": 3,
+    "anchors": 2,
     "audited": "2026-07-27"
   },
   "docs/badges.md": {
@@ -193,7 +193,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/purity-decorators.md": {
-    "anchors": 27,
+    "anchors": 20,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/sharing-caches.md": {

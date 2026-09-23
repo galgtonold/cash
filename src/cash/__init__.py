@@ -40,7 +40,7 @@ from .exceptions import (
     ForwardReferenceError,
     UpstreamStateError,
 )
-from .notebook.purity import analyze_function_purity, is_pure, is_stateful, pure, stateful
+from .notebook.purity import is_pure, is_stateful, pure, stateful
 from .notebook.randomness import CashRandomnessWarning
 from .remote_source import RemoteFileDataSource
 
@@ -396,7 +396,6 @@ __all__ = [
     "stateful",
     "is_pure",
     "is_stateful",
-    "analyze_function_purity",
     # Configuration (stable)
     "get_config",
     "CashConfig",
