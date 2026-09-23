@@ -43,33 +43,6 @@ logger = logging.getLogger(__name__)
 __all__ = ["StatementStore", "config_float"]
 
 
-_KNOWN_PICKLABLE_TYPE_NAMES = frozenset(
-    {
-        "DataFrame",
-        "Series",
-        "ndarray",
-        "int",
-        "float",
-        "str",
-        "bool",
-        "bytes",
-        "NoneType",
-        "list",
-        "dict",
-        "tuple",
-        "set",
-        "frozenset",
-        "int64",
-        "float64",
-        "int32",
-        "float32",
-        "Timestamp",
-        "Timedelta",
-        "DatetimeIndex",
-    }
-)
-
-
 def config_float(config: Any, attr: str, default: float) -> float:
     """Read a float-valued config attribute defensively.
 
@@ -441,20 +414,11 @@ class StatementStore:
             logger.debug("[SIZE_AWARE] Failed to estimate object size, allowing caching")
         return False, None, None
 
-    def _filter_safe_vars(self, captured_vars: dict[str, Any]) -> dict[str, Any]:
-        """Drop module objects; keep everything else (unknown types assumed picklable)."""
-        logger.debug("[CACHE DEBUG] Filtering %s variables for pickleability...", len(captured_vars))
-        safe: dict[str, Any] = {}
-        for k, v in captured_vars.items():
-            try:
-                if isinstance(v, types.ModuleType):
-                    continue
-                # Unknown types are assumed picklable; backend handles failures.
-                if type(v).__name__ in _KNOWN_PICKLABLE_TYPE_NAMES or True:  # noqa: SIM210
-                    safe[k] = v
-            except (TypeError, AttributeError, pickle.PicklingError) as e:
-                logger.debug("[CACHE DEBUG] Variable '%s' cannot be pickled (%s), skipping cache storage.", k, e)
-        return safe
+    @staticmethod
+    def _filter_safe_vars(captured_vars: dict[str, Any]) -> dict[str, Any]:
+        """Every captured variable but a module. Whether a value pickles is the
+        backend's to find out when it stores it."""
+        return {k: v for k, v in captured_vars.items() if not isinstance(v, types.ModuleType)}
 
     def _store(
         self,
