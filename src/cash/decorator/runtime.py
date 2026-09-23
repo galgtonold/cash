@@ -455,7 +455,7 @@ class RuntimeMixin:
             try:
                 self._track_declared_files(run.tracker, func_name)
                 yield run
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - the user's body can raise anything; logged, then re-raised
                 self._log_raised(func_name, exc, call.call_start)
                 raise
             finally:
