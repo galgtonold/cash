@@ -144,6 +144,8 @@ dev = [
     # a cell, which ipykernel 7 no longer supports on its own.
     "jupyter_ui_poll",
     "nest_asyncio",
+    # tools/test_selection/run_baseline.py records per-test coverage.
+    "coverage",
     "traitlets",
     "pyinstrument>=4.6,<6",
     # An in-process S3 emulator for the object-storage docs examples and s3fs
