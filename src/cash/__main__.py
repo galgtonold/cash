@@ -513,7 +513,7 @@ def _inspect_notebook(notebook_path: str) -> None:
     print(f"  Markdown cells: {len(md_cells)}")
 
     # Check if %cash_on is used
-    uses_cash = any("%cash_on" in c.source or "%%cash" in c.source for c in code_cells)
+    uses_cash = any("%cash_on" in c.source for c in code_cells)
     print(f"  Uses cash: {'Yes' if uses_cash else 'No'}")
 
     # Check for associated cache directory

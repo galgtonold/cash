@@ -130,7 +130,7 @@ def test_between_cell_runs_the_window_applies(tmp_path, monkeypatch, count_hashe
 
 
 def test_a_nested_cell_run_is_the_same_run(tmp_path, monkeypatch, count_hashes):
-    """`%%cash` inside a hooked cell runs the pipeline again from within it."""
+    """A cell that calls `get_ipython().run_cell(...)` runs the pipeline again from within it."""
     path = _aged(tmp_path, "a.csv")
     clock = [1000.0]
     monkeypatch.setattr(file_dep_snapshot.time, "monotonic", lambda: clock[0])

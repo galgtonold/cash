@@ -697,7 +697,6 @@ session with a usable hot-exit backup** — both above.
 
 - **`from math import pi`-style imports** can block restore-after-restart where a plain `import math` restores.
 - **A legitimately empty cached value** (an empty list or frame) may be recomputed rather than restored.
-- **`%%cash` cell magic** does not reset cell-entry lineage on re-run, costing a recompute.
 
 ---
 

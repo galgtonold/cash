@@ -10325,7 +10325,7 @@ class Cash:
         print(text if text else "cash: no cached function has been called yet.")
 
     def register_magic(self) -> None:
-        """Register IPython magic commands (``%cash_on``, ``%%cash``, etc.)."""
+        """Register IPython magic commands (``%cash_on``, ``%cash_stats``, etc.)."""
         try:
             from IPython import get_ipython
         except ImportError:

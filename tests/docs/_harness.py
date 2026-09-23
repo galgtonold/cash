@@ -5,7 +5,7 @@ Supports two execution paths:
 - The plain ``exec()`` path concatenates non-skipped fences into a single
   script and runs them together. Cache claims are inferred by AST analysis.
 - The IPython ``InteractiveShell`` path runs each fence as a separate cell
-  so magic commands (``%cash_on``, ``%%cash``) and ``{ .nb-cell }`` fences
+  so magic commands (``%cash_on``, ``%cash_stats``) and ``{ .nb-cell }`` fences
   can execute as they would in a notebook.
 
 ``run_page`` chooses the path automatically based on fence content
@@ -226,7 +226,7 @@ def _run_page_ipy(
 
     shell = InteractiveShell.instance()
 
-    # Register Cash's magics on the shell so %cash_on / %%cash / etc. work.
+    # Register Cash's magics on the shell so %cash_on / %cash_stats / etc. work.
     # The plain-exec conftest fixture patches Cash.register_magic to a no-op,
     # so we bypass that by importing and registering directly here.
     try:

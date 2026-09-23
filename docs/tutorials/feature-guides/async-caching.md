@@ -101,8 +101,7 @@ top-level `await` is cached like any other cell.
 
 <!-- test:skip reason="illustrative — top-level await requires a live IPython kernel" -->
 ```python
-%%cash
-rows = await db.fetch("SELECT * FROM events")   # cached like any other cell
+rows = await db.fetch("SELECT * FROM events")   # under %cash_on: cached like any other cell
 ```
 
 <!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell_async @f7097405, cash/notebook/ipython/cell_executor.py:CellExecutor._execute_cell_pipeline_async @94fd8a41, cash/notebook/statement/processor.py:StatementProcessor.process_statement_async @dcb073f8 -->

@@ -18,7 +18,7 @@ import weakref
 # without declaring a hard IPython dependency in production code.
 from typing import Any
 
-from IPython.core.magic import Magics, cell_magic, line_magic, magics_class
+from IPython.core.magic import Magics, line_magic, magics_class
 from IPython.display import HTML, display, publish_display_data
 
 from ... import __version__
@@ -1277,9 +1277,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         is "error" while suppressing IPython's duplicate traceback.
 
         Hook-path only: makes sense when ``_execute_cell`` is itself standing
-        in for ``run_cell``.  The ``%%cash`` magic does **not** call this —
-        it just lets the exception propagate so IPython's magic-error path
-        handles it.
+        in for ``run_cell``.
         """
         self.shell.user_ns["__cash_exception__"] = e
         orig_showtb = getattr(self.shell, "showtraceback", None)
@@ -1312,20 +1310,14 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         badge_render_time: float,
         args: tuple,
         kwargs: dict,
-        delegate_to_run_cell: bool = True,
     ) -> Any:
         """Post-process a cell execution: flush analytics, record metrics, render final badge.
 
-        Tail phase shared by ``_execute_cell`` (hook-driven `%cash_on`) and
-        the ``cash`` cell magic (`%%cash`).  Handles analytics flushing,
-        session statistics updates, provenance recording,
-        debug output, and the final badge render.
-
-        ``delegate_to_run_cell``: when True (the default, used by the hook),
-        ends by calling ``self._original_run_cell("pass", *args, **kwargs)``
-        so IPython's internal bookkeeping (execution count, history) stays
-        in sync.  ``%%cash`` passes False — it runs inside an IPython magic
-        whose own dispatcher already keeps that bookkeeping consistent.
+        Tail phase of ``_execute_cell`` (the hook-driven `%cash_on`). Handles
+        session statistics updates, provenance recording, debug output, and
+        the final badge render, then ends by calling
+        ``self._original_run_cell("pass", *args, **kwargs)`` so IPython's
+        internal bookkeeping (execution count, history) stays in sync.
         """
         self._finalize_cell_body(
             raw_cell,
@@ -1338,11 +1330,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         )
 
         # Delegate to original run_cell with "pass" so IPython keeps its
-        # execution count + history consistent.  Skipped when called from
-        # `%%cash` (its dispatcher already handles that bookkeeping).
-        if delegate_to_run_cell:
-            return self._original_run_cell("pass", *args, **kwargs)
-        return None
+        # execution count + history consistent.
+        return self._original_run_cell("pass", *args, **kwargs)
 
     def _finalize_cell_body(
         self,
@@ -1420,7 +1409,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         # Update Interactive Badge with final metrics. This is the cell's
         # actual final DONE badge on the success path (shared by the sync
-        # hook, the async hook, and %%cash) -- cancel any still-pending
+        # and the async hook) -- cancel any still-pending
         # progress timer first so a late fire can never overwrite it with a
         # stale RUNNING badge.
         self.cancel_progress_badge()
@@ -1947,63 +1936,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             update_existing=update_existing,
             _from_thread=_from_thread,
         )
-
-    @staticmethod
-    def _cash_parse_ttl(line: str) -> int | None:
-        """Parse optional TTL value from a %%cash magic line. Returns None if not set."""
-        if not line:
-            return None
-        parts = line.split("=")
-        if len(parts) == 2 and parts[0].strip() == "ttl":
-            try:
-                return int(parts[1].strip())
-            except ValueError:
-                logger.warning("Invalid TTL value")
-        return None
-
-    @cell_magic
-    def cash(self, line: str, cell: str) -> None:
-        """Cell magic to cache the execution of a single cell.
-
-        Usage: ``%%cash [ttl=60]``
-
-        Delegates to :meth:`CellExecutor.execute_cell` so this path runs
-        the same caching logic as ``%cash_on`` — module-change detection,
-        opaque-warning metrics, function-change metrics, and the
-        early-return plumbing all apply here too.  The two used to drift;
-        the shared executor makes drift structurally impossible.
-
-        Does **not** pass ``original_run_cell`` to the executor — that
-        opts out of the IPython-fallback paths.  Exceptions from upstream
-        simulation propagate naturally so IPython's magic-error path
-        handles them.
-        """
-        ttl = self._cash_parse_ttl(line)
-        saved_ttl = self.global_ttl
-        self.global_ttl = ttl
-        try:
-            result = self._cell_executor.execute_cell(cell)
-
-            if isinstance(result, EarlyReturn):
-                return
-            if isinstance(result, PipelineSyntaxError):
-                logger.error("Syntax Error in %%cash cell")
-                return
-
-            self._finalize_cell_execution(
-                cell,
-                result.all_metrics,
-                result.buffered_outputs,
-                result.badge_display_id,
-                result.hook_start,
-                result.timing_breakdown,
-                result.badge_render_time,
-                (),
-                {},
-                delegate_to_run_cell=False,
-            )
-        finally:
-            self.global_ttl = saved_ttl
 
     def show_clean_error(
         self,

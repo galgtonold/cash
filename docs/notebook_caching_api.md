@@ -70,9 +70,8 @@ on the first run, `CACHED` (green) on the second:
 
 <iframe class="cash-badge" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-`%cash_off` disables auto-caching again; `%%cash` caches a single cell
-explicitly when auto-caching is off. Both are covered in
-[Magic commands](magics.md).
+`%cash_off` disables auto-caching again; see
+[Magic commands](magics.md) for the rest.
 
 !!! note "Cross-process persistence has a compute floor"
     Only results whose computation took **longer than ~0.1 s** are written to
@@ -256,7 +255,7 @@ data = await fetch_from_api(url)   # cached: lineage, reset, and the result
 
 On a cache hit the restore returns before the coroutine is ever built, so an
 unchanged re-run skips the `await` entirely rather than re-issuing the request.
-See [`%%cash`](magics.md#cash-cell) for the mechanism.
+See [`%cash_on`](magics.md#top-level-await) for the mechanism.
 
 ---
 

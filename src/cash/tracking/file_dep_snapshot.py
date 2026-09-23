@@ -209,8 +209,8 @@ _HASH_MEMO_MIN_AGE_SECONDS = 10.0
 #: The current cell run's number, or None between runs.
 HASH_EPOCH: int | None = None
 _EPOCH_COUNT = 0
-#: A cell run started inside another (`%%cash` within a hooked cell) is the
-#: same run.
+#: A cell run started inside another (a cell that calls
+#: `get_ipython().run_cell(...)`) is the same run.
 _EPOCH_DEPTH = 0
 
 

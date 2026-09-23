@@ -217,7 +217,7 @@ cash info
   that is not a setting, or a value cash could not use, is left out of the
   list and reported as a warning.
 
-<!-- claim: cash/__main__.py:cmd_inspect @0975006f, cash/__main__.py:_inspect_cache_dir @de0a89d4, cash/__main__.py:_inspect_notebook @b18767fe -->
+<!-- claim: cash/__main__.py:cmd_inspect @0975006f, cash/__main__.py:_inspect_cache_dir @de0a89d4, cash/__main__.py:_inspect_notebook @22209429 -->
 ### `cash inspect [path] [--function NAME]` { #cash-inspect-path }
 
 Summarise a cache directory, or report on a notebook and its sibling `.cash`
@@ -229,7 +229,7 @@ directory.
 
 - `path` — *Optional.* One of:
     - **A `.ipynb` file.** Reads the notebook with `nbformat`, counts code
-      and markdown cells, detects whether `%cash_on` or `%%cash` is used, and
+      and markdown cells, detects whether `%cash_on` is used, and
       then inspects the sibling `.cash` directory next to the notebook (if
       any).
     - **A directory.** Treated as a cache directory; cash walks it
@@ -315,7 +315,7 @@ REPL, `python -c`, or a notebook kernel.
 **Output for a notebook:**
 
 - Code-cell and markdown-cell counts.
-- `Uses cash: Yes/No` based on a textual scan for `%cash_on` or `%%cash`.
+- `Uses cash: Yes/No` based on a textual scan for `%cash_on`.
 - The cache summary above if a sibling `.cash/` exists; otherwise
   `Cache: not found (no .cash directory)`.
 

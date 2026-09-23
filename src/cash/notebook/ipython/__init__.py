@@ -2,7 +2,7 @@
 
 The four files in this package — `magics`, `admin`, `cell_executor`,
 `error_display` — make up the adapter that wires Cash's caching pipeline
-into IPython's `Magics` system: `%cash_on`, `%%cash`, `%cash_status`,
+into IPython's `Magics` system: `%cash_on`, `%cash_status`,
 `%cash_stats`, and so on.
 
 Public surface:

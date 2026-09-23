@@ -1,7 +1,7 @@
 """Cell-level orchestrator for the cash caching pipeline.
 
-Owns the 7-phase pipeline shared by ``%cash_on`` (the ``pre_run_cell`` hook
-proxy) and ``%%cash`` (the cell magic):
+Owns the 7-phase pipeline that ``%cash_on``'s ``run_cell`` and
+``run_cell_async`` hooks run every cell through:
 
     1. Cell ID & notebook path resolution
     2. Badge & timing initialisation
@@ -11,9 +11,9 @@ proxy) and ``%%cash`` (the cell magic):
     6. Pre-execution notification assembly
     7. Statement-by-statement execution
 
-Both magic entry points delegate to :meth:`CellExecutor.execute_cell`.  This
-is what makes the drift bug structurally impossible to reintroduce: there
-is exactly one cell-execution code path.
+Both hooks delegate to :meth:`CellExecutor.execute_cell` (or its async
+twin, which shares every phase but statement execution): there is exactly
+one cell-execution code path.
 
 **Anti-god-class rule (load-bearing):**
 
@@ -34,9 +34,9 @@ The hook supplies its captured ``_original_run_cell`` so error paths
 that arise mid-pipeline (SyntaxError from upstream simulation,
 ``RuntimeError`` / :class:`AmbiguousCellError`, generic exception
 fallback) can be surfaced through IPython's normal execution machinery
-and the kernel reply status stays as "error".  The ``%%cash`` magic
-passes ``None`` so those exceptions propagate naturally to IPython's
-magic-error path instead.
+and the kernel reply status stays as "error".  The async hook passes
+``None``: those exceptions propagate to it, and it re-raises them through
+the original ``run_cell_async`` itself.
 """
 
 from __future__ import annotations
@@ -914,8 +914,8 @@ def _writes_only_into_its_own_objects(nodes: list[ast.stmt]) -> bool:
 class CellExecutor:
     """Run a single notebook cell through the cached-execution pipeline.
 
-    Single public entry: :meth:`execute_cell`.  Both ``%cash_on`` and
-    ``%%cash`` route through it — there is no separate code path.
+    Single public entry: :meth:`execute_cell` (and its async twin
+    :meth:`execute_cell_async`) — there is no separate code path.
     """
 
     def __init__(
@@ -1493,7 +1493,7 @@ class CellExecutor:
 
         On error: if *original_run_cell* is provided (hook path), fall back
         through IPython so the user sees the error in the cell.  When None
-        (magic path), re-raise so the magic's caller sees a normal Python
+        (the async hook), re-raise so the caller sees a normal Python
         exception.
         """
         t_ensure = time.time()
@@ -1583,8 +1583,8 @@ class CellExecutor:
 
         Behaviour is otherwise identical to the old in-``except`` dispatch:
 
-        - ``original_run_cell is None`` (``%%cash`` magic path): a SyntaxError
-          becomes a quiet "log + return"; anything else re-raises so the magic's
+        - ``original_run_cell is None`` (the async hook): a SyntaxError
+          becomes a quiet "log + return"; anything else re-raises so the
           caller sees the real error.
         - SyntaxError (hook path): re-run the raw cell through IPython so the
           user sees the parse error attributed to their cell.
@@ -1595,10 +1595,10 @@ class CellExecutor:
         - anything else: log and fall back to normal execution.
         """
         if original_run_cell is None:
-            # Magic path: SyntaxError from upstream sim is best surfaced as
-            # a normal "log + return" (matches the executor's own AST-parse
-            # SyntaxError path).  Any other exception propagates so the
-            # magic's caller sees the real error.
+            # No run_cell to fall back on: a SyntaxError from upstream sim is
+            # surfaced as a normal "log + return" (matches the executor's own
+            # AST-parse SyntaxError path).  Any other exception propagates so
+            # the caller sees the real error.
             if isinstance(caught, SyntaxError):
                 self._magics.cancel_progress_badge()
                 self._magics.render_interactive_badge([], display_id=badge_display_id, status="DONE")

@@ -118,10 +118,12 @@ class TestCashStripPreprocessor:
         preprocessor.strip_magics = True
         names = sorted(CashMagics.magics["line"])
         assert "cash_badge" in names  # positive control: a magic the old hand-kept list lacked
-        source = "\n".join(f"%{name} on" for name in names) + "\n%%cash\n%load_ext cash\nx = 1\n%cash_onward = 2"
+        source = (
+            "\n".join(f"%{name} on" for name in names) + "\n%load_ext cash\nx = 1\n%cash_onward = 2\n%% not_a_magic"
+        )
         cell = _make_cell(source)
         result, _ = preprocessor.preprocess_cell(cell, {}, 0)
-        assert result.source == "x = 1\n%cash_onward = 2"
+        assert result.source == "x = 1\n%cash_onward = 2\n%% not_a_magic"
 
     def test_preserve_non_badge_html(self, preprocessor):
         outputs = [

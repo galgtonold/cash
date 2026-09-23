@@ -11,7 +11,7 @@ The notebook layer makes a verdict on every statement: cache it, refuse to cache
 - The 200 MB model you just trained should hit disk, even though the smart-persistence policy would normally leave it in RAM.
 - The `np.random.randn` call is intentional and you don't need a warning every cell run.
 
-Four general-purpose comment annotations and a magic-level TTL cover all of those cases. Two more specialised directives are covered elsewhere: the ML-specific [`# @cash:cache-fit`](../../annotations.md#cashcache-fit), and [`# @cash:no-cache-calls`](../../annotations.md#call-level-caching-default-and-cashno-cache-calls), the opt-out for cash's default behavior of caching the *calls inside* a statement instead of just the statement itself — the fix for an accumulator loop that can never cache as a whole. They live as `# @cash:<directive>` comments on or immediately above the statement, and they're picked up by the same parser regardless of whether you came in via `%cash_on` or `%%cash`.
+Four general-purpose comment annotations and a magic-level TTL cover all of those cases. Two more specialised directives are covered elsewhere: the ML-specific [`# @cash:cache-fit`](../../annotations.md#cashcache-fit), and [`# @cash:no-cache-calls`](../../annotations.md#call-level-caching-default-and-cashno-cache-calls), the opt-out for cash's default behavior of caching the *calls inside* a statement instead of just the statement itself — the fix for an accumulator loop that can never cache as a whole. They live as `# @cash:<directive>` comments on or immediately above the statement, and they're read by the same parser for every cell `%cash_on` caches.
 
 ## Quick start
 
@@ -74,7 +74,7 @@ daily_data = fetch_daily_metrics()         # one day
 ```
 
 <!-- claim: cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd, cash/core.py:Cash._validate_ttl @95cdd62d -->
-The annotation TTL overrides the global TTL set by `%cash_on ttl=N` or `%%cash ttl=N`. `_parse_annotation` does the merge: if `annotation.ttl is not None`, the effective TTL becomes that value; otherwise the global TTL applies.
+The annotation TTL overrides the global TTL set by `%cash_on ttl=N`. `_parse_annotation` does the merge: if `annotation.ttl is not None`, the effective TTL becomes that value; otherwise the global TTL applies.
 
 The check itself is in `Cash._validate_ttl`: on a lookup hit, `_validate_ttl` asks the one TTL rule every cache path shares (`ttl_expired`) and raises `CacheExpiredError` when the entry is stale: older than the TTL, or at once for `ttl=0`, which is never fresh. Stale entries fall through to recompute as if the cache had missed.
 
@@ -154,9 +154,9 @@ original execution left it in. Module-global RNG state (`random`,
 Cache entries written before this behaviour existed carry no object-RNG state;
 they restore unchanged rather than erroring.
 
-## Global TTL — `%cash_on ttl=N` and `%%cash ttl=N`
+## Global TTL — `%cash_on ttl=N`
 
-Two ways to set a default TTL for every cached statement in scope:
+Set a default TTL for every cached statement from here on:
 
 ```python { .nb-cell }
 %cash_on ttl=3600
@@ -164,16 +164,10 @@ Two ways to set a default TTL for every cached statement in scope:
 # unless overridden by @cash:ttl=...
 ```
 
-```python { .nb-cell }
-%%cash ttl=300
-# Just this cell — entries expire after 5 minutes.
-# Saves and restores the global TTL on entry/exit.
-result = compute_something()
-```
+`%cash_on ttl=N` sets `self.global_ttl` on the magic. For a shorter TTL on
+one cell, put `# @cash:ttl=N` above each statement that needs it.
 
-`%cash_on ttl=N` sets `self.global_ttl` on the magic. `%%cash` parses the same `ttl=N` arg locally and swaps the global TTL in/out around the cell, so the cell-scoped value doesn't leak out.
-
-A per-statement `# @cash:ttl=N` annotation always wins over both: the merge logic in `_parse_annotation` favors the annotation's TTL whenever it's set.
+A per-statement `# @cash:ttl=N` annotation always wins over the global TTL: the merge logic in `_parse_annotation` favors the annotation's TTL whenever it's set.
 
 ## Function-level controls on `@cash.cache`
 
@@ -247,7 +241,7 @@ For the annotations that *don't* skip caching:
 
 - `@cash:allow-random` is purely advisory — it suppresses warnings but does not influence the cacheability decision. You can combine it with anything.
 
-- Per-statement `@cash:ttl=N` overrides the global `%cash_on ttl=N` / `%%cash ttl=N` whenever it's set, even when its value is *longer* than the global (`StatementProcessor._parse_annotation` assigns `effective_ttl = annotation.ttl` whenever it is not `None`).
+- Per-statement `@cash:ttl=N` overrides the global `%cash_on ttl=N` whenever it's set, even when its value is *longer* than the global (`StatementProcessor._parse_annotation` assigns `effective_ttl = annotation.ttl` whenever it is not `None`).
 
 - A negative or non-integer TTL: the regex captures the whole value (`\S*`) and the parser then requires ASCII digits, so `ttl=-30`, `ttl=abc` and `ttl=5m` set no TTL. They are **not** silent -- each warns and names the directive it could not read. The wide capture is what makes that possible: a `\d+` value group would match only the `5` of `ttl=5m` and silently mean *five seconds*, a 60x error whose only symptom was a cache that kept missing. See [Annotations - common mistakes](../../annotations.md#ttl-with-no-value-or-non-digits).
 
@@ -260,7 +254,6 @@ For the annotations that *don't* skip caching:
 | `# @cash:persist` | directive=`persist` | Sets `CacheAnnotation.persist=True`. Forces tiered-backend promotion to the persistent tier regardless of the smart-persistence policy. |
 | `# @cash:allow-random` | directive=`allow-random` | Sets `CacheAnnotation.allow_random=True`. `check_and_warn_randomness` suppresses `CashRandomnessWarning` for the statement. |
 | `%cash_on ttl=N` | line-magic flag | Sets `self.global_ttl` on the magic. Applies to every statement unless overridden by `@cash:ttl=...`. |
-| `%%cash ttl=N` | cell-magic flag | Swaps `global_ttl` in for the duration of the cell, then restores it. |
 | `@c.cache(ttl=N)` | decorator kwarg | Same TTL semantics, applied to function-level caching. |
 
 All annotation parsing lives in `src/cash/analysis/annotations.py`. The single regex pattern is `ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?')` — the value group is deliberately wide so a malformed value is *rejected by name* rather than silently truncated.

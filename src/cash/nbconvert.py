@@ -131,6 +131,13 @@ class CashStripPreprocessor(Preprocessor):
 def _magic_line_pattern() -> re.Pattern[str]:
     """A source line that invokes a cash magic, built from the registered set."""
 
-    line = "|".join(sorted(map(re.escape, CashMagics.magics["line"]), key=len, reverse=True))
-    cell = "|".join(sorted(map(re.escape, CashMagics.magics["cell"]), key=len, reverse=True))
-    return re.compile(rf"^\s*(?:%(?:{line})|%%(?:{cell})|%load_ext\s+cash)(?:\s|$)")
+    def names(kind: str) -> str:
+        return "|".join(sorted(map(re.escape, CashMagics.magics[kind]), key=len, reverse=True))
+
+    # An empty alternation would match a bare ``%``/``%%``, so a kind with no
+    # registered magic (cash has no cell magic) contributes nothing.
+    forms = [
+        f"{prefix}(?:{names(kind)})" for prefix, kind in (("%", "line"), ("%%", "cell")) if CashMagics.magics[kind]
+    ]
+    forms.append(r"%load_ext\s+cash")
+    return re.compile(rf"^\s*(?:{'|'.join(forms)})(?:\s|$)")

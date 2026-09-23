@@ -105,7 +105,7 @@ The return value is a `CacheExplanation` dataclass (`would_hit`, `reason`, `func
 
 Inside a notebook, `%cash_debug on` raises the cash logger to DEBUG and prints labelled lines from each subsystem as cells execute. Turn it off with `%cash_debug off` (or pipe to JSON with `%cash_debug json`, or to a file with `%cash_debug file <path>`).
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @1178ce8b -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @5f76702f -->
 The five log prefixes you'll see most:
 
 | Prefix | What it tells you |

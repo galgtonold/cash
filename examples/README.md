@@ -11,12 +11,12 @@ This directory contains polished examples demonstrating cash's caching features 
 ## Example Notebooks
 
 ### [`demo_cell_caching.ipynb`](demo_cell_caching.ipynb) - Statement-Level Caching
-**What it demonstrates:** The `%%cash` cell magic for explicit caching of individual cells.
+**What it demonstrates:** Statement-level caching with `%cash_on`, one cell at a time.
 
 **Key features shown:**
-- Basic cache hit/miss with `%%cash`
+- Basic cache hit/miss
 - Dependency tracking (changing `multiplier` invalidates downstream cache)
-- TTL (Time To Live) for cache expiration
+- TTL (Time To Live) for cache expiration with `# @cash:ttl=N`
 - Cache explorer widget
 
 **What to try:**
@@ -34,7 +34,6 @@ This directory contains polished examples demonstrating cash's caching features 
 - Execution timing comparison (cached vs uncached)
 - Cache invalidation when upstream code changes
 - `%cash_stats` for session statistics
-- Explicit `%%cash` alongside auto mode
 
 **What to try:**
 1. Run notebook once — observe execution times

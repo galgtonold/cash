@@ -16,7 +16,6 @@ across multiple scenarios:
   - Upstream re-execution triggered cells
   - Debug on/off
   - Cell edits (cell_code_changed)
-  - %%cash cell magic
 """
 
 import pandas as pd

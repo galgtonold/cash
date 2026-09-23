@@ -180,7 +180,7 @@ print(slow.explain(1))
 
 ## The notebook path — the same cost model, one gate earlier
 
-The notebook integration (`%%cash` cells, `%cash_on` magic) applies the **same** fitted cost model, but one step earlier: its Gate A decides whether a statement's output is worth caching *at all* before the value ever reaches the backend. The tier promotion policy uses that same model, so the two gates agree. Gate A lives in `statement/processor.py`; the fitted coefficients live in `src/cash/cost_model.py` and predict serialize / deserialize wall-time per `(type_family, backend_kind, size_bytes)`. They are re-fittable via:
+The notebook integration (`%cash_on`) applies the **same** fitted cost model, but one step earlier: its Gate A decides whether a statement's output is worth caching *at all* before the value ever reaches the backend. The tier promotion policy uses that same model, so the two gates agree. Gate A lives in `statement/processor.py`; the fitted coefficients live in `src/cash/cost_model.py` and predict serialize / deserialize wall-time per `(type_family, backend_kind, size_bytes)`. They are re-fittable via:
 
 1. `benchmarks/measure_ser_deser.py` — runs a measurement campaign across families and sizes, writing the matrix to `benchmarks/results/ser_deser_matrix.csv`.
 2. `benchmarks/fit_cost_model.py` — fits per-(family, backend, op) `cost = a + b · size_bytes` lines and prints constants ready to paste into the module.
@@ -202,7 +202,7 @@ For a deep dive into the notebook filter and its skip-reason taxonomy, see [Cost
 Two override mechanisms exist, and they apply to different paths:
 
 <!-- claim: cash/analysis/annotations.py:CacheAnnotation.persist == False, cash/notebook/statement/processor.py:StatementProcessor._should_skip_large_object_caching @74019274 -->
-- **Notebook `# @cash:persist` annotation.** When a `%%cash` cell carries a `# @cash:persist` comment, the parser sets `force_persist=True` on the entry's metadata. The notebook filter then bypasses its skip checks (`StatementProcessor._should_skip_large_object_caching` returns early), and the `TieredBackend` also reads `metadata['force_persist']` and bypasses its promotion policy (in `TieredBackend.set`). The annotation is the only way to force a single statement past both filters.
+- **Notebook `# @cash:persist` annotation.** When a notebook statement carries a `# @cash:persist` comment, the parser sets `force_persist=True` on the entry's metadata. The notebook filter then bypasses its skip checks (`StatementProcessor._should_skip_large_object_caching` returns early), and the `TieredBackend` also reads `metadata['force_persist']` and bypasses its promotion policy (in `TieredBackend.set`). The annotation is the only way to force a single statement past both filters.
 - **`smart_persistence=False`.** Disables the policy for every call. Useful for benchmarking, debugging, or workloads where you've measured that the heuristic is wrong on your data.
 - **`%cash_persist on` / `cash.configure(persist_all=True)`.** Force-caches *every* statement, bypassing the cost-aware floors globally — the blanket equivalent of putting `# @cash:persist` on all of them. Good for reproducibility and benchmarking; wasteful for trivial statements in normal use.
 

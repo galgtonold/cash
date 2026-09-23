@@ -702,21 +702,18 @@ class TestTransitiveDependencyTracking:
 
 
 # ============================================================================
-# Pipeline parity tests — both magics should run the same caching pipeline.
+# The %cash_on hook runs the whole pipeline
 # ============================================================================
 
 
-class TestPipelineParity:
-    """Regression coverage for the `%cash_on` vs `%%cash` drift bug.
-
-    Before the unification, ``%%cash`` skipped module-change detection,
-    opaque-warning metrics, and function-change metrics that ``%cash_on``
-    ran.  Now both routes go through ``_execute_cached_pipeline`` so they
-    cannot drift again.
+class TestHookRunsTheFullPipeline:
+    """The `%cash_on` hook runs module-change detection and the pre-execution
+    notifications for every cell. A second entry point (the removed `%%cash`
+    magic) once skipped both; there is now one, and these pin that it keeps
+    doing both.
     """
 
-    def test_cash_magic_invokes_module_change_detection(self, magics_fixture):
-        """%%cash must call `CellExecutor._detect_module_changes` (was missing pre-unification)."""
+    def test_hook_invokes_module_change_detection(self, magics_fixture):
         magics, _, _ = magics_fixture
         executor = magics._cell_executor
         called_with: list[str] = []
@@ -727,11 +724,10 @@ class TestPipelineParity:
             return original(raw_cell)
 
         executor._detect_module_changes = spy
-        run_cash_cell(magics, "x = 1")
+        magics._execute_cell("x = 1")
         assert called_with == ["x = 1"]
 
-    def test_cash_magic_invokes_pre_execution_notifications(self, magics_fixture):
-        """%%cash must call `CellExecutor._build_pre_execution_notifications` (was missing pre-unification)."""
+    def test_hook_invokes_pre_execution_notifications(self, magics_fixture):
         magics, _, _ = magics_fixture
         executor = magics._cell_executor
         call_count = [0]
@@ -742,24 +738,5 @@ class TestPipelineParity:
             return original(raw_cell, pre_upstream_metrics, upstream_metrics)
 
         executor._build_pre_execution_notifications = spy
-        run_cash_cell(magics, "x = 1")
+        magics._execute_cell("x = 1")
         assert call_count[0] == 1
-
-    def test_both_magics_populate_last_cell_metrics(self, magics_fixture):
-        """Both routes must populate `_last_cell_metrics` with the same shape."""
-        magics, _, _ = magics_fixture
-
-        run_cash_cell(magics, "a_via_cash_magic = 1")
-        metrics_cash = magics._last_cell_metrics
-        assert metrics_cash is not None
-        assert "statements" in metrics_cash
-        assert "total_time" in metrics_cash
-        assert "status" in metrics_cash
-
-        magics._execute_cell("b_via_hook = 2")
-        metrics_hook = magics._last_cell_metrics
-        assert metrics_hook is not None
-        assert set(metrics_cash.keys()) == set(metrics_hook.keys()), (
-            f"%%cash and %cash_on must produce identical _last_cell_metrics keys; "
-            f"missing: {set(metrics_cash.keys()) ^ set(metrics_hook.keys())}"
-        )

@@ -9,6 +9,8 @@ This test enables debug output to trace exactly what's happening with
 lineages, cache keys, and the upstream checker.
 """
 
+import ast
+
 import pytest
 
 
@@ -106,40 +108,37 @@ class TestVolAdjRecomputeDebug:
             print("Full debug output above shows the lineage trace")
 
     @pytest.mark.timeout(60)
-    @pytest.mark.xfail(
-        reason=(
-            "Confined to the %%cash CELL-MAGIC path. Editing only the later "
-            "in-place write (df['SMA_58'] -> df['SMA_59']) and re-running the cell "
-            "leaves the earlier unchanged df['VolAdj_20'] COMPUTED instead of "
-            "RESTORED, because under %%cash the cell-entry lineage of df is not "
-            "reset to its base on re-run -- so VolAdj's input 'df' resolves to the "
-            "advanced (post-cell) lineage and its cache key no longer matches the "
-            "first run. The DEFAULT %cash_on proxy path DOES reset df and restores "
-            "VolAdj correctly (verified with a dataset above the cost floor), so "
-            "this is a %%cash-path gap, NOT a general in-place-mutation-lineage "
-            "bug. The original 100-row dataset additionally masked everything "
-            "under the 10 ms cost floor (rolling-apply ~3 ms, never cached); the "
-            "20k-row dataset below clears the floor so the residual %%cash gap is "
-            "what remains. Effectiveness only -- cached values stay correct."
-        ),
-        strict=False,
-    )
     def test_voladj_status_badges(self, nb_runner):
+        """After an SMA-only edit, the unchanged VolAdj statement is RESTORED.
+
+        Reads the edited cell's statement statuses from the kernel with
+        ``peek`` rather than from a printing cell: under ``%cash_on`` a
+        printing cell is itself cached, and a hit would replay the statuses of
+        the run that wrote it.
         """
-        Check the actual badge metrics to verify VolAdj is RESTORED not COMPUTED.
-        Uses %%cash cell magic to avoid proxy-hook metric overwriting.
-        """
+        heavy = (
+            "df['VolAdj_20'] = df.groupby('Ticker')['Close'].transform("
+            "lambda x: x.rolling(window=5).apply("
+            "lambda y: np.mean(y) / (np.std(y) + 1e-6), raw=True))\n"
+            "def custom_weighted_mean(x):\n"
+            "    weights = np.arange(1, len(x) + 1)\n"
+            "    return np.sum(x * weights) / np.sum(weights)\n"
+            "df['{col}'] = df.groupby('Ticker')['Close'].transform("
+            "lambda x: x.rolling(window={window}).apply("
+            "custom_weighted_mean, raw=True))\n"
+            "df"
+        )
         nb_runner.create_notebook(
             [
                 # Cell 1: imports
                 ("import pandas as pd\nimport numpy as np\nimport time"),
-                # Cell 2: load ext + debug (but NOT cash_on -- we'll use %%cash)
-                ("%load_ext cash\n%cash_debug on"),
-                # Cell 3: Create data (not cached, just runs normally).
-                # NOTE: the dataset must be large enough that the rolling-apply
-                # computations clear the 10 ms cost floor; otherwise the VolAdj
-                # statement is (correctly) never cached and "RESTORED" can never be
-                # observed -- see the test docstring.
+                # Cell 2: load ext + cash_on. No debug output: it would echo the
+                # peek below and bury its answer.
+                ("%load_ext cash\n%cash_on"),
+                # Cell 3: Create data. The dataset must be large enough that the
+                # rolling-apply computations clear the 10 ms cost floor;
+                # otherwise the VolAdj statement is (correctly) never cached and
+                # "RESTORED" can never be observed.
                 (
                     "np.random.seed(42)\n"
                     "df = pd.DataFrame({\n"
@@ -147,111 +146,36 @@ class TestVolAdjRecomputeDebug:
                     "    'Close': np.random.randn(20000).cumsum() + 100\n"
                     "})"
                 ),
-                # Cell 4: Sort (using %%cash)
-                ("%%cash\ndf = df.sort_values(by=['Ticker'])"),
-                # Cell 5: bare df (using %%cash)
-                ("%%cash\ndf"),
+                # Cell 4: Sort
+                "df = df.sort_values(by=['Ticker'])",
+                # Cell 5: bare df
+                "df",
                 # Cell 6: Heavy computation - FIRST version (SMA_58)
-                (
-                    "%%cash\n"
-                    "df['VolAdj_20'] = df.groupby('Ticker')['Close'].transform("
-                    "lambda x: x.rolling(window=5).apply("
-                    "lambda y: np.mean(y) / (np.std(y) + 1e-6), raw=True))\n"
-                    "def custom_weighted_mean(x):\n"
-                    "    weights = np.arange(1, len(x) + 1)\n"
-                    "    return np.sum(x * weights) / np.sum(weights)\n"
-                    "df['SMA_58'] = df.groupby('Ticker')['Close'].transform("
-                    "lambda x: x.rolling(window=10).apply("
-                    "custom_weighted_mean, raw=True))\n"
-                    "df"
-                ),
-                # Cell 7: Query metrics
-                (
-                    "cash_magics = get_ipython().magics_manager.magics['line'].get('cash_debug').__self__\n"
-                    "last_metrics = cash_magics._last_cell_metrics\n"
-                    "if last_metrics:\n"
-                    "    for stmt in last_metrics.get('statements', []):\n"
-                    "        code_preview = stmt['code'][:80]\n"
-                    "        status = stmt.get('status', 'UNKNOWN')\n"
-                    "        is_upstream = stmt.get('is_upstream', False)\n"
-                    "        prefix = '↑ ' if is_upstream else ''\n"
-                    "        print(f'{prefix}{status}: {code_preview}')\n"
-                    "else:\n"
-                    "    print('No last cell metrics available')"
-                ),
-                # Cell 8: Dump lineage state
-                (
-                    "cash_magics = get_ipython().magics_manager.magics['line'].get('cash_debug').__self__\n"
-                    "vl = cash_magics.tracking_state.variable_lineage\n"
-                    "print('=== LINEAGE STATE ===')\n"
-                    "for k, v in sorted(vl.items()):\n"
-                    "    print(f'  {k}: {v[:16]}...')\n"
-                    "print('=== EXECUTED_CELL_CODES ===')\n"
-                    "ecc = cash_magics._statement_processor.executed_cell_codes\n"
-                    "for k, v in sorted(ecc.items()):\n"
-                    "    print(f'  {k}: {v[:60]}')"
-                ),
+                heavy.format(col="SMA_58", window=10),
             ]
         )
         nb_runner.start_kernel(with_cash=False)
         nb_runner.run_all()
 
-        first_metrics = nb_runner.get_output(7)
-        print("\n=== FIRST RUN METRICS ===")
-        print(first_metrics)
-
-        first_lineage = nb_runner.get_output(8)
-        print("\n=== FIRST RUN LINEAGE ===")
-        print(first_lineage)
-
-        # Get raw output from cell 6 for debug traces
-        first_raw = nb_runner.get_raw_output(6)
-        print("\n=== FIRST RUN CELL 6 RAW ===")
-        print(first_raw[:3000] if first_raw else "(no output)")
-
         # Now change SMA_58 -> SMA_59 in cell 6
-        nb_runner.set_cell_source(
-            6,
-            "%%cash\n"
-            "df['VolAdj_20'] = df.groupby('Ticker')['Close'].transform("
-            "lambda x: x.rolling(window=5).apply("
-            "lambda y: np.mean(y) / (np.std(y) + 1e-6), raw=True))\n"
-            "def custom_weighted_mean(x):\n"
-            "    weights = np.arange(1, len(x) + 1)\n"
-            "    return np.sum(x * weights) / np.sum(weights)\n"
-            "df['SMA_59'] = df.groupby('Ticker')['Close'].transform("
-            "lambda x: x.rolling(window=3).apply("
-            "custom_weighted_mean, raw=True))\n"
-            "df",
-        )
+        nb_runner.set_cell_source(6, heavy.format(col="SMA_59", window=3))
         nb_runner.run_cell(6)
 
-        second_raw = nb_runner.get_raw_output(6)
-        print("\n=== SECOND RUN CELL 6 RAW ===")
-        print(second_raw[:5000] if second_raw else "(no output)")
-
-        nb_runner.run_cell(7)
-        nb_runner.run_cell(8)
-
-        second_metrics = nb_runner.get_output(7)
-        print("\n=== SECOND RUN METRICS ===")
-        print(second_metrics)
-
-        second_lineage = nb_runner.get_output(8)
-        print("\n=== SECOND RUN LINEAGE ===")
-        print(second_lineage)
-
-        # Parse the metrics output to check VolAdj status
-        assert second_metrics is not None, "Should have metrics output"
-        lines = second_metrics.strip().split("\n")
-        voladj_lines = [l for l in lines if "VolAdj" in l]
-        sma_lines = [l for l in lines if "SMA_59" in l]
+        statuses = nb_runner.peek(
+            "[(s['code'][:80], str(s.get('status'))) for s in "
+            "get_ipython().magics_manager.magics['line']['cash_status'].__self__"
+            "._last_cell_metrics['statements']]"
+        )
+        print("\n=== SECOND RUN STATUSES ===")
+        print(statuses)
+        entries = ast.literal_eval(statuses)
 
         # SMA_59 should be present (proving the updated code ran)
-        assert sma_lines, f"SMA_59 should be in metrics, got: {second_metrics}"
+        assert any("SMA_59" in code for code, _ in entries), f"SMA_59 should be in metrics, got: {statuses}"
 
-        # VolAdj should be RESTORED or SKIPPED
-        for s in voladj_lines:
-            assert "RESTORED" in s or "SKIPPED" in s, (
-                f"VolAdj statement should be RESTORED or SKIPPED after SMA-only change, but got: {s}"
+        voladj = [status for code, status in entries if "VolAdj" in code]
+        assert voladj, f"VolAdj should be in metrics, got: {statuses}"
+        for status in voladj:
+            assert status in ("RESTORED", "SKIPPED"), (
+                f"VolAdj statement should be RESTORED or SKIPPED after SMA-only change, but got: {statuses}"
             )

@@ -445,7 +445,7 @@ def _jupyter_labextension_paths():
 
 
 def load_ipython_extension(ipython):
-    """Register the ``%%cash`` IPython magic on behalf of the global singleton.
+    """Register cash's IPython magics on behalf of the global singleton.
 
     Called automatically by IPython/Jupyter when the user runs
     ``%load_ext cash`` or when cash is listed in ``ipython_config``.  Most

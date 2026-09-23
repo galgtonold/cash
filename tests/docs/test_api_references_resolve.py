@@ -19,7 +19,7 @@ from cash.notebook.ipython.magics import CashMagics  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 
-#: ``%cash_on``, ``%%cash``; not the ``%cash_*`` family wildcard.
+#: ``%cash_on``, or a ``%%`` cell-magic form; not the ``%cash_*`` family wildcard.
 _MAGIC = re.compile(r"(?<![%\w])%{1,2}(cash\w*)(?![\w*])")
 #: ``Cash.clear_all``, ``Cash().register_magic``.
 _METHOD = re.compile(r"\bCash(?:\(\))?\.([A-Za-z_]\w*)")
@@ -29,7 +29,7 @@ _METHOD = re.compile(r"\bCash(?:\(\))?\.([A-Za-z_]\w*)")
 _KNOWN_STALE: set[tuple[str, str]] = set()
 
 #: A magic named in prose as an example of a *different* name.
-_NOT_A_REFERENCE = {("src/cash/notebook/staleness.py", "%%cash_variant")}
+_NOT_A_REFERENCE: set[tuple[str, str]] = set()
 
 
 def _sources() -> list[Path]:

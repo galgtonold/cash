@@ -10,30 +10,28 @@ Each test attacks one distinct mechanism:
     then isolated re-run of an x-consumer (interactive variant of the un-definition case).
 4.  test_cash_off_edit_cash_on_run_all -- %cash_off, edit + run while off,
     %cash_on, run_all: tracking must be coherent after the gap (no stale).
-5.  test_cash_cellmagic_fresh_value_and_ttl -- %%cash on a fresh notebook,
-    plain + ttl=60 arg; value correctness across run_all x2 and isolated re-run.
-6.  test_time_magic_assignment_invalidation -- %time / %%time wrapping cached
+5.  test_time_magic_assignment_invalidation -- %time / %%time wrapping cached
     assignments; upstream edit must invalidate through the timing magics.
-7.  test_shell_escape_output_replay -- !echo hi cell; side-effect output must
+6.  test_shell_escape_output_replay -- !echo hi cell; side-effect output must
     appear on re-run (executed or replayed), neighbours cached correctly.
-8.  test_exotic_cells_empty_comment_import_introspection -- empty cell,
+7.  test_exotic_cells_empty_comment_import_introspection -- empty cell,
     comment-only cell, import-only cell, obj? introspection; no crash, values ok.
-9.  test_display_repr_and_semicolon_suppression_on_rerun -- df.tail display
+8.  test_display_repr_and_semicolon_suppression_on_rerun -- df.tail display
     expression repr correct on cached re-run; trailing-semicolon suppression
     preserved (no phantom repr) on cached re-run.
-10. test_duplicate_identical_cells_isolated_rerun_disambiguation -- two
+9.  test_duplicate_identical_cells_isolated_rerun_disambiguation -- two
     byte-identical `x = x + 1` cells; isolated re-run of EACH must reproduce
     that cell's own first-run value (cell-ID disambiguation).
-11. test_add_cell_mid_session_consumes_old_var -- add_cell mid-session
+10. test_add_cell_mid_session_consumes_old_var -- add_cell mid-session
     consuming a var from before; runs and re-runs correctly.
-12. test_swap_cell_sources_values_follow_new_order -- swap two cells' sources
+11. test_swap_cell_sources_values_follow_new_order -- swap two cells' sources
     (reorder simulation) then run_all; final value follows the NEW order.
-13. test_restart_no_persist_full_recompute -- restart without persist: full
+12. test_restart_no_persist_full_recompute -- restart without persist: full
     recompute, correct values.
-14. test_restart_persist_then_edit_upstream_recomputes -- restart WITH persist,
+13. test_restart_persist_then_edit_upstream_recomputes -- restart WITH persist,
     then edit an upstream cell BEFORE the first post-restart run: downstream
     must recompute, not virtual-restore stale values (historically fragile).
-15. test_rapid_quadruple_rerun_idempotent -- same self-modifying cell re-run
+14. test_rapid_quadruple_rerun_idempotent -- same self-modifying cell re-run
     4x in a row: idempotent every time.
 """
 
@@ -138,27 +136,6 @@ def test_cash_off_edit_cash_on_run_all(nb_runner):
 
 
 # ---------------------------------------------------------------- 5
-def test_cash_cellmagic_fresh_value_and_ttl(nb_runner):
-    nb_runner.create_notebook(
-        [
-            "%%cash\ntotal = sum(range(50000))\nprint('total', total)",
-            "%%cash ttl=60\ndoubled = total * 2\nprint('doubled', doubled)",
-        ]
-    )
-    nb_runner.start_kernel()
-    nb_runner.run_all()
-    assert "total 1249975000" in nb_runner.get_output(1), nb_runner.get_output(1)
-    assert "doubled 2499950000" in nb_runner.get_output(2), nb_runner.get_output(2)
-
-    nb_runner.run_all()
-    assert "total 1249975000" in nb_runner.get_output(1), nb_runner.get_output(1)
-    assert "doubled 2499950000" in nb_runner.get_output(2), nb_runner.get_output(2)
-
-    nb_runner.run_cell(2)
-    assert "doubled 2499950000" in nb_runner.get_output(2), nb_runner.get_output(2)
-
-
-# ---------------------------------------------------------------- 6
 def test_time_magic_assignment_invalidation(nb_runner):
     nb_runner.create_notebook(
         [
@@ -185,7 +162,7 @@ def test_time_magic_assignment_invalidation(nb_runner):
     assert "p 50" not in out, out
 
 
-# ---------------------------------------------------------------- 7
+# ---------------------------------------------------------------- 6
 def test_shell_escape_output_replay(nb_runner):
     nb_runner.create_notebook(
         [
@@ -206,7 +183,7 @@ def test_shell_escape_output_replay(nb_runner):
     assert "b 2" in nb_runner.get_output(3), nb_runner.get_output(3)
 
 
-# ---------------------------------------------------------------- 8
+# ---------------------------------------------------------------- 7
 def test_exotic_cells_empty_comment_import_introspection(nb_runner):
     nb_runner.create_notebook(
         [
@@ -231,7 +208,7 @@ def test_exotic_cells_empty_comment_import_introspection(nb_runner):
         assert "Traceback" not in nb_runner.get_raw_output(c), (c, nb_runner.get_raw_output(c))
 
 
-# ---------------------------------------------------------------- 9
+# ---------------------------------------------------------------- 8
 def test_display_repr_and_semicolon_suppression_on_rerun(nb_runner):
     nb_runner.create_notebook(
         [
@@ -255,7 +232,7 @@ def test_display_repr_and_semicolon_suppression_on_rerun(nb_runner):
     assert nb_runner.get_output(3).strip() == "", nb_runner.get_output(3)
 
 
-# ---------------------------------------------------------------- 10
+# ---------------------------------------------------------------- 9
 def test_duplicate_identical_cells_isolated_rerun_disambiguation(nb_runner):
     """ADJUDICATED: byte-identical cells raise ``AmbiguousCellError`` by design.
 
@@ -289,7 +266,7 @@ def test_duplicate_identical_cells_isolated_rerun_disambiguation(nb_runner):
     )
 
 
-# ---------------------------------------------------------------- 11
+# ---------------------------------------------------------------- 10
 def test_add_cell_mid_session_consumes_old_var(nb_runner):
     nb_runner.create_notebook(["base = 21"])
     nb_runner.start_kernel()
@@ -303,7 +280,7 @@ def test_add_cell_mid_session_consumes_old_var(nb_runner):
     assert "doubled 42" in nb_runner.get_output(2), nb_runner.get_output(2)
 
 
-# ---------------------------------------------------------------- 12
+# ---------------------------------------------------------------- 11
 def test_swap_cell_sources_values_follow_new_order(nb_runner):
     src_a = "cfg = {'k': 1}"
     src_b = "cfg['k'] = 2"
@@ -327,7 +304,7 @@ def test_swap_cell_sources_values_follow_new_order(nb_runner):
     assert "k 2" not in out, out
 
 
-# ---------------------------------------------------------------- 13
+# ---------------------------------------------------------------- 12
 def test_restart_no_persist_full_recompute(nb_runner):
     nb_runner.create_notebook(
         [
@@ -345,7 +322,7 @@ def test_restart_no_persist_full_recompute(nb_runner):
     assert "w 246" in nb_runner.get_output(2), nb_runner.get_output(2)
 
 
-# ---------------------------------------------------------------- 14
+# ---------------------------------------------------------------- 13
 def test_restart_persist_then_edit_upstream_recomputes(nb_runner):
     nb_runner.create_notebook(
         [
@@ -378,7 +355,7 @@ def test_restart_persist_then_edit_upstream_recomputes(nb_runner):
     assert "final 307" not in out3, out3
 
 
-# ---------------------------------------------------------------- 15
+# ---------------------------------------------------------------- 14
 def test_rapid_quadruple_rerun_idempotent(nb_runner):
     nb_runner.create_notebook(
         [

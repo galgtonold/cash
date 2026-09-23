@@ -2,7 +2,7 @@
 
 Cash registers a small set of IPython magic commands that control caching and
 inspect session state. This page is the canonical
-reference for all **10** magics — each entry lists the exact signature, every
+reference for all **9** magics — each entry lists the exact signature, every
 parsed flag, and a working example. Behaviour is derived directly from
 `src/cash/notebook/ipython/magics.py` and `src/cash/notebook/ipython/admin.py`.
 
@@ -25,7 +25,6 @@ parsed flag, and a working example. Behaviour is derived directly from
 | [`%cash_badge`](#cash_badge) | Set per-cell badge mode (html/print/off). |
 | [`%cash_stats`](#cash_stats) | Session-wide cache statistics. |
 | [`%cash_debug`](#cash_debug) | Toggle / configure debug logging. |
-| [`%%cash`](#cash-cell) | Cache a single cell explicitly. |
 | [`%cash_provenance`](#cash_provenance) | Variable computation history. |
 
 ---
@@ -73,6 +72,15 @@ that it did nothing and leaves every cell running uncached — see
 %cash_on
 %cash_on ttl=3600
 ```
+
+#### Top-level `await` { #top-level-await }
+
+ipykernel dispatches a cell containing top-level `await`
+through `shell.run_cell_async`, not the `pre_run_cell` hook that `%cash_on`
+patches. Cash intercepts that entry point as well, so awaited cells get lineage
+tracking, upstream reset, and result caching — the async pipeline is the
+line-for-line twin of the sync one. A cache hit returns before the coroutine is
+built, so an unchanged re-run skips the `await` rather than re-issuing the call.
 
 ### `%cash_off`
 <!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_off @700a45e0 -->
@@ -281,54 +289,6 @@ Argument matching is case-insensitive.
 %cash_debug json
 %cash_debug file /tmp/cash.log
 ```
-
-### `%%cash` { #cash-cell }
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash @bc76ef56 -->
-
-Cell magic. Explicitly cache a single cell with the same statement-level
-processing as `%cash_on` (upstream simulation, file tracking, badge rendering).
-
-**Signature:**
-
-```python
-%%cash [ttl=N]
-<cell body>
-```
-
-**Arguments:**
-
-- `ttl=N` — *Optional.* TTL in seconds for statements computed in this cell.
-
-**Behaviour:**
-
-- Parses the cell with `ast.parse` and processes each top-level statement
-  individually. A `SyntaxError` aborts the cell early.
-- Runs upstream simulation against the notebook's current cell sources — a live
-  reader where one answers (cash's JupyterLab extension, Colab, VS Code's
-  hot-exit backup), the on-disk `.ipynb` otherwise. On the on-disk path an
-  unsaved upstream edit won't be seen, so save before running; see
-  [editing without saving](known-limitations.md#editing-without-saving).
-- Renders the configured badge (`html` / `print` / off — see
-  [`%cash_badge`](#cash_badge)).
-- Caches cells that use top-level `await` on the same terms as any other cell
-  (see below).
-
-**Example:**
-
-<!-- test:skip reason="illustrative — references missing big.csv; stub pandas returns dict without .groupby" -->
-```python
-%%cash ttl=600
-import pandas as pd
-df = pd.read_csv("big.csv")
-agg = df.groupby("region").sum()
-```
-
-**Top-level `await`:** ipykernel dispatches a cell containing top-level `await`
-through `shell.run_cell_async`, not the `pre_run_cell` hook that `%cash_on`
-patches. Cash intercepts that entry point as well, so awaited cells get lineage
-tracking, upstream reset, and result caching — the async pipeline is the
-line-for-line twin of the sync one. A cache hit returns before the coroutine is
-built, so an unchanged re-run skips the `await` rather than re-issuing the call.
 
 ---
 
