@@ -40,17 +40,17 @@ The resolver receives **the same positional and keyword arguments as the decorat
 
 ## How it works
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @c065234b, cash/data_source.py:DataSource.state_token @fb386b76 -->
+<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @347cb002, cash/data_source.py:DataSource.state_token @fb386b76 -->
 The resolver lives in `Cash._resolve_dynamic_dependencies`. The path is:
 
 1. The resolver is called as `resolver(*args, **kwargs)` — same signature as the decorated function.
 2. The return value is normalised to a list: `dss = ds_result if isinstance(ds_result, list) else [ds_result]`.
-3. Each entry that **is a `DataSource`** contributes `str(ds.state_token())`. The base `state_token` returns `_get_mtime()` when the subclass exposes one and falls back to `has_changed()` otherwise — override it to track anything else.
+3. Each `None` entry is skipped, and each `DataSource` contributes `str(ds.state_token())`. Anything else makes the call unkeyable (below). The base `state_token` returns `_get_mtime()` when the subclass exposes one and falls back to `has_changed()` otherwise — override it to track anything else.
 4. The collected strings are sorted and SHA-256'd to produce a `dynamic_state_hash` that is mixed into the cache key alongside the args hash and the static dependency hash.
 
 Two consequences of step 3 worth pinning down:
 
-- **Only `DataSource` instances count.** A raw string, int, or dict returned from the resolver is silently dropped — the `isinstance(ds, DataSource)` gate filters everything else out, and the resulting `dynamic_state_hash` is `""`. The call still caches; the dynamic dependency just doesn't contribute to the key. There's no warning for this — it's an easy way to think you've enabled a dependency that isn't actually being tracked.
+- **Only `DataSource` instances count.** A raw string, int, or dict returned from the resolver cannot be tracked, so the call runs **uncached** and a `KEY-DYNAMIC-DEP-FAILED` warning says what the resolver returned. It is never folded in silently as "no dependency", which would keep serving the entry after the data changed.
 - **Sorting makes the result order-independent.** Two resolvers that return the same set of states in different orders produce the same hash.
 
 ## Returning a single source vs. a list
@@ -89,7 +89,9 @@ The resolver must return one of:
 
 - A single `DataSource` instance (`FileDataSource`, or your own subclass).
 - A list of `DataSource` instances.
-- An empty list, `None`, or any non-`DataSource` value — but these are silently dropped from the key. The call still caches; the dynamic dep just doesn't contribute.
+- `None` or an empty list, for a call that has no dynamic dependency. The call caches on everything else.
+
+Any other value makes the call run uncached, with a warning.
 
 To track something other than an mtime, write a `DataSource` subclass. The key
 method is `has_changed()` (or `state_token()`), which must return a **value that
@@ -141,8 +143,8 @@ instead override `state_token()` directly.
 @cash.cache(dynamic_depends_on=lambda: os.environ.get("MODEL_VERSION", "v1"))
 def predict(features):
     ...
-# Resolver returns a str. Cash silently drops it. The cache key has
-# no dynamic component. MODEL_VERSION changes do NOT invalidate.
+# Resolver returns a str, which cash cannot track: every call runs
+# uncached, with a KEY-DYNAMIC-DEP-FAILED warning.
 ```
 
 This is a common trap. The fix is to wrap the value in a `DataSource` subclass (see above) so that `has_changed()` reports the change.
@@ -164,18 +166,16 @@ Mutating `state['v']` between calls changes which file the resolver returns, but
 
 ## Error handling
 
-If the resolver raises any of `OSError`, `TypeError`, `ValueError`, `AttributeError`, `RuntimeError`, Cash:
+If the resolver raises — any exception, including one from a source's `state_token()` — or returns something that is not a `DataSource`, Cash:
 
-1. Emits a `CashCacheIneffectiveWarning` exactly once per `(func, '')` pair (deduped via `_warn_once`).
-2. Drops the failed resolver's contribution from the dynamic state hash — the cache key is built as if that resolver had returned nothing.
-3. Continues processing any remaining resolvers in a list.
-4. Lets the call complete and the result is cached against the (incomplete) key.
+1. Emits a `CashCacheIneffectiveWarning` (`KEY-DYNAMIC-DEP-FAILED`) once per function (deduped via `_warn_once`).
+2. Runs the function **uncached**: nothing is looked up and nothing is stored for that call.
 
 The warning text reads:
 
-> `[KEY-DYNAMIC-DEP-FAILED] @cash.cache on {func_name}: dynamic_depends_on resolver raised {ErrorType} ({message}), so that dependency is missing from the cache key and results may be stale when the underlying data changes.`
+> `[KEY-DYNAMIC-DEP-FAILED] @cash.cache on {func_name}: dynamic_depends_on resolver raised {ErrorType} ({message}), so cash cannot tell whether that dependency changed and the call ran uncached.`
 
-Catching the exception and continuing means a transiently failing resolver (e.g. a temporary `OSError`) does not break your pipeline — it just degrades to a broader cache hit while you fix it.
+A transiently failing resolver (e.g. a temporary `OSError`) therefore does not break your pipeline, and it never widens the cache either: without the dependency there is no key that could be trusted, so the call pays full compute until the resolver works again.
 
 <!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies_silent @dff56944 -->
 `f.explain()` uses a different variant — `Cash._resolve_dynamic_dependencies_silent` — which re-raises instead of warning, so introspection never emits warnings as a side effect. The resulting `CacheExplanation` carries `reason='key_uncomputable'` with the error type in `details`.
@@ -189,8 +189,7 @@ Two things to watch:
 
 ## Caveats
 
-- **Non-`DataSource` returns are silent.** As noted above, anything that's not a `DataSource` instance is dropped from the key without a warning. If you suspect your resolver isn't being applied, check `f.explain()` — a key that doesn't reflect your dependency tells you the resolver returned something the `isinstance` gate rejected.
-- **Resolver errors fail open, not closed.** A transient failure widens the cache. If correctness matters more than availability, validate the resolver's output yourself or call `f.cache_clear()` when you suspect drift.
+- **Resolver errors fail closed.** A resolver that raises or returns something other than a `DataSource` makes each such call run uncached, with a warning, rather than keying it without the dependency.
 - **`FileDataSource.__init__` snapshots mtime eagerly.** Each call constructs a fresh source, so the snapshot is the *current* mtime at the moment the resolver runs — exactly what you want for dynamic tracking. (`file_depends_on=` works differently: it checks the file's content, the way an automatically tracked read is checked. See [Custom File Sources](custom-file-sources.md).)
 - **Closures over mutable state are a footgun.** See the example above — if a closure changes which `DataSource` you return without changing the function arguments, the cache may not notice. Encode anything that varies across calls into the arguments.
 
@@ -202,7 +201,7 @@ Two things to watch:
 | `dynamic_depends_on=[callable1, callable2, ...]` | `@cash.cache` kwarg | Each resolver is called independently; results are pooled and hashed together. Equivalent to one resolver that concatenates the lists. |
 | `cash.DataSource` | Public ABC | Subclass to track anything other than file mtime. Implement `get_id`, `has_changed`, `update_state`. |
 | `cash.FileDataSource(path)` | Public class | mtime-based source for a single file. The canonical thing to return from a resolver. |
-| `CashCacheIneffectiveWarning` | Warning | Fires once per function when a resolver raises one of the caught exception types. |
+| `CashCacheIneffectiveWarning` | Warning | Fires once per function when a resolver raises or returns something that is not a `DataSource`; the call runs uncached. |
 | `f.explain(*args).reason == 'key_uncomputable'` | Diagnostic | What `explain()` reports when the resolver itself raises (the silent variant re-raises and is caught upstream). |
 
 ## Related

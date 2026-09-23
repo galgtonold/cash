@@ -629,7 +629,7 @@ def build(schema):
 build(Schema)                    # edit Schema, call again -> used to return the old answer
 ```
 
-<!-- claim: cash/core.py:Cash._fold_code_args @db74fec4, cash/core.py:Cash._iter_code_carriers @ef2a0021 -->
+<!-- claim: cash/core.py:Cash._fold_code_args @e1da8f21, cash/core.py:Cash._iter_code_carriers @ef2a0021 -->
 Your code reached through the arguments now folds into `state_hash`, so editing
 it invalidates. cash finds it in a class, a function, an instance (through its
 class), any of those nested in a list/tuple/set/dict, and an instance whose
@@ -720,7 +720,7 @@ flowchart TD
     F -->|Yes| G[Return cached value]
 ```
 
-<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @db74fec4 -->
+<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @e1da8f21 -->
 The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
 
 - `state_hash` folds in the function's own source hash + every
@@ -916,29 +916,27 @@ def load_user(user_id):
     return json.load(open(f"/data/users/{user_id}.json"))
 ```
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @c065234b -->
+<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @347cb002 -->
 The resolver runs with the same `args/kwargs` as the function on every call.
 
-!!! warning "A resolver exception is only *sometimes* survivable"
-    Five exception types are caught — `OSError`, `TypeError`, `ValueError`,
-    `AttributeError`, `RuntimeError`. Raise one of those and you get a one-shot
-    `CashCacheIneffectiveWarning` and the call proceeds without the dep in the
-    key.
+!!! warning "A resolver that fails makes the call run uncached"
+    Whatever the resolver raises — a `KeyError` from a lookup as much as an
+    `OSError` — or a return value that is not a `DataSource` (or a list of
+    them, or `None`), the call runs **uncached** and a one-shot
+    `CashCacheIneffectiveWarning` (`KEY-DYNAMIC-DEP-FAILED`) says why. It is
+    never keyed without the dependency, which would keep serving the entry
+    after the data changed.
 
-    **Anything else propagates and fails the call.** The realistic way to hit
-    this is a lookup in the resolver:
-
-    <!-- test:skip reason="illustrative: demonstrates the KeyError escaping" -->
+    <!-- test:skip reason="illustrative: PATHS is undefined" -->
     ```python
     @cash.cache(dynamic_depends_on=lambda uid: FileDataSource(PATHS[uid]))
     def load(uid): ...
 
-    load("unknown")   # KeyError — from the resolver, not from load()
+    load("unknown")   # KeyError in the resolver: warns, runs load() uncached
     ```
 
     A resolver is dependency *bookkeeping*, so keep it total: return `None` for
-    an input you can't map rather than raising, and do the lookup inside the
-    function where an error belongs.
+    an input that has no dependency rather than raising.
 
 ### `cache_if=` — skip caching by result
 

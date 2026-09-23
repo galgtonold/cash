@@ -1052,7 +1052,9 @@ its place and can be removed instead.
 **What happened.** Something raised while Cash was assembling the cache key,
 somewhere it did not anticipate. The message names the exception and, where it
 can identify one, the argument type most likely responsible. Your call ran and
-returned its real result; only the caching was skipped.
+returned its real result; only the caching was skipped. Cash never builds the
+key without the part that failed, because that key could not see a change to
+it.
 
 <!-- claim: cash/core.py:Cash._resolve_cache_key @b7a3d596 -->
 **Why it matters.** That call did not cache. Correctness is not at risk — with
@@ -1159,27 +1161,28 @@ line then, so the decision is written down where the next reader looks.
 
 ## KEY-DYNAMIC-DEP-FAILED {#key-dynamic-dep-failed}
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @c065234b -->
+<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @347cb002 -->
 **What happened.** A resolver you passed to `dynamic_depends_on=` raised when
-Cash called it to find out which data sources this particular call depends on.
-Cash carried on and built the key without that dependency. The message names
-the exception.
+Cash called it to find out which data sources this particular call depends on,
+or returned something that is not a `DataSource` (or a list of them, or
+`None`). The message names the exception or the type returned. The call ran
+uncached.
 
-**Why it matters.** Whatever the resolver was tracking is missing from the
-cache key. Entries written now keep being served after the underlying data
-changes, because nothing in the key moves when it does. This is a stale-result
-risk, not just a lost speedup.
+**Why it matters.** Without the dependency Cash cannot tell whether the data
+behind it changed, so there is no key it could trust: keying the call without
+it would keep serving the entry after the data changed. Nothing stale is
+served, but every such call pays full compute.
 
 **What to do.** Fix the resolver. It is called with exactly the same arguments
 as your function, which is the usual source of the failure — a resolver written
 against one signature and attached to another, or one that assumes an argument
-is always present. Until it is fixed, treat results from this function as
-possibly stale, and clear its entries after changing the source data.
+is always present. A resolver that returns a raw value (a version string, a
+path) needs to wrap it in a `DataSource`; return `None` for a call that has no
+dependency.
 
-**When it is safe to ignore.** Never, while the data behind that resolver can
-change. If the thing it tracked has since become static, the right response is
-to delete the `dynamic_depends_on=` argument, not to filter the warning — a
-silent declaration that does nothing is worse than no declaration.
+**When it is safe to ignore.** When the function is cheap enough that running
+it every time is fine. If the thing it tracked has since become static, delete
+the `dynamic_depends_on=` argument instead of filtering the warning.
 
 ## KEY-FROZEN-MUTATED {#key-frozen-mutated}
 

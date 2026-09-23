@@ -263,18 +263,32 @@ def _tag_subtype(value: Any, base: type, canon: Any) -> Any:
     # entry, and a `dict` subclass holding `self.source` served the first
     # caller's answer for every source (found attacking the decorator before
     # round 26). Pickle carries both, so this is signal cash had and dropped.
+    # Nothing is caught here: a part that cannot be read is not left out of the
+    # key, it makes the call unkeyable (run uncached, with a warning).
     state: Any = ()
-    try:
-        factory = getattr(value, "default_factory", None)
-        own = {k: v for k, v in (getattr(value, "__dict__", None) or {}).items() if not k.startswith("__")}
-        if factory is not None:
-            state += (("default_factory", getattr(factory, "__qualname__", repr(factory))),)
-        if own:
-            state += tuple(sorted((k, _stable_key_repr(v, 45)) for k, v in own.items()))
-    except Exception:  # noqa: BLE001 - a key part that cannot be read is left out
-        state = ()
+    factory = getattr(value, "default_factory", None)
+    own = {k: v for k, v in (getattr(value, "__dict__", None) or {}).items() if not k.startswith("__")}
+    if factory is not None:
+        state += (("default_factory", getattr(factory, "__qualname__", repr(factory))),)
+    if own:
+        state += tuple(sorted((k, _stable_key_repr(v, 45)) for k, v in own.items()))
     tag = f"{t.__module__}.{t.__qualname__}"
     return ("__cash_subtype__", tag, canon) if not state else ("__cash_subtype__", tag, canon, state)
+
+
+class _KeyBuildFailed(Exception):
+    """Building a key met something it cannot key, and says what to tell the user.
+
+    Raised from inside a key build; `_resolve_cache_key_now` warns once with
+    *code*, *message* and *fix*, and runs the call uncached -- never keys it
+    without the part that failed, which would serve a stale result silently.
+    """
+
+    def __init__(self, code: str, message: str, fix: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.fix = fix
 
 
 class CyclicValueError(TypeError):
@@ -2600,46 +2614,42 @@ class Cash:
         seen_carriers: set[int] = set()
         # A clock test double's date is the date, not code (`_fake_clock`).
         fake_dates = _plain_data._fake_clock()[0]
-        try:
-            for param, value in (*((None, a) for a in args), *kwargs.items()):
-                for carrier in self._iter_code_carriers(value):
-                    if fake_dates and (type(carrier) in fake_dates or carrier in fake_dates):
-                        continue
-                    # Dedup ACROSS arguments too, not just within one walk:
-                    # `f(a, b, c)` with three instances of one class reaches
-                    # `_is_opaque` + `_code_surface_hash` once instead of three
-                    # times. Safe by identity because every carrier is
-                    # reachable from `args`/`kwargs` for this whole loop, so no
-                    # id can be recycled underneath us.
-                    if id(carrier) in seen_carriers:
-                        continue
-                    seen_carriers.add(id(carrier))
-                    if self._is_opaque(carrier):
-                        continue
-                    digest = self._code_surface_hash(carrier)
-                    if digest is not None:
-                        parts.append(f"{self._carrier_name(carrier)}:{digest}")
-                        # Its CODE is in the key; the globals that code reads
-                        # were not (CAS-113). A callback reading a module
-                        # constant served the old result after the constant
-                        # changed, while the same read one call level deeper,
-                        # or in the cached function itself, invalidated.
-                        if self._is_user_code_carrier(carrier):
-                            parts.extend(self._carrier_read_global_parts(carrier, func_name))
-                            if warn:
-                                self._warn_untrackable_in_carrier_once(carrier, func_name, param)
-                    elif warn and self._is_user_code_carrier(carrier):
-                        # User code we could not hash: a C-extension type, an
-                        # exotic descriptor, a ``functools.partial`` (whose
-                        # wrapped function pickles by reference like any
-                        # other). We fall back to today's key, which means an
-                        # edit will NOT invalidate -- so say so once. This is
-                        # the residue where cash genuinely cannot determine the
-                        # answer, and silence is the danger.
-                        self._warn_unhashable_code_once(carrier, func_name, param)
-        except Exception as e:  # noqa: BLE001 - never break a call
-            logger.debug("[CORE] code-arg fold failed: %s", e)
-            return state_hash
+        for param, value in (*((None, a) for a in args), *kwargs.items()):
+            for carrier in self._iter_code_carriers(value):
+                if fake_dates and (type(carrier) in fake_dates or carrier in fake_dates):
+                    continue
+                # Dedup ACROSS arguments too, not just within one walk:
+                # `f(a, b, c)` with three instances of one class reaches
+                # `_is_opaque` + `_code_surface_hash` once instead of three
+                # times. Safe by identity because every carrier is
+                # reachable from `args`/`kwargs` for this whole loop, so no
+                # id can be recycled underneath us.
+                if id(carrier) in seen_carriers:
+                    continue
+                seen_carriers.add(id(carrier))
+                if self._is_opaque(carrier):
+                    continue
+                digest = self._code_surface_hash(carrier)
+                if digest is not None:
+                    parts.append(f"{self._carrier_name(carrier)}:{digest}")
+                    # Its CODE is in the key; the globals that code reads
+                    # were not (CAS-113). A callback reading a module
+                    # constant served the old result after the constant
+                    # changed, while the same read one call level deeper,
+                    # or in the cached function itself, invalidated.
+                    if self._is_user_code_carrier(carrier):
+                        parts.extend(self._carrier_read_global_parts(carrier, func_name))
+                        if warn:
+                            self._warn_untrackable_in_carrier_once(carrier, func_name, param)
+                elif warn and self._is_user_code_carrier(carrier):
+                    # User code we could not hash: a C-extension type, an
+                    # exotic descriptor, a ``functools.partial`` (whose
+                    # wrapped function pickles by reference like any
+                    # other). We fall back to today's key, which means an
+                    # edit will NOT invalidate -- so say so once. This is
+                    # the residue where cash genuinely cannot determine the
+                    # answer, and silence is the danger.
+                    self._warn_unhashable_code_once(carrier, func_name, param)
         if not parts:
             return state_hash
         payload = ":".join(sorted(set(parts)))
@@ -2667,22 +2677,19 @@ class Cash:
             if not isinstance(g, dict):
                 continue
             owner = getattr(fn, "__qualname__", "?")
-            try:
-                for name in self._read_global_data_names(fn):
-                    if name not in g:
-                        continue
-                    value = g[name]
-                    if isinstance(value, (types.ModuleType, type)):
-                        continue
-                    if callable(value) and not isinstance(value, (dict, list, tuple, set)):
-                        continue
-                    h = self._safe_global_hash(value, func_name, f"{owner}.{name}")
-                    if h is not None:
-                        parts.append(f"argglobal:{owner}.{name}:{h}")
-                for label, h in self._module_attr_parts(fn, func_name, g):
-                    parts.append(f"argglobal:{owner}:{label}:{h}")
-            except Exception as e:  # noqa: BLE001 - never break a call
-                logger.debug("[CORE] callback-globals fold failed for %s: %s", owner, e)
+            for name in self._read_global_data_names(fn):
+                if name not in g:
+                    continue
+                value = g[name]
+                if isinstance(value, (types.ModuleType, type)):
+                    continue
+                if callable(value) and not isinstance(value, (dict, list, tuple, set)):
+                    continue
+                h = self._safe_global_hash(value, func_name, f"{owner}.{name}")
+                if h is not None:
+                    parts.append(f"argglobal:{owner}.{name}:{h}")
+            for label, h in self._module_attr_parts(fn, func_name, g):
+                parts.append(f"argglobal:{owner}:{label}:{h}")
         return parts
 
     @staticmethod
@@ -3439,7 +3446,14 @@ class Cash:
                 return (_CACHE_MISS, result, "unhashable")
             cache_key = self._compute_cache_key(func_name, current_state_hash, dynamic_state_hash, args_hash)
             return (cache_key, current_state_hash, args_hash)
-        except (TypeError, ValueError, pickle.PicklingError, AttributeError) as e:
+        except _KeyBuildFailed as e:
+            self._warn_once(CashCacheIneffectiveWarning, func_name, e.code, e.message, code=e.code, fix=e.fix)
+            result = func(*args, **kwargs)
+            self._log_decorator_call(
+                func_name, cache_hit=False, execution_time=_perf_counter() - call_start, args_hash="error", cache_key=""
+            )
+            return (_CACHE_MISS, result, "error")
+        except Exception as e:  # noqa: BLE001 - any failure building the key means no key
             arg_type_name = self._first_unhashable_arg_type(args, kwargs)
             if arg_type_name == "<unknown>":
                 hint = (
@@ -5642,32 +5656,40 @@ class Cash:
 
         dynamic_state_parts = []
         resolvers = dynamic_depends_on if isinstance(dynamic_depends_on, list) else [dynamic_depends_on]
-
+        fix = (
+            "fix the resolver -- it is called with exactly the same arguments "
+            "as the function -- so that it returns a DataSource, a list of "
+            "them, or None for no dependency."
+        )
         for resolver in resolvers:
+            # Any failure makes the call unkeyable, never a key without the
+            # dependency: that key would keep hitting after the data changed.
             try:
                 # Resolver receives the same args as the function
                 ds_result = resolver(*args, **kwargs)
-
-                # Normalize to list
                 dss = ds_result if isinstance(ds_result, list) else [ds_result]
-
                 for ds in dss:
-                    if isinstance(ds, DataSource):
-                        dynamic_state_parts.append(str(ds.state_token()))
-            except (OSError, TypeError, ValueError, AttributeError, RuntimeError) as e:
-                self._warn_once(
-                    CashCacheIneffectiveWarning,
-                    func_name,
-                    "",
+                    if ds is None:
+                        continue
+                    if not isinstance(ds, DataSource):
+                        raise _KeyBuildFailed(
+                            "KEY-DYNAMIC-DEP-FAILED",
+                            f"@cash.cache on {func_name}: a dynamic_depends_on resolver "
+                            f"returned a {type(ds).__name__}, which is not a DataSource, "
+                            f"so cash cannot tell when it changes and the call ran uncached.",
+                            fix,
+                        )
+                    dynamic_state_parts.append(str(ds.state_token()))
+            except _KeyBuildFailed:
+                raise
+            except Exception as e:  # noqa: BLE001 - any failure here is the resolver's
+                raise _KeyBuildFailed(
+                    "KEY-DYNAMIC-DEP-FAILED",
                     f"@cash.cache on {func_name}: dynamic_depends_on resolver raised "
-                    f"{type(e).__name__} ({e}), so that dependency is missing from "
-                    f"the cache key and results may be stale when the underlying "
-                    f"data changes.",
-                    code="KEY-DYNAMIC-DEP-FAILED",
-                    fix="fix the resolver -- it is called with exactly the same "
-                    "arguments as the function -- and clear this function's "
-                    "entries after changing the source data.",
-                )
+                    f"{type(e).__name__} ({e}), so cash cannot tell whether that "
+                    f"dependency changed and the call ran uncached.",
+                    fix,
+                ) from e
 
         if dynamic_state_parts:
             # Sort to ensure deterministic order if multiple sources
@@ -6546,13 +6568,7 @@ class Cash:
         as a call to it would; a plain function of the user's as its source
         plus its helpers, re-resolved live like any helper's.
         """
-        try:
-            return self._data_callable_identity_of(fn)
-        except (OSError, TypeError, ValueError):
-            raise  # `_stabilize_for_global_hash` handles these
-        except Exception:  # noqa: BLE001 - never break a key over the deeper identity
-            logger.debug("[CORE] deep identity failed for %r", fn, exc_info=True)
-            return self._hash_callable_source(fn)
+        return self._data_callable_identity_of(fn)
 
     def _data_callable_identity_of(self, fn: Any) -> str:
         if getattr(fn, "_cash_cached", False):
@@ -6745,8 +6761,8 @@ class Cash:
         still the same object and still hits its memo entry.
 
         ``None`` means "cannot determine" and the caller must fall back to
-        today's by-reference key. This never raises: a hashing failure must not
-        break a cached call.
+        today's by-reference key. A hashing failure is not "cannot determine":
+        it propagates, and the key build that asked runs the call uncached.
 
         Memoized on the object itself, following ``_user_class_src_cache``:
         redefining a class produces a NEW object and therefore a distinct dict
@@ -6762,41 +6778,36 @@ class Cash:
         while isinstance(obj, functools.partial) and depth < 8:
             obj = obj.func
             depth += 1
-        try:
-            # Dispatch FIRST, memo read second. Every argument to a cached
-            # function passes through here (Task 4), and most are not a
-            # class or callable at all -- a list, dict, set, numpy array,
-            # DataFrame. Checking the dispatch before touching the memo means
-            # those return None from a plain isinstance()/callable() check
-            # (neither raises) instead of reaching a dict.get() that would
-            # raise TypeError and get caught, on the common case rather than
-            # the exception.
-            is_type = isinstance(obj, type)
-            if not (is_type or callable(obj)):
-                return None
-            if not self._is_user_code_object(obj):
-                return None
-            # The memo read must still be INSIDE the try: by this point *obj*
-            # is a class or a callable, and while both are hashable in the
-            # overwhelming common case, neither is guaranteed to be (a
-            # __call__-implementing instance can set __hash__ = None) -- this
-            # must not be the one path in this method that can still raise.
-            cached = self._code_surface_cache.get(obj)
-            if cached is not None:
-                return cached
-            if is_type:
-                parts = self._class_surface_parts(obj)
-            else:
-                ident = self._code_identity(obj)
-                if not ident:
-                    return None
-                parts = [(getattr(obj, "__qualname__", "?"), "", ident)]
-            if not parts:
-                return None
-            digest = hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()
-        except Exception as e:  # noqa: BLE001 - hashing must never break a call
-            logger.debug("[CORE] code-surface hash failed for %r: %s", obj, e)
+        # Dispatch FIRST, memo read second. Every argument to a cached
+        # function passes through here (Task 4), and most are not a
+        # class or callable at all -- a list, dict, set, numpy array,
+        # DataFrame. Checking the dispatch before touching the memo means
+        # those return None from a plain isinstance()/callable() check
+        # instead of reaching the memo at all.
+        is_type = isinstance(obj, type)
+        if not (is_type or callable(obj)):
             return None
+        if not self._is_user_code_object(obj):
+            return None
+        # By this point *obj* is a class or a callable, and while both are
+        # hashable in the overwhelming common case, neither is guaranteed to
+        # be (a __call__-implementing instance can set __hash__ = None).
+        try:
+            cached = self._code_surface_cache.get(obj)
+        except TypeError:
+            cached = None
+        if cached is not None:
+            return cached
+        if is_type:
+            parts = self._class_surface_parts(obj)
+        else:
+            ident = self._code_identity(obj)
+            if not ident:
+                return None
+            parts = [(getattr(obj, "__qualname__", "?"), "", ident)]
+        if not parts:
+            return None
+        digest = hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()
         try:
             if len(self._code_surface_cache) < 4096:
                 self._code_surface_cache[obj] = digest
@@ -6959,11 +6970,7 @@ class Cash:
         own = self._code_surface_own(obj)
         if own is None:
             return None
-        try:
-            reached = self._code_ref_closure(obj)
-        except Exception as e:  # noqa: BLE001 - hashing must never break a call
-            logger.debug("[CORE] code-ref closure failed for %r: %s", obj, e)
-            return own
+        reached = self._code_ref_closure(obj)
         if not reached:
             return own
         return hashlib.sha256(":".join([own, *sorted(reached)]).encode("utf-8")).hexdigest()
