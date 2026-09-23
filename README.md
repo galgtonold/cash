@@ -170,7 +170,7 @@ Full walkthrough in [the decorator guide](https://cash-lib.readthedocs.io/en/lat
 
 A cache is only worth as much as your trust in it, so [**how cash is tested**](https://cash-lib.readthedocs.io/en/latest/how-it-works/testing/) is written down: <!-- docnum:tests_total -->~10,800<!-- /docnum --> tests across <!-- docnum:platforms -->15<!-- /docnum --> platform combinations, documentation whose code is executed and whose prose is pinned to the source that decides it, and a section on what all of that still fails to catch.
 
-Bug reports welcome: the badge has a "Report a bug" button, `%cash_feedback` prints how, or open an [issue](https://github.com/galgtonold/cash/issues).
+Bug reports welcome: the badge has a "Report a bug" button, `%cash_help` ends with the links, or open an [issue](https://github.com/galgtonold/cash/issues).
 
 ## Contributing
 

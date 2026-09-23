@@ -56,6 +56,7 @@ from ..statement import ProcessResult, StatementProcessor
 from ..statement.processor import config_float
 from ..upstream import UpstreamChecker
 from ._args import strip_inline_comment
+from ._help import help_text
 from ._types import CellMetrics, TimingBreakdown
 from .admin import CashAdminMagicsMixin
 from .cell_executor import (
@@ -486,11 +487,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
     @line_magic
     def cash_on(self, line: str) -> None:
-        """
-        Enable automatic caching for all subsequent cells.
+        """Enable automatic caching for all subsequent cells.
+
         Usage:
-            %cash_on              # Enable with no TTL
-            %cash_on ttl=3600     # Enable with 1-hour TTL
+            %cash_on              - enable, entries never expire
+            %cash_on ttl=3600     - enable, entries expire after an hour
         """
         # Parse optional TTL. Comment-stripped first, or `%cash_on ttl=3600  #
         # one hour` would parse "3600  # one hour" as an int, fail, and silently
@@ -585,9 +586,10 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
     @line_magic
     def cash_off(self, line: str) -> None:
-        """
-        Disable automatic caching.
-        Usage: %cash_off
+        """Disable automatic caching.
+
+        Usage:
+            %cash_off
         """
         self._auto_cache_enabled = False
         if self._io_release is not None:
@@ -723,106 +725,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
     @line_magic
     def cash_help(self, line: str) -> None:
-        """Display a quick-reference card for Cash magic commands."""
-        topic = strip_inline_comment(line).lower()
-        if topic in ("badge", "badges"):
-            print(
-                "Badge Display\n"
-                "─────────────\n"
-                "  %cash_badge html    Interactive HTML badges (default)\n"
-                "  %cash_badge print   Text summary after cell completes\n"
-                "  %cash_badge off     No badge output\n"
-                "\n"
-                "Badge status icons:\n"
-                "  [C] COMPUTED  — statement was executed (cache miss)\n"
-                "  [R] RESTORED  — result loaded from cache (cache hit)\n"
-                "  [S] SKIPPED   — unchanged, no work needed"
-            )
-        elif topic in ("debug", "debugging"):
-            print(
-                "Debugging\n"
-                "─────────\n"
-                "  %cash_debug on      Enable debug output\n"
-                "  %cash_debug off     Disable debug output\n"
-                "  %cash_debug json    JSON-formatted debug output\n"
-                "  %cash_debug file p  Log debug output to file path p"
-            )
-        elif topic in ("collab", "collaboration", "sharing"):
-            print(
-                "Collaboration & Sharing\n"
-                "───────────────────────\n"
-                "  %cash_export file      Export cache to file\n"
-                "  %cash_export f --json  Export lineage as JSON\n"
-                "  %cash_import file      Import cache from file\n"
-                "  %cash_import f --merge Merge with existing cache\n"
-                "  %cash_diff file        Compare with exported cache\n"
-                "  %cash_diff f --vars    Show variable-level differences"
-            )
-        elif topic in ("inspect", "provenance", "audit"):
-            print(
-                "Inspection & Audit\n"
-                "──────────────────\n"
-                "  %cash_status        Last cell execution metrics\n"
-                "  %cash_stats         Session-wide statistics\n"
-                "  %cash_provenance v  History of variable v\n"
-                "  %cash_provenance --time   Timeline of computations\n"
-                "  %cash_provenance --graph  Dependency graph\n"
-                "  %cash_audit on/off  Enable/disable audit logging\n"
-                "  %cash_audit show    View audit log\n"
-                "  %cash_log           View recent log events\n"
-                "  !cash inspect       Every cache entry: size, time it saves, uses"
-            )
-        else:
-            print(
-                "Cash — Smart Caching for Jupyter Notebooks\n"
-                "═══════════════════════════════════════════\n"
-                "\n"
-                "Quick Start:\n"
-                "  %cash_on             Enable automatic caching\n"
-                "  %cash_on ttl=3600    Enable with 1-hour TTL\n"
-                "  %cash_off            Disable caching\n"
-                "\n"
-                "Essential Commands:\n"
-                "  %cash_status         Show last cell metrics\n"
-                "  %cash_stats          Session-wide statistics\n"
-                "  %cash_badge html|print|off   Set badge display\n"
-                "  %cash_debug on|off   Toggle debug output\n"
-                "\n"
-                "Cache Management:\n"
-                "  %cash_export file    Export cache to file\n"
-                "  %cash_import file    Import cache from file\n"
-                "  !cash inspect        Every entry: size, time it saves, uses\n"
-                "\n"
-                "Module Tracking:\n"
-                "  %cash_track module   Track a module for changes\n"
-                "  %cash_track --list   Show tracked modules\n"
-                "\n"
-                "Annotations (in code comments):\n"
-                "  # @cash:no-cache    Skip caching for a statement\n"
-                "  # @cash:ttl=300     Set TTL for a statement\n"
-                "  # @cash:persist     Force disk persistence\n"
-                "\n"
-                "Topics: %cash_help badge | debug | collab | inspect\n"
-                "\n"
-                "Docs: https://cash-lib.readthedocs.io/"
-            )
+        """Print the list of Cash magics, or one magic's full usage.
 
-    @line_magic
-    def cash_feedback(self, line: str) -> None:
-        """Show feedback instructions for beta users."""
-        print(
-            "We'd love to hear from you!\n"
-            "───────────────────────────\n"
-            "\n"
-            "Bug reports & feature requests:\n"
-            "  https://github.com/galgtonold/cash/issues\n"
-            "\n"
-            "Questions & discussion:\n"
-            "  https://github.com/galgtonold/cash/discussions\n"
-            "\n"
-            "You can also run %cash_stats to see how much time\n"
-            "Cash has saved you this session."
-        )
+        Usage:
+            %cash_help              - every magic with its one-line summary
+            %cash_help badge        - full usage of %cash_badge (the cash_ prefix is optional)
+        """
+        print(help_text(self, strip_inline_comment(line)))
 
     @line_magic
     def cash_badge(self, line: str) -> None:
@@ -832,6 +741,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             %cash_badge html   - Interactive HTML badges with live updates (default)
             %cash_badge print  - Text summary printed once after cell completes
             %cash_badge off    - No badge output at all
+
+        Badge status icons:
+            [C] COMPUTED - the statement ran (cache miss)
+            [R] RESTORED - the result was loaded from the cache (cache hit)
+            [S] SKIPPED  - unchanged since the last run, no work needed
         """
         mode = strip_inline_comment(line).lower()
         if mode in ("html", "print", "off"):
@@ -845,8 +759,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
     @line_magic
     def cash_status(self, line: str) -> dict[str, Any] | None:
-        """
-        Get machine-readable status of the last cell execution.
+        """Get machine-readable status of the last cell execution.
 
         Usage:
             %cash_status          # Print JSON status

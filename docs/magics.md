@@ -2,7 +2,7 @@
 
 Cash registers a suite of IPython magic commands that control caching, inspect
 session state, and move cache data between sessions. This page is the canonical
-reference for all **18** magics — each entry lists the exact signature, every
+reference for all **17** magics — each entry lists the exact signature, every
 parsed flag, and a working example. Behaviour is derived directly from
 `src/cash/notebook/ipython/magics.py` and `src/cash/notebook/ipython/admin.py`.
 
@@ -20,8 +20,7 @@ parsed flag, and a working example. Behaviour is derived directly from
 | [`%cash_on`](#cash_on) | Enable automatic caching for subsequent cells. |
 | [`%cash_off`](#cash_off) | Disable automatic caching. |
 | [`%cash_persist`](#cash_persist) | Cache *every* statement, bypassing the cost-aware floors. |
-| [`%cash_help`](#cash_help) | Print a quick-reference card (optionally per topic). |
-| [`%cash_feedback`](#cash_feedback) | Show bug-report and feedback URLs. |
+| [`%cash_help`](#cash_help) | List every magic, or print one magic's full usage. |
 | [`%cash_status`](#cash_status) | Inspect the last cell + session as dict / JSON. |
 | [`%cash_badge`](#cash_badge) | Set per-cell badge mode (html/print/off). |
 | [`%cash_stats`](#cash_stats) | Session-wide cache statistics. |
@@ -41,7 +40,7 @@ parsed flag, and a working example. Behaviour is derived directly from
 ## Enabling and configuring (user-facing)
 
 ### `%cash_on`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @08a46796 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @418e758d -->
 
 Enable automatic caching for every subsequent cell.
 
@@ -83,7 +82,7 @@ that it did nothing and leaves every cell running uncached — see
 ```
 
 ### `%cash_off`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_off @34cb0527 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_off @700a45e0 -->
 
 Disable automatic caching. Subsequent cells run uncached until you call
 `%cash_on` again.
@@ -127,49 +126,37 @@ trivial statements in normal use.
 ```
 
 ### `%cash_help`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_help @6cf2d3d6 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_help @6f3ad8e6 -->
+<!-- claim: cash/notebook/ipython/_help.py:help_text @800a29c8 -->
 
-Print a quick-reference card. With no argument the main card is shown; pass a
-topic name to drill into a sub-card.
+Print every registered magic with the first line of its docstring, a working
+example of each `# @cash:` annotation, and the links for docs, bug reports and
+questions. Pass a magic's name to print its full usage instead.
 
-**Signature:** `%cash_help [topic]`
+The card is built from the magics IPython actually registered and from their
+docstrings, and each annotation example is checked against the real parser, so
+it lists exactly the magics that exist.
+
+**Signature:** `%cash_help [name]`
 
 **Arguments:**
 
-- *(no argument)* — Main quick-reference (essential commands, cache management,
-  module tracking, annotation syntax). See [Annotations](annotations.md) for the
+- *(no argument)* — The full card. See [Annotations](annotations.md) for the
   full `@cash:` directive reference.
-- `badge` / `badges` — Badge display modes and status icons.
-- `debug` / `debugging` — Debug logging commands.
-- `collab` / `collaboration` / `sharing` — Export / import / diff commands.
-- `inspect` / `provenance` / `audit` — Status, stats, provenance, audit, log,
-  and `!cash inspect` for every cache entry's size, time saved, and uses.
+- `name` — One magic's docstring: its usage and flags. The `%` and `cash_`
+  prefixes are optional, so `badge`, `cash_badge` and `%cash_badge` all work.
+  An unknown name says so and prints the full card.
 
 **Example:**
 
 ```python
 %cash_help
 %cash_help badge
-%cash_help inspect
-```
-
-### `%cash_feedback`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_feedback @ae5c76bf -->
-
-Print bug-report and feedback URLs. Useful pointer for beta users.
-
-**Signature:** `%cash_feedback`
-
-**Arguments:** None.
-
-**Example:**
-
-```python
-%cash_feedback
+%cash_help stats
 ```
 
 ### `%cash_status`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @687a4c46 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @b88509d3 -->
 
 Report status of the last cell plus a snapshot of session state (lineage,
 executed-code map, auto-cache flag, backend stats).
@@ -193,7 +180,7 @@ blob   = %cash_status json # capture as JSON string
 ```
 
 ### `%cash_badge`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_badge @3519b2f6 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_badge @15b462c4 -->
 
 Set the badge display mode for subsequent cached cells. See
 [Reading the Cash Badge](badges.md) for the full anatomy of each mode.
@@ -355,7 +342,7 @@ built, so an unchanged re-run skips the `await` rather than re-issuing the call.
 ## Inspecting your session
 
 ### `%cash_provenance`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_provenance @f9d5eace -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_provenance @efdb75ad -->
 
 Show how a variable was computed: its lineage hash, the cell code that produced
 it, and (optionally) a dependency graph or timeline.

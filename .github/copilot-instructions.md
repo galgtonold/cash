@@ -182,7 +182,7 @@ server, then pin the fix with an `nb_runner` test. Keep throwaway scripts in
 | tracker | what goes there |
 | --- | --- |
 | **`galgtonold/cash-tracker`** (private) | Everything internal: bugs, follow-ups, tech debt, roadmap. This is the single source of truth for planning. |
-| **`galgtonold/cash`** (public) | Only issues filed by outside users — the README's bug-report link, the badge's "Report a bug" button, `%cash_feedback`. Do not file internal work here. |
+| **`galgtonold/cash`** (public) | Only issues filed by outside users — the README's bug-report link, the badge's "Report a bug" button, the links at the end of `%cash_help`. Do not file internal work here. |
 
 Board: <https://github.com/users/galgtonold/projects/1> (private) — views *All work*, *Board*, *High priority*, *Correctness*, *Docs*.
 

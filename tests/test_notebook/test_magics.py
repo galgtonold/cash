@@ -343,6 +343,54 @@ final_value = result * multiplier
             )
 
 
+def _help_output(magics, topic=""):
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        magics.cash_help(topic)
+    return buf.getvalue()
+
+
+def test_cash_help_lists_exactly_the_registered_magics(cash_magics):
+    """The card is built from the registered magics, so it names each one
+    once and names nothing else. The hand-written card it replaced never
+    listed ``%cash_persist`` and kept listing magics that had been removed."""
+    import re
+
+    out = _help_output(cash_magics)
+    listed = re.findall(r"^  %(cash_\w+) ", out, re.M)
+    assert sorted(listed) == sorted(CashMagics.magics["line"])
+    assert "cash_persist" in listed
+    assert all(re.search(rf"^  %{name} +\S", out, re.M) for name in listed), out
+
+
+def test_cash_help_ends_with_the_feedback_links(cash_magics):
+    out = _help_output(cash_magics).rstrip().splitlines()
+    assert out[-2:] == [
+        "Bug reports & feature requests: https://github.com/galgtonold/cash/issues",
+        "Questions & discussion: https://github.com/galgtonold/cash/discussions",
+    ]
+
+
+def test_cash_help_topic_prints_that_magics_docstring(cash_magics):
+    import inspect
+
+    expected = inspect.getdoc(CashMagics.cash_badge)
+    for topic in ("badge", "cash_badge", "%cash_badge", "  Badge  # comment"):
+        out = _help_output(cash_magics, topic)
+        assert out.startswith("%cash_badge\n"), (topic, out)
+        assert expected in out
+        assert "[R] RESTORED" in out
+
+
+def test_cash_help_unknown_topic_says_so_and_prints_the_card(cash_magics):
+    out = _help_output(cash_magics, "collab")
+    assert out.startswith("No magic named %cash_collab.")
+    assert "  %cash_on " in out
+
+
 def test_register_magic_registers_cash_on():
     """``Cash.register_magic()`` imports ``CashMagics`` from the post-ADR-013
     path and registers it on the active shell.

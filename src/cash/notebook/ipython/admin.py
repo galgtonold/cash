@@ -587,6 +587,7 @@ class CashAdminMagicsMixin:
 
             %cash_provenance x           - Show how 'x' was computed
             %cash_provenance x --graph   - Include dependency graph
+            %cash_provenance x --time    - Include a timeline of computations
             %cash_provenance x --json    - Output as JSON
             %cash_provenance --all       - List all tracked variables
             %cash_provenance --clear     - Clear provenance data
