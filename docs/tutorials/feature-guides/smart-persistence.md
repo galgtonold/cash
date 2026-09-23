@@ -1,258 +1,106 @@
-# Smart persistence — when caching to disk would cost more than it saves
+# Restarts and persistence
 
-Caching to disk costs I/O. For very cheap computations, the disk-write itself takes longer than rerunning the function. Cash's smart-persistence policy decides per call whether a result is worth promoting past RAM — using the call's measured execution time and the result's size as inputs.
+!!! info "Applies to: notebook"
+    Notebooks with `%cash_on`. What survives a kernel restart, and how to keep
+    more of it.
 
-## Why this exists
+Cash keeps every cached statement in memory for the rest of the session and
+writes the ones worth keeping to disk. After a kernel restart, only what is on
+disk comes back.
 
-A naive "cache everything to disk" backend hurts when most calls take 5 ms. The serialize-and-write step alone can take 10 ms, so every "hit" on disk is slower than just rerunning the function. Smart persistence keeps cheap results in the in-memory tier and only writes to disk (or Redis, or S3) when the compute was expensive enough that re-reading is genuinely faster than recomputing.
+## What survives a restart
 
-The decision applies to **multi-tier backends only**. A single-tier `FileBackend` or `RedisBackend` writes every entry — there is no tier 0 to fall back to. Smart persistence is what makes the default `TieredBackend([RAM, FileBackend])` produce sensible disk usage instead of a flat "save everything that ran" pile.
+A statement's result goes to disk when it took more than **0.1 s** to compute
+and reading it back is clearly faster than computing it again. Quicker results
+stay in memory, and results under 10 ms are not stored at all. The
+[cost model](../../cost-model.md) has the exact rules and the settings that tune
+them.
 
-## The decision in one sentence
+With `%cash_badge print` each row shows where its result went. Here `slow`
+takes 0.3 s and `mid` 0.05 s:
 
-If the promotion policy returns `False` for a given call, the result lands in RAM only — the next disk tier (and every tier after) is skipped. Promote when recomputing the value would cost more than restoring it, and the bytes it would occupy are worth that saving: `execution_time - est_restore_time > min_cache_savings_pct × execution_time`, where `est_restore_time` is the fitted cost model's end-to-end serialize-write / read-deserialize prediction.
-
-## Quick start
-
-Smart persistence is on by default. Nothing to configure:
-
-<!-- test:expect-warning reason="the slow demo function has a side effect, so the impurity advisory is expected (cash still caches)" -->
-```python
-import cash
-
-@cash.cache
-def fast(x):
-    return x + 1            # ~1 µs
-
-@cash.cache
-def slow(x):
-    time.sleep(2)
-    return heavy_thing(x)   # ~2 s
-
-fast(1); fast(1)            # MISS, HIT — both served from RAM, no disk write
-slow(1); slow(1)            # MISS, HIT — second call survives kernel restart
+```text
+[Cash] EXECUTED (0.37s)
+  EXECUTED: a = slow(1)  (0.30s) -> RAM+DISK
+    sub-call slow(1): 0/1 hit
+  EXECUTED: b = mid(2)  (0.05s) -> RAM
+    sub-call mid(2): 0/1 hit
+  EXECUTED: c = a + 1  (0.00s)
+  @cash.cache:
+    slow() [intercepted]: 0/1 cached (0.300s)
+    mid() [intercepted]: 0/1 cached (0.050s)
 ```
 
-After both calls, peek at the cache directory: only `slow`'s entry is on disk. `fast` lives in RAM and disappears when the process exits.
+After a restart, the same cell restores `a` and runs `b` and `c` again:
 
-## The promotion policy
-
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.pays_to_restore @e011b70e, cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1 -->
-The rule lives in one object, `PersistencePolicy` in `backends/persistence_policy.py`, which the `TieredBackend` consults on every write. Its restore-vs-recompute test:
-
-```python
-# test:inject: compute_floor_s, min_savings_pct = 0.1, 0.20
-# test:inject: from cash import cost_model
-def pays_to_restore(compute_s: float, size_bytes: int, type_name: str = "", backend_kind: str = "disk") -> bool:
-    if compute_s < compute_floor_s:                   # 0.1 s compute floor
-        return False
-    # Fitted cost model: predicted seconds to read + deserialize the value.
-    # (End-to-end serialize/deserialize, NOT a raw byte-per-second guess.)
-    restore = cost_model.estimated_restore_time(type_name, size_bytes, backend_kind)
-    # Persist only when restoring beats recomputing by min_savings_pct.
-    return compute_s - restore > min_savings_pct * compute_s
+```text
+[Cash] CACHED (1 restored, 2 ran; 0.06s, saved 0.29s)
+  CACHED: a = slow(1)  (saved 0.30s)
+  EXECUTED: b = mid(2)  (0.05s) -> RAM
+    sub-call mid(2): 0/1 hit
+  EXECUTED: c = a + 1  (0.00s)
+  @cash.cache:
+    mid() [intercepted]: 0/1 cached (0.050s)
 ```
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @dfaf7643, cash/cost_model.py:estimated_restore_time @19d51f03, cash/backends/value_policy.py:worth_its_bytes, cash/backends/value_policy.py:WORTH_CEILING_BYTES_PER_SECOND == 134217728, cash/backends/value_policy.py:WORTH_FLOOR_BYTES == 8388608 -->
-Three things gate the promotion:
+The HTML badge shows the same with the storage dots on each row.
 
-1. **Hard floor at 100 ms.** Anything that ran faster than `0.1 s` never reaches disk — the I/O alone would cost more than recomputing.
-2. **Restore-vs-recompute check.** Above the floor, Cash predicts how long the value would take to *restore* (`cost_model.estimated_restore_time`, the fitted serialize-write / read-deserialize model) and promotes only when recomputing would cost more, by at least `min_cache_savings_pct` of the compute time. Because the prediction is per-object-size, a **bigger** result that is **expensive** to recompute is now *more* likely to persist — the opposite of the old raw-bandwidth model, which scaled a fake `io_time` with size and left large frames RAM-only.
-3. **What the answer costs.** Both gates above ask whether restoring beats recomputing; neither asks what the cache pays for that. So a third gate caps the *rate*: cash spends at most **128 MiB of cache per second of compute saved**, and refuses anything over 8 MiB that exceeds it ([`CACHE-NOT-WORTH-BYTES`](../../warnings.md#cache-not-worth-bytes) says so once per cell, naming each statement it refused). Version pruning rations superseded copies at half that rate: a spare copy kept for undo is speculative, while a live entry is the one that will actually be restored.
+## How a restart picks up
 
-When the entry knows its type — every notebook-cached value records its `cost_model_family` on the metadata — the restore is predicted for that type, so the two persistence gates (this one and the statement processor's Gate A) agree instead of contradicting each other. Otherwise the policy assumes the slowest (`_GENERIC`) family, a conservative choice.
+Run any cell after a restart. Cash works out which variables the cell needs,
+checks that the code and files behind each one are unchanged, and restores them
+from disk instead of running the cells that built them. A deep pipeline comes
+back in the time it takes to read the results. Whatever it cannot restore, such
+as a value that was kept in memory only, it computes by running the statements
+that produced it. See
+[Picking up after a kernel restart](../../how-it-works/notebook-path.md#picking-up-after-a-kernel-restart).
 
-The `100 ms` floor is fixed (`persistence_policy.COMPUTE_FLOOR_S`), and it is the same whether cash builds the backend or you build a `TieredBackend` yourself; the savings fraction is `min_cache_savings_pct` (default `0.20`). `cash info` prints the policy in force.
+<!-- claim: cash/notebook/statement/rebuild_cost.py:RebuildCostLedger.end_cell_persistence @b5fce68e -->
+**A cheap value over expensive inputs is written too.** `latest =
+sales["week"].max()` takes milliseconds, but after a restart `sales` may be gone,
+and so is everything it was built from. So at the end of each cell, cash adds up
+what rebuilding each value would cost after a restart (the statement plus every
+statement behind it that is not on disk) and writes the value when reading it
+back is cheaper. Only the version the cell ends with is written: a name the cell
+assigns three times is stored once.
 
-The rate ceiling exists because the first two gates, on their own, filled five user-testing caches with 58 GiB for 61–360 MB of input data — 1.3 GB frames that rebuild in 5 seconds, 48 MiB loop iterations with 0.00 s of recorded compute. Measured over all 3120 of those entries, the rate refuses 76% of the bytes and gives up 1% of the compute. `@cash.cache` and `@cash:persist` skip it, like the other two gates: an explicit decision is not re-judged.
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.plan_cell_run @08f1e9d7 -->
+Running such a cell again after a restart restores the last versions it has on
+disk and runs only the statements they do not cover, in order.
 
-> **Restart implication.** The corollary of the 100 ms floor is that a *fast but
-> important* computation on the default `TieredBackend` stays RAM-only and does
-> **not** survive a process restart — by design, since re-running it is cheaper
-> than the disk round-trip. If you need a sub-100 ms result to persist across
-> restarts (e.g. a thin reader process that should always restore), use a
-> single-tier persistent backend (`Cash(backend=FileBackend(...))` or
-> `SQLiteBackend`), which writes every entry regardless of compute time.
+## Keeping more
 
-<!-- claim: cash/notebook/statement/rebuild_cost.py:RebuildCostLedger.end_cell_persistence @b5fce68e, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @0c20fd53 -->
-In a notebook, "cheaper to re-run" is judged once more at the end of each cell.
-A statement is often fast only because its inputs are there: `latest =
-sales['week'].max()` takes milliseconds, but after a restart `sales` is gone too,
-and so is everything it was built from. So for each value the cell leaves, Cash
-adds up what rebuilding it after a restart would take —
-the statement, and every statement behind it whose result is not on disk — and
-writes the value to disk when restoring it beats that, by the same
-restore-vs-recompute rule, and when the value is worth its bytes against that
-same rebuild time (the rate ceiling above). Only the value as the cell leaves it is written, not
-each intermediate version. That includes a value too cheap to cache on its own
-(`is_refund = sales['qty'] < 0`) over inputs that are costly to rebuild. The same
-holds while the cell runs: a statement whose every output a later statement of
-the cell writes again (`sales = sales.merge(...)` three times over) keeps its
-result in RAM, and `# @cash:persist` still writes it.
+To store a result on disk however quick it was, mark the statement:
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.plan_cell_run @08f1e9d7, cash/notebook/ipython/cell_executor.py:_writes_only_into_its_own_objects @9faf10be -->
-Running that cell again after a restart does not rebuild the versions in
-between. Cash simulates the cell's run of assignments the way it simulates a
-cell above, restores the last versions it has on disk, and runs only what they
-do not cover, in order: a statement that must run reads the version its place
-in the cell gives it, never a later one a restore put back. Running the cell
-again in the same kernel with nothing changed skips those steps. A run jumps
-only when every write into an object (`sales['t'] = ...`, `x += 1`) lands in an
-object the run itself made: `y = x; y[0] += 5` changes `x`, and
-`v = arr[1:]; v += 1` changes `arr`, so those run statement by statement.
-
-### Worked examples
-
-Walking the policy with concrete values clarifies why each is promoted or kept in RAM. The predicted restore times below come from the conservative `_GENERIC` family the 2-argument closure assumes; a known type (e.g. a numeric DataFrame) predicts lower, so it is even more likely to persist.
-
-| `execution_time` | `size_bytes` | Predicted restore | Outcome |
-|---|---|---|---|
-| 50 ms | 1 KiB | — (below floor) | RAM only — under the 0.1 s compute floor |
-| 50 ms | 100 MiB | — (below floor) | RAM only — same gate; size is irrelevant below the floor |
-| 200 ms | 1 MiB | ~0.01 s | Promoted — restoring costs a fraction of the 0.2 s recompute |
-| 2 s | 50 MiB | ~0.11 s | Promoted — restore ≪ recompute |
-| 2 s | 500 MiB | ~1.05 s | Promoted — restore (1.05 s) still saves well over 20% of 2 s |
-| 1 s | 1 GiB | ~2.13 s | RAM only — restoring would cost *more* than recomputing |
-| 0.5 s | 2 GiB | ~4.25 s | RAM only — huge but cheap to recompute; recompute wins |
-
-The comparison is *write-now-read-later* vs *recompute-now*: `est_restore_time` is the fitted read-plus-deserialize cost, and a value is promoted only when skipping the recompute saves more than that. Crucially, a large result at high compute (row 5) now persists, where the old `2 × size / 100 MB/s` bandwidth model wrongly refused it.
-
-## Configuration
-
-<!-- claim: cash/config.py:CashConfig.min_cache_savings_pct == 0.20 -->
-The policy knob exposed via `CashConfig`:
-
-| Field | Default | Effect |
-|---|---|---|
-| `min_cache_savings_pct` | `0.20` | Required time-savings fraction. A cache hit must save at least this fraction of the compute cost to be worth promoting past RAM. |
-
-Set them via any layer (`pyproject.toml [tool.cash]`, `CASH_*` env vars, or kwargs):
-
-```python
-import cash
-
-cash.configure(min_cache_savings_pct=0.10)        # promote when a hit saves >10%
+<!-- test:skip reason="illustrative: build_lookup and raw are the reader's own" -->
+```python { .nb-cell }
+# @cash:persist
+lookup = build_lookup(raw)     # 50 ms, but needed right after every restart
 ```
 
-<!-- claim: cash/__init__.py:configure @945b5c80, cash/backends/factory.py:apply_persistence_settings @59a8e45e -->
-`cash.configure` hands a change to it straight to the running
-backend (`apply_persistence_settings`), so it applies from the next write
-without rebuilding the backend or dropping what the RAM tier holds. The
-notebook's own promotion gate reads the config live as well.
+`%cash_persist on` does the same for every statement until `%cash_persist off`.
+It suits a benchmark or a reproducible run; for everyday work it fills the disk
+with values that are faster to compute than to read.
 
-## Inspecting where a value actually landed
+A slow cell made of cheap parts is a common surprise: a cell of 120 independent
+statements at 0.05 s each takes six seconds and stores nothing on disk, because
+the threshold applies to each statement on its own. Mark the ones you need with
+`# @cash:persist`, or move the expensive work into one statement.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @8f018587, cash/backends/tiered_backend.py:TieredBackend.get @1c90dca6 -->
-The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']`. This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (set in `TieredBackend.get`).
+## Checking what was written
 
-When it went no further than RAM, `metadata['persist_skipped']` says why: `"size"` (a tier's size cap), `"bytes"` (the bytes-per-second-saved ceiling), `"compute"` (the notebook's compute floor or its cost model), or `"replaced_in_cell"` (a later statement of the same cell writes that name again, so the version the cell leaves is the one written). Only the first can happen to a `@cash.cache` result: decorating a function is the decision to cache it, so neither the floor nor the cost model is consulted on that path.
-
-For debugging, turn on debug output — `CASH_DEBUG=1`, or:
-
-```python
-import cash
-cash.configure(debug=True)
-```
-
-Each decorated call then logs a line to stderr, and a result held back from disk says so and why: `kept in RAM only -- too big for the persistent tier's size cap -- so another process will recompute it`. A size cap is the only reason left on this path. `CASH_SUMMARY=1` counts the same thing per function at exit. The TieredBackend also logs `[STORAGE] Stored in: RAM` for skipped-disk entries and `[STORAGE] Stored in: RAM, FileBackend` for promoted ones (logged at the end of `TieredBackend.set`). For per-call introspection use `f.explain(*args, **kwargs)` — it tells you whether the next call would hit and which tier the entry currently lives in:
-
-```python
-@cash.cache
-def slow(x):
-    time.sleep(2)
-    return x
-
-slow(1)
-print(slow.explain(1))
-# [HIT] __main__.slow — hit
-#   cache_key: slow:...
-#   cached_at: 1742813001.4
-#   execution_time_saved: 2.001
-#   cache_age_seconds: 0.012
-```
-
-`explain` returns the `reason` string, the `cache_key`, and a `details` dict. To see *which tier* a hit came from, read the metadata directly from the backend or watch the `[STORAGE]` log lines.
-
-> **Note.** The decorator's `f.cache_info()` returns aggregate hit/miss/savings stats and a recent-warnings log — it does *not* expose persist/skip context per call. Inspecting promotion decisions is a debug-log job, not a `cache_info` field.
-
-## The notebook path — the same cost model, one gate earlier
-
-The notebook integration (`%cash_on`) applies the **same** fitted cost model, but one step earlier: its Gate A decides whether a statement's output is worth caching *at all* before the value ever reaches the backend. The tier promotion policy uses that same model, so the two gates agree. Gate A lives in `statement/store.py`; the fitted coefficients live in `src/cash/cost_model.py` and predict serialize / deserialize wall-time per `(type_family, backend_kind, size_bytes)`. They are re-fittable via:
-
-1. `benchmarks/measure_ser_deser.py` — runs a measurement campaign across families and sizes, writing the matrix to `benchmarks/results/ser_deser_matrix.csv`.
-2. `benchmarks/fit_cost_model.py` — fits per-(family, backend, op) `cost = a + b · size_bytes` lines and prints constants ready to paste into the module.
-
-<!-- claim: cash/config.py:CashConfig.min_execution_time_to_cache_seconds == 0.01, cash/config.py:CashConfig.min_cache_fixed_budget_seconds == 0.05 -->
-Two further `CashConfig` fields apply **only** to the notebook Gate A:
-
-| Field | Default | Effect |
-|---|---|---|
-| `min_execution_time_to_cache_seconds` | `0.01` | Statements faster than this are not cached at all — no metadata entry is written. |
-| `min_cache_fixed_budget_seconds` | `0.05` | Flat floor on restore-time budget. Trivial cells get this much budget regardless of compute, so tiny results aren't refused over a few-ms ratio. |
-
-`min_cache_savings_pct` (above) is shared by Gate A and the tier promotion policy; these two are notebook-only. The plain `@cash.cache` decorator path caches every returned value and relies solely on the `TieredBackend` promotion policy for the RAM-vs-disk decision.
-
-For a deep dive into the notebook filter and its skip-reason taxonomy, see [Cost Model](../../cost-model.md).
-
-## Overriding the decision
-
-Two override mechanisms exist, and they apply to different paths:
-
-<!-- claim: cash/analysis/annotations.py:CacheAnnotation.persist == False, cash/notebook/statement/store.py:StatementStore.should_skip_large_object_caching @f2eb9f11 -->
-- **Notebook `# @cash:persist` annotation.** When a notebook statement carries a `# @cash:persist` comment, the parser sets `force_persist=True` on the entry's metadata. The notebook filter then bypasses its skip checks (`StatementStore.should_skip_large_object_caching` returns early), and the `TieredBackend` also reads `metadata['force_persist']` and bypasses its promotion policy (in `TieredBackend.set`). The annotation is the only way to force a single statement past both filters.
-- **`%cash_persist on` / `cash.configure(persist_all=True)`.** Force-caches *every* statement, bypassing the cost-aware floors globally — the blanket equivalent of putting `# @cash:persist` on all of them. Good for reproducibility and benchmarking; wasteful for trivial statements in normal use.
-
-There is **no** `@cash.cache(persist=True)` decorator parameter. To force persistence of a specific function's results, the available options are: switch to a non-tiered backend (`Cash(backend=FileBackend(...))` writes everything), or lower `min_cache_savings_pct` toward `0` so almost any hit clears the promotion bar. See [Controlling Cache Behavior](controlling-cache-behavior.md) for the full list of decorator knobs.
-
-## Tuning for your workload
-
-- **Many small fast computations.** Defaults are fine — the 100 ms floor drops them from disk before the cost model even runs.
-- **Big slow rare computations.** Defaults are fine. Their recompute cost dwarfs the predicted restore, so the cost model almost always promotes them.
-- **Medium-cost, medium-size workloads that should land on disk.** If your typical "worth caching" call runs 200–500 ms and you want more of them on disk, lower the savings bar: `cash.configure(min_cache_savings_pct=0.1)`.
-- **Notebook cells skipped by the fitted cost model.** That's the statement processor's Gate A, which shares the same rule. Tune `min_cache_savings_pct` (raise to skip more, lower to skip less) or use `# @cash:persist` on the cell. See [Cost Model](../../cost-model.md).
-- **All results must land on disk regardless.** Build the backend directly: `Cash(backend=FileBackend(...))` writes every entry.
-
-## TieredBackend interaction
-
-Two decisions are made when a value is set on a `TieredBackend`:
-
-1. **Tier 0 always writes.** Memory tier 0 takes every entry, no policy consulted (`TieredBackend.set`).
-2. **Tiers 1..N consult the promotion policy.** If the policy returns `True` *and* the entry fits under each tier's `max_size_bytes` cap, the entry is set on that tier. A 20 MB entry might land in RAM + DISK but skip a Redis tier with a 10 MB cap.
-
-The promotion policy decides *whether to write past tier 0*. Each tier's `max_size_bytes` then decides *which tiers* among the eligible ones get a copy. The two checks are independent — a `True` from the policy is necessary, not sufficient.
-
-See [Choosing a Backend](choosing-a-backend.md) for how to wire `TieredBackend` stacks and what each tier's cap means in practice.
-
-## Replacing the cost model
-
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.__init__ @48547719 -->
-`TieredBackend(tiers, promotion_policy=fn)` takes a `(execution_time, size_bytes) -> bool` callable that decides instead of the cost model for an entry that carries no `cost_model_family` (a decorated call's result does not). `@cash.cache`, `# @cash:persist` and the bytes-per-second ceiling still apply. `TieredBackend(tiers, policy=PersistencePolicy(min_savings_pct=0.1))` changes the savings fraction for a stack you build yourself.
-
-## Caveats
-
-- **Heuristic, not optimal.** The policy uses a hardcoded `100 ms` floor and the fitted cost model's coefficients, which were measured on one dev machine's NVMe. On very different storage (a slow network share, a RAM disk) the predictions drift; per-machine recalibration is a planned follow-up. Measure before tuning.
-- **First call to a new function.** There's no history-tracking — every call's policy is decided from that call's own `execution_time` and `size_bytes`. Cold-start times that happen to be slow get promoted; cold-start times that happen to be fast (e.g. JIT not warmed up) skip disk and are recomputed on the next process.
-- **`size_bytes` comes from the backend's serializer.** A pre-serialization size estimate isn't always accurate for objects that pickle to dramatically different sizes than their in-memory footprint (compressed numpy arrays, sparse matrices, dicts of small primitives).
-- **No `@cash.cache(persist=True)` knob.** The only force-persist mechanism is the `# @cash:persist` notebook annotation. If you need to guarantee persistence for a decorator-wrapped function, lower `min_cache_savings_pct` or pick a single-tier backend.
-- **Don't trust the heuristic blindly for production caches.** If a specific entry's freshness is critical (a tier 0 RAM-only entry disappears on restart), use a single-tier persistent backend or a `# @cash:persist` annotation.
-
-## API reference
-
-| Symbol | Surface | Effect |
-|---|---|---|
-| `min_cache_savings_pct` | `CashConfig` field | Required savings fraction for promotion — used by **both** the tier policy and the notebook Gate A. Default `0.20`. |
-| `min_execution_time_to_cache_seconds` | `CashConfig` field | **Notebook path only.** Per-statement floor. Default `0.01 s`. |
-| `min_cache_fixed_budget_seconds` | `CashConfig` field | **Notebook path only.** Flat restore-time budget floor. Default `0.05 s`. |
-| `PersistencePolicy` | `src/cash/backends/persistence_policy.py` | The whole rule: floor, savings fraction, bytes ceiling. `TieredBackend.policy`. |
-| `TieredBackend.promotion_policy` | `Callable[(float, int), bool]` or `None` | Replaces the cost model for entries with no `cost_model_family`. Set with the constructor's `promotion_policy=` kwarg. |
-| `metadata['force_persist']` | Backend metadata | Set by `# @cash:persist` notebook annotation. Bypasses the policy. |
-| `metadata['cost_model_family']` / `['cost_model_size_bytes']` | Backend metadata | Written by the statement processor; let `TieredBackend.set` predict restore time with the real type. |
-| `metadata['storage']` | Backend metadata (list[str]) | Records which tiers accepted the write — `["RAM"]`, `["RAM", "FileBackend"]`, etc. |
-| `cost_model.estimated_serialize_time` / `estimated_restore_time` | `src/cash/cost_model.py` | Fitted predictions used by **both** the notebook Gate A and the tier promotion policy. |
+- The badge: `-> RAM+DISK` in the text badge, the storage dots in the HTML
+  badge.
+- `%cash_debug on` logs `[STORAGE] Stored in: RAM, DISK` for each write, and
+  `[SIZE_AWARE] ... below 10ms floor` for a result too cheap to store. See
+  [Debugging](debugging-and-monitoring.md).
+- `cash inspect` in a terminal lists what is on disk, with the time each entry
+  saves.
 
 ## Related
 
-- [Choosing a Backend](choosing-a-backend.md) — what a `TieredBackend` is, what each tier's `max_size_bytes` means, and when to skip tiered entirely.
-- [Cost Model](../../cost-model.md) — the notebook-only second filter, its fitted coefficients, and the skip-reason taxonomy you see in cell badges.
-- [Controlling Cache Behavior](controlling-cache-behavior.md) — every `@cash.cache` knob (TTL, `cache_if`, `file_depends_on`, etc.) and how they interact with the promotion policy.
-- [Configuration](../../getting-started/configuration.md) — the full `CashConfig` field table and env-var bindings.
+- [Cost model](../../cost-model.md): the thresholds and how to tune them.
+- [Notebook guide](../../notebook_caching_api.md#where-the-cache-is): where the
+  cache folder is and how to clear it.
+- [Where your cache lives](../../how-it-works/storage.md): memory and disk tiers,
+  size caps and eviction.

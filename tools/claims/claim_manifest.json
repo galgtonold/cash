@@ -1,6 +1,6 @@
 {
   "docs/annotations.md": {
-    "anchors": 11,
+    "anchors": 10,
     "audited": "2026-07-27"
   },
   "docs/api/backend_internals.md": {
@@ -60,7 +60,7 @@
     "audited": "2026-07-27"
   },
   "docs/cost-model.md": {
-    "anchors": 6,
+    "anchors": 12,
     "audited": "2026-07-27"
   },
   "docs/decorator.md": {
@@ -149,7 +149,7 @@
     "audited": "2026-07-27"
   },
   "docs/notebook_caching_api.md": {
-    "anchors": 3,
+    "anchors": 5,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/async-caching.md": {
@@ -169,7 +169,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/controlling-cache-behavior.md": {
-    "anchors": 11,
+    "anchors": 2,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/custom-file-sources.md": {
@@ -209,7 +209,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/smart-persistence.md": {
-    "anchors": 15,
+    "anchors": 2,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/testing-your-code.md": {
