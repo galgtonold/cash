@@ -36,7 +36,7 @@ ts = datetime.utcnow()           # never cached
 
 ## Grammar
 
-Annotations are matched by a single regex at [`src/cash/notebook/annotations.py`][regex]:
+Annotations are matched by a single regex at [`src/cash/analysis/annotations.py`][regex]:
 
 <!-- test:skip reason="source-code excerpt: references re module without import" -->
 ```python
@@ -69,8 +69,8 @@ name. A `\d+` group would simply not match the bad part — `ttl=5m` would captu
 
 A few details that bite people:
 
-<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/notebook/annotations.py:parse_annotation_line @341dca2e -->
-- **`@cash:` is case-sensitive.** `# @Cash:persist` is silently ignored. Only the directive *name* after the colon is lower-cased ([`annotations.py` — `ANNOTATION_PATTERN`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), so `# @cash:PERSIST` works.
+<!-- claim: cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/analysis/annotations.py:parse_annotation_line @341dca2e -->
+- **`@cash:` is case-sensitive.** `# @Cash:persist` is silently ignored. Only the directive *name* after the colon is lower-cased ([`annotations.py` — `ANNOTATION_PATTERN`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py)), so `# @cash:PERSIST` works.
 - **A space after the colon is fine.** `# @cash: persist` and `# @cash:persist` both match (the pattern allows `\s*` after the colon), as does spacing around `=` — `# @cash:ttl = 60` works.
 - **Whitespace before `@cash:` is fine.** `#@cash:persist`, `# @cash:persist`, and `#   @cash:persist` all match.
 - **`=N` only accepts digits.** `# @cash:ttl=60` works. `# @cash:ttl`, `# @cash:ttl=`, `# @cash:ttl=abc`, `# @cash:ttl=-5` and `# @cash:ttl=5m` do not set a TTL — but they are **not** silent: each warns and names the directive it could not read. The suffix case is why: `ttl=5m` used to parse as *five seconds*, a 60× error whose only symptom was a cache that kept missing.
@@ -91,8 +91,8 @@ Forces a statement to be cached on disk even when the cost model would normally 
 cheap_constant = compute_constants()    # would normally be skipped; now forced
 ```
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @341dca2e, cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd -->
-Behind the scenes: the parser sets `CacheAnnotation(persist=True)` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), and `_parse_annotation` in the statement processor turns that into `force_persist=True` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)), which bypasses the cost-model skip logic downstream.
+<!-- claim: cash/analysis/annotations.py:parse_annotation_line @341dca2e, cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd -->
+Behind the scenes: the parser sets `CacheAnnotation(persist=True)` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py)), and `_parse_annotation` in the statement processor turns that into `force_persist=True` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)), which bypasses the cost-model skip logic downstream.
 
 If both `persist` and `no-cache` apply to the same statement, **`no-cache` wins** (see [Merging](#merging-multiple-annotations)).
 
@@ -109,8 +109,8 @@ now = datetime.utcnow()    # always fresh
 
 This is the right directive when a statement has observable side effects or produces values that must always be recomputed (timestamps, monotonic counters, "fire and forget" prints).
 
-<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
-Behind the scenes: the cacheability decision short-circuits at [`cacheability_decision.py` — `decide_cacheability`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py):
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
+Behind the scenes: the cacheability decision short-circuits at [`cacheability_decision.py` — `decide_cacheability`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/cacheability_decision.py):
 
 <!-- test:skip reason="source-code excerpt: has return outside function" -->
 ```python
@@ -135,8 +135,8 @@ Notes:
 - If multiple `ttl=` annotations apply to the same statement, **the last one wins** (see [Merging](#merging-multiple-annotations)).
 - TTL only governs *cache freshness*. A statement with `no-cache` won't be cached at all, so its `ttl=` is irrelevant.
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @341dca2e -->
-Behind the scenes: the annotation sets `CacheAnnotation.ttl` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), which `_parse_annotation` reads and uses as `effective_ttl` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)).
+<!-- claim: cash/analysis/annotations.py:parse_annotation_line @341dca2e -->
+Behind the scenes: the annotation sets `CacheAnnotation.ttl` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py)), which `_parse_annotation` reads and uses as `effective_ttl` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)).
 
 ### `# @cash:allow-random`
 
@@ -569,15 +569,15 @@ generator instead.
 
 ## Lookback and scoping
 
-<!-- claim: cash/notebook/annotations.py:parse_annotations_in_range @27219e63 -->
-Cash needs to associate each annotation with a specific statement. It does this in [`parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py) which walks two directions from a top-level AST node:
+<!-- claim: cash/analysis/annotations.py:parse_annotations_in_range @27219e63 -->
+Cash needs to associate each annotation with a specific statement. It does this in [`parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py) which walks two directions from a top-level AST node:
 
 ### Backward walk
 
 Starting from the line **immediately above** the statement and walking up, the parser collects annotations until it hits a stop condition. For each line:
 
-1. **Blank line** → STOP. The lookback block is over. ([`annotations.py` — `parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py))
-2. **Code line** (non-blank, doesn't start with `#`) → STOP. ([`annotations.py` — `parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py))
+1. **Blank line** → STOP. The lookback block is over. ([`annotations.py` — `parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py))
+2. **Code line** (non-blank, doesn't start with `#`) → STOP. ([`annotations.py` — `parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py))
 3. **Plain comment line** (`# hello`, no `@cash:`) → CONTINUE walking. Plain comments are *transparent*; they don't break the binding.
 4. **Annotation comment** (`# @cash:directive`) → merge into the running annotation, then continue walking.
 
@@ -600,7 +600,7 @@ model = train_model(data)    # the annotation does NOT apply
 
 ### Forward walk
 
-After the backward walk, the parser also scans the lines *inside* the statement's range (`start_line..end_line` inclusive, [`annotations.py` — `parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)). This lets you put an annotation inside the body of a compound statement:
+After the backward walk, the parser also scans the lines *inside* the statement's range (`start_line..end_line` inclusive, [`annotations.py` — `parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py)). This lets you put an annotation inside the body of a compound statement:
 
 ```python
 for i in range(10):
@@ -667,8 +667,8 @@ That's a perfectly valid placement. Don't overuse it — the multi-line form abo
 
 ## Merging multiple annotations
 
-<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @150e9620 -->
-When several annotations apply to a single statement (stacked above, on the line, or inside a compound body), Cash merges them with `CacheAnnotation.merge` ([`annotations.py` — `CacheAnnotation.merge`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)):
+<!-- claim: cash/analysis/annotations.py:CacheAnnotation.merge @150e9620 -->
+When several annotations apply to a single statement (stacked above, on the line, or inside a compound body), Cash merges them with `CacheAnnotation.merge` ([`annotations.py` — `CacheAnnotation.merge`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py)):
 
 | Field | Merge rule |
 |---|---|
@@ -683,7 +683,7 @@ That means:
 
 - Boolean flags are sticky: once `persist=True` shows up in the block, the whole block is `persist=True`.
 - **`ttl` order matters**: the *last* `ttl=` the parser sees wins. The forward walk runs after the backward walk, so an in-body `ttl=` overrides a header `ttl=`.
-- Mixing `persist` and `no-cache` is allowed, but `no-cache` short-circuits cacheability at [`cacheability_decision.py` — `decide_cacheability`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py), so `persist` becomes a no-op.
+- Mixing `persist` and `no-cache` is allowed, but `no-cache` short-circuits cacheability at [`cacheability_decision.py` — `decide_cacheability`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/cacheability_decision.py), so `persist` becomes a no-op.
 - `no-cache` also wins over call-level interception: caching the expensive call inside a no-cache statement would honour the letter while breaking the intent, the same reasoning that makes it win over `persist`. You never need to write `no-cache-calls` alongside `no-cache` — the statement-level directive already covers it.
 
 Examples:
@@ -888,12 +888,12 @@ Because the regex is applied with `re.search`, `## @cash:persist` still binds �
 
 For source-diving:
 
-- Grammar regex: [`src/cash/notebook/annotations.py`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
-- `parse_annotation_line`: [`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
-- Lookback semantics: [`annotations.py` — `parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
-- Merge rules: [`annotations.py` — `CacheAnnotation.merge`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
+- Grammar regex: [`src/cash/analysis/annotations.py`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py)
+- `parse_annotation_line`: [`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py)
+- Lookback semantics: [`annotations.py` — `parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py)
+- Merge rules: [`annotations.py` — `CacheAnnotation.merge`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py)
 - Consumer (statement processor): [`statement/processor.py` — `StatementProcessor.process_statement`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)
-- `no-cache` short-circuit: [`cacheability_decision.py` — `decide_cacheability`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py)
+- `no-cache` short-circuit: [`cacheability_decision.py` — `decide_cacheability`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/cacheability_decision.py)
 - Tests: [`tests/test_notebook/test_annotations.py`](https://github.com/galgtonold/cash/blob/main/tests/test_notebook/test_annotations.py)
 
 ## See also
@@ -902,4 +902,4 @@ For source-diving:
   end-to-end walkthrough of the annotation directives alongside `cache_if=`,
   `ttl=`, and `force_persist` in a realistic notebook.
 
-[regex]: https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py
+[regex]: https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py

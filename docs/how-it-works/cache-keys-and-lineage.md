@@ -32,7 +32,7 @@ Five details of that formula are load-bearing:
   `input_lineages` and routed to the module component instead. Hashing a module object
   would fall back to its memory address, which is fresh in every kernel and would make
   every downstream key drift across a restart.
-  <!-- claim: cash/notebook/lineage_formula.py:module_read_lineage @cb6866d0 -->
+  <!-- claim: cash/notebook/lineage_formula.py:module_read_lineage @79c91ad7 -->
   The module component is not the whole module when it need not be. A statement
   that only reads attributes of a local module — `helpers.load(x)` — is keyed on
   what those attributes reach inside it, so editing `helpers.report` leaves it alone.
@@ -163,8 +163,8 @@ flowchart LR
 
 A statement's `inputs` come from its AST, which only sees the names it mentions. Two real dependencies are invisible there, and each gets its own key component.
 
-<!-- claim: cash/notebook/randomness.py:rng_virtual_var @a0a5f014, cash/notebook/randomness.py:hidden_lineage_reads @e9ddd20b, cash/notebook/randomness.py:hidden_lineage_writes @1369d609 -->
-**The RNG is modelled as a hidden lineage variable.** A draw such as `x = np.random.rand(3)` has stable source and no tracked inputs, so nothing about it moves when you edit the seed above it — Cash would replay the previous seed's numbers. So each RNG module gets a virtual variable, `__cash_rng__numpy.random`: a `seed()` statement *writes* it (taking the seeding statement's own cache key as its lineage), a draw *reads* it. That virtual name never enters `user_ns`; it exists only as a key in the lineage dict, and it flows through the ordinary input-lineage code, which is what makes a re-seed propagate to everything cached downstream of the draw. See `rng_virtual_var` / `hidden_lineage_reads` / `hidden_lineage_writes` in `cash.notebook.randomness`.
+<!-- claim: cash/tracking/randomness.py:rng_virtual_var @a0a5f014, cash/tracking/randomness.py:hidden_lineage_reads @e9ddd20b, cash/tracking/randomness.py:hidden_lineage_writes @1369d609 -->
+**The RNG is modelled as a hidden lineage variable.** A draw such as `x = np.random.rand(3)` has stable source and no tracked inputs, so nothing about it moves when you edit the seed above it — Cash would replay the previous seed's numbers. So each RNG module gets a virtual variable, `__cash_rng__numpy.random`: a `seed()` statement *writes* it (taking the seeding statement's own cache key as its lineage), a draw *reads* it. That virtual name never enters `user_ns`; it exists only as a key in the lineage dict, and it flows through the ordinary input-lineage code, which is what makes a re-seed propagate to everything cached downstream of the draw. See `rng_virtual_var` / `hidden_lineage_reads` / `hidden_lineage_writes` in `cash.tracking.randomness`.
 
 **A call site is keyed on the globals its callees reach for.** `r = a(3)` names `a`, not what `a` touches when it runs. Python resolves a function's globals at *call* time, so the call genuinely depends on every global `a` reads — but the ordinary input path cannot supply them: it is built when `def a` executes and only sees names bound *above* it. Cash therefore walks `__code__.co_names` transitively from the called functions (with a seen-guard so mutual recursion terminates) and folds `name:lineage` for each into the `:callees:` component. A **missing** name contributes the literal string `ABSENT` rather than being skipped, and that half is the point: it is what makes *deleting* a callee change the key, so Cash surfaces the `NameError` a plain kernel would raise instead of reprinting a cached value. `co_names` also holds *attribute* names (`m.forecast(h)` puts `forecast` there); a name the callees only ever use as an attribute always contributes `ABSENT`, even when a notebook variable shares it — otherwise `forecast = run_forecast(...)` keyed differently before and after its own first run.
 
@@ -213,9 +213,9 @@ c.register_hasher(MyModel, lambda model: model.get_fingerprint())
 See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full API, including class-hierarchy matching and versioned hashers.
 
 !!! warning "`register_hasher` is a decorator-path feature"
-    <!-- claim: cash/core.py:Cash.register_hasher @eed1ca57, cash/notebook/object_hashing.py:compute_hash @a7245478 -->
+    <!-- claim: cash/core.py:Cash.register_hasher @eed1ca57, cash/object_hashing.py:compute_hash @a7245478 -->
     Registered hashers are consulted when hashing `@cash.cache` **call arguments**. The
-    notebook path hashes fallback values through `cash.notebook.object_hashing.compute_hash`,
+    notebook path hashes fallback values through `cash.object_hashing.compute_hash`,
     a pure function with no registry, so a registered hasher does **not** change a
     statement's cache key. In practice this rarely bites: a notebook variable produced by a
     tracked statement is keyed on its lineage, never on its content.
@@ -236,7 +236,7 @@ The two paths answer "what is this object's fingerprint?" differently, and the o
 
 Content beats the lineage attribute, and that ordering is the fix for a real bug: a notebook variable's `_cash_lineage_hash` is re-derived in every kernel session and is not reproducible across a restart, so keying a persisted decorator entry on it made `train_model(X_train, ...)` miss after a restart and re-train the model. Pinned by `tests/test_core/test_arg_hash_restart_stable.py`.
 
-<!-- claim: cash/notebook/lineage_store.py:LineageStore.resolve @81312a14, cash/notebook/object_hashing.py:_hash_dataframe_or_series @f6c309e2, cash/notebook/object_hashing.py:_hash_collection @c5d5c637, cash/notebook/object_hashing.py:compute_hash @a7245478 -->
+<!-- claim: cash/notebook/lineage_store.py:LineageStore.resolve @81312a14, cash/object_hashing.py:_hash_dataframe_or_series @f6c309e2, cash/object_hashing.py:_hash_collection @c5d5c637, cash/object_hashing.py:compute_hash @a7245478 -->
 **Notebook — resolving a statement input** (`LineageStore.resolve`):
 
 1. **Virtual lineage** — the simulated value, when an upstream simulation is in flight.

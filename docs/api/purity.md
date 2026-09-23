@@ -1,6 +1,6 @@
 # Purity & annotations
 
-<!-- claim: cash/notebook/purity.py:pure @b3cd5bc3, cash/notebook/purity.py:stateful @d2b97ef0 -->
+<!-- claim: cash/purity.py:pure @b3cd5bc3, cash/purity.py:stateful @d2b97ef0 -->
 The decorators and helpers that control what Cash considers safe to
 cache. For a walkthrough — when to use each, common footguns — see the [Purity tutorial](../tutorials/feature-guides/purity-decorators.md).
 

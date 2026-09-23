@@ -9,7 +9,7 @@
  *   time - est_restore > 0.20 * time            -> persist to disk
  *   else                                        -> RAM only
  * est_restore comes from the fitted cost model in
- * src/cash/notebook/cost_model.py: a + b * size_bytes, per
+ * src/cash/cost_model.py: a + b * size_bytes, per
  * (family, backend, operation). The coefficients below are the "disk" /
  * "deserialize" row for each family and MUST be kept in sync with that
  * module if it is refitted. */

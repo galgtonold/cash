@@ -48,11 +48,11 @@ No decorator option to enable — iterator detection is automatic. Pre-existing 
 
 ## How chunking works
 
-<!-- claim: cash/core.py:Cash._stream_and_store @6da067ec broad="the loop, the tracker scope and the commit rule are one mechanism", cash/notebook/object_hashing.py:estimate_object_size @deb629d1 -->
+<!-- claim: cash/core.py:Cash._stream_and_store @df182657 broad="the loop, the tracker scope and the commit rule are one mechanism", cash/object_hashing.py:estimate_object_size @deb629d1 -->
 The write path lives in `Cash._stream_and_store`. The loop is:
 
 1. Pull one item from the user's iterator, with the `FileAccessTracker` live — so a file the generator reads lazily is recorded as a dependency. It is entered once and suspended around each yield, so the caller's own reads in its loop body are not attributed to the generator.
-2. Track running byte size via `estimate_object_size` from `cash.notebook.object_hashing`.
+2. Track running byte size via `estimate_object_size` from `cash.object_hashing`.
 3. When `len(buffer) >= chunk_max_items` **or** `buffer_bytes >= chunk_max_bytes`, flush the buffer to the backend under key `f"{cache_key}:chunk_{i}"`, increment `i`, and reset the buffer.
 4. **Yield the item to the caller**, then go back to 1.
 5. When the source iterator stops, flush any tail buffer, then commit the manifest.
@@ -63,7 +63,7 @@ If the caller abandons the iterator, or the producer raises, step 5 never runs: 
 
 On exhaust, Cash writes a **manifest entry** at the canonical `cache_key` carrying `iterator_storage="chunked"`, `n_chunks`, and `total_items`. The manifest is what the hit path reads first.
 
-<!-- claim: cash/core.py:Cash.cache @032d5ef1 broad="the defaults are keyword arguments of the decorator itself" -->
+<!-- claim: cash/core.py:Cash.cache @efbc9f40 broad="the defaults are keyword arguments of the decorator itself" -->
 Defaults:
 
 - `chunk_max_items = 1_000_000`

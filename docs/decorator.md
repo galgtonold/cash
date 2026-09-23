@@ -399,7 +399,7 @@ read by the wrapper. If the first call reaches cash before the body has made tha
 imports a module of *yours* itself to read it; a library you deliberately import
 inside a function to defer its cost is never imported early.
 
-<!-- claim: cash/notebook/analysis.py:CodeAnalyzer.find_called_functions @46fe2c58, cash/notebook/analysis.py:CodeAnalyzer._referenced_function @54c5c19c -->
+<!-- claim: cash/analysis/code_analyzer.py:CodeAnalyzer.find_called_functions @46fe2c58, cash/analysis/code_analyzer.py:CodeAnalyzer._referenced_function @54c5c19c -->
 **Another cached function counts whether you call it or hand it on.** Calling
 `inner(n)` makes `inner` part of the caller's key, and so does passing it as a
 value — `map(inner, xs)`, `pool.map(inner, xs)`, `joblib.delayed(inner)`,
@@ -410,7 +410,7 @@ used to count.
 
 ### File reads are tracked automatically
 
-<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @027b224f, cash/notebook/file_tracker.py:FileDependencyRegistry @8e2e6255 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
+<!-- claim: cash/tracking/file_tracker.py:_install_module_patches @027b224f, cash/tracking/file_tracker.py:FileDependencyRegistry @8e2e6255 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
 You usually don't need to declare files at all: cash intercepts file reads
 *inside* a cached function — `pd.read_csv`, `np.load`, `open()`, `joblib.load`,
 … — and folds each file's fingerprint into the entry, so changing the file on
@@ -431,7 +431,7 @@ coming back False is an input — it chose the defaults branch — so the entry 
 produced stops being valid once that file appears, including when the same
 relative name resolves into a directory that has one.
 
-<!-- claim: cash/notebook/file_tracker.py:_patch_thread_pool_submit @e0f54e32 -->
+<!-- claim: cash/tracking/file_tracker.py:_patch_thread_pool_submit @e0f54e32 -->
 Reads in a **thread pool** the function starts count too:
 `ThreadPoolExecutor(4).map(np.load, shards)` records every shard, the same as a
 serial loop would — it used to record none of them. A thread you start
@@ -439,7 +439,7 @@ yourself with `threading.Thread(target=...)` begins with nothing cash can see,
 so a file read only there is not tracked; read it in the function, hand the work
 to a `ThreadPoolExecutor`, or name the file with `file_depends_on=`.
 
-<!-- claim: cash/notebook/file_tracker.py:_patch_process_pool_submit @9e495aaf, cash/notebook/file_tracker.py:_ReadsInWorker.__call__ @288a0a53 -->
+<!-- claim: cash/tracking/file_tracker.py:_patch_process_pool_submit @9e495aaf, cash/tracking/file_tracker.py:_ReadsInWorker.__call__ @288a0a53 -->
 A **`ProcessPoolExecutor`** the function starts reads in other processes, and
 cash brings those reads back: each task runs in its worker under a tracker of
 its own and returns what it read with its result, so `ex.map(read_region,
@@ -449,7 +449,7 @@ import of cash's file tracker. `multiprocessing.Pool` and joblib's workers are
 not wrapped: files read only there are not seen, so name them with
 `file_depends_on=`.
 
-<!-- claim: cash/core.py:Cash._credit_remembered_reads @f2df187b, cash/notebook/file_tracker.py:_credit_read_to_stack @a47279d7 -->
+<!-- claim: cash/core.py:Cash._credit_remembered_reads @2ae02a90, cash/tracking/file_tracker.py:_credit_read_to_stack @a47279d7 -->
 A read your code **memoises** counts for every call that uses it. With
 `parse = functools.lru_cache()(parse_csv)` — or a module-level dict of parsed
 files — only the first cached function to call `parse(path)` actually opens
@@ -459,7 +459,7 @@ them without it reading, adds what it read then — just `path`, when the memo i
 keyed by a path this call was given. The second consumer used to record
 no file at all and kept its result after the file changed.
 
-<!-- claim: cash/notebook/file_tracker.py:_note_untracked_read @4251648f, cash/notebook/file_tracker.py:install_read_watch @16286f03 -->
+<!-- claim: cash/tracking/file_tracker.py:_note_untracked_read @4251648f, cash/tracking/file_tracker.py:install_read_watch @16286f03 -->
 That holds wherever the memo was filled: in a cached call, or before any ran —
 `main()` printing its settings through the memo at start-up — because cash
 watches your reads from the moment a function is decorated. And cash remembers
@@ -520,7 +520,7 @@ normally.
 The same rule applies to variables a closure captures, not just module
 globals.
 
-<!-- claim: cash/core.py:Cash._carried_global_hash @bf87b143 -->
+<!-- claim: cash/core.py:Cash._carried_global_hash @ed278963 -->
 **A callable built from data counts as that data.** A global that is a
 library callable carrying values — `SMOOTH = partial(ndimage.gaussian_filter,
 sigma=SIGMA)`, `POLY = np.poly1d(COEFFS)`, `CAL = interp1d(X, Y)`,
@@ -781,7 +781,7 @@ parameters below. And when a miss (or a suspicious hit) mystifies you,
 For the cases the automatic model above can't see — plus
 expiry, opt-outs, and the purity gates. All keyword-only and optional.
 
-<!-- claim: cash/core.py:Cash.cache @032d5ef1 -->
+<!-- claim: cash/core.py:Cash.cache @efbc9f40 -->
 | Param | What it does |
 |---|---|
 | `depends_on=` | List of `Callable` or `DataSource` that contributes to the cache key |
@@ -1047,7 +1047,7 @@ on them.
 
 ### `allow_random=` — unseeded randomness
 
-<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @2ddb43ca -->
+<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @76def961 -->
 At decoration time, `@cash.cache` scans the function's source for draws
 from an unseeded RNG and emits a one-shot `CashRandomnessWarning`:
 
@@ -1574,7 +1574,7 @@ A `requests.get` is not a file read, and is never checked.
 
 ### A function returning a matplotlib `Figure` is never cached
 
-<!-- claim: cash/core.py:Cash._refuses_identity_coupled @4a7abbf6 -->
+<!-- claim: cash/core.py:Cash._refuses_identity_coupled @66978112 -->
 `@cash.cache` refuses to store a result that is — or contains — a matplotlib
 `Figure` or `Axes`, and warns once saying so.
 

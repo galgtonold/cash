@@ -6,7 +6,7 @@ on-disk layer, with a promotion policy that decides what's worth writing down.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend @06eab78e, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend broad="tier ordering and read-repair are properties of the class as a whole" -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend @20d6e433, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend broad="tier ordering and read-repair are properties of the class as a whole" -->
 The default `TieredBackend` stacks two layers, fastest first:
 
 | Tier | Backend | Speed | Survives restart? |
@@ -29,7 +29,7 @@ the ones you pass in a `TieredBackend` of their own (see
 Writing every result to disk would be wasteful — a value that recomputes in
 20 ms isn't worth a disk write. But "wasteful" has to be measured, not guessed,
 so the promotion decision runs against a **fitted cost model**
-(`cash/notebook/cost_model.py`): a table of `(family, backend, operation)`
+(`cash/cost_model.py`): a table of `(family, backend, operation)`
 coefficients measured offline, which predicts how long it will actually take to
 read this value back and deserialize it. [Cost model](../cost-model.md) covers
 the fit itself and every knob; what follows is only the promotion decision.

@@ -40,6 +40,9 @@ src/cash/
 │                       #   store's own validator (ETag, version id, generation)
 ├── dependency_state.py # Folds source/dep/helper state into the cache key
 ├── purity_analyzer.py  # Static purity/impurity analysis for the decorator
+├── purity.py           # @pure / @stateful and the known-pure registry
+├── object_hashing.py   # Hashes and sizes arbitrary Python values
+├── cost_model.py       # Fitted serialize / restore time per type and backend
 ├── source_norm.py      # Normalizes source before hashing (drops comments,
 │                       #   blank lines, indentation width) so a reformat keeps
 │                       #   your cache
@@ -57,14 +60,18 @@ src/cash/
 ├── backends/           # Pluggable storage: _base.py (abstract CacheBackend),
 │                       #   memory / file / tiered / sqlite / redis / s3, plus
 │                       #   serialization and the on-disk entry format
-├── notebook/           # Jupyter integration
+├── tracking/           # What a computation depends on at run time: file
+│                       #   reads, file snapshots, function source, randomness
+├── analysis/           # Static analysis: statement inputs/outputs, the
+│                       #   # @cash: annotations, cacheability
+├── notebook/           # Jupyter integration (imports the layers above;
+│   │                   #   nothing outside it imports it but the magics loaders)
 │   ├── ipython/        #   magics, cell executor, argument parsing
 │   ├── statement/      #   statement-level caching
 │   ├── control_structures/  # per-iteration loop / branch caching
 │   ├── upstream/       #   upstream simulation & virtual restore
 │   ├── badge_renderer/ #   the HTML / text cell badge
-│   └── *.py            #   analysis, annotations, file/function tracking,
-│                       #   cost_model, consumables, randomness, purity,
+│   └── *.py            #   cache keys, lineage, call units, consumables,
 │                       #   provenance, audit, …
 ├── ui/                 # Interactive display components (explorer, dashboard)
 └── labextension/       # PREBUILT JupyterLab extension (cash-live-cells), shipped

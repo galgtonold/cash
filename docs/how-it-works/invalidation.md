@@ -87,7 +87,7 @@ Several independent signals can cause a miss. The first four feed the [cache key
     reprinting a cached value.
 
 === "Files"
-<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @ab9621f0 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/tracking/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @ab9621f0 -->
     A file you read (CSV, parquet, …) is snapshotted as mtime, size **and a content
     hash**. On every lookup the size is compared first. If it matches and so does
     everything else the snapshot recorded — the mtime to the nanosecond, which file
@@ -136,7 +136,7 @@ flowchart TD
 ```
 
 ??? note "Finer points"
-    <!-- claim: cash/notebook/lineage_formula.py:module_read_lineage @cb6866d0, cash/notebook/module_symbols.py:closure_digest @7ee6f069 -->
+    <!-- claim: cash/notebook/lineage_formula.py:module_read_lineage @79c91ad7, cash/tracking/module_symbols.py:closure_digest @7ee6f069 -->
     - **Editing one function re-runs only what uses it.** A statement that reads `helpers.load` — or `load`, after `from helpers import load` — depends on `load` and on everything `load` reaches inside the module: the helpers it calls, the constants it reads, the decorators on it, and any code that runs at import time. Editing `report` in the same file leaves it cached, and so is everything built on it. Every `# @cash:` line in the file still counts, because those are instructions to Cash rather than comments. Another local module the file imports counts in full.
     - **When Cash cannot say, the whole module counts.** That happens if the statement uses the module other than by reading attributes — passing it to a function, `getattr(helpers, name)` — or if the module reaches its own namespace dynamically (`globals()`, `exec`, `setattr`, `from x import *`, a module-level `__getattr__`). It also happens if something the name reaches computes a different value on every run, such as `STAMP = time.time()` at import time: an edit anywhere in the file reloads the module and recomputes it. A clock read inside a function -- a helper timing its own steps -- does not count unless code run at import time calls that function: it runs when the function is called, and a reload gives it nothing new. The whole module is always correct; it is only slower.
     - **Cash reloads an edited module in your kernel.** A plain kernel keeps the module it first imported until you restart it or turn on `%autoreload`; under Cash the edit takes effect in the next cell you run.
@@ -145,7 +145,7 @@ flowchart TD
 
 ## Mutation bumps the receiver's lineage
 
-<!-- claim: cash/notebook/cacheability.py @6a0f9bc6 broad="the three-tier mutation classification spans the module, not one function" -->
+<!-- claim: cash/analysis/cacheability.py @6a0f9bc6 broad="the three-tier mutation classification spans the module, not one function" -->
 `items.append(x)` names `items` as a *receiver*, not as an assignment target, so nothing about it would ordinarily move. Cash classifies every standalone method call and, when the call mutates, routes the receiver into the statement's outputs — its lineage is rebuilt from the statement's source, and everything downstream misses.
 
 The classification runs in three tiers, because "does this method mutate?" is not statically decidable in general:
@@ -160,7 +160,7 @@ That verdict dictionary is shared with the upstream simulation, which cannot obs
 
 `x = np.random.rand(3)` has stable source and no tracked inputs. Editing `np.random.seed(0)` to `seed(1)` above it therefore moved nothing, and Cash replayed the first seed's numbers — following the documented advice for reproducibility produced provably wrong values. Three mechanisms now cover this, and they are separate on purpose:
 
-<!-- claim: cash/notebook/randomness.py:hidden_lineage_writes @1369d609, cash/notebook/randomness.py:hidden_lineage_reads @e9ddd20b -->
+<!-- claim: cash/tracking/randomness.py:hidden_lineage_writes @1369d609, cash/tracking/randomness.py:hidden_lineage_reads @e9ddd20b -->
 - **The seed is a hidden lineage variable.** A `seed()` writes `__cash_rng__<module>`, a draw reads it, and that lineage flows through the ordinary input path — so a re-seed re-keys the draw *and* propagates to everything cached downstream of it.
 - **A stale RNG replay is suppressed.** Restoring a cached statement also restores the RNG state it left behind, which keeps the stream coherent when a restore stands in for an execution. After a re-seed that replay would rewind the generator to the old regime, so entries record the seed epoch they were written under and are only replayed while it still holds. Keying the draw was necessary but not sufficient — both halves are required.
 - **The stream is repositioned before a re-executed draw.** If reconstruction re-runs a draw because one of its *ordinary* inputs changed, the unchanged `seed()` above it is not scheduled, so the draw would continue from wherever the live stream happened to be. Cash restores the position that draw holds top-to-bottom before running it.

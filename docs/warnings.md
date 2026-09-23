@@ -38,7 +38,7 @@ For the class hierarchy, see [Exceptions & warnings](api/exceptions.md).
 
 ## ANNOT-TTL-INVALID {#annot-ttl-invalid}
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @341dca2e -->
+<!-- claim: cash/analysis/annotations.py:parse_annotation_line @341dca2e -->
 **What happened.** You put `# @cash:ttl=` on a statement in a notebook and the
 value after the `=` is not a whole number of seconds, so Cash ignored that
 annotation entirely and the statement keeps whatever caching it would have had
@@ -58,7 +58,7 @@ works. Two things can still expire it, and neither is what you wrote: a
 session-wide TTL from `%cash_on ttl=N`, and a `default_ttl` set on a backend
 tier, which stamps every entry that arrives without one of its own.
 
-<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/notebook/annotations.py:parse_annotation_line @341dca2e -->
+<!-- claim: cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/analysis/annotations.py:parse_annotation_line @341dca2e -->
 **What to do.** Rewrite the value as a bare count of seconds: `# @cash:ttl=300`
 for five minutes, `3600` for an hour, `86400` for a day. Annotations on *other*
 lines were parsed normally and still apply — a `# @cash:persist` above the
@@ -77,7 +77,7 @@ switched off.
 
 ## ANNOT-UNKNOWN-DIRECTIVE {#annot-unknown-directive}
 
-<!-- claim: cash/notebook/annotations.py:KNOWN_DIRECTIVES @91e03db7, cash/notebook/annotations.py:_warn_unknown_directive @24d9ef6e -->
+<!-- claim: cash/analysis/annotations.py:KNOWN_DIRECTIVES @91e03db7, cash/analysis/annotations.py:_warn_unknown_directive @24d9ef6e -->
 **What happened.** A comment in a notebook cell or a cached function starts
 `# @cash:` but the word after the colon is not a directive Cash knows, so Cash
 ignored the comment. The known directives are `no-cache`, `persist`, `ttl=N`, `allow-random`,
@@ -108,7 +108,7 @@ serve a value you meant to recompute, so fix those.
 
 ## CACHE-ASYNC-GENERATOR {#cache-async-generator}
 
-<!-- claim: cash/core.py:Cash.cache @032d5ef1 -->
+<!-- claim: cash/core.py:Cash.cache @efbc9f40 -->
 **What happened.** You put `@cash.cache` on an async generator — an `async def`
 function that `yield`s. Cash does not cache those in this release, so the
 decorator handed your function straight back, unwrapped.
@@ -131,7 +131,7 @@ not ignore it if this is the function you were trying to speed up.
 
 ## CACHE-IDENTITY-COUPLED {#cache-identity-coupled}
 
-<!-- claim: cash/core.py:Cash._refuses_identity_coupled @4a7abbf6 -->
+<!-- claim: cash/core.py:Cash._refuses_identity_coupled @66978112 -->
 **What happened.** Your cached function returned a live matplotlib `Figure` or
 `Axes` — or a list, tuple, dict or array holding one — and Cash refused to
 store it. "Identity-coupled" is Cash's term for an object that a library keeps
@@ -943,7 +943,7 @@ that moved — shows it again.
 
 ## KEY-AMBIENT-READ {#key-ambient-read}
 
-<!-- claim: cash/notebook/purity.py:_AMBIENT_READ_CALLS @a533ea58, cash/purity_analyzer.py:_PurityVisitor.visit_Subscript @c1d3b6a0 -->
+<!-- claim: cash/purity.py:_AMBIENT_READ_CALLS @a533ea58, cash/purity_analyzer.py:_PurityVisitor.visit_Subscript @c1d3b6a0 -->
 **What happened.** Reading the source of the function you decorated found a
 call that asks the world what time it is, what the environment says, where the
 process is running, or for a fresh UUID: `datetime.now()`, `date.today()`,
@@ -952,7 +952,7 @@ process is running, or for a fresh UUID: `datetime.now()`, `date.today()`,
 `pd.to_datetime("today")`. The named line ran, and the result was cached as
 normal.
 
-<!-- claim: cash/notebook/purity.py:_AMBIENT_WHEN_ARGS_OMITTED @778ab09c, cash/purity_analyzer.py:_reads_clock_when_omitted @00b78d02 -->
+<!-- claim: cash/purity.py:_AMBIENT_WHEN_ARGS_OMITTED @778ab09c, cash/purity_analyzer.py:_reads_clock_when_omitted @00b78d02 -->
 `time.strftime("%Y-%m")`, `time.asctime()`, `time.ctime()`,
 `time.localtime()` and `time.gmtime()` count when the time argument is left
 out, which is when they read the clock; `time.strftime("%Y-%m", t)` and
@@ -1629,7 +1629,7 @@ answers a different question without saying so.
 
 ## RANDOM-SEED-NONE {#random-seed-none}
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_entropy_reseed @87f3bd84 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_entropy_reseed @a794bb41 -->
 **What happened.** A statement called `seed(None)` — `np.random.seed(None)`,
 `random.seed()` with no argument, or the same on another supported module. That
 asks for a different, entropy-derived random stream on every run, and Cash
@@ -1750,7 +1750,7 @@ Whichever you pick, pick it per statement or per function. Switching caching off
 across the board to "fix" this trades a known frozen value for a slow notebook
 and gains nothing.
 
-<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @2ddb43ca -->
+<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @76def961 -->
 The decorator form is checked when the decorator is applied rather than when the
 function runs, so it appears at import time, before the function has been called
 once, and once per decorated function. It reads that function's source alone: a
@@ -1967,7 +1967,7 @@ the benefit.
 
 ## STORE-INPUT-CHANGED {#store-input-changed}
 
-<!-- claim: cash/core.py:Cash._inputs_moved_during_call @80b6ca64, cash/notebook/file_tracker.py:FileAccessTracker.inputs_changed_since_read @faa17b34 -->
+<!-- claim: cash/core.py:Cash._inputs_moved_during_call @80b6ca64, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @faa17b34 -->
 **What happened.** A file the cached function read changed before the function
 returned — its size or timestamps moved between the moment it was read and the
 moment the result was about to be stored. The warning names the file. The
@@ -1980,7 +1980,7 @@ every later call would be a cache hit with the old answer — silently, for as
 long as the entry lived. Not caching is the only honest option: nothing can say
 which version of the file the result came from.
 
-<!-- claim: cash/notebook/file_tracker.py:FileAccessTracker._digest_now @48300e66, cash/notebook/file_dep_snapshot.py:snapshot_file_deps @25737028 -->
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @8624e84e, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @25737028 -->
 A writer that moves neither the size nor a timestamp — an `np.memmap` write on
 Windows — does not trigger this warning. A file under the full-hash cap is
 fingerprinted by its content **when the function first reads it**, so the entry

@@ -74,7 +74,7 @@ until this amendment.
 
 **Resolution:** auto-tracked file deps now record a content hash alongside
 `(mtime, size)` and treat **content as authoritative whenever the size matches**
-(`file_dep_is_fresh`, `src/cash/notebook/file_dep_snapshot.py`). The cheap size
+(`file_dep_is_fresh`, `src/cash/tracking/file_dep_snapshot.py`). The cheap size
 check runs first, so the "hashing a 2 GB parquet on every lookup" objection is
 answered by never hashing when the size already proves staleness, and by sampling
 files over `file_hash_full_max_bytes` (head/middle/tail) rather than reading them

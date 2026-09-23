@@ -149,7 +149,7 @@ def euclidean(p, q):
 
 ### What it actually does
 
-<!-- claim: cash/notebook/purity.py:pure @b3cd5bc3, cash/notebook/statement/processor.py:StatementProcessor._check_callable_stateful @0f704647 -->
+<!-- claim: cash/purity.py:pure @b3cd5bc3, cash/notebook/statement/processor.py:StatementProcessor._check_callable_stateful @0f704647 -->
 `@pure` is a one-line marker. It sets `_cash_pure = True` on both the original function and the wrapper.
 
 When the statement processor evaluates a cell, it looks at every bare-name call (`foo(x)`, not `obj.foo(x)`). For each name, it consults `_check_callable_stateful`, which:
@@ -213,14 +213,14 @@ Now any cell that calls `log_to_dashboard(...)` or `send_alert(...)` runs fresh 
 
 ### What it actually does
 
-<!-- claim: cash/notebook/purity.py:stateful @d2b97ef0, cash/notebook/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
+<!-- claim: cash/purity.py:stateful @d2b97ef0, cash/analysis/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
 `@stateful` sets `_cash_stateful = True` on the wrapped function. When the statement processor walks the bare-name calls in a cell and finds one whose resolved callable has that attribute, `_check_callable_stateful` returns `True`. The caller (in `decide_cacheability`) then refuses to cache the cell and records the reason "Calls @stateful function".
 
 `_check_callable_stateful` looks only for `@stateful`, so if you ever (accidentally) stack both decorators on the same function, stateful wins. Don't rely on that — see the [caveats](#mixing-markers).
 
 ## Known-pure builtins
 
-<!-- claim: cash/notebook/purity.py:KNOWN_PURE_BUILTINS @ed7ca2b0 -->
+<!-- claim: cash/purity.py:KNOWN_PURE_BUILTINS @ed7ca2b0 -->
 Cash short-circuits the analysis for stdlib names it already knows are safe. The full list lives in `KNOWN_PURE_BUILTINS`:
 
 ```
@@ -250,7 +250,7 @@ You never need to decorate these. A cell that does `n = len(data); s = sum(data)
 You can check membership programmatically — but mind the [string-not-callable footgun](#is_known_pure-takes-a-string):
 
 ```python
-from cash.notebook.purity import is_known_pure
+from cash.purity import is_known_pure
 
 is_known_pure("len")     # True
 is_known_pure("requests.get")  # False
@@ -344,13 +344,13 @@ def confused(x):
 
 This works (the cell will refuse to cache), but it's an implementation detail, not a language-level guarantee. Treat it as undefined behavior and never stack the two decorators on the same function.
 
-<!-- claim: cash/notebook/purity.py:is_known_pure @a40e4d3e -->
+<!-- claim: cash/purity.py:is_known_pure @a40e4d3e -->
 ### `is_known_pure` takes a string
 
 Common slip-up: the helper takes a *name string*, not a callable:
 
 ```python
-from cash.notebook.purity import is_known_pure
+from cash.purity import is_known_pure
 
 is_known_pure(len)       # False — `len` the function object is not in the frozenset
 is_known_pure("len")     # True
@@ -620,7 +620,7 @@ Two limits worth stating:
   globals would be both expensive and noisy. If a library keeps a registry you
   depend on being updated, that call is a poor candidate for caching.
 
-<!-- claim: cash/notebook/purity.py:pure @b3cd5bc3, cash/notebook/purity.py:stateful @d2b97ef0 -->
+<!-- claim: cash/purity.py:pure @b3cd5bc3, cash/purity.py:stateful @d2b97ef0 -->
 ### Marking a third-party callable: `cash.pure(func)` and `cash.stateful(func)`
 
 `@pure` and `@stateful` mark the function they are given before they wrap
@@ -750,8 +750,8 @@ notebook cell), and the parent's cache invalidates automatically.
 | `stateful` | `from cash import stateful` | decorator | Sets `_cash_stateful = True` on *func* and on the wrapper. Cash refuses to cache any cell that calls this by bare name. |
 | `is_pure(func)` | `from cash import is_pure` | bool | Marker-only check. Does not analyze source. |
 | `is_stateful(func)` | `from cash import is_stateful` | bool | Marker-only check. |
-| `is_known_pure(name)` | `from cash.notebook.purity import is_known_pure` | bool | Membership check against the builtin allow-list. **Takes a string.** |
-| `KNOWN_PURE_BUILTINS` | `from cash.notebook.purity import KNOWN_PURE_BUILTINS` | `frozenset[str]` | The stdlib allow-list. |
+| `is_known_pure(name)` | `from cash.purity import is_known_pure` | bool | Membership check against the builtin allow-list. **Takes a string.** |
+| `KNOWN_PURE_BUILTINS` | `from cash.purity import KNOWN_PURE_BUILTINS` | `frozenset[str]` | The stdlib allow-list. |
 | `CashImpurityWarning` | `from cash import CashImpurityWarning` | warning class | Emitted by `@cash.cache` (default mode) when the analyzer finds issues. Subclasses `CashCacheIneffectiveWarning`. |
 | `CashImpureFunctionError` | `from cash import CashImpureFunctionError` | exception class | Raised by `@cash.cache(strict=True)` on any purity issue, **and by a plain `@cash.cache` on untrackable-dependency patterns** (`eval`/`exec`, dynamic `getattr(...)()`, `importlib`). `assume_safe=True` suppresses it. |
 

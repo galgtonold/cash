@@ -33,7 +33,7 @@ No decorator argument, no manual registration. Cash sees the `read_csv` call, re
 
 ## What's automatically tracked
 
-<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._initialize_defaults @f91131ed, cash/notebook/file_tracker.py:_find_patch_targets @001fdd80 -->
+<!-- claim: cash/tracking/file_tracker.py:FileDependencyRegistry._initialize_defaults @f91131ed, cash/tracking/file_tracker.py:_find_patch_targets @001fdd80 -->
 The default handler set is registered in `FileDependencyRegistry._initialize_defaults`:
 
 | Module | Functions |
@@ -56,7 +56,7 @@ The pandas entry is the glob `read_*`, expanded by `_find_patch_targets` against
 
 A reader may be given its path positionally or by keyword — `pd.read_csv(filepath_or_buffer=p)`, `np.load(file=p)`, `pq.read_table(source=p)` — and both are tracked. pyarrow reads files in C++, so none of its reads pass through `open()`; before its readers were registered, a function that switched to `pyarrow.csv` for speed recorded no dependency at all and kept returning the old file's answer. `pyarrow.parquet.ParquetFile` and `pyarrow.dataset` are not wrapped (one is a class, the other enumerates directories); read through them and name the files with `file_depends_on=`.
 
-<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._create_open_handler @c84d6caa -->
+<!-- claim: cash/tracking/file_tracker.py:FileDependencyRegistry._create_open_handler @c84d6caa -->
 For `open()`, the wrapper records the path as a *dependency* only when the call can read what was there before: a mode containing `'r'`, or `'+'` without `'w'` or `'x'` (`'r+'`, `'a+'`) — see `_create_open_handler`. An `open(path, 'w')` for output does **not** become a dependency, which is what you want: folding a file the function writes into its own cache key would invalidate the entry on its own output. Nor does `'w+'` / `'x+'`, which start from an empty file — Pillow saves every image with `'w+b'`, so a `savefig` used to depend on the PNG it had just written.
 
 A write is not ignored, though — it is an *effect*, and it is reported as one. The same wrapper hands a write-mode open to the [effect observer](purity-decorators.md#observed-effects-what-the-first-call-actually-did), which warns once if the first call wrote a file the static analyzer never saw. That matters because every cache hit from then on skips the write.
@@ -132,7 +132,7 @@ The patch set is a curated list. Reads that go through anything else slip past t
 
 ### Reads that are ignored on purpose
 
-<!-- claim: cash/notebook/file_tracker.py:incidental_read @63ee2ae5 -->
+<!-- claim: cash/tracking/file_tracker.py:incidental_read @63ee2ae5 -->
 Some reads happen while your code runs but are not your data, and cash leaves them out: files of the **Python installation itself** (the standard library), **package metadata** lookups (`importlib.metadata`, `importlib.resources`, `pkg_resources` — the import system listing every `sys.path` folder, your working directory included, and reading `entry_points.txt` files), anything a library reads **while it is being imported** (matplotlib's style sheets and font cache), and files that belong to an **installed package other than your own** — matplotlib's fonts on first draw, scikit-learn's HTML template, a zone `zoneinfo` loads from `tzdata` (or from the system time zone database) the first time you use it. They only happen the first time, so recording them gave the same statement a different key on its second run, and a new file anywhere next to a notebook invalidated everything after an `import`. The zone is the case that shows why the reader does not decide: `zoneinfo` is the standard library, so "a library reading its own package" did not cover it, and a load's lineage carried that file after a restart but not on a re-run in the same session — everything below it missed, once, on the first restart.
 
 A library reading a file **for you** is still tracked — `PIL.Image.open(p)`, `torch.load(p)` and `pd.read_csv(p)` read a path outside that library. So is your own module reading its configuration at import, and so is an installed tool reading data from its own package folder when the cached function belongs to that tool.
@@ -262,7 +262,7 @@ A declared file that does not exist yet is recorded as *absent*, like a lookup f
 
 ## Escape hatch 2: registering a custom file source for auto-tracking
 
-<!-- claim: cash/core.py:Cash.register_file_handler @5731a107, cash/notebook/file_tracker.py:_install_module_patches @027b224f -->
+<!-- claim: cash/core.py:Cash.register_file_handler @39310719, cash/tracking/file_tracker.py:_install_module_patches @027b224f -->
 For libraries you use across many cached functions, manually adding `file_depends_on=` to each decorator is repetitive. `Cash.register_file_handler` lets you teach the auto-tracker about a new reader once and have every subsequent call site picked up automatically:
 
 <!-- test:skip reason="illustrative — the handler wraps `my_lib`, which does not exist; executing it only proves a def parses, while shadowing the real load_features above" -->
@@ -308,13 +308,13 @@ A matching size *and* a matching content hash is fresh, **regardless of the mtim
 
 ### Large files are sampled, not fully hashed
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @ab9621f0, cash/notebook/file_dep_snapshot.py:file_content_hash @1f14c1fa, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @ab9621f0, cash/tracking/file_dep_snapshot.py:file_content_hash @1f14c1fa, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/tracking/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
 Hashing a multi-GB parquet on every lookup would defeat the point of caching, so the hash is size-bounded (`file_content_hash`), at a threshold you can move (`file_hash_full_max_bytes`):
 
 - Files **≤ 256 MiB** (`_HASH_FULL_MAX_BYTES`) are hashed **in full**.
 - Files **> 256 MiB** are **sampled** at three deterministic, size-derived offsets — head, middle, and tail, **256 KiB each** (`_HASH_SAMPLE_REGION_BYTES`) — with the byte length folded into the digest.
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == 5.0 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == 5.0 -->
 A full hash costs about 0.72 ms per MiB, and it is only taken when the file's metadata moved (above). Within one process a digest is reused for up to five seconds against the file's stat fields (in a notebook, also for the rest of the cell run), so an aggregate whose ten cached helpers read the same fifty freshly written inputs hashes each input once.
 
 A sampled hash on its own would miss an edit that changes only unsampled interior bytes while preserving the exact size. **It doesn't, because sampled files carry a timestamp backstop**: above the cap a matching hash is trusted only when the mtime *also* matches, so any real in-place write is caught (`stale_reason` reads `'mtime-sampled'`). Below the cap, once the metadata has moved, the hash is authoritative and mtime is ignored, which is what makes a content-preserving `touch` free.

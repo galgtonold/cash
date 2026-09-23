@@ -37,13 +37,13 @@ After both calls, peek at the cache directory: only `slow`'s entry is on disk. `
 
 ## The promotion policy
 
-<!-- claim: cash/backends/factory.py:_build_smart_persistence_policy @e178f401, cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
+<!-- claim: cash/backends/factory.py:_build_smart_persistence_policy @09e3e719, cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
 The active policy is built by `_build_smart_persistence_policy` in `backends/factory.py` and handed to the `TieredBackend` constructor at startup. Its body:
 
 ```python
 # test:inject: min_persist_compute_s = 0.1
 # test:inject: min_savings = 0.20
-# test:inject: from cash.notebook import cost_model
+# test:inject: from cash import cost_model
 def policy(execution_time: float, size_bytes: int) -> bool:
     if execution_time < min_persist_compute_s:        # 0.1 s compute floor
         return False
@@ -54,7 +54,7 @@ def policy(execution_time: float, size_bytes: int) -> bool:
     return execution_time - est_restore > min_savings * execution_time
 ```
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._cost_model_promote @3584234e, cash/notebook/cost_model.py:estimated_restore_time @19d51f03, cash/backends/value_policy.py:worth_its_bytes, cash/backends/value_policy.py:WORTH_CEILING_BYTES_PER_SECOND == 134217728, cash/backends/value_policy.py:WORTH_FLOOR_BYTES == 8388608 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._cost_model_promote @45aed92d, cash/cost_model.py:estimated_restore_time @19d51f03, cash/backends/value_policy.py:worth_its_bytes, cash/backends/value_policy.py:WORTH_CEILING_BYTES_PER_SECOND == 134217728, cash/backends/value_policy.py:WORTH_FLOOR_BYTES == 8388608 -->
 Three things gate the promotion:
 
 1. **Hard floor at 100 ms.** Anything that ran faster than `0.1 s` never reaches disk — the I/O alone would cost more than recomputing.
@@ -180,7 +180,7 @@ print(slow.explain(1))
 
 ## The notebook path — the same cost model, one gate earlier
 
-The notebook integration (`%%cash` cells, `%cash_on` magic) applies the **same** fitted cost model, but one step earlier: its Gate A decides whether a statement's output is worth caching *at all* before the value ever reaches the backend. The tier promotion policy uses that same model, so the two gates agree. Gate A lives in `statement/processor.py`; the fitted coefficients live in `src/cash/notebook/cost_model.py` and predict serialize / deserialize wall-time per `(type_family, backend_kind, size_bytes)`. They are re-fittable via:
+The notebook integration (`%%cash` cells, `%cash_on` magic) applies the **same** fitted cost model, but one step earlier: its Gate A decides whether a statement's output is worth caching *at all* before the value ever reaches the backend. The tier promotion policy uses that same model, so the two gates agree. Gate A lives in `statement/processor.py`; the fitted coefficients live in `src/cash/cost_model.py` and predict serialize / deserialize wall-time per `(type_family, backend_kind, size_bytes)`. They are re-fittable via:
 
 1. `benchmarks/measure_ser_deser.py` — runs a measurement campaign across families and sizes, writing the matrix to `benchmarks/results/ser_deser_matrix.csv`.
 2. `benchmarks/fit_cost_model.py` — fits per-(family, backend, op) `cost = a + b · size_bytes` lines and prints constants ready to paste into the module.
@@ -201,7 +201,7 @@ For a deep dive into the notebook filter and its skip-reason taxonomy, see [Cost
 
 Two override mechanisms exist, and they apply to different paths:
 
-<!-- claim: cash/notebook/annotations.py:CacheAnnotation.persist == False, cash/notebook/statement/processor.py:StatementProcessor._should_skip_large_object_caching @13a32fc7 -->
+<!-- claim: cash/analysis/annotations.py:CacheAnnotation.persist == False, cash/notebook/statement/processor.py:StatementProcessor._should_skip_large_object_caching @4b8c4a48 -->
 - **Notebook `# @cash:persist` annotation.** When a `%%cash` cell carries a `# @cash:persist` comment, the parser sets `force_persist=True` on the entry's metadata. The notebook filter then bypasses its skip checks (`StatementProcessor._should_skip_large_object_caching` returns early), and the `TieredBackend` also reads `metadata['force_persist']` and bypasses its promotion policy (in `TieredBackend.set`). The annotation is the only way to force a single statement past both filters.
 - **`smart_persistence=False`.** Disables the policy for every call. Useful for benchmarking, debugging, or workloads where you've measured that the heuristic is wrong on your data.
 - **`%cash_persist on` / `cash.configure(persist_all=True)`.** Force-caches *every* statement, bypassing the cost-aware floors globally — the blanket equivalent of putting `# @cash:persist` on all of them. Good for reproducibility and benchmarking; wasteful for trivial statements in normal use.
@@ -265,7 +265,7 @@ It applies the same restore-vs-recompute rule as the smart policy, just with a 1
 | `metadata['force_persist']` | Backend metadata | Set by `# @cash:persist` notebook annotation. Bypasses the policy. |
 | `metadata['cost_model_family']` / `['cost_model_size_bytes']` | Backend metadata | Written by the statement processor; let `TieredBackend.set` predict restore time with the real type. |
 | `metadata['storage']` | Backend metadata (list[str]) | Records which tiers accepted the write — `["RAM"]`, `["RAM", "FileBackend"]`, etc. |
-| `cost_model.estimated_serialize_time` / `estimated_restore_time` | `src/cash/notebook/cost_model.py` | Fitted predictions used by **both** the notebook Gate A and the tier promotion policy. |
+| `cost_model.estimated_serialize_time` / `estimated_restore_time` | `src/cash/cost_model.py` | Fitted predictions used by **both** the notebook Gate A and the tier promotion policy. |
 
 ## Related
 

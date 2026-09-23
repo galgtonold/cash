@@ -346,7 +346,7 @@ Like the other two filters, an explicit decision skips it: `# @cash:persist` and
 ### How the restore time is predicted
 
 The prediction is a **fitted linear regression** of deserialize wall-time as
-<!-- claim: cash/notebook/cost_model.py:_TYPE_TO_FAMILY @674b9d86, cash/notebook/cost_model.py:resolve_family @91ef972a, cash/notebook/cost_model.py:_resolve_backend @d6308bba, cash/notebook/cost_model.py:_KNOWN_BACKENDS @3f31251c -->
+<!-- claim: cash/cost_model.py:_TYPE_TO_FAMILY @674b9d86, cash/cost_model.py:resolve_family @91ef972a, cash/cost_model.py:_resolve_backend @d6308bba, cash/cost_model.py:_KNOWN_BACKENDS @3f31251c -->
 `a + b × size_bytes`, per `(type_family, backend)`:
 
 1. Map `type(value).__name__` to a **family** — `DataFrame → dataframe_numeric`,
@@ -386,11 +386,11 @@ The `CashConfig` fields that drive all of the above are in the
 [Configuration reference](getting-started/configuration.md).
 
 ??? note "Source map for divers"
-    - Cost model + coefficients: [`src/cash/notebook/cost_model.py`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cost_model.py), refit offline by [`benchmarks/fit_cost_model.py`](https://github.com/galgtonold/cash/blob/main/benchmarks/fit_cost_model.py).
+    - Cost model + coefficients: [`src/cash/cost_model.py`](https://github.com/galgtonold/cash/blob/main/src/cash/cost_model.py), refit offline by [`benchmarks/fit_cost_model.py`](https://github.com/galgtonold/cash/blob/main/benchmarks/fit_cost_model.py).
     - Filter 1 (the gate, skip-reason, cheap-floor): [`src/cash/notebook/statement/processor.py`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py).
     - Filter 2 (promotion policy + application): [`src/cash/backends/factory.py`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/factory.py), [`src/cash/backends/tiered_backend.py`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/tiered_backend.py).
     - Filter 3 (the rate ceiling): [`src/cash/backends/value_policy.py`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/value_policy.py).
-    - `# @cash:persist` parsing: [`src/cash/notebook/annotations.py`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py).
+    - `# @cash:persist` parsing: [`src/cash/analysis/annotations.py`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py).
     - Config fields: [`src/cash/config.py`](https://github.com/galgtonold/cash/blob/main/src/cash/config.py).
 
 ---

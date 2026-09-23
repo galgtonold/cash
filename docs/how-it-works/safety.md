@@ -22,7 +22,7 @@ data = [1, 2, 3]      # cached snapshot: [1, 2, 3]
 data.append(4)        # data is now [1, 2, 3, 4] — but the snapshot still says [1, 2, 3]
 ```
 
-<!-- claim: cash/notebook/cacheability.py:_MutationVisitor @c41cea02, cash/notebook/cacheability.py:StatementAnalysis.skip_reasons @843e903a broad="the claim is about the visitor's whole set of visit_* patterns, not one of them" -->
+<!-- claim: cash/analysis/cacheability.py:_MutationVisitor @c41cea02, cash/analysis/cacheability.py:StatementAnalysis.skip_reasons @843e903a broad="the claim is about the visitor's whole set of visit_* patterns, not one of them" -->
 Cash answers two questions about every statement, in that order:
 
 1. **Does it mutate something?** — a pure-AST scan (`analyze_statement`), plus
@@ -36,7 +36,7 @@ captured, the variable's lineage advances, and the statement caches normally. A
 mutation of some *other* variable has nowhere to hang that new version, so the
 statement is refused and re-executes every run.
 
-<!-- claim: cash/notebook/cacheability.py:MUTATING_METHODS @245ce55b, cash/notebook/cacheability.py:PANDAS_INPLACE_METHODS @92780608, cash/notebook/cacheability.py:_MutationVisitor @c41cea02 broad="the table enumerates every pattern the visitor detects; a new visit_* method is a missing row" -->
+<!-- claim: cash/analysis/cacheability.py:MUTATING_METHODS @245ce55b, cash/analysis/cacheability.py:PANDAS_INPLACE_METHODS @92780608, cash/analysis/cacheability.py:_MutationVisitor @c41cea02 broad="the table enumerates every pattern the visitor detects; a new visit_* method is a missing row" -->
 | Pattern | Example | How it's detected | Verdict |
 |---------|---------|-------------------|---------|
 | Augmented assignment | `total += 1` | `ast.AugAssign` node | **Cached** — `total` is the statement's output |
@@ -53,7 +53,7 @@ The split looks arbitrary until you write the two forms side by side.
 statement's outputs; `d.update(o)` is a bare expression with no target at all.
 The first can be re-derived from the statement that made it; the second cannot.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @8b25634c, cash/notebook/cacheability.py:selfref_inplace_write_vars @f9e28262 -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @8b25634c, cash/analysis/cacheability.py:selfref_inplace_write_vars @f9e28262 -->
 !!! note "…but only when the base was made in the same cell"
     The **Cached** verdicts above are this classifier's per-statement decision.
     A separate rule sits on top, in the upstream checker: a variable the cell
@@ -74,7 +74,7 @@ The first can be re-derived from the statement that made it; the second cannot.
 has no store target to give the receiver a fresh lineage. So Cash classifies
 method-call receivers in tiers, in this order:
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @08a14a35, cash/notebook/cacheability.py:KNOWN_PURE_METHODS @b44508ae, cash/notebook/cacheability.py:standalone_method_call_inner_methods @4a62a44e, cash/notebook/cacheability.py:chain_is_pure @530e6134, cash/notebook/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @697bbf7a, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @1cca2d82 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @08a14a35, cash/analysis/cacheability.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/cacheability.py:standalone_method_call_inner_methods @4a62a44e, cash/analysis/cacheability.py:chain_is_pure @530e6134, cash/analysis/cacheability.py:RECEIVER_READONLY_WRITE_METHODS @697bbf7a, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @1cca2d82 -->
 
 - **Excluded outright.** A module receiver is a plain function call, not a
   mutation: `np.foo()`, `time.sleep()`, `plt.title()`. The exception is a
@@ -163,7 +163,7 @@ a draw on a live `Axes`/`Figure` (including one handed to a helper,
 
 ### A bare `model.fit(X, y)`
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._estimator_fit_receivers @7e4d333f, cash/notebook/annotations.py:CacheAnnotation.cache_fit == False -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._estimator_fit_receivers @7e4d333f, cash/analysis/annotations.py:CacheAnnotation.cache_fit == False -->
 A bare fit is a method-call mutation of its receiver, so it takes the default
 path above: **skip-cache, re-execute every run**. That is net-neutral — a fit
 that would keep missing cannot cost more than it saves — and it avoids the
@@ -190,7 +190,7 @@ Replaying them from cache would skip the action (a file never gets written, a
 request never gets sent). Cash's side-effect analysis flags these statements as
 **uncacheable** so they always run:
 
-<!-- claim: cash/notebook/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @a2946490, cash/notebook/cacheability.py:_SideEffectVisitor @2923ce80 broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
+<!-- claim: cash/analysis/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @a2946490, cash/analysis/cacheability.py:_SideEffectVisitor @2923ce80 broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
 | Pattern | Examples | Why it's unsafe to replay |
 |---------|----------|---------------------------|
 | File writes | `open('f', 'w')`, `df.to_csv()`, `df.to_parquet()`, `Path(p).write_text()` | The file wouldn't be written on a cache hit |
@@ -209,7 +209,7 @@ Writing to the console is output, not a file: `os.write(2, ...)`, `sys.stderr.wr
 and `sys.stdout.write(...)` count as a `print` does, so a step marker in a helper does
 not make every statement that calls it a file writer.
 
-<!-- claim: cash/notebook/cacheability.py:_WRITE_METHODS @11ba6ecb, cash/notebook/cacheability.py:_WRITE_MODES @07565e83, cash/notebook/cacheability.py:_is_open_write_mode @1acb03f6, cash/notebook/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @a2946490 -->
+<!-- claim: cash/analysis/cacheability.py:_WRITE_METHODS @11ba6ecb, cash/analysis/cacheability.py:_WRITE_MODES @07565e83, cash/analysis/cacheability.py:_is_open_write_mode @1acb03f6, cash/analysis/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @a2946490 -->
 Detection is by call shape, so it works without importing anything, with two
 consequences worth knowing. A bare `open(...)` counts only when its mode
 argument is **statically** a write mode: `open(p, 'w')` is flagged, and
@@ -223,7 +223,7 @@ colliding: `rename`, `replace` and `touch` are deliberately absent, because
 that has one writes to a filesystem, and an `OUT.mkdir(exist_ok=True)` restored
 instead of run leaves an emptied output folder missing.
 
-<!-- claim: cash/notebook/cacheability.py:statement_write_repeatability @d361c0c9, cash/notebook/cacheability.py:_REPLACING_WRITE_METHODS @b3158e08, cash/notebook/cacheability.py:_is_append_mode_call @d7aef5f5 -->
+<!-- claim: cash/analysis/cacheability.py:statement_write_repeatability @d361c0c9, cash/analysis/cacheability.py:_REPLACING_WRITE_METHODS @b3158e08, cash/analysis/cacheability.py:_is_append_mode_call @d7aef5f5 -->
 Being uncacheable is not the end of the story for a writer. Because a file
 write has no variable edge, nothing in the lineage graph would ever re-run one,
 so Cash separately records which statements wrote which paths and re-fires a
@@ -239,7 +239,7 @@ Random calls are *deterministic only if seeded*. Cash's `RandomnessDetector`
 finds unseeded draws and **warns** — the statement is still cached, and the
 first result is simply frozen:
 
-<!-- claim: cash/notebook/randomness.py:RANDOM_FUNCTIONS @5801a3eb, cash/notebook/randomness.py:SEED_FUNCTIONS @2fe6d536 -->
+<!-- claim: cash/tracking/randomness.py:RANDOM_FUNCTIONS @5801a3eb, cash/tracking/randomness.py:SEED_FUNCTIONS @2fe6d536 -->
 | Module | Tracked functions |
 |--------|-------------------|
 | `random` | `random()`, `randint()`, `choice()`, `shuffle()`, `sample()`, `uniform()`, … |
@@ -247,7 +247,7 @@ first result is simply frozen:
 | `torch` | `rand()`, `randn()`, `randint()`, `randperm()`, `normal()`, … |
 | `tensorflow.random` | `uniform()`, `normal()`, `truncated_normal()`, `shuffle()`, … |
 
-<!-- claim: cash/notebook/randomness.py:RandomnessDetector @ac3951cb broad="the claim is about the detector having exactly two channels, which is a property of the class", cash/notebook/randomness.py:RandomnessDetector.is_seeded @9ff99734, cash/notebook/randomness.py:RNG_CARRIER_CONSTRUCTORS @cec10494 -->
+<!-- claim: cash/tracking/randomness.py:RandomnessDetector @ac3951cb broad="the claim is about the detector having exactly two channels, which is a property of the class", cash/tracking/randomness.py:RandomnessDetector.is_seeded @9ff99734, cash/tracking/randomness.py:RNG_CARRIER_CONSTRUCTORS @cec10494 -->
 Two channels feed it, because there are two ways to be random. **Module
 globals** (`np.random.rand()`) are reproducible if the *module* was seeded, so
 the detector tracks `seed()` calls across the session: once a module is seeded,
@@ -289,7 +289,7 @@ Cash checks the live estimator and warns through the same channel.
 
 ## From watching to deciding
 
-<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
 The findings above are merged into a single verdict per statement by
 `decide_cacheability`. It has five reason-sources and the first one that
 triggers wins:
@@ -297,8 +297,8 @@ triggers wins:
 ```python
 import ast
 
-from cash.notebook.cacheability import analyze_statement
-from cash.notebook.cacheability_decision import decide_cacheability
+from cash.analysis.cacheability import analyze_statement
+from cash.analysis.cacheability_decision import decide_cacheability
 
 code = "df.to_parquet('out.pq')"
 tree = ast.parse(code)
@@ -330,7 +330,7 @@ Note the `outputs` argument: it is what turns "this statement mutates `df`"
 into "this statement *produces* `df`". Pass `outputs={"df"}` for a statement
 like `df.dropna(inplace=True)` and the mutation stops being a reason at all.
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @2e425a0f, cash/notebook/cacheability_decision.py:identity_coupled_reason @77bfb1cc -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @2e425a0f, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc -->
 Two more refusals are decided *after* execution, because they are properties of
 the value rather than the source: a live-alias object (a NumPy view, a pandas
 `groupby` ref-holder) would be decoupled from its base by a round trip, and an

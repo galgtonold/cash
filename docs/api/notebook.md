@@ -22,7 +22,7 @@ from cash.notebook import (
     CacheStatus,           # cell-status enum (COMPUTED / RESTORED / SKIPPED / …)
     ExecutionResult,       # statement-execution result wrapper
 )
-from cash.notebook.analysis import CodeAnalyzer   # source hashing + called-function detection
+from cash.analysis.code_analyzer import CodeAnalyzer   # source hashing + called-function detection
 from cash.notebook.ipython.magics import CashMagics  # the magics class (registered automatically)
 ```
 
@@ -104,7 +104,7 @@ Static helpers for source hashing and called-function detection.
 them directly when building lint tools that need a stable hash of a
 callable's body.
 
-::: cash.notebook.analysis.CodeAnalyzer
+::: cash.analysis.code_analyzer.CodeAnalyzer
 
 ---
 

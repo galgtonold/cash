@@ -276,5 +276,5 @@ documented symbol: `%cash_on` is named on 26 pages, and it lists all of them.
 Working on source rather than docs? Check what your change touches first:
 
 ```bash
-python scripts/claims.py --report cash/notebook/cost_model.py
+python scripts/claims.py --report cash/cost_model.py
 ```

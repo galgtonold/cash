@@ -15,7 +15,7 @@ This page lists every such case we know about, what you actually see, and what t
 
 The single most-often-misread behaviour, and it is working as designed.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @a4042c14, cash/notebook/randomness.py:restore_rng_state @3f0a03ee -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @a4042c14, cash/tracking/randomness.py:restore_rng_state @3f0a03ee -->
 An unseeded random draw that is expensive enough to cache **is** cached. Re-running the cell returns the *same* numbers, because you are seeing a restored value rather than a fresh draw:
 
 <!-- test:skip reason="illustrative: demonstrates replayed randomness across re-runs" -->
@@ -33,7 +33,7 @@ Cash warns the first time this happens:
 
 The cost floor decides whether a value is worth *persisting*. It does not decide whether you see the same number twice.
 
-<!-- claim: cash/core.py:Cash._rng_replay_parts @33ebe200, cash/core.py:Cash._replay_rng_state @663a9b98 -->
+<!-- claim: cash/core.py:Cash._rng_replay_parts @c45b579b, cash/core.py:Cash._replay_rng_state @1eba1994 -->
 **What the caller draws next is not affected.** A hit does not run the body, so
 the stream it advanced would stay where it was and the caller's own next draw
 would repeat what the function drew — with `np.random.seed(0)`, exactly the
@@ -71,7 +71,7 @@ x = np.random.rand(10**6) # cell 2 — run this alone
 
 The **module-global** RNG channels — `np.random.*`, `random.*`, `torch.*` — are fully tracked: a draw is flagged on the badge (a `random` / `unseeded` pill), an unseeded draw's cached value is announced as a frozen replay, editing a `seed()` invalidates everything cached downstream, and a re-run reflects the position a clean top-to-bottom run would produce.
 
-<!-- claim: cash/notebook/randomness.py:RNG_CARRIER_CONSTRUCTORS @cec10494, cash/notebook/randomness.py:capture_object_rng_states @51b16e5b -->
+<!-- claim: cash/tracking/randomness.py:RNG_CARRIER_CONSTRUCTORS @cec10494, cash/tracking/randomness.py:capture_object_rng_states @51b16e5b -->
 A **per-object generator** created with `np.random.default_rng()` (or `Generator(...)` / `RandomState(...)`) is a different, narrower story. Its **seed is tracked** — `rng = np.random.default_rng(SEED)` binds a variable, so editing `SEED` and re-running refreshes through the ordinary variable-lineage path, and an *unseeded* named generator (`rng = np.random.default_rng()`) drawn from by name is flagged. But three things about a per-object generator are **not** tracked:
 
 **1. Stream position across cells.** cash does not follow a generator's internal position as several cells draw from it:
@@ -108,7 +108,7 @@ These all share one shape: a cell changes an object through a path cash does not
 
 ### Mutating through an alias
 
-<!-- claim: cash/notebook/cacheability.py:bare_alias_targets @63962a47, cash/notebook/cacheability.py:reference_alias_targets @0e0de16b -->
+<!-- claim: cash/analysis/cacheability.py:bare_alias_targets @63962a47, cash/analysis/cacheability.py:reference_alias_targets @0e0de16b -->
 Cash tracks mutation through the name an object was bound to. Reach the same object through a different name and the mutation is invisible — re-running the cell applies it twice:
 
 <!-- test:skip reason="illustrative: alias-mutation shapes, need isolated cell re-runs" -->
@@ -125,14 +125,14 @@ y = x if flag else z   # ternary: two possible sources
 y.append(3)
 ```
 
-<!-- claim: cash/notebook/cacheability.py:_literal_unpack_aliases @2c6e633d -->
+<!-- claim: cash/analysis/cacheability.py:_literal_unpack_aliases @2c6e633d -->
 Literal unpacking — flat (`(y,) = (x,)`) *and* nested (`(p, (q,)) = (x, (y,))`) — is **not** in this list: cash recognises every leaf of a 1:1 literal unpack as a pointer copy, at any nesting depth, and refuses to cache the statement. A later `q.append(9)` is therefore not double-applied. One `*rest` or one computed element (`b, c = a, f()`) opts the whole statement back out, since that element may be real work worth caching.
 
 **What to do:** mutate through the original name (`x.append(99)`), or rebind rather than mutate (`x = x + [99]`).
 
 ### Mutating global state inside a function
 
-<!-- claim: cash/notebook/cacheability.py:called_function_global_mutations @2b38c37d -->
+<!-- claim: cash/analysis/cacheability.py:called_function_global_mutations @2b38c37d -->
 Cash analyses what a *statement* reads and writes, and it tracks the **arguments**
 a called function mutates — including imported helpers and bare calls (`proc(df)`
 that mutates `df`). It also tracks a function mutating a **global** it wasn't
@@ -296,7 +296,7 @@ A thread that mutates data after the cell that created it has finished is outsid
 
 ### Reads through a loader cash cannot see
 
-<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @027b224f -->
+<!-- claim: cash/tracking/file_tracker.py:_install_module_patches @027b224f -->
 Cash records a file dependency by intercepting the *read*: `pd.read_*`, `np.load`, `joblib.load`, `polars`, `sqlite3.connect`, plain `open()`, and friends — including a read that finds the file MISSING, whichever way it is spelled (`os.path.exists`, or `open()` raising `FileNotFoundError`). A read that goes through none of them — a C extension that opens the file itself, a third-party client, a `subprocess` — is invisible. Two known gaps of that kind: `os.open`/`os.read` (the descriptor-level API, below `open()`), and a SQLite database in **WAL** mode, where a commit lands in the sidecar `-wal` file and the database file cash records may not move.
 
 The consequence is easy to mis-guess, so it is worth stating plainly: cash **does not** refuse to cache such a statement. It caches it exactly like any other, with *no file recorded*. Change the file on disk afterwards and nothing invalidates; you get the old value back with a `CACHED` badge and no warning.
@@ -351,7 +351,7 @@ puts you on the content-hashed eager path, or name the file:
 
 Unlike the mutation cases above, this one is **not** isolated-re-run only — it can give a wrong answer on a fresh `Run All`, the first time the loop ever executes.
 
-<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @26f3a097 -->
+<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @5390bd5c -->
 Cash decomposes a `for` loop per iteration and uses the loop variable's value — captured at the moment it is *bound*, before any body statement runs — as the per-iteration cache discriminator. That applies both to an ordinary cached statement in the body and to an intercepted (on by default) sub-call whose own arguments give the key nothing else to vary on. If the body **mutates the loop variable before it is used**, the discriminator was already captured before that mutation and cannot see it:
 
 <!-- test:skip reason="illustrative: pull() stands in for a slow call whose only per-iteration signal is the loop variable; call-level caching is on by default and needs no directive to make pull(handle) itself the cached, keyed unit" -->
@@ -705,7 +705,7 @@ session with a usable hot-exit backup** — both above.
 
 To keep hashing cheap, cash samples large values rather than reading them whole:
 
-<!-- claim: cash/notebook/object_hashing.py:compute_hash @a7245478 -->
+<!-- claim: cash/object_hashing.py:compute_hash @a7245478 -->
 | Type | What is hashed |
 |---|---|
 | DataFrame | shape, dtypes, **first 5 rows** |
@@ -729,7 +729,7 @@ Two large objects that differ only outside the sampled region therefore hash ide
 
 ## An edit that keeps the size and timestamps
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:_unchanged_since_hashed @e3a8e057, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @ab9621f0, cash/notebook/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:_unchanged_since_hashed @e3a8e057, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @ab9621f0, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0 -->
 Whether a file you read has changed is answered by its metadata first. If its
 size, its modification time to the nanosecond, which file it is, and on Linux
 and macOS its inode change time are all as they were when Cash hashed it — and
@@ -766,7 +766,7 @@ copy whose files have the same sizes and timestamps is not seen there either.
 that read it recomputes. To make one function recompute regardless, clear it
 (`f.cache_clear()`).
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == 5.0 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == 5.0 -->
 When the metadata did move, a file up to `file_hash_full_max_bytes` (**256 MiB**
 by default) is hashed in full, and a larger one at three 256 KiB regions — head,
 middle and tail — with its timestamps standing in for the bytes the sample never

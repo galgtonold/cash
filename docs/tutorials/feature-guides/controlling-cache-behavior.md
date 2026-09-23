@@ -32,7 +32,7 @@ model = train_xgb(X, y)         # 12 min to fit — force to disk
 noise = np.random.rand(1000)    # we know it's unseeded; don't warn us
 ```
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @341dca2e, cash/notebook/annotations.py:ANNOTATION_PATTERN @412c3ce1 -->
+<!-- claim: cash/analysis/annotations.py:parse_annotation_line @341dca2e, cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1 -->
 That's the everyday language — six directives in total, counting the two specialised ones above. Stack annotations on consecutive lines above a statement (Cash walks backwards through comment lines until it hits a blank or a non-comment).
 
 ## The four annotations
@@ -53,7 +53,7 @@ api_response = requests.get("https://api.example.com/data")
 print(f"Debug: {some_value}")
 ```
 
-<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
 The decision-merge layer short-circuits as soon as it sees this annotation — `decide_cacheability` returns `(False, ['@cash:no-cache annotation'])` before consulting anything else. The badge shows the statement as NOT CACHED with that exact reason string.
 
 <iframe class="cash-badge" src="/_badges/not_cached_explicit.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
@@ -96,7 +96,7 @@ The annotation sets `force_persist = True`, which the post-execute path threads 
 
 ### `@cash:allow-random` — accept non-reproducibility
 
-<!-- claim: cash/notebook/randomness.py:check_and_warn_randomness @4b5eb84f, cash/notebook/randomness.py:MODULE_ALIASES @993c2ed1, cash/notebook/randomness.py:RANDOM_FUNCTIONS @5801a3eb -->
+<!-- claim: cash/tracking/randomness.py:check_and_warn_randomness @4b5eb84f, cash/tracking/randomness.py:MODULE_ALIASES @993c2ed1, cash/tracking/randomness.py:RANDOM_FUNCTIONS @5801a3eb -->
 Cash scans every statement for unseeded calls to known RNG functions (`numpy.random.randn`, `torch.rand`, `random.choice`, dozens more — full list in `RANDOM_FUNCTIONS`) and raises a `CashRandomnessWarning` when it finds one. The reasoning: a cached `np.random.rand(1000)` won't match what a fresh re-execution would produce, so cache hits are silently non-reproducible.
 
 Two fixes. Seed it:
@@ -130,7 +130,7 @@ The warning fires once per statement per session, so a re-run of an unchanged ce
 
 ## RNG state is replayed across cache hits
 
-<!-- claim: cash/notebook/randomness.py:capture_object_rng_states @51b16e5b, cash/notebook/randomness.py:restore_object_rng_states @9b0cccf3 -->
+<!-- claim: cash/tracking/randomness.py:capture_object_rng_states @51b16e5b, cash/tracking/randomness.py:restore_object_rng_states @9b0cccf3 -->
 A cache hit restores more than the value. If you hold your own RNG object — an
 `np.random.Generator`, an `np.random.RandomState`, or a `random.Random` —
 its internal state is captured alongside the cached statement and **replayed**
@@ -236,7 +236,7 @@ The first source that triggers wins; later sources are not consulted.
 
 For the annotations that *don't* skip caching:
 
-<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @150e9620 -->
+<!-- claim: cash/analysis/annotations.py:CacheAnnotation.merge @150e9620 -->
 - `@cash:persist` + `@cash:ttl=N` compose freely — a statement can be both forced-to-disk and time-limited. `CacheAnnotation.merge` ORs the persist flags and overrides the TTL, so stacking on consecutive lines works:
 
   ```python { .nb-cell }
@@ -263,7 +263,7 @@ For the annotations that *don't* skip caching:
 | `%%cash ttl=N` | cell-magic flag | Swaps `_global_ttl` in for the duration of the cell, then restores it. |
 | `@c.cache(ttl=N)` | decorator kwarg | Same TTL semantics, applied to function-level caching. |
 
-All annotation parsing lives in `src/cash/notebook/annotations.py`. The single regex pattern is `ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?')` — the value group is deliberately wide so a malformed value is *rejected by name* rather than silently truncated.
+All annotation parsing lives in `src/cash/analysis/annotations.py`. The single regex pattern is `ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?')` — the value group is deliberately wide so a malformed value is *rejected by name* rather than silently truncated.
 
 ## Related
 

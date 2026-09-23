@@ -37,11 +37,21 @@ Read these instead of relying on this file for details:
 - **`src/cash/backends/`**: storage backends. `factory.py` maps a `TierConfig.type`
   (`memory` / `file` / `sqlite` / `redis` / `s3` / `tiered`) to a class. The default is
   `TieredBackend([InMemoryBackend, FileBackend])`.
+- **`src/cash/tracking/`** and **`src/cash/analysis/`**, plus `purity.py`,
+  `object_hashing.py` and `cost_model.py` at the top level: the layer that the
+  decorator and the notebook share. `tracking/` records what a computation depends
+  on at run time (file reads and snapshots, function source, randomness);
+  `analysis/` is static analysis (statement inputs and outputs, `# @cash:`
+  annotations, cacheability).
 - **`src/cash/notebook/`**: the notebook subsystem. Its large parts are packages:
   `ipython/` (`CashMagics`, the cell executor), `statement/` (`StatementProcessor`
   and its siblings), `upstream/` (`UpstreamChecker`, `NotebookSimulator`,
   virtual lineage), `control_structures/` (per-iteration loop and branch caching)
   and `badge_renderer/`. `cache_key.py` and `lineage_store.py` hold the rules below.
+- **Layering:** `notebook/` imports `core` and the shared layer, never the reverse.
+  Outside `notebook/`, only the magics loaders (`Cash.register_magic`,
+  `load_ipython_extension`, `nbconvert`) import it, so `@cash.cache` runs without
+  the notebook package (`tests/test_core/test_decorator_without_notebook.py`).
 
 ### JupyterLab extension (`labextension/`)
 
