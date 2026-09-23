@@ -338,11 +338,12 @@ class VirtualLineage:
         Resolves from cell SOURCE (not ``inspect.getsource``, which has no
         linecache entry under nbclient) so ``function_arg_mutations`` can analyse
         a called function's body during the headless simulation. Later same-name
-        defs win (last definition), matching the runtime namespace.
+        defs win (last definition), matching the runtime namespace. A cell's
+        magics are stripped first, as the simulation reads every cell.
         """
         sources: dict[str, str] = {}
         for code in notebook_cells:
-            tree = parse_cached(code.replace("\r\n", "\n"))
+            tree = parse_cell_source(code)
             if tree is None:
                 continue
             for node in tree.body:

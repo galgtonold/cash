@@ -38,7 +38,7 @@ from .callee_effects import (
     stateful_closure_vars,
     stateful_self_functions,
 )
-from .code_analyzer import CodeAnalyzer
+from .code_analyzer import CodeAnalyzer, parse_cell_source
 from .mutations import (
     RECEIVER_READONLY_WRITE_METHODS,
     assigned_method_call_receivers,
@@ -131,13 +131,10 @@ class NotebookSources:
 
     @functools.cached_property
     def _bodies(self) -> list[list[ast.stmt]]:
-        bodies = []
-        for code in (*self.cells, self._current_cell):
-            try:
-                bodies.append(ast.parse(code).body)
-            except (SyntaxError, ValueError):
-                continue
-        return bodies
+        # Magics stripped: ``%matplotlib inline`` above a ``def`` is not a
+        # reason to lose the ``def``.
+        trees = (parse_cell_source(code) for code in (*self.cells, self._current_cell))
+        return [tree.body for tree in trees if tree is not None]
 
     def _top_level(self, kinds) -> Iterable:
         for body in self._bodies:
