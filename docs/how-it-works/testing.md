@@ -48,7 +48,7 @@ test that passes without the fix proves nothing and is rewritten.
   For a decorated function, it checks that the hits and misses match the
   example's comments (`# cache hit`, `# cache miss`).
 - **Claims are pinned to the code.** About
-  <!-- docnum:claims -->~400<!-- /docnum --> statements about behaviour carry an
+  <!-- docnum:claims -->~370<!-- /docnum --> statements about behaviour carry an
   anchor naming the source that decides them, with a fingerprint of that
   source. When the code changes, the claim is listed for re-reading. Pull
   requests report drift without failing; a release fails on it.
