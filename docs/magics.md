@@ -149,10 +149,10 @@ it lists exactly the magics that exist.
 ```
 
 ### `%cash_status`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @b88509d3 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @3d41dc2f -->
 
 Report status of the last cell plus a snapshot of session state (lineage,
-executed-code map, auto-cache flag, backend stats).
+executed-code map, auto-cache flag, and the number of entries in the backend).
 
 **Signature:** `%cash_status [mode]`
 

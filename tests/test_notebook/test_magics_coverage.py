@@ -178,6 +178,19 @@ class TestCashStatus:
         assert "lineage" in result
         assert "cache_stats" in result
 
+    def test_status_counts_entries_without_listing_them(self, magics_fixture, monkeypatch):
+        """The count comes from ``entry_count``: ``list_entries`` reads every
+        entry's metadata, seconds on a large file cache."""
+        magics, _, backend = magics_fixture
+        backend.set("k1", 1, {})
+        backend.set("k2", 2, {})
+
+        def no_listing():
+            raise AssertionError("%cash_status listed the backend to count it")
+
+        monkeypatch.setattr(backend, "list_entries", no_listing)
+        assert magics.cash_status("dict")["cache_stats"] == {"keys": 2}
+
     def test_status_json_mode(self, magics_fixture):
         magics, _, _ = magics_fixture
         result = magics.cash_status("json")

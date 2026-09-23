@@ -758,7 +758,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             - upstream_metrics: Metrics from upstream re-executions
             - status: Overall status (COMPUTED, RESTORED, SKIPPED, MIXED)
             - lineage: Current variable lineage state
-            - cache_stats: Backend statistics
+            - cache_stats: {"keys": number of entries in the backend}
         """
 
         mode = strip_inline_comment(line).lower() or "print"
@@ -774,10 +774,10 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             "debug_enabled": self._debug,
         }
 
-        # Add cache entry count if available
+        # Counted, not listed: listing reads every entry's metadata, which on a
+        # file cache of a few thousand entries takes seconds (see entry_count).
         try:
-            backend = self._cash_instance.backend
-            status["cache_stats"] = {"keys": len(backend.list_entries())}
+            status["cache_stats"] = {"keys": self._cash_instance.backend.entry_count()}
         except (AttributeError, TypeError, OSError) as exc:
             logger.debug("Failed to retrieve cache stats: %s", exc)
             status["cache_stats"] = {}
