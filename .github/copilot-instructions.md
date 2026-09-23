@@ -200,15 +200,17 @@ Do **not** create or resurrect roadmap markdown. The old `planning/ROADMAP.md` n
 3. **Cross-check on reference.** When the user mentions an issue — by number or description — read it (`gh issue view <n> --repo galgtonold/cash-tracker`) and work from its current state and comments, not from memory. **Ticket claims are unreliable**: roughly a third describe code that has since changed. Verify against the source before acting on a description.
 4. **Close with evidence.** When work is verified, close the issue with a comment naming what you checked (`--reason completed --comment "..."`). Don't close silently, and don't delete.
 
-**Historical `CAS-N` ids.** Issues lived in Linear (team `Cash`, prefix `CAS`) until 2026-08-21, when all 68 open ones were migrated. Commit messages and docs still cite `CAS-123` ids; those are **not** GitHub issue numbers — every migrated issue carries a canonical footer instead, so map an old id to its issue with:
+**Historical Linear ids.** Issues lived in Linear (team `Cash`, prefix `CAS`) until 2026-08-21, when all 68 open ones were migrated. Old commit messages and `CHANGELOG.md` entries still cite ids of the form `CAS-<n>`; those are **not** GitHub issue numbers. Every migrated issue carries a canonical footer instead, so map an old id to its issue with (put the number in for `<n>`):
 
 ```bash
 gh issue list --repo galgtonold/cash-tracker --state all --limit 300 \
   --json number,title,body \
-  --jq '.[] | select(.body | contains("Migrated from Linear `CAS-123`")) | "#\(.number) \(.title)"'
+  --jq '.[] | select(.body | contains("Migrated from Linear `CAS-<n>`")) | "#\(.number) \(.title)"'
 ```
 
-Match on the **backticked** id, not a bare search. `--search "CAS-19"` returns six issues (anything that merely mentions it), and an unanchored regex matches `CAS-191` inside `CAS-19`. The footer format is uniform across all 68 precisely so this stays a one-line exact lookup — keep it that way when filing new issues.
+Match on the **backticked** id, not a bare search: `--search` returns every issue that merely mentions the id, and an unanchored regex matches a longer id that starts with the same digits. The footer format is uniform across all 68 precisely so this stays a one-line exact lookup — keep it that way when filing new issues.
+
+Nothing else in the repo cites a tracker id or a user-testing round: `tests/test_repo_hygiene.py` fails on one anywhere outside `CHANGELOG.md`. Say what a change protects instead.
 
 **Structure:**
 - **Priority** — `prio:high` / `prio:medium` / `prio:low`. Every issue has exactly one.

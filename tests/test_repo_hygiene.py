@@ -26,33 +26,28 @@ _SESSION = "r" + r"\d+" + "s" + r"\d+"
 # Each pattern, with what it catches. Matching is case-insensitive.
 PATTERNS = {
     "private tracker id": re.compile(r"\b" + _ID + r"\d+", re.IGNORECASE),
-    "test round": re.compile(r"\bround[ -]?\d+", re.IGNORECASE),
+    # Not "--rounds 15", a benchmark's command-line flag.
+    "test round": re.compile(r"(?<![-\w])rounds?[ -]?\d+", re.IGNORECASE),
     "test session code": re.compile(r"\b" + _SESSION + r"\b", re.IGNORECASE),
     "test wave": re.compile(r"\bwave[ -]?\d+", re.IGNORECASE),
     "test batch": re.compile(r"\bbatch[ -]?\d+", re.IGNORECASE),
-    "numbered finding": re.compile(r"\bfinding #\d+", re.IGNORECASE),
+    "numbered finding": re.compile(r"\bfinding #?\d+", re.IGNORECASE),
+    "internal task": re.compile(r"\btask-\d+\b", re.IGNORECASE),
     "user-testing role": re.compile(r"\b" + "test" + r"ers?\b", re.IGNORECASE),
 }
+
+# A round code wrapped onto the next line of a comment or docstring, which the
+# line-by-line check cannot see: "(round" at a line end, "28)" on the next.
+WRAPPED_ROUND = re.compile(r"\bround\r?\n[ \t]*(?:#[ \t]*)?\d+\b", re.IGNORECASE)
 
 # A file NAMED after a ticket ("test_" + "cas" + "123_....py").
 PATH_PATTERN = re.compile(r"cas\d+", re.IGNORECASE)
 
-# Paths the content check skips entirely. Keep this list short and explained.
-SKIPPED_PREFIXES = (
-    # TEMPORARY: src/ still carries tracker ids in comments and is being cleaned
-    # up separately. Delete this entry once `src/` is clean; the check then
-    # covers the whole repository.
-    "src/",
-)
+# Files the content check skips. Keep this list short and explained.
 SKIPPED_FILES = {
     # The changelog is history: it may name what shipped the way it was known then.
     "CHANGELOG.md",
 }
-
-# In this file only the named section is skipped: it explains how to map an old
-# tracker id to its current issue, which needs the id format.
-GUIDE = ".github/copilot-instructions.md"
-GUIDE_SECTION = "## Project management"
 
 
 def _tracked_files() -> list[str]:
@@ -81,22 +76,8 @@ def _read_text(rel: str) -> str | None:
         return None
 
 
-def _skipped_line_numbers(rel: str, lines: list[str]) -> set[int]:
-    """Line numbers (1-based) inside the guide's allowed section."""
-    if rel != GUIDE:
-        return set()
-    skipped: set[int] = set()
-    inside = False
-    for n, line in enumerate(lines, 1):
-        if line.startswith("## "):
-            inside = line.strip() == GUIDE_SECTION
-        if inside:
-            skipped.add(n)
-    return skipped
-
-
 def _scanned_files() -> list[str]:
-    return [rel for rel in _tracked_files() if not rel.startswith(SKIPPED_PREFIXES) and rel not in SKIPPED_FILES]
+    return [rel for rel in _tracked_files() if rel not in SKIPPED_FILES]
 
 
 def test_no_tracker_ids_or_test_round_codes_in_tracked_files():
@@ -105,15 +86,14 @@ def test_no_tracker_ids_or_test_round_codes_in_tracked_files():
         text = _read_text(rel)
         if text is None:
             continue
-        lines = text.splitlines()
-        skipped = _skipped_line_numbers(rel, lines)
-        for n, line in enumerate(lines, 1):
-            if n in skipped:
-                continue
+        for n, line in enumerate(text.splitlines(), 1):
             for what, pattern in PATTERNS.items():
                 m = pattern.search(line)
                 if m:
                     found.append(f"{rel}:{n}: {what} {m.group(0)!r}: {line.strip()[:120]}")
+        for m in WRAPPED_ROUND.finditer(text):
+            n = text.count("\n", 0, m.start()) + 1
+            found.append(f"{rel}:{n}: test round wrapped onto the next line {m.group(0)!r}")
     assert not found, (
         "Say what the code protects instead of citing a private ticket or a "
         "user-testing code (see this test's docstring):\n" + "\n".join(found)
@@ -131,6 +111,9 @@ def test_no_file_is_named_after_a_ticket():
         _ID + "123",
         "round {n}",
         "Round-{n} gate",
+        "Rounds {n}-18",
+        "finding {n}",
+        "pre-" + "Task" + "-5 path",
         "r{n}s{n}",
         "wave {n}",
         "Batch {n}",
@@ -154,14 +137,16 @@ def test_the_patterns_catch_what_they_are_for(text):
         "test_tester_sessions.py",
         "batch_size = 32",
         "a test writer",
+        "--rounds 15",
+        "for r in range(rounds):",
+        "a network round trip",
     ],
 )
 def test_the_patterns_leave_ordinary_text_alone(text):
     assert not any(p.search(text) for p in PATTERNS.values())
 
 
-def test_the_allowed_guide_section_still_exists():
-    """If the heading is renamed, the carve-out must be updated, not widened."""
-    text = _read_text(GUIDE)
-    assert text is not None
-    assert GUIDE_SECTION in text.splitlines()
+def test_a_round_code_wrapped_onto_the_next_line_is_caught():
+    assert WRAPPED_ROUND.search("# came from a file (round\n        # 28), and")
+    assert WRAPPED_ROUND.search("another cell -- round\n21), and")
+    assert not WRAPPED_ROUND.search("x = round\n(y)")
