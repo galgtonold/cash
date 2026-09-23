@@ -127,7 +127,7 @@ def reset_session() -> None:
     What this does NOT do:
 
     * It doesn't clear the on-disk cache directory — that's a separate
-      operation (``Cash().clear_cache()`` or ``%cash_clear``).
+      operation (``cash clear --all`` on the command line).
     * It doesn't touch the ``FileAccessTracker`` dispatcher wrappers
       installed on ``builtins.open``, ``pandas.read_csv``, and other
       tracked I/O entry points. Those are permanent for the process

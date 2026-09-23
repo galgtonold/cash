@@ -459,12 +459,12 @@ class PendingWrites:
         project already had. ``CashCacheStoreFailedWarning`` exists for
         exactly this ("Compute succeeded but the backend rejected the write.
         Typical causes: ... disk full ..."), and the decorator path has always
-        used it -- see ``Cash._store_result``, which warns and continues with
-        "Compute succeeded; next call will recompute." The backend path simply
-        never adopted it. These two halves of the codebase disagreed, and the
-        decorator half was right: the value exists, and destroying it because
-        a *cache* write failed is the cache making things worse than not being
-        installed.
+        used it -- see ``Cash._store_in_cache``, which warns and continues with
+        "Compute succeeded, nothing was stored, and the next call recomputes."
+        The backend path simply never adopted it. These two halves of the
+        codebase disagreed, and the decorator half was right: the value
+        exists, and destroying it because a *cache* write failed is the cache
+        making things worse than not being installed.
 
         Nothing is hidden by this. The failure is recorded in the
         discarded-writes registry as it happens (``_run_task``), which is what
