@@ -84,3 +84,25 @@ def test_strict_mode_does_not_raise_on_a_global_the_key_folds():
         assert gf.strict_price(100) == pytest.approx(130)
     finally:
         gf.set_rate(0.10)
+
+
+def test_an_edited_module_is_scanned_again(tmp_path, monkeypatch):
+    """The scan is remembered per source text, not per module name: a module
+    edited under a running process must not keep its first answer."""
+    import importlib
+    import os
+    import sys
+
+    path = tmp_path / "edited_globals_mod.py"
+    path.write_text("SEEN = []\n\ndef f():\n    return SEEN\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    mod = importlib.import_module("edited_globals_mod")
+    try:
+        assert "SEEN" not in _module_modified_globals(mod)
+
+        path.write_text("SEEN = []\n\ndef f():\n    SEEN.append(1)\n", encoding="utf-8")
+        st = path.stat()
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+        assert "SEEN" in _module_modified_globals(mod)
+    finally:
+        sys.modules.pop("edited_globals_mod", None)

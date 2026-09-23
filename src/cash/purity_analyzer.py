@@ -2136,9 +2136,6 @@ def get_analyzer() -> PurityAnalyzer:
         return _global_analyzer
 
 
-_MODULE_MOD_GLOBALS_CACHE: dict[str, frozenset[str]] = {}
-
-
 #: ``# @cash:assume-safe`` -- a waiver scoped to ONE statement.
 #
 # ``assume_safe=True`` on the decorator silences the whole function, for good.
@@ -2457,28 +2454,30 @@ class _GlobalMutationScanner(ast.NodeVisitor):
 def _module_modified_globals(module: Any) -> frozenset[str]:
     """Module-global names that are reassigned/mutated somewhere in *module*.
 
-    Cached per module name. Returns an empty set when the source can't be read
-    (so we never flag on incomplete information)."""
-    name = getattr(module, "__name__", None)
-    if not name:
-        return frozenset()
-    cached = _MODULE_MOD_GLOBALS_CACHE.get(name)
-    if cached is not None:
-        return cached
+    Empty when the source can't be read, so nothing is flagged on incomplete
+    information. The scan is memoised on the source text, so a module edited
+    under a running process is scanned again.
+    """
     try:
-        tree = ast.parse(textwrap.dedent(inspect.getsource(module)))
+        source = inspect.getsource(module)
     except SOURCE_RETRIEVAL_ERRORS:
-        _MODULE_MOD_GLOBALS_CACHE[name] = frozenset()
+        return frozenset()
+    return _modified_globals_in_source(source)
+
+
+@functools.lru_cache(maxsize=256)
+def _modified_globals_in_source(source: str) -> frozenset[str]:
+    try:
+        tree = ast.parse(textwrap.dedent(source))
+    except (SyntaxError, ValueError):
         return frozenset()
     try:
         scanner = _GlobalMutationScanner(_imported_module_names(tree))
         scanner.visit(tree)
-        result = frozenset(scanner.modified)
-    except Exception:  # noqa: BLE001 - analysis must never break caching
-        logger.debug("global-mutation scan failed for module %s", name)
-        result = frozenset()
-    _MODULE_MOD_GLOBALS_CACHE[name] = result
-    return result
+    except RecursionError:
+        logger.debug("global-mutation scan gave up on a deeply nested module")
+        return frozenset()
+    return frozenset(scanner.modified)
 
 
 def _qualname_of(func: Callable[..., Any]) -> str:

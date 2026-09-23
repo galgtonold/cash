@@ -264,6 +264,7 @@ def _analyse(source: str) -> _Analysis | None:
 
 #: ``{path: (mtime_ns, size, analysis)}``, one entry per file.
 _ANALYSES: dict[str, tuple[int, int, _Analysis | None]] = {}
+_MAX_ANALYSES = 1024
 
 
 def analysis_for(path: str) -> _Analysis | None:
@@ -280,6 +281,8 @@ def analysis_for(path: str) -> _Analysis | None:
     except (OSError, UnicodeDecodeError):
         analysis = None
     if settled:
+        if len(_ANALYSES) >= _MAX_ANALYSES:
+            _ANALYSES.clear()
         _ANALYSES[path] = (st.st_mtime_ns, st.st_size, analysis)
     return analysis
 
