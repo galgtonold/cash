@@ -165,7 +165,7 @@
     "audited": "2026-08-28"
   },
   "docs/tutorials/feature-guides/choosing-a-backend.md": {
-    "anchors": 8,
+    "anchors": 11,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/controlling-cache-behavior.md": {
@@ -205,7 +205,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/sharing-caches.md": {
-    "anchors": 5,
+    "anchors": 6,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/smart-persistence.md": {
@@ -217,7 +217,7 @@
     "audited": "2026-09-10"
   },
   "docs/tutorials/feature-guides/thread-safety.md": {
-    "anchors": 13,
+    "anchors": 10,
     "audited": "2026-07-27"
   },
   "docs/tutorials/use-cases/data-engineering.md": {
