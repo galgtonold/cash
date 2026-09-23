@@ -10,7 +10,7 @@ Measures:
 - Statement processor overhead
 - Upstream simulation overhead
 
-Run with: pytest tests/test_benchmarks.py -v
+Run with: pytest tests/test_core/test_benchmarks.py -v
 Each timing test asserts that the measured operation stays within acceptable
 bounds. They carry the ``perf`` marker: the unit CI job excludes them, because
 wall-clock thresholds are not reliable on shared runners under xdist.

@@ -222,7 +222,7 @@ gh issue list --repo galgtonold/cash-tracker --state all --limit 300 \
 
 Match on the **backticked** id, not a bare search: `--search` returns every issue that merely mentions the id, and an unanchored regex matches a longer id that starts with the same digits. The footer format is uniform across all 68 precisely so this stays a one-line exact lookup — keep it that way when filing new issues.
 
-Nothing else in the repo cites a tracker id or a user-testing round: `tests/test_repo_hygiene.py` fails on one anywhere outside `CHANGELOG.md`. Say what a change protects instead.
+Nothing else in the repo cites a tracker id or a user-testing round: `tests/test_tooling/test_repo_hygiene.py` fails on one anywhere outside `CHANGELOG.md`. Say what a change protects instead.
 
 **Structure:**
 - **Priority** — `prio:high` / `prio:medium` / `prio:low`. Every issue has exactly one.

@@ -30,7 +30,7 @@ jobs:
           pip install -e ".[dev]"
 
       # Run tests/ by exclusion, never by listing files, so a new test file runs
-      # without anyone adding it here (tests/test_ci_covers_the_suite.py checks).
+      # without anyone adding it here (tests/test_tooling/test_ci_covers_the_suite.py checks).
       # Excluded: test_notebook_integration/ starts real kernels and is too slow
       # per push (the integration-core job runs its core set);
       # test_wheel_gate/ belongs to the release gate; docs/ has its own job.

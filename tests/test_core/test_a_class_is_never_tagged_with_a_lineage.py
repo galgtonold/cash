@@ -8,7 +8,7 @@ records ``Path`` -- the class -- and the tag landed on the class, so every
 ``@cash.cache`` function hashed the same, and a call on one file was served
 another file's result: in the unit suite, ``test_explain_file_freshness``
 got the previous test's entry whenever it shared a worker with
-``test_file_tracking.py``'s ``test_pathlib_tracking`` (found while chasing that
+``test_notebook/test_statement_file_tracking.py``'s ``test_pathlib_tracking`` (found while chasing that
 "flaky" test). A result for a DIFFERENT file with DIFFERENT content
 came back without the function running.
 """

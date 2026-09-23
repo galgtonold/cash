@@ -1,6 +1,6 @@
 """End to end: the decorator warns when caching costs more than it saves.
 
-``tests/test_effectiveness_ledger.py`` pins the decision rule in isolation.
+``tests/test_core/test_effectiveness_ledger.py`` pins the decision rule in isolation.
 This pins the wiring -- that the numbers reaching that rule are the right
 ones, which is where this feature was one silent mistake away from being
 useless: ``CacheMetadata.execution_time`` is measured from the top of the

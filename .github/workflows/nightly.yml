@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       # N in --shard=I/N is the number of jobs, so the matrix must hold nothing
-      # but the shard numbers 1..N (tests/test_ci_covers_the_suite.py checks).
+      # but the shard numbers 1..N (tests/test_tooling/test_ci_covers_the_suite.py checks).
       matrix:
         shard: [1, 2, 3, 4, 5, 6]
 
