@@ -154,6 +154,8 @@ class _Metric:
     #: With cash's iteration / control markers still in: grouping keys on them.
     code: str
     display_code: str | None
+    #: The statement's own compute: its wall time less ``cash_tax``, cash's
+    #: time inside it (see ``_own_compute``).
     execution_time: float
     total_time: float
     saved_time: float
@@ -197,7 +199,7 @@ class _Metric:
             status=CacheStatus.parse(m.get("status")),
             code=str(m.get("code") or ""),
             display_code=strip_markers(str(m["display_code"])) if m.get("display_code") else None,
-            execution_time=_float(m.get("execution_time")),
+            execution_time=_own_compute(m),
             total_time=_float(m.get("total_time")),
             saved_time=_float(m.get("saved_time")),
             is_upstream=bool(m.get("is_upstream", False)),
@@ -246,6 +248,20 @@ class _Metric:
         no execution time, so it shows its restore time.
         """
         return self.execution_time or self.total_time
+
+
+def _own_compute(m: dict[str, Any]) -> float:
+    """What the statement's own code took, without cash's time inside it.
+
+    A statement's wall time includes what cash does while it runs: recording
+    the files it reads, and keying, hashing and storing the calls it routes.
+    For a call that returns a large frame that is a noticeable share, and the
+    row showed it while the same statement restored showed "saved" net of it
+    (``CallRouting.statement_cost``): "0.92s" beside "saved 0.82s" for one
+    computation. ``%cash_stats`` counts compute the same way. The difference
+    lands in the overhead row's ``cache`` part, with the rest of cash's cost.
+    """
+    return max(0.0, _float(m.get("execution_time")) - _float(m.get("cash_tax")))
 
 
 def _printed(m: dict[str, Any]) -> str:
@@ -843,7 +859,7 @@ _OVERHEAD_LABELS = {
 }
 _OVERHEAD_TOOLTIPS = {
     "upstream_check": "re-checking and re-restoring upstream cells",
-    "cache_write": "hashing inputs and serialising results into the cache",
+    "cache_write": "hashing inputs, recording file reads and serialising results into the cache",
     "remote_validate": "asking object storage whether tracked remote data changed",
     "badge": "building and updating Cash's badge display",
     "other": "cell time not attributed to a category above",
@@ -867,8 +883,9 @@ def _overhead_section(
 
     upstream_check = float(timing_breakdown.get("upstream_check", 0.0))
     badge = float(timing_breakdown.get("badge_init", 0.0)) + float(timing_breakdown.get("badge_progress", 0.0))
-    # Hashing inputs and serialising results: what COMPUTED rows carry beyond
-    # the compute they show. RESTORED rows show their full total_time.
+    # Hashing inputs and serialising results, and cash's time inside the
+    # statement (``cash_tax``): what COMPUTED rows carry beyond the compute
+    # they show. RESTORED rows show their full total_time.
     cache_write = max(0.0, sum(m.total_time for m in metrics) - statements_time)
     # Round trips asking object storage whether tracked remote data moved: the
     # one overhead on the HIT path, where nothing else reports what it cost.

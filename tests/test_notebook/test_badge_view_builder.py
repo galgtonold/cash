@@ -116,6 +116,32 @@ def test_computed_row_shows_compute_not_serialisation_overhead() -> None:
     assert row.time_s == pytest.approx(0.44), "row must show the compute, not compute + serialisation overhead"
 
 
+def test_computed_row_leaves_out_cash_s_time_inside_the_statement() -> None:
+    """Cash's time INSIDE the statement (``cash_tax``: keying, hashing and
+    storing the calls it routes) is not the statement's compute either.
+
+    The restore credits "saved" at the wall time less that tax
+    (``CallRouting.statement_cost``), so a row that kept it read "EXECUTED
+    0.92s" beside "saved 0.82s" for one computation of a large frame.
+    """
+    metrics = [
+        {
+            "code": "df = _mk()",
+            "status": str(CacheStatus.COMPUTED),
+            "execution_time": 0.92,  # wall time, with the call's store inside it
+            "cash_tax": 0.10,
+            "total_time": 1.05,
+        }
+    ]
+    badge = build_interactive_badge(metrics, timing_breakdown={"badge_init": 0.01}, cell_total_time=1.06)
+    row = badge.sections[0].items[0]
+    assert isinstance(row, StatementRow)
+    assert row.time_s == pytest.approx(0.82), "the row must show what the saved figure counts"
+    breakdown = next(s for s in badge.sections if s.kind is SectionKind.OVERHEAD).items[0]
+    cache = next(e for e in breakdown.entries if e.label == "cache")
+    assert cache.time_s == pytest.approx(0.23, abs=0.005), "the tax moves to the overhead row, not away"
+
+
 def test_statement_row_exposes_cache_key_short_prefix() -> None:
     """The badge surfaces an 8-char cache-key prefix in the row detail.
 

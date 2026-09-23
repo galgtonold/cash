@@ -23,7 +23,9 @@ Compute time is your code's, not cash's: time cash spends inside the statement
 tracking the files it reads, or keying and storing the calls it intercepts, is
 taken out, and a call served from the cache counts at what it cost to compute.
 So a statement whose expensive call hit is still valued at that call, and the
-badge's "saved" is not inflated by cash's own bookkeeping.
+badge's "saved" is not inflated by cash's own bookkeeping. The time the badge
+shows when the statement runs leaves out the same bookkeeping, so for a
+statement whose calls all ran, it matches the "saved" of its later restore.
 
 <!-- claim: cash/config.py:CashConfig.min_execution_time_to_cache_seconds == 0.01, cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1 -->
 
