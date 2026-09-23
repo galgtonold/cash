@@ -43,5 +43,5 @@ replacement, wherever that's feasible. Removals are called out in the
 Pin cash the way you'd pin any dependency you rely on in production — e.g.
 `cash-lib<!-- docnum:version_pin -->~=0.11.0<!-- /docnum -->` to take patch fixes but not an
 automatic `<!-- docnum:version_next_minor -->0.12<!-- /docnum -->` — and upgrade
-deliberately, reading the CHANGELOG and running `%cash_repair --full` as part of
+deliberately, reading the CHANGELOG and running `cash clear --all` as part of
 the bump.
