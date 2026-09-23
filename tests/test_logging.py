@@ -6,7 +6,7 @@ import json
 import logging
 import os
 
-from cash.logging import CashLogHandler, JsonFormatter, setup_logging
+from cash.logging import JsonFormatter, setup_logging
 
 
 class TestJsonFormatter:
@@ -39,72 +39,11 @@ class TestJsonFormatter:
         assert data["cache_key"] == "stmt:abc123"
 
 
-class TestCashLogHandler:
-    """Tests for in-memory log handler."""
-
-    def test_emit_and_retrieve(self):
-        handler = CashLogHandler()
-        record = logging.LogRecord(
-            name="cash", level=logging.INFO, pathname="", lineno=0, msg="test", args=(), exc_info=None
-        )
-        handler.emit(record)
-        events = handler.get_events()
-        assert len(events) == 1
-        assert events[0]["msg"] == "test"
-
-    def test_max_entries(self):
-        handler = CashLogHandler()
-        handler.MAX_ENTRIES = 10
-        for i in range(20):
-            record = logging.LogRecord(
-                name="cash", level=logging.INFO, pathname="", lineno=0, msg=f"msg-{i}", args=(), exc_info=None
-            )
-            handler.emit(record)
-        events = handler.get_events(limit=100)
-        assert len(events) == 10
-        # Should have the last 10 messages
-        assert events[0]["msg"] == "msg-10"
-        assert events[-1]["msg"] == "msg-19"
-
-    def test_filter_by_event(self):
-        handler = CashLogHandler()
-        for event_type in ["cache_hit", "cache_miss", "cache_hit"]:
-            record = logging.LogRecord(
-                name="cash", level=logging.INFO, pathname="", lineno=0, msg=event_type, args=(), exc_info=None
-            )
-            record.event = event_type
-            handler.emit(record)
-        hits = handler.get_events(event_type="cache_hit")
-        assert len(hits) == 2
-
-    def test_clear(self):
-        handler = CashLogHandler()
-        record = logging.LogRecord(
-            name="cash", level=logging.INFO, pathname="", lineno=0, msg="test", args=(), exc_info=None
-        )
-        handler.emit(record)
-        assert len(handler.get_events()) == 1
-        handler.clear()
-        assert len(handler.get_events()) == 0
-
-    def test_limit(self):
-        handler = CashLogHandler()
-        for i in range(10):
-            record = logging.LogRecord(
-                name="cash", level=logging.INFO, pathname="", lineno=0, msg=f"msg-{i}", args=(), exc_info=None
-            )
-            handler.emit(record)
-        events = handler.get_events(limit=3)
-        assert len(events) == 3
-        assert events[0]["msg"] == "msg-7"
-
-
 class TestSetupLogging:
     """Tests for the setup_logging function."""
 
     def test_basic_setup(self):
-        handler = setup_logging(level=logging.DEBUG)
-        assert isinstance(handler, CashLogHandler)
+        setup_logging(level=logging.DEBUG)
         cash_logger = logging.getLogger("cash")
         assert cash_logger.level == logging.DEBUG
 

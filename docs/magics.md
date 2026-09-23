@@ -2,7 +2,7 @@
 
 Cash registers a suite of IPython magic commands that control caching, inspect
 session state, and move cache data between sessions. This page is the canonical
-reference for all **17** magics — each entry lists the exact signature, every
+reference for all **16** magics — each entry lists the exact signature, every
 parsed flag, and a working example. Behaviour is derived directly from
 `src/cash/notebook/ipython/magics.py` and `src/cash/notebook/ipython/admin.py`.
 
@@ -29,7 +29,6 @@ parsed flag, and a working example. Behaviour is derived directly from
 | [`%cash_provenance`](#cash_provenance) | Variable computation history. |
 | [`%cash_track`](#cash_track) | Watch a local module for source changes. |
 | [`%cash_diff`](#cash_diff) | Diff current session against an exported cache file. |
-| [`%cash_log`](#cash_log) | View / clear the in-memory structured log buffer. |
 | [`%cash_audit`](#cash_audit) | Manage the cache-operation audit log. |
 | [`%cash_export`](#cash_export) | Serialize cache (and/or lineage) to a file. |
 | [`%cash_import`](#cash_import) | Load cache from a file written by `%cash_export`. |
@@ -262,7 +261,7 @@ not, and the entries are still missing from disk afterwards.
 ```
 
 ### `%cash_debug`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @1178ce8b -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @5f76702f -->
 
 Toggle or configure debug logging. Levels propagate to the global `cash` logger
 and to the statement processor, upstream checker, and core Cash instance.
@@ -274,9 +273,9 @@ and to the statement processor, upstream checker, and core Cash instance.
 - *(no argument)* — Toggle debug on/off.
 - `on` (aliases: `true`, `1`, `enable`) — Enable debug logging at DEBUG level.
 - `off` (aliases: `false`, `0`, `disable`) — Disable debug logging (INFO level).
-- `json` — Enable DEBUG with a JSON-formatted log handler (powers
-  [`%cash_log`](#cash_log)).
-- `file <path>` — Enable DEBUG and also log to `<path>` in JSON format.
+- `json` — Enable DEBUG and print each record as a JSON object.
+- `file <path>` — Enable DEBUG and also append the records to `<path>`, one
+  JSON object per line.
 
 Argument matching is case-insensitive.
 
@@ -419,32 +418,6 @@ only-other, changed, identical) and optionally per-variable detail.
 ```python
 %cash_diff teammate_session.cache
 %cash_diff teammate_session.cache --vars
-```
-
-### `%cash_log`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_log @211fa612 -->
-
-View the in-memory structured log buffer (CashLogHandler). Requires a JSON
-handler installed via [`%cash_debug json`](#cash_debug) (or
-`%cash_debug file <path>`); otherwise the command prints a hint and returns.
-
-**Signature:** `%cash_log [<N>|json|clear]`
-
-**Arguments:**
-
-- *(no argument)* — Show the last 20 events.
-- `<N>` (integer) — Show the last `N` events.
-- `json` — Output the events as a JSON array.
-- `clear` — Clear the log buffer.
-
-**Example:**
-
-```python
-%cash_debug json     # arm the handler first
-%cash_log
-%cash_log 50
-%cash_log json
-%cash_log clear
 ```
 
 ### `%cash_audit`

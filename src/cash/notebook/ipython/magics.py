@@ -323,9 +323,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # Session-level concerns (statistics, provenance, audit) grouped in one object
         self._session = CashSession()
 
-        # Structured log handler (set by %cash_debug json/file)
-        self._log_handler = None
-
         # Benchmark config (one-shot, set by %cash_benchmark)
         self._benchmark_config = None
 
@@ -623,13 +620,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         elif mode == "json":
             self._debug = True
 
-            self._log_handler = setup_logging(level=logging.DEBUG, json_output=True)
+            setup_logging(level=logging.DEBUG, json_output=True)
             print("Cache debug output enabled (JSON format).")
         elif mode == "file" and len(parts) > 1:
             log_path = parts[1]
             self._debug = True
 
-            self._log_handler = setup_logging(level=logging.DEBUG, log_file=log_path)
+            setup_logging(level=logging.DEBUG, log_file=log_path)
             print(f"Cache debug output enabled (logging to {log_path}).")
         else:
             # Toggle if no argument

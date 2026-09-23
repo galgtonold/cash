@@ -101,7 +101,7 @@
     "audited": "2026-07-27"
   },
   "docs/how-it-works/inspecting.md": {
-    "anchors": 36,
+    "anchors": 33,
     "audited": "2026-07-27"
   },
   "docs/how-it-works/invalidation.md": {
@@ -137,7 +137,7 @@
     "audited": "2026-07-27"
   },
   "docs/magics.md": {
-    "anchors": 18,
+    "anchors": 17,
     "audited": "2026-07-27"
   },
   "docs/migration_guide.md": {

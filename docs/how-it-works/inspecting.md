@@ -109,13 +109,13 @@ taken seconds, served from cache in milliseconds. `--json` gives the same
 records machine-readably, `%cash_provenance --all` lists every tracked variable,
 and `%cash_provenance --clear` drops the history.
 
-## Going deeper: debug and log
+## Going deeper: debug output
 
 When a cache decision surprises you, turn on debug mode to see Cash's
 reasoning — key computations, lineage calculations, upstream detection, and
 restoration decisions:
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @1178ce8b, cash/logging.py:setup_logging @2ceff60e -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @5f76702f, cash/logging.py:setup_logging @d2921e24 -->
 <!-- test:skip reason="IPython magic command — requires kernel context" -->
 ```python
 %cash_debug on            # human-readable (default)
@@ -124,23 +124,10 @@ restoration decisions:
 %cash_debug off
 ```
 
-`%cash_log` prints the structured event **buffer** — but only the `json` and
-`file` modes create one. Plain `%cash_debug on` prints its records straight to
-the cell and keeps nothing, so `%cash_log` after it reports *"No log handler
-active"* (and unhelpfully suggests the `%cash_debug on` you just ran). Start
-from `%cash_debug json` if you want a buffer to query:
+The records go to the cell as they happen; `json` formats each one as a JSON
+object, and `file` also appends them to the file, one JSON object per line.
 
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_log @211fa612, cash/notebook/ipython/admin.py:CashAdminMagicsMixin._find_cash_log_handler @a5b19adf, cash/notebook/ipython/admin.py:_parse_log_args @0946bbba -->
-<!-- test:skip reason="IPython magic command — requires kernel context" -->
-```python
-%cash_debug json      # the buffer exists from here on
-%cash_log             # recent events (last 20)
-%cash_log 50          # show the last 50 events
-%cash_log json        # output as a JSON array
-%cash_log clear       # clear the buffer
-```
-
-Both magics are documented in full under [Magic Commands](../magics.md).
+The flags are documented in full under [Magic Commands](../magics.md).
 
 ## The audit log: every cache operation, in order
 

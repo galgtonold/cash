@@ -27,64 +27,19 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(log_entry)
 
 
-class CashLogHandler(logging.Handler):
-    """Handler that stores structured log events for inspection.
-
-    Accumulates log records so they can be retrieved via
-    ``%cash_stats log`` or the CLI.
-    """
-
-    MAX_ENTRIES = 1000
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.records: list[dict] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        entry = {
-            "time": record.created,
-            "level": record.levelname,
-            "msg": record.getMessage(),
-        }
-        for key in ("event", "duration_ms", "cache_key", "status", "variable", "module"):
-            val = getattr(record, key, None)
-            if val is not None:
-                entry[key] = val
-
-        self.records.append(entry)
-        if len(self.records) > self.MAX_ENTRIES:
-            self.records = self.records[-self.MAX_ENTRIES :]
-
-    def get_events(self, event_type: str | None = None, limit: int = 50) -> list[dict]:
-        """Retrieve recent log events, optionally filtered."""
-        filtered = [r for r in self.records if r.get("event") == event_type] if event_type else self.records
-        return filtered[-limit:]
-
-    def clear(self) -> None:
-        self.records.clear()
-
-
-def setup_logging(level: int = logging.INFO, json_output: bool = False, log_file: str | None = None) -> CashLogHandler:
+def setup_logging(level: int = logging.INFO, json_output: bool = False, log_file: str | None = None) -> None:
     """Configure the ``cash`` logger hierarchy.
 
     Args:
         level: Logging level (DEBUG, INFO, etc.)
         json_output: If True, use JSON formatter for console output
         log_file: Optional path for JSON file logging
-
-    Returns:
-        The CashLogHandler for programmatic access to events.
     """
     cash_logger = logging.getLogger("cash")
     cash_logger.setLevel(level)
 
     # Remove existing handlers to avoid duplicates
     cash_logger.handlers.clear()
-
-    # In-memory structured handler (always active)
-    mem_handler = CashLogHandler()
-    mem_handler.setLevel(level)
-    cash_logger.addHandler(mem_handler)
 
     # Console handler
     console = logging.StreamHandler()
@@ -101,5 +56,3 @@ def setup_logging(level: int = logging.INFO, json_output: bool = False, log_file
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(JsonFormatter())
         cash_logger.addHandler(fh)
-
-    return mem_handler

@@ -20,7 +20,6 @@ from IPython.core.magic import line_magic
 from cash.utils import safe_text
 
 from ...backends._base import discarded_writes
-from ...logging import CashLogHandler
 from ._args import parse_mode, strip_inline_comment
 
 if TYPE_CHECKING:
@@ -527,55 +526,6 @@ class CashAdminMagicsMixin:
         _track_or_import_module(ft, parts[0], "--reload" in parts)
 
     # ------------------------------------------------------------------
-    # Structured logging
-    # ------------------------------------------------------------------
-
-    @line_magic
-    def cash_log(self: CashMagics, line: str) -> None:
-        """View recent structured log events.
-
-        Usage::
-
-            %cash_log              - Show last 20 events
-            %cash_log 50           - Show last 50 events
-            %cash_log clear        - Clear log buffer
-            %cash_log json         - Output as JSON array
-        """
-        parts = strip_inline_comment(line).split()
-
-        handler = self._find_cash_log_handler()
-        if handler is None:
-            print("No log handler active. Use '%cash_debug on' first.")
-            return
-
-        if parts and parts[0] == "clear":
-            handler.clear()
-            print("Log buffer cleared.")
-            return
-
-        limit, as_json = _parse_log_args(parts)
-        events = handler.get_events(limit=limit)
-        if not events:
-            print("No log events recorded.")
-            return
-
-        if as_json:
-            print(json.dumps(events, indent=2, default=str))
-        else:
-            for evt in events:
-                print(_format_log_event(evt))
-
-    def _find_cash_log_handler(self: CashMagics) -> Any | None:
-        """Return the active CashLogHandler, or None if not found."""
-        handler = getattr(self, "_log_handler", None)
-        if handler is None:
-            cash_logger = logging.getLogger("cash")
-            for h in cash_logger.handlers:
-                if isinstance(h, CashLogHandler):
-                    return h
-        return handler
-
-    # ------------------------------------------------------------------
     # Provenance
     # ------------------------------------------------------------------
 
@@ -913,31 +863,6 @@ def _track_or_import_module(ft: Any, module_name: str, force_reload: bool) -> No
             print(f"[Warning] Module '{module_name}' imported but has no file (built-in?)")
     except ImportError:
         print(f"[Error] Module '{module_name}' not found")
-
-
-def _parse_log_args(parts: list[str]) -> tuple[int, bool]:
-    """Parse %cash_log arguments, returning (limit, as_json)."""
-    limit = 20
-    as_json = False
-    for p in parts:
-        if p == "json":
-            as_json = True
-        elif p.isdigit():
-            limit = int(p)
-    return limit, as_json
-
-
-def _format_log_event(evt: dict) -> str:
-    """Format a single log event dict as a printable string."""
-    ts = time.strftime("%H:%M:%S", time.localtime(evt["time"]))
-    level = evt["level"][:4]
-    msg = evt["msg"]
-    extra = ""
-    if "event" in evt:
-        extra += f" [{evt['event']}]"
-    if "duration_ms" in evt:
-        extra += f" ({evt['duration_ms']:.1f}ms)"
-    return f"  {ts} {level}{extra} {msg}"
 
 
 def _print_timing_section(label: str, times: list[float], statistics: Any) -> None:
