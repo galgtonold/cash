@@ -153,7 +153,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/async-caching.md": {
-    "anchors": 7,
+    "anchors": 3,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/caching-class-methods.md": {
@@ -193,7 +193,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/iterator-caching.md": {
-    "anchors": 12,
+    "anchors": 9,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/production-transition.md": {
