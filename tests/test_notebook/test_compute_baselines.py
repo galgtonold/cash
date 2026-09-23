@@ -78,7 +78,7 @@ def test_the_cheapest_baselines_are_dropped_at_the_cap(tmp_path, monkeypatch):
         store.record(f"s{i}", float(i))
     assert store.get("s39") == pytest.approx(39.0)
     assert store.get("s0") is None
-    assert len(store._baselines) <= 10
+    assert len(store._items) <= 10
 
 
 def test_clear_drops_the_file_too(tmp_path):

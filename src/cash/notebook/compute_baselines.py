@@ -31,16 +31,8 @@ from __future__ import annotations
 import atexit
 import contextlib
 import hashlib
-import json
-import logging
-import os
 
-from cash.backends.file_backend import recreate_cache_dir
-from cash.utils import replace_with_retry
-
-from .statement.miss_guard import resolve_cache_dir
-
-logger = logging.getLogger(__name__)
+from .versioned_json_store import StoreRegistry, VersionedJsonStore
 
 _STORE_FILENAME = "_compute_baselines.json"
 _STORE_VERSION = 1
@@ -60,40 +52,28 @@ def _key(identity: str) -> str:
     return hashlib.sha256(identity.encode("utf-8", "replace")).hexdigest()[:16]
 
 
-class ComputeBaselineStore:
+class ComputeBaselineStore(VersionedJsonStore[float]):
     """``identity -> the least seconds it has ever been measured to cost``."""
 
+    FILENAME = _STORE_FILENAME
+    VERSION = _STORE_VERSION
+    FIELD = "baselines"
+    LOG_TAG = "BASELINES"
+
     def __init__(self, cache_dir: str | None) -> None:
-        self._path = os.path.join(cache_dir, _STORE_FILENAME) if cache_dir else None
-        self._baselines: dict[str, float] = {}
-        self._loaded = False
+        super().__init__(cache_dir)
         self._dirty = False
 
-    def _ensure_loaded(self) -> None:
-        if self._loaded:
-            return
-        self._loaded = True
-        if not self._path:
-            return
-        try:
-            with open(self._path, encoding="utf-8") as fh:
-                doc = json.load(fh)
-        except (OSError, ValueError):
-            logger.debug("[BASELINES] no readable store at %s", self._path)
-            return
-        if not isinstance(doc, dict) or doc.get("version") != _STORE_VERSION:
-            return
-        baselines = doc.get("baselines")
-        if not isinstance(baselines, dict):
-            return
-        for key, seconds in baselines.items():
-            if isinstance(key, str) and isinstance(seconds, (int, float)) and seconds > 0:
-                self._baselines[key] = float(seconds)
+    def _load_value(self, value: object) -> float | None:
+        return float(value) if isinstance(value, (int, float)) and value > 0 else None
+
+    def _dump_value(self, value: float) -> float:
+        return round(value, 4)
 
     def get(self, identity: str) -> float | None:
         """The least this computation has been measured to cost, or ``None``."""
         self._ensure_loaded()
-        return self._baselines.get(_key(identity))
+        return self._items.get(_key(identity))
 
     def record(self, identity: str, seconds: float) -> None:
         """Note a measurement. Only a new minimum changes anything.
@@ -108,36 +88,22 @@ class ComputeBaselineStore:
             return
         self._ensure_loaded()
         key = _key(identity)
-        known = self._baselines.get(key)
+        known = self._items.get(key)
         if known is not None and known <= seconds:
             return
-        self._baselines[key] = float(seconds)
+        self._items[key] = float(seconds)
         self._dirty = True
-        if len(self._baselines) > _MAX_ENTRIES:
+        if len(self._items) > _MAX_ENTRIES:
             self._evict()
 
     def _evict(self) -> None:
-        keep = sorted(self._baselines.items(), key=lambda kv: kv[1], reverse=True)
-        self._baselines = dict(keep[:_MAX_ENTRIES])
+        keep = sorted(self._items.items(), key=lambda kv: kv[1], reverse=True)
+        self._items = dict(keep[:_MAX_ENTRIES])
 
     def flush(self) -> None:
         """Write the store out, if anything changed."""
-        if not self._dirty or not self._path:
-            return
-        doc = {"version": _STORE_VERSION, "baselines": {k: round(v, 4) for k, v in sorted(self._baselines.items())}}
-        tmp_path = f"{self._path}.{os.getpid()}.tmp"
-        try:
-            recreate_cache_dir(os.path.dirname(self._path))
-            with open(tmp_path, "w", encoding="utf-8") as fh:
-                json.dump(doc, fh)
-            # Same reason as the loop-split store: on Windows a bare
-            # os.replace is DENIED while any handle holds the destination.
-            replace_with_retry(tmp_path, self._path)
+        if self._dirty and self._write():
             self._dirty = False
-        except OSError:
-            logger.debug("[BASELINES] could not persist to %s", self._path)
-            with contextlib.suppress(OSError):
-                os.unlink(tmp_path)
 
     def clear(self) -> None:
         """Forget every measurement, on disk too.
@@ -147,40 +113,33 @@ class ComputeBaselineStore:
         reset claims not to have.
         """
         self._ensure_loaded()
-        self._baselines.clear()
+        self._items.clear()
         self._dirty = False
-        if self._path:
-            with contextlib.suppress(OSError):
-                os.unlink(self._path)
+        self._delete_file()
 
 
-_STORES: dict[str | None, ComputeBaselineStore] = {}
+def _flush_at_exit(store: ComputeBaselineStore) -> None:
+    # The first measurement is written straight away and the rest are
+    # throttled, so this only catches the last few seconds of a session --
+    # and a kernel killed outright runs no hook at all. Cheap insurance,
+    # never relied upon.
+    with contextlib.suppress(Exception):
+        atexit.register(store.flush)
+
+
+_STORES: StoreRegistry[ComputeBaselineStore] = StoreRegistry(ComputeBaselineStore, _flush_at_exit)
 
 
 def get_store(cache_dir: str | None) -> ComputeBaselineStore:
     """The shared store for *cache_dir* (one per directory, process-wide)."""
-    store = _STORES.get(cache_dir)
-    if store is None:
-        store = ComputeBaselineStore(cache_dir)
-        _STORES[cache_dir] = store
-        # The first measurement is written straight away and the rest are
-        # throttled, so this only catches the last few seconds of a session --
-        # and a kernel killed outright runs no hook at all. Cheap insurance,
-        # never relied upon.
-        with contextlib.suppress(Exception):
-            atexit.register(store.flush)
-    return store
+    return _STORES.get(cache_dir)
 
 
 def store_for_backend(backend) -> ComputeBaselineStore | None:
     """Shared store for *backend*'s cache dir, or ``None`` if unresolvable."""
-    try:
-        return get_store(resolve_cache_dir(backend))
-    except Exception:  # noqa: BLE001 - a baseline is a reporting nicety
-        logger.debug("[BASELINES] could not resolve a store", exc_info=True)
-        return None
+    return _STORES.for_backend(backend)
 
 
 def _reset_stores_for_tests() -> None:
     """Drop cached stores. Tests only -- each tmp_path is a fresh session."""
-    _STORES.clear()
+    _STORES.reset()

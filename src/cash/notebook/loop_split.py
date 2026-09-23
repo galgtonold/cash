@@ -38,18 +38,9 @@ derivation test. Two properties are load-bearing:
 from __future__ import annotations
 
 import ast
-import contextlib
-import json
-import logging
-import os
-
-from cash.backends.file_backend import recreate_cache_dir
-from cash.utils import replace_with_retry
 
 from .cache_key import statement_source_hash
-from .statement.miss_guard import resolve_cache_dir
-
-logger = logging.getLogger(__name__)
+from .versioned_json_store import StoreRegistry, VersionedJsonStore
 
 _STORE_FILENAME = "_loop_split.json"
 _STORE_VERSION = 1
@@ -119,83 +110,43 @@ def split_sources(node: ast.For, k: int) -> tuple[str, str]:
     return ast.unparse(head), ast.unparse(tail)
 
 
-class LoopSplitStore:
+class LoopSplitStore(VersionedJsonStore[int]):
     """Persisted ``source_hash -> k`` verdicts, read by both sides.
 
     Mirrors ``statement/miss_guard.py``: loaded lazily once per session,
-    written only when a verdict is added, atomic via ``os.replace``, and
-    best-effort throughout -- a missing, unreadable, corrupt or
+    written only when a verdict is added, and best-effort throughout (see
+    :mod:`.versioned_json_store`) -- a missing, unreadable, corrupt or
     future-versioned store leaves it empty, which means "no loop is split",
     which is exactly the pre-split behaviour. The failure mode must be "no
     optimisation", never "wrong answer".
     """
 
-    def __init__(self, cache_dir: str | None) -> None:
-        self._path = os.path.join(cache_dir, _STORE_FILENAME) if cache_dir else None
-        self._splits: dict[str, int] = {}
-        self._loaded = False
+    FILENAME = _STORE_FILENAME
+    VERSION = _STORE_VERSION
+    FIELD = "splits"
+    LOG_TAG = "LOOP_SPLIT"
 
-    def _ensure_loaded(self) -> None:
-        if self._loaded:
-            return
-        self._loaded = True
-        if not self._path:
-            return
-        try:
-            with open(self._path, encoding="utf-8") as fh:
-                doc = json.load(fh)
-        except (OSError, ValueError):
-            logger.debug("[LOOP_SPLIT] no readable store at %s", self._path)
-            return
-        if not isinstance(doc, dict) or doc.get("version") != _STORE_VERSION:
-            return
-        splits = doc.get("splits")
-        if not isinstance(splits, dict):
-            return
-        for source_hash, k in splits.items():
-            if isinstance(source_hash, str) and isinstance(k, int) and k > 0:
-                self._splits[source_hash] = k
+    def _load_value(self, value: object) -> int | None:
+        return value if isinstance(value, int) and value > 0 else None
 
     def get(self, source_hash: str) -> int | None:
         """The persisted ``k`` for this loop, or ``None`` if it is not split."""
         self._ensure_loaded()
-        return self._splits.get(source_hash)
+        return self._items.get(source_hash)
 
     def record(self, source_hash: str, k: int) -> None:
         """Persist a split verdict. No-op if one already exists.
 
         Never rewrites: a ``k`` that moved between runs would change the
         tail's source and therefore its key, which is the failure this store
-        exists to prevent.
+        exists to prevent. A verdict that cannot be written stays in memory
+        for this session; the next one does not split the loop.
         """
         self._ensure_loaded()
-        if source_hash in self._splits:
+        if source_hash in self._items:
             return
-        self._splits[source_hash] = k
-        self._persist()
-
-    def _persist(self) -> None:
-        if not self._path:
-            return
-        doc = {"version": _STORE_VERSION, "splits": dict(sorted(self._splits.items()))}
-        tmp_path = f"{self._path}.{os.getpid()}.tmp"
-        try:
-            recreate_cache_dir(os.path.dirname(self._path))
-            with open(tmp_path, "w", encoding="utf-8") as fh:
-                json.dump(doc, fh)
-            # Not a bare os.replace: on Windows the call is DENIED, not
-            # delayed, while any handle has the destination open -- and the
-            # except below swallows that at debug level, so the verdict
-            # vanished from disk while staying in memory. The next session
-            # then loads a store without it, does not split the loop, and
-            # keys the tail differently: a cache miss and a real recompute,
-            # which is precisely what this store exists to prevent. Measured
-            # susceptible with a single reader handle held open (#74).
-            replace_with_retry(tmp_path, self._path)
-        except OSError:
-            logger.debug("[LOOP_SPLIT] could not persist to %s", self._path)
-            with contextlib.suppress(OSError):
-                os.unlink(tmp_path)
+        self._items[source_hash] = k
+        self._write()
 
 
 # One store per cache dir, process-wide.
@@ -206,32 +157,23 @@ class LoopSplitStore:
 # earlier and already marked loaded, never sees it. The runtime would then be
 # recording a split the simulator does not apply. Sharing the instance makes
 # "recorded" mean the same thing on both sides at the same instant.
-_STORES: dict[str | None, LoopSplitStore] = {}
+_STORES: StoreRegistry[LoopSplitStore] = StoreRegistry(LoopSplitStore)
 
 
 def get_store(cache_dir: str | None) -> LoopSplitStore:
     """The shared :class:`LoopSplitStore` for *cache_dir*."""
-    store = _STORES.get(cache_dir)
-    if store is None:
-        store = LoopSplitStore(cache_dir)
-        _STORES[cache_dir] = store
-    return store
+    return _STORES.get(cache_dir)
 
 
 def store_for_backend(backend) -> LoopSplitStore | None:
     """Shared store for *backend*'s cache dir, or ``None`` if unresolvable.
 
     The one place both sides resolve a store, so they cannot disagree about
-    which directory they are reading. Returns ``None`` rather than raising:
-    an unresolvable store means "no loop is split".
+    which directory they are reading. ``None`` means "no loop is split".
     """
-    try:
-        return get_store(resolve_cache_dir(backend))
-    except Exception:  # noqa: BLE001 - splitting is an optimisation
-        logger.debug("[LOOP_SPLIT] could not resolve a store", exc_info=True)
-        return None
+    return _STORES.for_backend(backend)
 
 
 def _reset_stores_for_tests() -> None:
     """Drop cached stores. Tests only -- each tmp_path is a fresh session."""
-    _STORES.clear()
+    _STORES.reset()
