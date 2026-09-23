@@ -58,9 +58,10 @@ A test that passes against unfixed source is not evidence. It is a green
 checkmark with nothing behind it.
 
 [`scripts/fails_first.py`](https://github.com/galgtonold/cash/blob/main/scripts/fails_first.py)
-exists to catch that: it stashes the fix, runs the new test against the
-*unfixed* source, restores, and reports which tests failed. A test that passes
-there is vacuously green and gets rewritten.
+exists to catch that: it runs the new test against the *unfixed* source (the
+last commit, checked out into a temporary worktree next to your changed tests)
+and reports which tests failed. A test that passes there is vacuously green and
+gets rewritten.
 
 Its docstring enumerates four ways a test can be vacuously green — **all four of
 which have actually shipped in this repository**:

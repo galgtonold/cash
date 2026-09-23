@@ -185,7 +185,7 @@ features, feature pairs or step sequences per second of runtime, and writes
 1. Run the unit tests for the area you touched (`pytest tests/test_notebook/` for notebook work).
 2. Run the relevant integration tests, chosen as above.
 3. Show that a new test fails without the fix: `python scripts/fails_first.py <test file>`.
-   It stashes `src/`, runs the tests and fails if they pass anyway. Common ways a
+   It runs the tests against the last commit's `src/` in a temporary worktree and fails if any pass anyway. Common ways a
    test passes vacuously: the mechanism never engages (a cached function faster
    than the persistence floor is never written to disk; sleep
    `tests.conftest.ABOVE_PERSISTENCE_FLOOR_S`), empty input satisfies the
