@@ -86,20 +86,22 @@ def test_the_main_process_is_not_a_child():
     assert in_multiprocessing_child() is False
 
 
-def _report(q):
+@pytest.mark.timeout(120)
+def test_a_worker_process_is_one():
+    """A spawned worker answers True.
+
+    The worker runs cash's own function, so all it imports is cash: not this
+    module, which would drag pytest and numpy into a fresh interpreter. An
+    executor rather than a bare Process and a queue, so a worker that dies or
+    raises fails the test at once with its error instead of leaving the parent
+    waiting on a queue that will never fill. The timeout covers starting an
+    interpreter on a loaded machine, which alone took several seconds when
+    many test workers started one at once; the suite-wide 30 s did not.
+    """
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+
     from cash.backends._writes import in_multiprocessing_child
 
-    q.put(in_multiprocessing_child())
-
-
-def test_a_worker_process_is_one():
-    import multiprocessing as mp
-
-    ctx = mp.get_context("spawn")
-    q = ctx.Queue()
-    p = ctx.Process(target=_report, args=(q,))
-    p.start()
-    try:
-        assert q.get(timeout=60) is True
-    finally:
-        p.join(timeout=60)
+    with ProcessPoolExecutor(max_workers=1, mp_context=mp.get_context("spawn")) as pool:
+        assert pool.submit(in_multiprocessing_child).result(timeout=110) is True
