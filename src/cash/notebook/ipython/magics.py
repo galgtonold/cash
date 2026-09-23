@@ -176,6 +176,22 @@ class CashSession:
         self.baselines: Any = compute_baselines.get_store(None)
 
 
+def _is_silent(args: tuple, kwargs: dict) -> bool:
+    """Whether ``run_cell(raw_cell, store_history, silent, ...)`` was asked to be silent.
+
+    A frontend sends ``silent=True`` for code of its own -- a variable
+    explorer's query, a coverage or profiling hook -- never for a cell the
+    user runs, and Jupyter's protocol has it run "as quietly as possible".
+    Put through cash, such code was treated as a cell below the notebook:
+    its names were given lineage (a test tool's ``_cov`` and ``_cov_mod``,
+    deleted by the same code, stayed in it) and its statements were cached
+    and planned against the notebook's cells. It runs as plain IPython.
+    """
+    if "silent" in kwargs:
+        return bool(kwargs["silent"])
+    return len(args) >= 2 and bool(args[1])
+
+
 @magics_class
 class CashMagics(CashAdminMagicsMixin, Magics):
     def __init__(self, shell: ShellProtocol, cash_instance: Cash) -> None:
@@ -1102,7 +1118,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             self._in_sync_cell = prev_in_sync
 
     def _execute_cell_inner(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
-        if not self._auto_cache_enabled:
+        if not self._auto_cache_enabled or _is_silent(args, kwargs):
             return self._original_run_cell(raw_cell, *args, **kwargs)
 
         try:
@@ -1166,7 +1182,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # RE-ENTRANT one that IPython's sync ``run_cell`` makes internally
         # (guarded by ``_in_sync_cell``). Doing cash work here would
         # double-run the pipeline / double-fire events for the sync cell.
-        if not self._auto_cache_enabled or self._in_sync_cell:
+        if not self._auto_cache_enabled or self._in_sync_cell or _is_silent(args, kwargs):
             return await self._original_run_cell_async(raw_cell, *args, **kwargs)
 
         # Raise the re-entrancy guard for the whole async execution: the
