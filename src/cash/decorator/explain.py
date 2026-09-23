@@ -234,8 +234,9 @@ def describe_file_deps(deps: dict[str, Any] | None) -> dict[str, str]:
 
 def is_sampled_dep(rec: Any) -> bool:
     """Was this file fingerprinted by sampling (larger than
-    ``file_hash_full_max_bytes``)? Only such snapshots record a ctime."""
-    return isinstance(rec, dict) and ("ctime_ns" in rec or "ctime" in rec)
+    ``file_hash_full_max_bytes``)? The snapshot says so itself: every
+    snapshot records a ctime now, so its presence says nothing."""
+    return isinstance(rec, dict) and rec.get("sampled") is True
 
 
 def describe_state_change(old: dict[str, str], new: dict[str, str]) -> str | None:
