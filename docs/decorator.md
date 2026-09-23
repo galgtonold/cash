@@ -197,7 +197,7 @@ The id in brackets is the one `cash inspect --function` lists and
 `CASH_VERBOSE=1` or `verbose = true` give these lines without the other debug
 records.
 
-<!-- claim: cash/core.py:Cash._absent_entry_reason @63fb8844, cash/core.py:Cash._remember_ram_only @17341e53 -->
+<!-- claim: cash/decorator/explain.py:ExplainMixin._absent_entry_reason @63fb8844, cash/decorator/stored_keys.py:StoredKeysMixin._remember_ram_only @17341e53 -->
 A reason is not limited to what this process saw: each function's recently
 stored keys are recorded beside the cache (in `.keys/`), so the first call of a
 new run can still say that the code changed, that the arguments are new, that
@@ -209,7 +209,7 @@ arguments new. After a code edit, every call says `code or state changed`, not
 just the first — including after a changed parameter default, which moves the
 arguments as well because they are keyed with defaults applied.
 
-<!-- claim: cash/decorator/explain.py:describe_state_change @7b3bcda1, cash/core.py:Cash._flat_ledger @cd04a090 -->
+<!-- claim: cash/decorator/explain.py:describe_state_change @7b3bcda1, cash/decorator/explain.py:ExplainMixin._flat_ledger @cd04a090 -->
 After `--` it says *what* changed: `its own source changed`, `global
 THRESHOLD changed`, `helper model._rank changed`, `cached function
 model.load changed`, `environment variable TENANT changed`, `it now uses
@@ -829,7 +829,7 @@ After the TTL elapses, the next call recomputes and replaces the entry.
 Entries whose calls never come back stay on disk until you reclaim them —
 call `cash.cleanup()`, or run `python -m cash clear` from the CLI.
 
-<!-- claim: cash/core.py:Cash._entry_ttl @4df547f6, cash/core.py:Cash._absent_entry_reason @63fb8844 -->
+<!-- claim: cash/core.py:Cash._entry_ttl @4df547f6, cash/decorator/explain.py:ExplainMixin._absent_entry_reason @63fb8844 -->
 An entry remembers the `ttl` it was written with, and the decorator's
 current `ttl` applies too, so the **shorter** of the two wins. Lengthening
 `ttl=60` to `ttl=3600` does not rescue entries already written under 60 s:
@@ -1240,7 +1240,7 @@ dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/core.py:Cash._explain_call @2a140859 -->
+<!-- claim: cash/decorator/explain.py:ExplainMixin._explain_call @2a140859 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 

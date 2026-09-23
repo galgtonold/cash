@@ -169,7 +169,7 @@ The warning text reads:
 
 A transiently failing resolver (e.g. a temporary `OSError`) therefore does not break your pipeline, and it never widens the cache either: without the dependency there is no key that could be trusted, so the call pays full compute until the resolver works again.
 
-<!-- claim: cash/core.py:Cash._explain_call @2a140859 -->
+<!-- claim: cash/decorator/explain.py:ExplainMixin._explain_call @2a140859 -->
 `f.explain()` builds the key with the same code a real call uses (`Cash._build_key`), with its warnings held back, so introspection never emits warnings as a side effect. A resolver the real call would refuse gives a `CacheExplanation` with `reason='key_uncomputable'` and the reason in `details`.
 
 ## Performance

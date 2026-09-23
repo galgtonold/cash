@@ -5,8 +5,18 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+from ..backends import CacheMetadata
+from ..backends._base import ttl_expired
+from ..data_source import DataSource
+from ..dependency_state import EXPLAINING as _EXPLAINING
+from ..tracking.file_dep_snapshot import dep_is_fresh, dep_path_for_this_process
+from .arg_hashing import unhashable_arg_fix
+from .call_state import PROCESS_STARTED, KeyBuildFailed, UnhashableArgs, UnhashableDefault
 
 # Reason codes returned by `Cash._explain_call` / ``f.explain(...)``.
 # Kept as module-level constants so external code can match against them
@@ -249,3 +259,474 @@ def describe_state_change(old: dict[str, str], new: dict[str, str]) -> str | Non
 def entry_id_of(cache_key: str) -> str:
     """The id `cash inspect` and `cash clear --entry` use for *cache_key*."""
     return hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:12]
+
+
+class ExplainMixin:
+    """``f.explain()`` and the reason recorded for each miss."""
+
+    def _explain_call(
+        self,
+        func: Callable,
+        func_name: str,
+        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
+        ttl: int | None,
+        args: tuple,
+        kwargs: dict,
+    ) -> CacheExplanation:
+        """Return why a call with these args would hit or miss the cache.
+
+        Pure introspection - does NOT call ``func``, does NOT touch
+        `Cash` stats, does NOT emit warnings, and does NOT
+        mutate the backend. The key comes from `_build_key`, the same
+        build a real call uses, and the entry is judged by the rules
+        `_try_get_cached` applies, so the answer reflects what would
+        actually happen on the next real call.
+
+        See `CacheExplanation` for the return shape.
+        """
+        if self.config.disable:
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_DISABLED,
+                func_name=func_name,
+                details={"hint": "Caching is disabled (disable=True / CASH_DISABLE): every call runs the function."},
+            )
+        # Populate the dependency closure first so the state hash matches what
+        # a real call computes (otherwise explain() reports a stale pre-analysis
+        # key and a false `no_entry` - finding #7). This only fills internal
+        # analysis caches; it does not warn, run the function, or touch the
+        # backend.
+        self._ensure_closure_analyzed(func)
+        # Same binding check a real call makes first: a patched helper
+        # changes the key, and a mock means the call would run uncached.
+        unkeyable = self._refresh_helper_bindings(func, func_name)
+        if unkeyable is not None:
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_KEY_UNCOMPUTABLE,
+                func_name=func_name,
+                details={
+                    "error": MISS_MOCKED,
+                    "hint": f"{unkeyable}, which has no code to key, so the call would run uncached.",
+                },
+            )
+
+        # The key a real call builds, built the same way, with every warning
+        # a step would give held back: explain() must stay silent.
+        token = _EXPLAINING.set(True)
+        try:
+            built = self._build_key(func, func_name, dynamic_depends_on, args, kwargs)
+        except UnhashableDefault:
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_KEY_UNCOMPUTABLE,
+                func_name=func_name,
+                details={
+                    "error": "unhashable parameter default",
+                    "hint": (
+                        "A parameter default could not be hashed, so cash "
+                        "cannot detect a change to it and will not cache "
+                        "this call."
+                    ),
+                },
+            )
+        except UnhashableArgs:
+            arg_type_name = self._first_unhashable_arg_type(args, kwargs)
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_KEY_UNCOMPUTABLE,
+                func_name=func_name,
+                details={
+                    "arg_type": arg_type_name,
+                    "hint": (
+                        unhashable_arg_fix(self._first_unhashable_arg(args, kwargs), arg_type_name)
+                        if arg_type_name != "<unknown>"
+                        else "Could not identify the offending argument; likely a nested unpicklable value."
+                    ),
+                },
+            )
+        except KeyBuildFailed as e:
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_KEY_UNCOMPUTABLE,
+                func_name=func_name,
+                details={"error": e.code, "hint": f"{e.message} {e.fix}"},
+            )
+        except Exception as e:  # noqa: BLE001 - explain() reports, never raises
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_KEY_UNCOMPUTABLE,
+                func_name=func_name,
+                details={
+                    "error": f"{type(e).__name__}: {e}",
+                    "hint": "Building the cache key raised, so the call would run uncached.",
+                },
+            )
+        finally:
+            _EXPLAINING.reset(token)
+        cache_key = built.cache_key
+        frozen_args = self._frozen_arg_names(built.normalized_args)
+
+        # Looking, not reading: `get` would count this as a use (USES / LAST
+        # USED in `cash inspect`) and make the file backend rewrite the entry.
+        raw_metadata = self.backend.peek_metadata(cache_key)
+        if raw_metadata is not None and raw_metadata.get("metadata_only"):
+            raw_metadata = None  # nothing to restore: a real call misses
+        if raw_metadata is None:
+            details = {
+                "hint": ("No matching cache entry. First call with these arguments, or the cache was cleared."),
+            }
+            # A tracked dynamic dependency that changed produces a NEW cache key,
+            # so the miss surfaces as no_entry rather than file_changed. Make the
+            # explanation say so and list what's tracked (finding #8).
+            dyn_ids = self._describe_dynamic_dependencies(dynamic_depends_on, args, kwargs)
+            if dyn_ids:
+                details["dynamic_dependencies"] = dyn_ids
+                details["hint"] = (
+                    "No matching cache entry. Either the first call with these "
+                    "arguments, or a tracked dynamic dependency changed - a "
+                    "dynamic_depends_on change yields a new cache key, so it "
+                    "shows up here as no_entry, not file_changed. Tracked "
+                    "dynamic dependencies: " + ", ".join(dyn_ids) + "."
+                )
+            # What this process knows about the key says more than "first call
+            # or cleared": that it was never stored, why, or that it expired
+            # under the ttl it was WRITTEN with -- which a backend drops on
+            # read, so the entry looks absent (round 17).
+            kind, why = self._absent_entry_reason(func_name, cache_key)
+            if kind == MISS_TTL:
+                return CacheExplanation(
+                    would_hit=False,
+                    reason=EXPLAIN_TTL_EXPIRED,
+                    func_name=func_name,
+                    cache_key=cache_key,
+                    details={"why": why},
+                )
+            details["why"] = f"{kind}: {why}"
+            if kind != MISS_FIRST and "dynamic_dependencies" not in details:
+                del details["hint"]  # the generic guess, now that we know
+            if frozen_args:
+                details["frozen_args"] = frozen_args
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_NO_ENTRY,
+                func_name=func_name,
+                cache_key=cache_key,
+                details=details,
+            )
+
+        metadata = CacheMetadata.from_dict(raw_metadata)
+
+        # TTL check - the same rule `_try_get_cached` applies.
+        ttl = self._entry_ttl(ttl, metadata)
+        if ttl_expired(metadata.timestamp, ttl):
+            timestamp = metadata.timestamp or 0
+            age = time.time() - timestamp
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_TTL_EXPIRED,
+                func_name=func_name,
+                cache_key=cache_key,
+                details={
+                    "ttl_seconds": ttl,
+                    "age_seconds": age,
+                    "cached_at": timestamp,
+                },
+            )
+
+        # Auto-tracked file deps freshness. Routed through the SAME
+        # content-authoritative helper a real lookup uses - comparing
+        # raw mtime/size here made explain() report file_changed / 'mtime
+        # changed' after a touch while the actual call hit. A diagnostic that
+        # contradicts the behavior it describes is worse than none.
+        if metadata.auto_file_deps:
+            stale = self._stale_file_deps(metadata)
+            if stale:
+                return CacheExplanation(
+                    would_hit=False,
+                    reason=EXPLAIN_FILE_CHANGED,
+                    func_name=func_name,
+                    cache_key=cache_key,
+                    details={"changed_files": stale, "file_deps": describe_file_deps(metadata.auto_file_deps)},
+                )
+
+        timestamp = metadata.timestamp or 0
+        details = {
+            "cached_at": timestamp,
+            "cache_age_seconds": time.time() - timestamp if timestamp else None,
+            "execution_time_saved": metadata.execution_time or 0.0,
+        }
+        if metadata.auto_file_deps:
+            details["file_deps"] = describe_file_deps(metadata.auto_file_deps)
+        if frozen_args:
+            details["frozen_args"] = frozen_args
+        return CacheExplanation(
+            would_hit=True,
+            reason=EXPLAIN_HIT,
+            func_name=func_name,
+            cache_key=cache_key,
+            details=details,
+        )
+
+    def _describe_dynamic_dependencies(
+        self,
+        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
+        args: tuple,
+        kwargs: dict,
+    ) -> list[str]:
+        """Best-effort list of the ``DataSource`` ids a function's
+        ``dynamic_depends_on`` resolves to for these args - so ``explain()`` can
+        report *what* is being tracked. Returns ``[]`` when there are none or
+        resolution fails (introspection must never raise)."""
+        if not dynamic_depends_on:
+            return []
+        resolvers = dynamic_depends_on if isinstance(dynamic_depends_on, list) else [dynamic_depends_on]
+        ids: list[str] = []
+        for resolver in resolvers:
+            try:
+                ds_result = resolver(*args, **kwargs)
+            except Exception:  # noqa: BLE001 - explain() is best-effort
+                continue
+            dss = ds_result if isinstance(ds_result, list) else [ds_result]
+            for ds in dss:
+                if isinstance(ds, DataSource):
+                    try:
+                        ids.append(ds.get_id())
+                    except Exception:  # noqa: BLE001
+                        ids.append(repr(ds))
+        return ids
+
+    def _note_miss(self, func_name: str, cache_key: str, reason: tuple[str, str]) -> None:
+        """Hold *reason* for the `_log_decorator_call` that reports this miss."""
+        if len(self._pending_miss) > STORE_OUTCOMES_MAX:
+            # Only a call that raised leaves one behind; never let those pile up.
+            self._pending_miss.clear()
+        self._pending_miss[cache_key] = reason
+        self._last_key[func_name] = cache_key
+
+    def _absent_entry_reason(self, func_name: str, cache_key: str) -> tuple[str, str]:
+        """Why there is no entry for *cache_key*. Reads state; changes none.
+
+        This process's own history first. With none -- the first call of a
+        function in a fresh process, which is where a script's misses are --
+        the keys earlier runs stored for this function, recorded beside the
+        cache (`_record_stored_key`). Without them every such miss read "no
+        earlier run left one on disk", including after a code edit and a TTL
+        expiry, whose entries were in fact on disk (round 18, all five
+        testers).
+        """
+        outcome = self._store_outcomes.get(cache_key)
+        if outcome is not None:
+            if outcome.get("not_stored"):
+                return MISS_NOT_STORED, outcome["not_stored"]
+            written_ttl = outcome.get("ttl")
+            age = time.time() - outcome.get("stored_at", 0)
+            if ttl_expired(outcome.get("stored_at", 0), written_ttl):
+                return MISS_TTL, f"written {age:.1f}s ago with ttl={written_ttl}s"
+            return MISS_GONE, ("stored earlier in this process and since evicted or cleared")
+        previous = self._last_key.get(func_name)
+        since = "since the last call"
+        doc = self._stored_doc(func_name)
+        record = doc["keys"]
+        if cache_key in record:
+            stored_at, written_ttl = record[cache_key][:2]
+            age = time.time() - stored_at
+            if ttl_expired(stored_at, written_ttl):
+                return MISS_TTL, (f"stored {age:.0f}s ago by an earlier run, with ttl={written_ttl}s")
+            return MISS_GONE, ("an earlier run stored it; it has since been evicted or cleared")
+        if cache_key in doc["ram_only"]:
+            why = doc["ram_only"][cache_key][1]
+            return MISS_NOT_STORED, (
+                f"an earlier run computed it but kept it in RAM only ({why}), so this process recomputed it"
+            )
+        # The same arguments stored under another state: the code or a value
+        # it reads changed. Asked of the record BEFORE the call-to-call
+        # comparison, which after a code edit blamed "new arguments" on every
+        # call of a loop but the first (round 19).
+        new_parts = cache_key.rsplit(":", 3)
+        if len(new_parts) == 4:
+            for key in reversed([*record, *doc["ram_only"]]):
+                old_parts = key.rsplit(":", 3)
+                if len(old_parts) == 4 and old_parts[2:] == new_parts[2:] and old_parts[1] != new_parts[1]:
+                    return MISS_CODE, self._code_changed_detail(
+                        func_name, old_parts[1], new_parts[1], doc, "since an earlier run stored it"
+                    )
+            # Earlier runs stored entries, and none under the state this
+            # process computes: every one of them is out of date, whatever the
+            # arguments. A changed DEFAULT moves the arguments too (they are
+            # keyed with defaults applied), so the match above cannot see it,
+            # and the call-to-call comparison below called 3 of 4 such misses
+            # "new arguments" (round 20).
+            earlier = {
+                key: value
+                for kind in ("keys", "ram_only")
+                for key, value in doc[kind].items()
+                if value and isinstance(value[0], (int, float)) and value[0] < PROCESS_STARTED
+            }
+            states = {key.rsplit(":", 3)[1] for key in earlier if key.count(":") >= 3}
+            if states and new_parts[1] not in states:
+                newest = max(earlier, key=lambda key: earlier[key][0])
+                return MISS_CODE, self._code_changed_detail(
+                    func_name,
+                    newest.rsplit(":", 3)[1],
+                    new_parts[1],
+                    doc,
+                    "since an earlier run stored its entries, so none of them applies",
+                )
+        if previous is None or previous == cache_key:
+            others = [key for key in record if key != cache_key]
+            if previous is None and others:
+                previous = others[-1]
+                since = "since an earlier run stored it"
+            if previous is None or previous == cache_key:
+                return MISS_FIRST, (
+                    "the first call with these arguments in this process, and no earlier run stored one"
+                )
+        # Keys are `func:state:dynamic:args`; the parts that moved say why.
+        old = previous.rsplit(":", 3)
+        new = cache_key.rsplit(":", 3)
+        if len(old) != 4 or len(new) != 4:
+            return MISS_FIRST, "no entry for this key"
+        moved = []
+        what = None
+        if old[1] != new[1]:
+            moved.append((MISS_CODE, f"the function's code, a helper it calls, or a value it reads changed {since}"))
+            what = self._what_changed(func_name, old[1], new[1], doc)
+        if old[2] != new[2]:
+            moved.append((MISS_DYNAMIC, "a dynamic_depends_on source changed"))
+        if old[3] != new[3]:
+            moved.append(
+                (
+                    MISS_ARGS,
+                    "called with arguments not seen "
+                    + ("on the last call" if since == "since the last call" else "in the last run"),
+                )
+            )
+        if not moved:
+            return MISS_FIRST, "no entry for this key"
+        detail = "; and ".join(detail for _, detail in moved)
+        return moved[0][0], detail + (f"{WHAT_CHANGED}{what}" if what else "")
+
+    def _code_changed_detail(self, func_name: str, old_state: str, new_state: str, doc: dict, since: str) -> str:
+        """A "code or state changed" detail, naming what changed when known."""
+        detail = f"the function's code, a helper it calls, or a value it reads changed {since}"
+        what = self._what_changed(func_name, old_state, new_state, doc)
+        return detail + (f"{WHAT_CHANGED}{what}" if what else "")
+
+    def _keep_state_ledger(self, slot: tuple[str, str], ledger: dict) -> None:
+        """Keep the ledger of the first key build that produced this
+        ``(func_name, state)``."""
+        ledgers = self._state_ledgers
+        ledgers[slot] = ledger
+        if len(ledgers) > 512:
+            try:
+                ledgers.pop(next(iter(ledgers)))
+            except (RuntimeError, StopIteration, KeyError):
+                pass  # another thread trimmed it first
+
+    def _flat_ledger(self, func_name: str, state: str, doc: dict | None = None) -> dict[str, str] | None:
+        """``{part: short digest}`` for *state*: this process's ledger, else the record's."""
+        ledger = self._state_ledgers.get((func_name, state))
+        if ledger is None:
+            recorded = (doc or {}).get("states", {}).get(state)
+            return recorded if isinstance(recorded, dict) else None
+
+        def short(value: Any) -> str:
+            return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:10]
+
+        flat: dict[str, str] = {}
+        grouped: dict[str, list] = {}
+        for label, value in list(ledger.items()):
+            if label == "@chain":
+                for i, link in enumerate(value):
+                    flat[f"@{i}"] = short(link)
+            elif label == "source":
+                flat["source"] = short(value)
+            elif isinstance(label, tuple) and label[0] == "globals":
+                via = f" (read by {label[1]})" if label[1] else ""
+                for name, digest in value:
+                    # `X#carried`, `X#cls:C`: more of what global X is.
+                    grouped.setdefault(f"global {name.split('#', 1)[0]}{via}", []).append((name, digest))
+            elif isinstance(label, tuple) and label[0] == "env":
+                # Already worded: "environment variable TENANT".
+                flat[label[1]] = short(value)
+            elif isinstance(label, tuple):
+                kind = "cached function" if label[0] == "calls" else label[0]
+                flat[f"{kind} {label[1]}"] = short(value)
+        for name, parts in grouped.items():
+            flat[name] = short(sorted(parts))
+        return flat
+
+    def _what_changed(self, func_name: str, old_state: str, new_state: str, doc: dict | None = None) -> str | None:
+        """Name what moved between two states of *func_name*, or None if unknown.
+
+        "code or state changed" alone sent every round-20 tester to diff their
+        own edits: a moved helper, an edited constant, a changed default, a
+        path whose case differed by launch mode all read the same.
+        """
+        old = self._flat_ledger(func_name, old_state, doc)
+        new = self._flat_ledger(func_name, new_state, doc)
+        if not old or not new:
+            return None
+        return describe_state_change(old, new)
+
+    @staticmethod
+    def _stale_file_deps(metadata: CacheMetadata) -> dict[str, str]:
+        """``{path: what changed}`` for each recorded dependency that moved.
+
+        The same freshness check a lookup makes, so the answer cannot
+        contradict the behaviour it explains.
+        """
+
+        stale: dict[str, str] = {}
+        seen: set[str] = set()
+        for path, recorded in (metadata.auto_file_deps or {}).items():
+            here = dep_path_for_this_process(path, recorded)
+            same = same_file_key(here)
+            if same in seen:
+                continue
+            resolved, is_fresh, why = dep_is_fresh(path, recorded)
+            if not is_fresh:
+                seen.add(same)
+                stale[resolved or here] = STALE_REASON_TEXT.get(why or "", "changed")
+        return stale
+
+    def _describe_stale_files(self, metadata: CacheMetadata) -> str:
+        stale = self._stale_file_deps(metadata)
+        if not stale:
+            return "a file it read"
+        path, why = next(iter(stale.items()))
+        more = f" and {len(stale) - 1} more" if len(stale) > 1 else ""
+        return f"{path} ({why}){more}"
+
+    def _remember_outcome(self, cache_key: str, outcome: dict[str, Any]) -> None:
+        outcome.setdefault("at", time.time())
+        self._store_outcomes[cache_key] = outcome
+        self._store_outcomes.move_to_end(cache_key)
+        while len(self._store_outcomes) > STORE_OUTCOMES_MAX:
+            self._store_outcomes.popitem(last=False)
+
+    def _note_not_stored(self, cache_key: str, refusal: str) -> None:
+        self._remember_outcome(cache_key, {"not_stored": refusal})
+
+    @staticmethod
+    def _not_persisted_reason(stored_meta: dict[str, Any], execution_time: float) -> str | None:
+        """Why a stored value reached only RAM, or ``None`` if it went further.
+
+        Only a tiered backend says where a value landed; anything else reports
+        nothing, and nothing is claimed.
+        """
+        tiers = stored_meta.get("storage")
+        skipped = stored_meta.get("persist_skipped")
+        if not isinstance(tiers, list) or skipped is None or any(t != "RAM" for t in tiers):
+            return None
+        if skipped == "size":
+            return "too big for the persistent tier's size cap"
+        # There used to be three more answers here: "under the 0.1s
+        # persistence floor", "the cost model judged restoring it no cheaper
+        # than recomputing it", and the rate ceiling's "more cache per second
+        # saved than cash will spend". None can happen to a decorated result:
+        # `@cash.cache` persists what it is given, and only a size cap stops it
+        # (see `TieredBackend.set`). Reporting a floor that no longer applies
+        # would send the reader looking for a setting to change.
+        return None
