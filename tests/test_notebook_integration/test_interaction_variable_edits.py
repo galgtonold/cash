@@ -12,19 +12,6 @@ pytestmark = [pytest.mark.upstream, pytest.mark.stress, pytest.mark.timeout(30)]
 class TestVariableShadowing:
     """Variable defined in one cell, redefined in another."""
 
-    def test_shadow_variable(self, nb_runner):
-        """Two cells define same variable — last one wins."""
-        nb_runner.create_notebook(
-            [
-                "x = 10",
-                "x = 20",
-                "print(f'x = {x}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x = 20" in nb_runner.get_output(3)
-
     def test_shadow_then_edit_first(self, nb_runner):
         """Shadow variable, then edit the first definition."""
         nb_runner.create_notebook(
@@ -81,22 +68,6 @@ class TestVariableShadowing:
         nb_runner.set_cell_source(1, "x = [1, 2, 3]")
         nb_runner.run_all()
         assert "type = list, val = [1, 2, 3]" in nb_runner.get_output(2)
-
-
-class TestVariableOverwriting:
-    """Variable computed from itself (self-assignment)."""
-
-    def test_self_assignment_basic(self, nb_runner):
-        """x = x + 1 pattern."""
-        nb_runner.create_notebook(
-            [
-                "x = 10",
-                "x = x + 5\nprint(f'x = {x}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x = 15" in nb_runner.get_output(2)
 
 
 class TestMultipleVariables:

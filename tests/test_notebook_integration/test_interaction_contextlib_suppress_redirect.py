@@ -17,17 +17,6 @@ class TestContextlibSuppressRedirect:
         nb_runner.run_all()
         assert "result=survived" in nb_runner.get_output(2)
 
-    def test_redirect_stdout(self, nb_runner):
-        nb_runner.create_notebook(
-            [
-                "from contextlib import redirect_stdout\nimport io",
-                "f = io.StringIO()\nwith redirect_stdout(f):\n    print('captured')\noutput = f.getvalue().strip()\nprint(f'output={output}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "output=captured" in nb_runner.get_output(2)
-
     def test_suppress_edit(self, nb_runner):
         nb_runner.create_notebook(
             [

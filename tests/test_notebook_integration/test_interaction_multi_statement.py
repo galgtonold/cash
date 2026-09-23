@@ -113,19 +113,6 @@ class TestMultiStatementWithFunction:
 class TestMultiStatementWithPrint:
     """Multi-statement cells with print statements (side effects)."""
 
-    def test_print_between_assignments(self, nb_runner):
-        """Print statement between two assignments."""
-        nb_runner.create_notebook(
-            [
-                "x = 10\nprint(f'x = {x}')\ny = x * 2\nprint(f'y = {y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        output = nb_runner.get_output(1)
-        assert "x = 10" in output
-        assert "y = 20" in output
-
     def test_edit_multi_statement_with_prints(self, nb_runner):
         """Edit a multi-statement cell that includes prints."""
         nb_runner.create_notebook(

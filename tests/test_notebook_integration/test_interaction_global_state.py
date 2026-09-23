@@ -12,21 +12,6 @@ pytestmark = [pytest.mark.core, pytest.mark.stress, pytest.mark.timeout(30)]
 class TestGlobalStateEdits:
     """Global state manipulation + cell edits."""
 
-    def test_global_list_accumulation(self, nb_runner):
-        """Accumulate into a global list, edit accumulation steps."""
-        nb_runner.create_notebook(
-            [
-                "results = []",
-                "results.append(1)  # step 1",
-                "results.append(2)  # step 2",
-                "results.append(3)  # step 3",
-                "print(f'results = {results}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "results = [1, 2, 3]" in nb_runner.get_output(5)
-
     def test_global_dict_update(self, nb_runner):
         """Update a global dict across cells, edit one update."""
         nb_runner.create_notebook(

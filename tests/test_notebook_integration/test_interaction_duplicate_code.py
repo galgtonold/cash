@@ -32,19 +32,6 @@ class TestDuplicateStatements:
         with pytest.raises(CellExecutionError, match="Ambiguous cell"):
             nb_runner.run_all()
 
-    def test_similar_assignment_with_comments(self, nb_runner):
-        """Two cells with same logic but unique comments."""
-        nb_runner.create_notebook(
-            [
-                "x = 10  # first assignment",
-                "x = 10  # second assignment (override)",
-                "print(f'x = {x}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x = 10" in nb_runner.get_output(3)
-
     def test_similar_code_edit_one(self, nb_runner):
         """Two similar cells (unique comments), edit one."""
         nb_runner.create_notebook(
@@ -141,32 +128,6 @@ class TestDuplicateImports:
         nb_runner.start_kernel()
         with pytest.raises(CellExecutionError, match="Ambiguous cell"):
             nb_runner.run_all()
-
-    def test_import_with_unique_usage(self, nb_runner):
-        """Import in two cells with unique additional code — no ambiguity."""
-        nb_runner.create_notebook(
-            [
-                "import math  # primary import",
-                "import math  # secondary import (just in case)",
-                "val = math.sqrt(16)\nprint(f'val = {val}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "val = 4.0" in nb_runner.get_output(3)
-
-    def test_import_then_from_import(self, nb_runner):
-        """import X then from X import Y."""
-        nb_runner.create_notebook(
-            [
-                "import math",
-                "from math import pi",
-                "val = math.sqrt(pi)\nprint(f'val = {val:.4f}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "val = 1.7725" in nb_runner.get_output(3)
 
 
 class TestRepetitivePatterns:

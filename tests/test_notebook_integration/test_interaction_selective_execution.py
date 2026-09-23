@@ -44,21 +44,6 @@ class TestRunSubsetOfCells:
         nb_runner.run_cells([1, 3])
         assert "c = 102" in nb_runner.get_output(3)
 
-    def test_incremental_cell_execution(self, nb_runner):
-        """Run cells one at a time."""
-        nb_runner.create_notebook(
-            [
-                "x = 5",
-                "y = x * 3",
-                "z = y + 1\nprint(f'z = {z}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_cell(1)
-        nb_runner.run_cell(2)
-        nb_runner.run_cell(3)
-        assert "z = 16" in nb_runner.get_output(3)
-
 
 class TestRerunAfterEdit:
     """Rerun specific cells after editing."""

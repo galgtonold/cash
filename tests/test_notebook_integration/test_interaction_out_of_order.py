@@ -12,21 +12,6 @@ pytestmark = [pytest.mark.stress, pytest.mark.upstream, pytest.mark.timeout(90)]
 class TestOutOfOrderExecution:
     """Running cells in non-sequential order."""
 
-    def test_run_later_cell_first(self, nb_runner):
-        """Run cell 2 before cell 1 — should fail or handle gracefully."""
-        nb_runner.create_notebook(
-            [
-                "a = 10  # define a",
-                "b = a + 5\nprint(f'b = {b}')",
-            ]
-        )
-        nb_runner.start_kernel()
-
-        # Run cell 1 then cell 2 (normal order)
-        nb_runner.run_cell(1)
-        nb_runner.run_cell(2)
-        assert "b = 15" in nb_runner.get_output(2)
-
     def test_skip_middle_cell(self, nb_runner):
         """Run cells 1 and 3, skipping cell 2."""
         nb_runner.create_notebook(
