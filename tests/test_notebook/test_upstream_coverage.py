@@ -23,6 +23,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from cash.notebook._protocols import TrackingState
+from cash.notebook.file_dep_snapshot import snapshot_file_deps
 from cash.notebook.upstream import UpstreamChecker
 from cash.notebook.upstream.virtual_lineage import VirtualLineage
 
@@ -258,20 +259,18 @@ class TestCheckFileDepsForRestore:
         f = tmp_path / "data.csv"
         f.write_text("content")
         checker = _make_checker()
-        mtime = os.path.getmtime(str(f))
         result = checker.simulator._virtual_lineage._check_file_deps_for_restore(
-            {str(f): {"mtime": mtime}}, time.time()
+            snapshot_file_deps({str(f)}), time.time()
         )
         assert result is None  # None means all fresh
 
     def test_stale_file(self, tmp_path):
         f = tmp_path / "data.csv"
         f.write_text("content")
+        snapshot = snapshot_file_deps({str(f)})
+        f.write_text("changed content")
         checker = _make_checker()
-        result = checker.simulator._virtual_lineage._check_file_deps_for_restore(
-            {str(f): {"mtime": 0.0}},
-            time.time(),  # old mtime → stale
-        )
+        result = checker.simulator._virtual_lineage._check_file_deps_for_restore(snapshot, time.time())
         assert result is not None  # Tuple means failure
         assert isinstance(result, tuple)
 

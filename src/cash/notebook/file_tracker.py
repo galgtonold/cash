@@ -401,7 +401,7 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
 
 #: Path segments that belong to cash's OWN storage, never to the user's data.
 #:
-#: A cache HIT reads the entry's ``.data`` file to deserialise it, and that read
+#: A cache HIT reads the ``.entry`` file to deserialise it, and that read
 #: happens inside the enclosing statement's tracker window -- so without this
 #: guard the statement acquires a dependency on a cash-internal file. The
 #: consequence is not a stale value but an UNSTABLE LINEAGE: the dependency
@@ -439,9 +439,7 @@ _CASH_CACHE_DIRS_LOCK = threading.Lock()
 #: bug this guard exists to prevent. A missed dependency serves a stale value
 #: silently; an extra one only costs a recompute.
 _CASH_FILE_SUFFIXES: tuple[str, ...] = (
-    ".entry",  # one file per entry (format v2)
-    ".meta",
-    ".data",  # the pair entries were stored as before v2
+    ".entry",  # one file per entry
     ".part",  # a write still in flight
     ".db",
     ".db-wal",

@@ -52,7 +52,6 @@ __all__ = [
     "snapshot_absent_deps",
     "snapshot_dependencies",
     "existing_file_deps",
-    "split_file_dep_value",
     "file_content_hash",
     "file_dep_is_fresh",
 ]
@@ -461,8 +460,6 @@ def snapshot_file_deps(
         # other under the same path (CAS-108).
         entry["dev"], entry["ino"] = st.st_dev, st.st_ino
         entry["sampled"] = st.st_size > full_hash_max
-        if entry["sampled"]:
-            entry["ctime"] = st.st_ctime
         snapshot[f] = entry
     return snapshot
 
@@ -579,29 +576,10 @@ def existing_file_deps(paths: Iterable[str]) -> list[str]:
     return sorted({p for p in paths if os.path.exists(p)})
 
 
-def split_file_dep_value(value: dict[str, Any]) -> tuple[float, int | None]:
-    """Return ``(mtime, size_or_None)`` from a file-dep snapshot dict.
-
-    Snapshots are written as ``{'mtime': float, 'size': int, 'hash': str}``;
-    ``size`` may be absent for callers that only record mtime, in which case
-    the size check is skipped downstream. ``hash`` is read separately by
-    :func:`file_dep_is_fresh`.
-    """
-    return float(value.get("mtime", 0.0)), value.get("size")
-
-
-#: How far two timestamps may differ and still count as the same one, for a
-#: snapshot that recorded only the float seconds. Inherited from the
-#: pre-content-hash check, where it absorbed storage jitter across a whole
-#: comparison; it is FOUR ORDERS OF MAGNITUDE wider than any filesystem's
-#: resolution, so a snapshot carrying integer nanoseconds does not use it.
-_LEGACY_TIMESTAMP_TOLERANCE_SECONDS = 0.01
-
-
-def _timestamps_match(st: os.stat_result, stored: Any, field: str) -> bool:
+def _timestamps_match(st: os.stat_result, stored: dict[str, Any], field: str) -> bool:
     """Did *field* (``mtime`` / ``ctime``) stay put since the snapshot?
 
-    Exact on the integer nanoseconds when the snapshot recorded them, because
+    Exact on the integer nanoseconds, because
     this is the SAMPLED regime's backstop: the hash covers three regions of
     the file, so an interior edit is caught by the timestamp or not at all,
     and a tolerance is a window the edit can sit inside. Measured on a 65 MiB
@@ -618,22 +596,11 @@ def _timestamps_match(st: os.stat_result, stored: Any, field: str) -> bool:
     the answer there is to stay under ``file_hash_full_max_bytes`` so the
     content hash decides and timestamps are never consulted.
 
-    Falls back to the tolerance for a snapshot written before this was
-    recorded, so existing entries keep their meaning rather than invalidating
-    en masse on upgrade.
+    A snapshot without the nanoseconds cannot prove the file unchanged, so it
+    does not match.
     """
-    if not isinstance(stored, dict):
-        return True
     stored_ns = stored.get(f"{field}_ns")
-    if stored_ns is not None:
-        live_ns = getattr(st, f"st_{field}_ns", None)
-        if live_ns is not None:
-            return live_ns == stored_ns
-    stored_seconds = stored.get(field)
-    if stored_seconds is None:
-        return True
-    live = getattr(st, f"st_{field}")
-    return abs(live - stored_seconds) <= _LEGACY_TIMESTAMP_TOLERANCE_SECONDS
+    return stored_ns is not None and getattr(st, f"st_{field}_ns", None) == stored_ns
 
 
 #: A directory holding at least this many of one lookup's dependencies is read
@@ -703,10 +670,9 @@ def _unchanged_since_hashed(st: os.stat_result, stored: dict[str, Any]) -> bool:
     moved: a ``touch`` or a byte-identical re-download stays fresh.
     """
     hashed_at = stored.get("hashed_at")
-    mtime_ns = stored.get("mtime_ns")
-    if hashed_at is None or mtime_ns is None:
-        return False  # written before this was recorded: the digest decides
-    if st.st_mtime_ns != mtime_ns:
+    if hashed_at is None:
+        return False  # the tracker did not note when it hashed: the digest decides
+    if st.st_mtime_ns != stored.get("mtime_ns"):
         return False
     # The same file, where the stat says which: a directory listing's does not
     # (``st_ino`` 0), and that is the cost of taking one listing for thousands
@@ -736,9 +702,9 @@ def file_dep_is_fresh(
     (``_unchanged_since_hashed``). Otherwise, when a content hash was recorded,
     the content hash is authoritative: equal content is FRESH even if the mtime
     moved (touch), and differing content is STALE even if the mtime
-    is indistinguishable (same-size quick edit). Snapshots written
-    before content hashing (no ``hash`` key) fall back to the old mtime
-    tolerance so pre-existing cache entries keep working.
+    is indistinguishable (same-size quick edit). A snapshot with no ``hash``
+    (the file could not be read when it was taken) is fresh only while its
+    mtime is unchanged to the nanosecond.
 
     **Sampled-file backstop.** For files larger than ``_full_hash_max_bytes()``
     the content hash only covers three fixed head/middle/tail regions (see
@@ -760,9 +726,9 @@ def file_dep_is_fresh(
     "path" is a URL, so there is nothing to stat, and the store's own validator
     answers the question instead.
     """
-    if isinstance(stored, dict) and stored.get(_REMOTE_MARKER):
+    if stored.get(_REMOTE_MARKER):
         return remote_dep_is_fresh(resolved_path, stored)
-    if isinstance(stored, dict) and stored.get(_ABSENT_MARKER):
+    if stored.get(_ABSENT_MARKER):
         # The call ran with this path missing. It is fresh for exactly as long
         # as the path is still missing; a file that has appeared is a changed
         # input, whether it appeared because someone created it or because the
@@ -771,8 +737,8 @@ def file_dep_is_fresh(
             return (not os.path.exists(resolved_path)), "appeared"
         except (OSError, ValueError):
             return False, "appeared"
-    stored_mtime, stored_size = split_file_dep_value(stored)
-    stored_hash = stored.get("hash") if isinstance(stored, dict) else None
+    stored_size = stored.get("size")
+    stored_hash = stored.get("hash")
     if full_hash_max is None and listed is not None:
         full_hash_max = _full_hash_max_bytes()
     # A listed stat (``stats_from_listings``) stands in for one only where the
@@ -804,10 +770,8 @@ def file_dep_is_fresh(
             # Recorded in one regime and checked in the other -- the size is
             # the same, so `file_hash_full_max_bytes` moved across it. The
             # two digests are not comparable, and "content changed" blamed
-            # the data for a setting (round 20). A snapshot says which; one
-            # written before it did records a ctime only when sampled.
-            recorded_sampled = stored["sampled"] if "sampled" in stored else "ctime_ns" in stored or "ctime" in stored
-            if recorded_sampled != (st.st_size > full_hash_max):
+            # the data for a setting (round 20). The snapshot says which.
+            if stored.get("sampled", False) != (st.st_size > full_hash_max):
                 return False, "hash-mode"
             return False, "content"
         # Full-hashed file: content is authoritative, mtime ignored.
@@ -834,8 +798,8 @@ def file_dep_is_fresh(
         if not _timestamps_match(st, stored, "ctime"):
             return False, "ctime-sampled"
         return True, None
-    # Legacy snapshot with no content hash: fall back to the mtime tolerance.
-    if abs(st.st_mtime - stored_mtime) > _LEGACY_TIMESTAMP_TOLERANCE_SECONDS:
+    # No content hash: the file was unreadable when the snapshot was taken.
+    if not _timestamps_match(st, stored, "mtime"):
         return False, "mtime"
     return True, None
 

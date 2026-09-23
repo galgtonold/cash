@@ -18,12 +18,10 @@ Everything else (`CacheFreshnessChecker`, `StatementFileDeps`,
 `StatementLineageBuilder`, `StatementRestorer`) is internal to this package.
 See ADR-011 for the package-extraction rationale.
 
-The two file-snapshot helpers (`snapshot_file_deps`, `split_file_dep_value`)
-that historically lived in `cache_freshness.py` were extracted to
-:mod:`cash.notebook.file_dep_snapshot` before this package was formed —
-they have cross-subsystem callers (the decorator path in
-``src/cash/core.py``, ``Restorer``, and ``upstream/virtual_lineage.py``)
-and don't belong inside ``statement/``.
+The file-snapshot helper (`snapshot_file_deps`) lives in
+:mod:`cash.notebook.file_dep_snapshot`, not here: it has cross-subsystem
+callers (the decorator path in ``src/cash/core.py``, ``Restorer``, and
+``upstream/virtual_lineage.py``).
 """
 
 from __future__ import annotations

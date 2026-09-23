@@ -34,11 +34,7 @@ import os
 import pytest
 
 from cash.notebook import file_dep_snapshot
-from cash.notebook.file_dep_snapshot import (
-    _LEGACY_TIMESTAMP_TOLERANCE_SECONDS,
-    file_dep_is_fresh,
-    snapshot_file_deps,
-)
+from cash.notebook.file_dep_snapshot import file_dep_is_fresh, snapshot_file_deps
 
 pytestmark = pytest.mark.core
 
@@ -85,7 +81,7 @@ def test_an_edit_inside_the_old_tolerance_is_caught(tmp_path):
     snap = snapshot_file_deps({path})[path]
     assert file_dep_is_fresh(path, snap) == (True, None)
 
-    slack_ns = int(_LEGACY_TIMESTAMP_TOLERANCE_SECONDS * 1e9) // 2  # 5 ms
+    slack_ns = 5_000_000  # half the 10 ms tolerance this check once had
     _edit_in_place(path, snap["mtime_ns"] + slack_ns)
 
     fresh, reason = file_dep_is_fresh(path, snap)
@@ -123,22 +119,14 @@ def test_an_untouched_file_still_hits(tmp_path):
         assert file_dep_is_fresh(path, snap) == (True, None)
 
 
-def test_a_legacy_snapshot_keeps_the_tolerance(tmp_path):
-    """An entry written before the nanoseconds were recorded still works.
-
-    Without this, upgrading would invalidate every sampled file at once: the
-    stored float cannot reproduce the live nanoseconds exactly.
-    """
+def test_a_snapshot_without_nanoseconds_is_not_trusted(tmp_path):
+    """Without the recorded nanoseconds a sampled file cannot be proved
+    unchanged, so it is re-run rather than served."""
     path = _big_file(tmp_path)
     snap = snapshot_file_deps({path})[path]
-    legacy = {k: v for k, v in snap.items() if not k.endswith("_ns")}
-    assert "mtime_ns" not in legacy
+    partial = {k: v for k, v in snap.items() if not k.endswith("_ns")}
 
-    assert file_dep_is_fresh(path, legacy) == (True, None)
-
-    # and it still catches what it always caught
-    _edit_in_place(path, os.stat(path).st_mtime_ns + 5_000_000_000)
-    assert file_dep_is_fresh(path, legacy)[0] is False
+    assert file_dep_is_fresh(path, partial) == (False, "mtime-sampled")
 
 
 def test_a_full_hashed_file_ignores_timestamps_entirely(tmp_path):

@@ -123,7 +123,8 @@ def test_a_sampled_file_records_its_ctime(sampled_regime, tmp_path):
     """The extra signal is captured; whether it MOVES is the platform's call."""
     path = _big_csv(str(tmp_path / "big.csv"))
     snap = snapshot_file_deps({path})
-    assert "ctime" in snap[path]
+    assert snap[path]["sampled"] is True
+    assert "ctime_ns" in snap[path]
 
 
 def test_a_small_file_does_not_bother(tmp_path):
@@ -131,7 +132,7 @@ def test_a_small_file_does_not_bother(tmp_path):
     small = tmp_path / "small.csv"
     small.write_text("1,alpha,10.00\n" * 10, encoding="utf-8")
     snap = snapshot_file_deps({str(small)})
-    assert "ctime" not in snap[str(small)]
+    assert snap[str(small)]["sampled"] is False
 
 
 @pytest.mark.skipif(

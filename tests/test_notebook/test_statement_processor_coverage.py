@@ -111,12 +111,16 @@ class TestCheckCache:
         processor, _, backend = processor_fixture
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2\n")
+        from cash.notebook.file_dep_snapshot import snapshot_file_deps
+
+        snapshot = snapshot_file_deps({str(test_file)})
+        test_file.write_text("a,b\n1,2\n3,4\n")  # changed since the snapshot
 
         cache_key = "test_file_dep_changed"
         metadata = {
             "timestamp": time.time(),
             "output_lineages": {"x": "abc123"},
-            "file_dependencies": {str(test_file): {"mtime": time.time() - 100}},  # Old mtime
+            "file_dependencies": snapshot,
         }
         cached_data = {"variables": {"x": 42}}
         backend.set(cache_key, cached_data, metadata)
@@ -129,13 +133,13 @@ class TestCheckCache:
         processor, _, backend = processor_fixture
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2\n")
-        current_mtime = os.path.getmtime(str(test_file))
+        from cash.notebook.file_dep_snapshot import snapshot_file_deps
 
         cache_key = "test_file_dep_ok"
         metadata = {
             "timestamp": time.time(),
             "output_lineages": {"x": "abc123"},
-            "file_dependencies": {str(test_file): {"mtime": current_mtime}},
+            "file_dependencies": snapshot_file_deps({str(test_file)}),
         }
         cached_data = {"variables": {"x": 42}}
         backend.set(cache_key, cached_data, metadata)

@@ -87,7 +87,7 @@ Several independent signals can cause a miss. The first four feed the [cache key
     reprinting a cached value.
 
 === "Files"
-<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @3b5f9ef9 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @ab9621f0 -->
     A file you read (CSV, parquet, …) is snapshotted as mtime, size **and a content
     hash**. On every lookup the size is compared first. If it matches and so does
     everything else the snapshot recorded — the mtime to the nanosecond, which file

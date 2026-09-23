@@ -133,9 +133,10 @@ def _stored(path, cap):
         "size": st.st_size,
         "mtime_ns": st.st_mtime_ns,
         "hash": file_content_hash(str(path), st.st_size, cap),
+        "sampled": st.st_size > cap,
     }
     if st.st_size > cap:
-        rec.update(ctime=st.st_ctime, ctime_ns=st.st_ctime_ns)
+        rec.update(ctime_ns=st.st_ctime_ns)
     return rec
 
 

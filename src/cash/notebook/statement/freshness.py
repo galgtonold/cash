@@ -16,11 +16,9 @@ Distinct from [[Cacheability decision]] (which is the *pre-execution*
 "should we cache this statement at all?" question).  This is the
 *post-execution* "is the entry we already have still good?" question.
 
-The two file-snapshot helpers (`snapshot_file_deps`, `split_file_dep_value`)
-that used to live alongside `CacheFreshnessChecker` were extracted to
-``cash.notebook.file_dep_snapshot`` before this module moved into the
-``statement/`` package (ADR-011): they have cross-cluster callers and don't
-belong inside ``statement/``.
+The file-snapshot helper (`snapshot_file_deps`) lives in
+``cash.notebook.file_dep_snapshot``, not here: it has cross-cluster callers
+(ADR-011).
 """
 
 from __future__ import annotations

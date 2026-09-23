@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from cash.notebook.file_dep_snapshot import snapshot_file_deps
 from cash.notebook.upstream import UpstreamChecker
 from cash.notebook.upstream.virtual_lineage import VirtualLineage
 
@@ -35,16 +36,14 @@ class TestValidateFileFreshness:
     def test_existing_file_with_matching_mtime(self, tmp_path):
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2")
-        import os
-
-        mtime = os.path.getmtime(str(test_file))
-        assert VirtualLineage._validate_file_freshness({str(test_file): {"mtime": mtime}}) is True
+        assert VirtualLineage._validate_file_freshness(snapshot_file_deps({str(test_file)})) is True
 
     def test_existing_file_with_stale_mtime(self, tmp_path):
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2")
-        # Use a very old mtime
-        assert VirtualLineage._validate_file_freshness({str(test_file): {"mtime": 0.0}}) is False
+        snapshot = snapshot_file_deps({str(test_file)})
+        test_file.write_text("a,b\n1,2\n3,4")
+        assert VirtualLineage._validate_file_freshness(snapshot) is False
 
     def test_multiple_files_all_fresh(self, tmp_path):
         """All files must be fresh for the result to be True."""
@@ -52,12 +51,7 @@ class TestValidateFileFreshness:
         f2 = tmp_path / "b.csv"
         f1.write_text("data1")
         f2.write_text("data2")
-        import os
-
-        files = {
-            str(f1): {"mtime": os.path.getmtime(str(f1))},
-            str(f2): {"mtime": os.path.getmtime(str(f2))},
-        }
+        files = snapshot_file_deps({str(f1), str(f2)})
         assert VirtualLineage._validate_file_freshness(files) is True
 
     def test_multiple_files_one_stale(self, tmp_path):
@@ -66,12 +60,8 @@ class TestValidateFileFreshness:
         f2 = tmp_path / "b.csv"
         f1.write_text("data1")
         f2.write_text("data2")
-        import os
-
-        files = {
-            str(f1): {"mtime": os.path.getmtime(str(f1))},
-            str(f2): {"mtime": 0.0},  # Stale
-        }
+        files = snapshot_file_deps({str(f1), str(f2)})
+        f2.write_text("data2 changed")
         assert VirtualLineage._validate_file_freshness(files) is False
 
 
