@@ -666,9 +666,9 @@ for i in range(10):
     heavy = i * i           # also re-runs — inherited from the loop
 ```
 
-`while` and `with` blocks (and a `for` containing `break`/`continue`) execute as a
-**single cache unit**, so there is no finer entry for a directive to attach to —
-one anywhere inside applies to the whole unit:
+`while` and `with` blocks (and a `for` containing `break`/`continue` or with an
+`else:` block) execute as a **single cache unit**, so there is no finer entry for
+a directive to attach to — one anywhere inside applies to the whole unit:
 
 <!-- test:skip reason="illustrative loop over undefined convergence state" -->
 ```python

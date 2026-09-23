@@ -172,7 +172,7 @@ one of them can change on its own and the rest still hit, at the statement
 level as well as the call level. See
 [Reordering a loop's items](../known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
 
-<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @33f81117, cash/notebook/control_structures/try_handler.py:TryHandler.process @d4f1f320 -->
+<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @75ed4110, cash/notebook/control_structures/try_handler.py:TryHandler.process @8145de6c -->
 Conditionals work the same way with a different marker: `if`/`elif`/`else` and
 `try`/`except` bodies are decomposed per statement and tagged with a
 `# control_context:` branch hash, so only the branch that actually ran is
