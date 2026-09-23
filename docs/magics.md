@@ -265,7 +265,7 @@ not, and the entries are still missing from disk afterwards.
 ```
 
 ### `%cash_debug`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @fb6167b9 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @29ba1a1b -->
 
 Toggle or configure debug logging. The level is set on the global `cash`
 logger, which the upstream checker and the statement pipeline log through, and
@@ -275,14 +275,19 @@ passed to the core Cash instance.
 
 **Arguments:**
 
-- *(no argument)* — Toggle debug on/off.
-- `on` (aliases: `true`, `1`, `enable`) — Enable debug logging at DEBUG level.
-- `off` (aliases: `false`, `0`, `disable`) — Disable debug logging (INFO level).
+- *(no argument)* — Toggle between `on` and `off`.
+- `on` (aliases: `true`, `1`, `enable`) — Enable debug logging at DEBUG level,
+  printed into the cell that produced each record.
+- `off` (aliases: `false`, `0`, `disable`) — Disable debug logging: remove the
+  handlers cash added and the level it set on the `cash` logger. Handlers your
+  own logging setup added stay.
 - `json` — Enable DEBUG and print each record as a JSON object.
 - `file <path>` — Enable DEBUG and also append the records to `<path>`, one
-  JSON object per line.
+  JSON object per line. Quote a path that contains a space or a `#`.
 
-Argument matching is case-insensitive.
+Each mode replaces the handlers the previous one added, so switching modes never
+prints a record twice. The mode is case-insensitive; a path keeps its case. Any
+other argument prints an error and changes nothing.
 
 **Example:**
 

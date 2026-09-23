@@ -115,7 +115,7 @@ When a cache decision surprises you, turn on debug mode to see Cash's
 reasoning — key computations, lineage calculations, upstream detection, and
 restoration decisions:
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @fb6167b9, cash/_log.py:setup_logging @1d39182c -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @29ba1a1b, cash/_log.py:setup_logging @37aea616 -->
 <!-- test:skip reason="IPython magic command — requires kernel context" -->
 ```python
 %cash_debug on            # human-readable (default)

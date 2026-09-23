@@ -238,29 +238,30 @@ class TestCaptureCellId:
 # logger.debug() markers ([UPSTREAM_DEBUG], [CACHE_HIT_DEBUG], ...) actually
 # reach the captured cell output. Raising the logger level alone is not enough
 # on recent Python/ipykernel where ambient root propagation no longer routes
-# DEBUG records to the cell.
+# DEBUG records to the cell. Every mode goes through `cash._log`, which records
+# the handlers cash added, so a mode switch replaces them and `off` removes them.
 # ============================================================================
 
 import logging
 
+from cash import _log
 
-def _cash_debug_handlers():
-    return [h for h in logging.getLogger("cash").handlers if getattr(h, "_cash_debug_console", False)]
+
+def _cash_handlers():
+    return [h for h in logging.getLogger("cash").handlers if h in _log._OWN_HANDLERS]
 
 
 class TestCashDebugConsoleHandler:
-    """`%cash_debug on/off` installs and quiets a DEBUG console handler."""
+    """`%cash_debug` installs, replaces and removes cash's own handlers."""
 
     def teardown_method(self):
-        # Don't leak the process-global handler into other tests.
-        cash_logger = logging.getLogger("cash")
-        for h in _cash_debug_handlers():
-            cash_logger.removeHandler(h)
+        # Don't leak the process-global handlers into other tests.
+        _log.disable()
 
     def test_on_installs_handler_routing_debug_to_stdout(self, cash_magics, capsys):
         cash_magics.cash_debug("on")
 
-        handlers = _cash_debug_handlers()
+        handlers = _cash_handlers()
         assert len(handlers) == 1
         assert handlers[0].level == logging.DEBUG
 
@@ -274,17 +275,15 @@ class TestCashDebugConsoleHandler:
         cash_magics.cash_debug("on")
         cash_magics.cash_debug("on")
         # Never add the console handler twice.
-        assert len(_cash_debug_handlers()) == 1
+        assert len(_cash_handlers()) == 1
 
-    def test_off_quiets_handler(self, cash_magics, capsys):
+    def test_off_removes_handler(self, cash_magics, capsys):
         cash_magics.cash_debug("on")
         capsys.readouterr()  # drop the "enabled" message
 
         cash_magics.cash_debug("off")
-        # Handler is left attached but raised above DEBUG so nothing emits.
-        handlers = _cash_debug_handlers()
-        assert len(handlers) == 1
-        assert handlers[0].level > logging.DEBUG
+        assert _cash_handlers() == []
+        assert logging.getLogger("cash").level == logging.NOTSET
 
         logging.getLogger("cash.notebook.unittest").debug("[UPSTREAM_DEBUG] silent")
         out = capsys.readouterr().out
@@ -296,7 +295,7 @@ class TestCashDebugConsoleHandler:
         import sys
 
         cash_magics.cash_debug("on")
-        handler = _cash_debug_handlers()[0]
+        handler = _cash_handlers()[0]
 
         new_stream = io.StringIO()
         old_stdout = sys.stdout
@@ -308,3 +307,54 @@ class TestCashDebugConsoleHandler:
         # Record landed in the stdout active at emit time, not install time.
         assert "[UPSTREAM_DEBUG] routed" in new_stream.getvalue()
         assert handler.stream is old_stdout
+
+    def test_the_bare_toggle_installs_the_handler(self, cash_magics, capsys):
+        """A bare `%cash_debug` set the level and nothing else, so the debug
+        markers the console handler exists to show never appeared."""
+        cash_magics._debug = False
+        cash_magics.cash_debug("")
+        assert len(_cash_handlers()) == 1
+        logging.getLogger("cash.notebook.unittest").debug("[UPSTREAM_DEBUG] toggled")
+        assert "[UPSTREAM_DEBUG] toggled" in capsys.readouterr().out
+
+        cash_magics.cash_debug("")
+        assert _cash_handlers() == []
+        assert cash_magics._cash_instance.debug is False
+
+    def test_switching_modes_does_not_print_twice(self, cash_magics, capsys):
+        """`on` then `json` left both handlers attached: every record twice."""
+        cash_magics.cash_debug("on")
+        cash_magics.cash_debug("json")
+        assert len(_cash_handlers()) == 1
+        cash_magics.cash_debug("on")
+        capsys.readouterr()
+        logging.getLogger("cash.notebook.unittest").debug("once")
+        assert capsys.readouterr().out.count("once") == 1
+
+    def test_off_after_json_stops_the_json_output(self, cash_magics, capsys):
+        """`json` then `off` left the JSON handler on, printing INFO records
+        for the rest of the session."""
+        cash_magics.cash_debug("json")
+        cash_magics.cash_debug("off")
+        assert _cash_handlers() == []
+        capsys.readouterr()
+        logging.getLogger("cash.notebook.unittest").info("still here?")
+        captured = capsys.readouterr()
+        assert "still here?" not in captured.out + captured.err
+
+    def test_a_file_path_keeps_its_case_and_loses_its_quotes(self, cash_magics, tmp_path):
+        target = tmp_path / "My Cash#1.log"
+        cash_magics.cash_debug(f'file "{target}"  # a comment')
+        logging.getLogger("cash.notebook.unittest").debug("to the file")
+        _log.disable()  # closes the file
+        assert "to the file" in target.read_text(encoding="utf-8")
+
+    def test_an_unknown_argument_changes_nothing(self, cash_magics, capsys):
+        cash_magics._debug = False
+        cash_magics.cash_debug("verbose")
+        assert "unrecognised" in capsys.readouterr().out
+        assert cash_magics._debug is False
+        assert _cash_handlers() == []
+        cash_magics.cash_debug("file")  # a file needs a path
+        assert "unrecognised" in capsys.readouterr().out
+        assert _cash_handlers() == []

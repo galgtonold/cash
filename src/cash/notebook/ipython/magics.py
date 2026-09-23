@@ -6,7 +6,6 @@ import contextlib
 import functools
 import json
 import logging
-import sys
 import time
 import weakref
 
@@ -18,8 +17,8 @@ from typing import Any
 
 from IPython.core.magic import Magics, line_magic, magics_class
 
+from ... import _log
 from ..._console import safe_text
-from ..._log import setup_logging
 from ...backends._writes import all_pending_writes
 from ...core import Cash
 from ...object_hashing import compute_hash
@@ -66,31 +65,6 @@ from .cell_executor import (
 __all__ = ["CashMagics"]
 
 logger = logging.getLogger(__name__)
-
-
-class _CurrentStdoutHandler(logging.StreamHandler):
-    """A ``StreamHandler`` that always writes to the *current* ``sys.stdout``.
-
-    Under ipykernel, ``sys.stdout`` is swapped to a per-cell output proxy on
-    each execution.  A vanilla ``StreamHandler(sys.stdout)`` captures the
-    stream at construction time, so debug records emitted during later cells
-    would be routed to whatever stdout was active when ``%cash_debug on`` ran.
-    Resolving ``sys.stdout`` at emit time keeps debug output landing in the
-    cell that produced it.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(stream=sys.stdout)
-
-    @property
-    def stream(self):  # type: ignore[override]
-        return sys.stdout
-
-    @stream.setter
-    def stream(self, value: Any) -> None:
-        # logging.StreamHandler.__init__ assigns self.stream; ignore the stored
-        # value and always defer to the live sys.stdout via the getter.
-        pass
 
 
 def new_session_stats() -> dict[str, Any]:
@@ -578,87 +552,45 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             %cash_debug off         - Disable debug logging
             %cash_debug json        - Enable JSON-formatted debug output
             %cash_debug file path   - Also log to file in JSON format
-        """
-        parts = strip_inline_comment(line).lower().split()
-        mode = parts[0] if parts else ""
+            %cash_debug             - Toggle between on and off
 
-        if mode in ("on", "true", "1", "enable"):
+        Every mode goes through ``cash._log``, which records the handlers it
+        adds: switching mode replaces them instead of stacking a second one,
+        and ``off`` removes them.
+        """
+        mode, _, rest = strip_inline_comment(line).partition(" ")
+        mode = mode.lower()
+        # Only the mode is case-insensitive: a path keeps its case, and one
+        # quoted to protect a space or a "#" loses the quotes.
+        path = rest.strip()
+        if len(path) >= 2 and path[0] == path[-1] and path[0] in "'\"":
+            path = path[1:-1]
+        if not mode:
+            mode = "off" if self._debug else "on"
+
+        if mode in ("on", "true", "1", "enable") and not path:
+            _log.enable_console(logging.DEBUG)
             self._debug = True
-            logger.setLevel(logging.DEBUG)
-            self._install_debug_console_handler()
             print("Cache debug output enabled.")
-        elif mode in ("off", "false", "0", "disable"):
+        elif mode in ("off", "false", "0", "disable") and not path:
+            _log.disable()
+            if self._cash_instance.verbose:
+                _log.enable(logging.INFO)  # verbose=True's one line per call stays
             self._debug = False
-            logger.setLevel(logging.INFO)
-            self._quiet_debug_console_handler()
             print("Cache debug output disabled.")
-        elif mode == "json":
+        elif mode == "json" and not path:
+            _log.setup_logging(level=logging.DEBUG, json_output=True)
             self._debug = True
-
-            setup_logging(level=logging.DEBUG, json_output=True)
             print("Cache debug output enabled (JSON format).")
-        elif mode == "file" and len(parts) > 1:
-            log_path = parts[1]
+        elif mode == "file" and path:
+            _log.setup_logging(level=logging.DEBUG, log_file=path)
             self._debug = True
-
-            setup_logging(level=logging.DEBUG, log_file=log_path)
-            print(f"Cache debug output enabled (logging to {log_path}).")
+            print(f"Cache debug output enabled (logging to {path}).")
         else:
-            # Toggle if no argument
-            self._debug = not self._debug
-            print(f"Cache debug output: {'enabled' if self._debug else 'disabled'}")
-
-        # Propagate to global cash logger to capture all component logs (backends, etc.)
-        cash_logger = logging.getLogger("cash")
-        cash_logger.setLevel(logging.DEBUG if self._debug else logging.INFO)
-        # Also set local logger
-        logger.setLevel(logging.DEBUG if self._debug else logging.INFO)
-
+            print(f"[Error] %cash_debug: unrecognised argument: {strip_inline_comment(line)!r}")
+            print("   Valid forms: %cash_debug on | off | json | file <path> | (no argument to toggle)")
+            return
         self._cash_instance.debug = self._debug
-
-    @staticmethod
-    def _install_debug_console_handler() -> None:
-        """Attach (idempotently) a DEBUG console handler to the ``cash`` logger.
-
-        ``%cash_debug on`` only raised the logger level, relying on ambient
-        root-logger propagation to surface DEBUG records in the captured cell
-        output.  On recent Python / ipykernel that propagation no longer routes
-        the records to the cell, so debug markers (``[UPSTREAM_DEBUG] ...``,
-        ``[CACHE_HIT_DEBUG] ...``, ...) never appeared.  Install our own
-        console handler so the records reach the cell regardless.
-
-        The handler resolves ``sys.stdout`` lazily at emit time (rather than
-        binding it once at construction): under ipykernel each cell execution
-        installs a fresh stdout proxy bound to that cell's output area, so a
-        handler that captured ``sys.stdout`` when ``%cash_debug on`` ran would
-        write debug records to the wrong (or a stale) cell.
-
-        The handler is tagged with ``_cash_debug_console`` so it is only added
-        once and so ``%cash_debug off`` can find and quiet it.
-        """
-        cash_logger = logging.getLogger("cash")
-        for h in cash_logger.handlers:
-            if getattr(h, "_cash_debug_console", False):
-                h.setLevel(logging.DEBUG)
-                return
-        handler = _CurrentStdoutHandler()
-        handler.setLevel(logging.DEBUG)
-        handler.setFormatter(logging.Formatter("[%(name)s] %(message)s"))
-        handler._cash_debug_console = True  # type: ignore[attr-defined]
-        cash_logger.addHandler(handler)
-
-    @staticmethod
-    def _quiet_debug_console_handler() -> None:
-        """Silence the debug console handler installed by ``%cash_debug on``.
-
-        Raises the handler's level above DEBUG so no further debug records are
-        emitted, while leaving it attached (cheap to re-enable on the next
-        ``%cash_debug on``).
-        """
-        cash_logger = logging.getLogger("cash")
-        for h in cash_logger.handlers:
-            if getattr(h, "_cash_debug_console", False):
-                h.setLevel(logging.WARNING)
 
     @line_magic
     def cash_persist(self, line: str) -> None:
