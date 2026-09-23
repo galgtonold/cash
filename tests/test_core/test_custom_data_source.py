@@ -21,15 +21,12 @@ class VersionSource(DataSource):
     def get_id(self) -> str:
         return "version"
 
-    def has_changed(self):
+    def state_token(self):
         return self.version  # a VALUE, not a bool
-
-    def update_state(self) -> None:
-        pass
 
 
 class TokenOverrideSource(DataSource):
-    """Overrides state_token() directly; has_changed left as a bool."""
+    """Returns an int revision as its token."""
 
     def __init__(self):
         self.rev = 0
@@ -37,27 +34,18 @@ class TokenOverrideSource(DataSource):
     def get_id(self) -> str:
         return "tok"
 
-    def has_changed(self) -> bool:
-        return True
-
-    def update_state(self) -> None:
-        pass
-
     def state_token(self):
         return self.rev
 
 
 class BoolSource(DataSource):
-    """The broken pattern: has_changed returns a bool."""
+    """The broken pattern: state_token returns a bool."""
 
     def get_id(self) -> str:
         return "bool"
 
-    def has_changed(self) -> bool:
+    def state_token(self) -> bool:
         return True
-
-    def update_state(self) -> None:
-        pass
 
 
 def test_value_source_invalidates_via_depends_on():

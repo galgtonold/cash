@@ -376,13 +376,6 @@ class RemoteFileDataSource(DataSource):
         """Identity of the dependency - the URL, so it matches across machines."""
         return f"remote:{self.url}"
 
-    def has_changed(self) -> str:
-        """The object's current state token (see :meth:`state_token`)."""
-        return self.state_token()
-
-    def update_state(self) -> None:
-        """No-op: the token is read from the store, not tracked internally."""
-
     def state_token(self) -> str:
         """The validator folded into the cache key.
 

@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 from ._clock import perf_counter as _perf_counter
 from .backends.serialization import get_serializer
 from .config import CashConfig, get_config
-from .data_source import DataSource
+from .data_source import DataSource, state_token_of
 from .dependency_state import (
     STATE_LEDGER,
     DependencyStateHasher,
@@ -1753,7 +1753,6 @@ class Cash:
         # backend (or list of backends) was provided, that wins - those
         # are concrete objects, not config - and we skip the factory.
         self._backend: CacheBackend | None = None
-        self._explicit_backends = backends  # remembered for repr / debugging only
         if backend is not None:
             self._backend = backend
         elif backends:
@@ -1841,10 +1840,9 @@ class Cash:
         self._func_ttls: dict[str, int | None] = {}  # func_name -> declared ttl
         self._effective_ttl_cache: dict[str, int | None] = {}
         self._deref_writes: dict = {}  # code object -> frozenset of reassigned freevars
-        self._func_key_cache: dict[int, str] = {}  # id(func) -> module-qualified key
         # id(func) -> decoration-pinned own-source identity. The
         # wrapper closure keeps *func* alive, so the id stays valid for the
-        # wrapper's lifetime (same contract as _func_key_cache).
+        # wrapper's lifetime.
         self._own_pins: dict[int, str] = {}
         # Pins taken at decoration whose file has not yet been compared with
         # the loaded code; the first call does it once (see _pin_own_source).
@@ -4230,10 +4228,6 @@ class Cash:
         self._stored_doc_memo[path] = ((st.st_mtime_ns, st.st_size), doc)
         return {kind: dict(value) for kind, value in doc.items()}
 
-    def _stored_keys(self, func_name: str) -> dict[str, list]:
-        """``{cache_key: [stored_at, ttl]}`` earlier runs recorded, oldest first."""
-        return self._stored_doc(func_name)["keys"]
-
     def _write_stored_doc(self, func_name: str, doc: dict[str, dict[str, list]]) -> None:
         """Replace the record for *func_name*. Raises; callers swallow."""
         path = self._stored_keys_path(func_name)
@@ -4971,7 +4965,6 @@ class Cash:
                             res,
                             cache_key=cache_key,
                             func_name=func_name,
-                            metadata=metadata,
                             tracker=tracker,
                             observer=observer,
                             rng_new=rng_new,
@@ -5221,7 +5214,6 @@ class Cash:
                             res,
                             cache_key=cache_key,
                             func_name=func_name,
-                            metadata=metadata,
                             tracker=tracker,
                             observer=observer,
                             rng_new=rng_new,
@@ -5679,7 +5671,7 @@ class Cash:
                             f"so cash cannot tell when it changes and the call ran uncached.",
                             fix,
                         )
-                    dynamic_state_parts.append(str(ds.state_token()))
+                    dynamic_state_parts.append(state_token_of(ds))
             except _KeyBuildFailed:
                 raise
             except Exception as e:  # noqa: BLE001 - any failure here is the resolver's
@@ -10793,7 +10785,6 @@ class Cash:
         *,
         cache_key,
         func_name,
-        metadata,
         tracker,
         observer,
         rng_new,
@@ -10895,7 +10886,6 @@ class Cash:
                         cache_key,
                         func_name,
                         {"n_chunks": 1 if buffer else 0, "total_items": total_items},
-                        metadata,
                         ttl,
                         current_state_hash,
                         args_hash,
@@ -10912,7 +10902,6 @@ class Cash:
                     cache_key,
                     func_name,
                     {"n_chunks": chunk_index, "total_items": total_items},
-                    metadata,
                     ttl,
                     current_state_hash,
                     args_hash,
@@ -10995,7 +10984,6 @@ class Cash:
         cache_key: str,
         func_name: str,
         manifest_data: dict[str, Any],
-        existing_metadata: dict[str, Any] | None,
         ttl: int | None,
         state_hash: str,
         args_hash: str,

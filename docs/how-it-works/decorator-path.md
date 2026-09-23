@@ -41,7 +41,7 @@ anything change?" question:
 | `dynamic` | Dependencies declared at call time via `dynamic_depends_on` | …a runtime-declared dependency changes |
 | `args` | A hash of the call arguments | …you pass different arguments |
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher @b5c19f4a broad="the state digest is the hasher class as a whole - own source, graph deps, transitive helpers" -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher @6d3a4123 broad="the state digest is the hasher class as a whole - own source, graph deps, transitive helpers" -->
 The interesting one is `state`. It starts as a `DependencyStateHasher` digest
 that folds three things together: the node's own source hash, each graph
 dependency's state hash (recursively, in sorted order), and the **transitive

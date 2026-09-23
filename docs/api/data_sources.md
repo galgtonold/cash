@@ -1,6 +1,6 @@
 # Data sources
 
-<!-- claim: cash/data_source.py:FileDataSource @4099fc64 broad="the mtime contract is a property of the whole class", cash/remote_source.py:RemoteFileDataSource @28df723e broad="the scheme list and validator contract are properties of the whole class" -->
+<!-- claim: cash/data_source.py:FileDataSource @a09d1326 broad="the mtime contract is a property of the whole class", cash/remote_source.py:RemoteFileDataSource @241d9616 broad="the scheme list and validator contract are properties of the whole class" -->
 Objects that contribute to a cache key by reporting a **token representing
 their current state** (an mtime, a version, a content digest) — the cached
 entry invalidates when that token changes. Two are bundled:
@@ -21,8 +21,7 @@ from cash.data_source import DataSource  # ABC for writing your own
       members:
         - __init__
         - get_id
-        - has_changed
-        - update_state
+        - state_token
 
 ### Example
 
@@ -52,9 +51,7 @@ typing.
       members:
         - __init__
         - get_id
-        - has_changed
         - state_token
-        - update_state
 
 ### Example
 
@@ -86,25 +83,20 @@ for the full story, including `immutable=` and the failure behaviour.
 ## Custom data sources
 
 To track something other than a file as a cache dependency, subclass
-`DataSource`. The contract is three abstract methods, plus an optional
-`state_token()` hook:
+`DataSource`. The contract is two abstract methods:
 
 ::: cash.data_source.DataSource
     options:
       members:
         - get_id
-        - has_changed
-        - update_state
         - state_token
 
-!!! warning "`has_changed()` must return a state *token*, not a `bool`"
-    Despite the name, the value `has_changed()` returns is folded into the cache
-    key — so it must **change when the data changes** (a version, a digest, a
-    max-id). A plain `bool` only has two states and can't track changes: cash
-    warns with `CashCacheIneffectiveWarning` and the cache never invalidates.
-    (`FileDataSource` returns a bool from `has_changed()`, but its state token is
-    the file mtime — the base `state_token()` picks up its `_get_mtime` — which
-    is why it works.) This is the same contract as
+!!! warning "`state_token()` must return a state *token*, not a `bool`"
+    The value `state_token()` returns is folded into the cache key — so it must
+    **change when the data changes** (a version, a digest, a max-id). A plain
+    `bool` only has two states and can't track changes: cash warns with
+    `CashCacheIneffectiveWarning` and the cache never invalidates. This is the
+    same contract as
     [`dynamic_depends_on=`](../tutorials/feature-guides/dynamic-dependencies.md).
 
 ### Example: tracking a database table
@@ -120,7 +112,7 @@ class DBTableSource(DataSource):
     def get_id(self):
         return f"db_table:{self.table}"
 
-    def has_changed(self):
+    def state_token(self):
         # The state TOKEN folded into the cache key — a value that moves when
         # the table changes, not a bool. (max_id, row_count) shifts whenever
         # rows are added or removed.
@@ -128,9 +120,6 @@ class DBTableSource(DataSource):
             f"SELECT MAX(id), COUNT(*) FROM {self.table}"
         ).fetchone()
         return (row[0], row[1])
-
-    def update_state(self):
-        pass   # token-based tracking keeps no internal state to update
 ```
 
 Pass via `depends_on=`, then **call it** — a `DataSource` only proves itself when
@@ -152,6 +141,6 @@ for a database example and not a problem: the connection isn't the data, and the
 `DataSource` is what notices when the table moves.
 
 Insert a row and the next call recomputes, because `(max_id, count)` changed.
-(If `has_changed()` returned a `bool` instead, this is the moment cash would warn
+(If `state_token()` returned a `bool` instead, this is the moment cash would warn
 that the entry can never invalidate — which is why the example exercises it
 rather than only defining it.)

@@ -132,9 +132,6 @@ print(f"  Sum: {result2} (cached - file unchanged)")
 with open(data_file, "w") as f:
     f.write("100\n200\n300\n")
 
-# Update the data source state
-data_source.update_state()
-
 result3 = process_data()
 print(f"  Sum: {result3} (re-computed - file changed!)")
 print()

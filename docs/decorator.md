@@ -287,7 +287,7 @@ Worth understanding before any parameter. With a bare `@cash.cache` and nothing
 configured, a cached result is discarded and recomputed when **any** of these
 change:
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @f4e5c88e, cash/core.py:Cash._analyze_dependencies @d32aeb90 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/core.py:Cash._analyze_dependencies @d32aeb90 -->
 | What changed | How it's detected |
 |---|---|
 | The **arguments** | Hashed by *content* — so DataFrames and arrays work, and two equal-but-distinct objects share one entry |
@@ -310,7 +310,7 @@ for the cases this model *can't* see.
 
 ### What else is in the key — the ones that cost a recompute
 
-<!-- claim: cash/core.py:Cash._fold_defaults @5760bcd5, cash/core.py:Cash._hash_arg_payload @6cf42ecf, cash/dependency_state.py:DependencyStateHasher.compute @f4e5c88e -->
+<!-- claim: cash/core.py:Cash._fold_defaults @5760bcd5, cash/core.py:Cash._hash_arg_payload @6cf42ecf, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
 None of these gives a wrong answer. Each one costs a recompute you might not
 expect, measured across fresh processes:
 
@@ -916,7 +916,7 @@ def load_user(user_id):
     return json.load(open(f"/data/users/{user_id}.json"))
 ```
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @347cb002 -->
+<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @1c912574 -->
 The resolver runs with the same `args/kwargs` as the function on every call.
 
 !!! warning "A resolver that fails makes the call run uncached"

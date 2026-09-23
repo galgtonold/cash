@@ -1026,11 +1026,10 @@ to it later.
 
 ## KEY-BOOL-STATE-TOKEN {#key-bool-state-token}
 
-<!-- claim: cash/data_source.py:DataSource.state_token @fb386b76 -->
-**What happened.** You wrote a `DataSource` subclass, and Cash asked it for the
-value to fold into the cache key. That value comes from `has_changed()` unless
-you override `state_token()` — and yours returned `True` or `False`. Despite
-the method's name, what Cash needs there is a *token*, not a yes/no.
+<!-- claim: cash/data_source.py:state_token_of @fd85369f -->
+**What happened.** You wrote a `DataSource` subclass, and Cash asked its
+`state_token()` for the value to fold into the cache key — and yours returned
+`True` or `False`. What Cash needs there is a *token*, not a yes/no.
 
 **Why it matters.** A boolean has two values, so it cannot represent "the data
 is different now". Entries keyed on one do not invalidate when the source
@@ -1038,9 +1037,8 @@ changes: you get stale results, silently, which is the one failure a cache must
 not have.
 
 **What to do.** Return something that moves with the data — a version string, a
-content digest, an mtime, an ETag. Either return it from `has_changed()`
-directly, or leave `has_changed()` as a real boolean and override
-`state_token()` to return the token. See [Data sources](api/data_sources.md).
+content digest, an mtime, an ETag — from `state_token()`. See
+[Data sources](api/data_sources.md).
 
 **When it is safe to ignore.** Effectively never, if the source can change
 while your program runs. The only exception is a source that is genuinely fixed
@@ -1161,7 +1159,7 @@ line then, so the decision is written down where the next reader looks.
 
 ## KEY-DYNAMIC-DEP-FAILED {#key-dynamic-dep-failed}
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @347cb002 -->
+<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @1c912574 -->
 **What happened.** A resolver you passed to `dynamic_depends_on=` raised when
 Cash called it to find out which data sources this particular call depends on,
 or returned something that is not a `DataSource` (or a list of them, or

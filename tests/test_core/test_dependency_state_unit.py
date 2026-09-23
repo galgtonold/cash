@@ -127,22 +127,10 @@ def test_node_own_qualname_excluded_from_helper_tokens():
     assert h.compute("f") == expected
 
 
-def test_data_source_node_uses_has_changed_marker():
+def test_data_source_node_uses_its_state_token():
     class DS:
-        def has_changed(self):
-            return True
-
-    h = make_hasher(data_sources={"src": DS()})
-    assert h.compute("src") == _sha("True")
-
-
-def test_data_source_node_prefers_mtime_when_available():
-    class DS:
-        def _get_mtime(self):
+        def state_token(self):
             return 1234.5
-
-        def has_changed(self):  # pragma: no cover - mtime path wins
-            raise AssertionError("should not be consulted")
 
     h = make_hasher(data_sources={"src": DS()})
     assert h.compute("src") == _sha("1234.5")

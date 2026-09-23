@@ -53,7 +53,7 @@ def _cash(tmp_path) -> Cash:
 
 
 def test_datasource_token_invalidates_when_it_changes(tmp_path):
-    """A ``depends_on`` DataSource whose ``has_changed()`` returns a state
+    """A ``depends_on`` DataSource whose ``state_token()`` returns a state
     *token* invalidates the cache exactly when that token changes."""
     c = _cash(tmp_path)
     state = {"v": 1}
@@ -62,11 +62,8 @@ def test_datasource_token_invalidates_when_it_changes(tmp_path):
         def get_id(self):
             return "tok"
 
-        def has_changed(self):
+        def state_token(self):
             return state["v"]  # a token (int), not a bool
-
-        def update_state(self):
-            pass
 
     n = {"c": 0}
 
@@ -84,18 +81,15 @@ def test_datasource_token_invalidates_when_it_changes(tmp_path):
 
 
 def test_datasource_nonbool_token_does_not_warn(tmp_path):
-    """A non-bool ``has_changed()`` token is valid and fires no warning."""
+    """A non-bool ``state_token()`` is valid and fires no warning."""
     c = _cash(tmp_path)
 
     class IntSource(DataSource):
         def get_id(self):
             return "int"
 
-        def has_changed(self):
+        def state_token(self):
             return 7
-
-        def update_state(self):
-            pass
 
     @c.cache(depends_on=[IntSource()])
     def pure():
@@ -106,8 +100,8 @@ def test_datasource_nonbool_token_does_not_warn(tmp_path):
         pure()  # must not raise
 
 
-def test_datasource_bool_has_changed_warns(tmp_path):
-    """A ``bool`` ``has_changed()`` can't track changes, so cash warns — this
+def test_datasource_bool_state_token_warns(tmp_path):
+    """A ``bool`` ``state_token()`` can't track changes, so cash warns — this
     is the exact misconfiguration behind the old broken DBTableSource example."""
     c = _cash(tmp_path)
 
@@ -115,11 +109,8 @@ def test_datasource_bool_has_changed_warns(tmp_path):
         def get_id(self):
             return "bool"
 
-        def has_changed(self):
+        def state_token(self):
             return True
-
-        def update_state(self):
-            pass
 
     @c.cache(depends_on=[BoolSource()])
     def pure():

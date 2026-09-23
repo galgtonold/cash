@@ -170,65 +170,35 @@ class TestFileDataSource:
     """Test the FileDataSource class."""
 
     def test_create_data_source(self, tmp_path):
-        """FileDataSource tracks a file."""
+        """FileDataSource tracks a file by its mtime."""
         from cash.data_source import FileDataSource
 
         f = tmp_path / "data.txt"
         f.write_text("hello")
         ds = FileDataSource(str(f))
         assert ds.get_id().startswith("file:")
-        assert not ds.has_changed()
+        assert ds.state_token() == os.path.getmtime(f)
 
     def test_detect_change(self, tmp_path):
-        """FileDataSource detects file modification."""
+        """The token moves when the file is modified."""
         from cash.data_source import FileDataSource
 
         f = tmp_path / "data.txt"
         f.write_text("hello")
         ds = FileDataSource(str(f))
+        before = ds.state_token()
 
         time.sleep(0.1)
         f.write_text("world")
-        assert ds.has_changed()
-
-    def test_update_state(self, tmp_path):
-        """update_state resets the change detector."""
-        from cash.data_source import FileDataSource
-
-        f = tmp_path / "data.txt"
-        f.write_text("hello")
-        ds = FileDataSource(str(f))
-
-        time.sleep(0.1)
-        f.write_text("world")
-        assert ds.has_changed()
-
-        ds.update_state()
-        assert not ds.has_changed()
+        assert ds.state_token() != before
 
     def test_nonexistent_file(self, tmp_path):
-        """FileDataSource handles nonexistent files."""
+        """A missing file has the token 0.0."""
         from cash.data_source import FileDataSource
 
         ds = FileDataSource(str(tmp_path / "missing.txt"))
         assert ds.get_id().startswith("file:")
-        assert not ds.has_changed()  # mtime is 0 both times
-
-    def test_get_mtime(self, tmp_path):
-        """FileDataSource._get_mtime returns modification time."""
-        from cash.data_source import FileDataSource
-
-        f = tmp_path / "data.txt"
-        f.write_text("hello")
-        ds = FileDataSource(str(f))
-        assert ds._get_mtime() > 0
-
-    def test_get_mtime_missing_file(self, tmp_path):
-        """FileDataSource._get_mtime returns 0 for missing files."""
-        from cash.data_source import FileDataSource
-
-        ds = FileDataSource(str(tmp_path / "missing.txt"))
-        assert ds._get_mtime() == 0.0
+        assert ds.state_token() == 0.0
 
 
 class TestGetNotebookPathEdgeCases:

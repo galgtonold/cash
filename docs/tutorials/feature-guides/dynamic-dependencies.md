@@ -40,12 +40,12 @@ The resolver receives **the same positional and keyword arguments as the decorat
 
 ## How it works
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @347cb002, cash/data_source.py:DataSource.state_token @fb386b76 -->
+<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @1c912574, cash/data_source.py:DataSource.state_token @89498b3e -->
 The resolver lives in `Cash._resolve_dynamic_dependencies`. The path is:
 
 1. The resolver is called as `resolver(*args, **kwargs)` — same signature as the decorated function.
 2. The return value is normalised to a list: `dss = ds_result if isinstance(ds_result, list) else [ds_result]`.
-3. Each `None` entry is skipped, and each `DataSource` contributes `str(ds.state_token())`. Anything else makes the call unkeyable (below). The base `state_token` returns `_get_mtime()` when the subclass exposes one and falls back to `has_changed()` otherwise — override it to track anything else.
+3. Each `None` entry is skipped, and each `DataSource` contributes `str(ds.state_token())`. Anything else makes the call unkeyable (below). `state_token()` is the one method a `DataSource` has to say what state it is in; `FileDataSource`'s returns the file's mtime.
 4. The collected strings are sorted and SHA-256'd to produce a `dynamic_state_hash` that is mixed into the cache key alongside the args hash and the static dependency hash.
 
 Two consequences of step 3 worth pinning down:
@@ -94,13 +94,13 @@ The resolver must return one of:
 Any other value makes the call run uncached, with a warning.
 
 To track something other than an mtime, write a `DataSource` subclass. The key
-method is `has_changed()` (or `state_token()`), which must return a **value that
+method is `state_token()`, which must return a **value that
 changes when the data changes** — a version, a config digest, a tenant id. Cash
 folds that value into the cache key, so the entry invalidates when it moves.
 
-<!-- claim: cash/data_source.py:DataSource.state_token @fb386b76 -->
-> **Return a value, not a `bool`.** Despite the name, `has_changed()` is the
-> *state token* that goes into the key — not a yes/no flag. A `bool` only has two
+<!-- claim: cash/data_source.py:state_token_of @fd85369f -->
+> **Return a value, not a `bool`.** `state_token()` is what goes into the key
+> — not a yes/no flag. A `bool` only has two
 > states and cannot track changes, so the cache would never invalidate. Cash
 > warns with a `CashCacheIneffectiveWarning` if it sees a `bool`.
 
@@ -119,19 +119,11 @@ class EnvVarSource(DataSource):
     def get_id(self) -> str:
         return f"env:{self.var}"
 
-    def has_changed(self) -> str:
+    def state_token(self) -> str:
         # Return the CURRENT value (the token), not a bool. The key changes
         # whenever the env var changes.
         return os.environ.get(self.var, "")
-
-    def update_state(self) -> None:
-        pass
 ```
-
-`has_changed()` is what gets hashed into the key when the source has no
-`_get_mtime` method. (`FileDataSource` exposes `_get_mtime`, so its `has_changed`
-— a real bool — is never used as a token.) To track a derived value, you can
-instead override `state_token()` directly.
 
 ## What NOT to do
 
@@ -147,7 +139,7 @@ def predict(features):
 # uncached, with a KEY-DYNAMIC-DEP-FAILED warning.
 ```
 
-This is a common trap. The fix is to wrap the value in a `DataSource` subclass (see above) so that `has_changed()` reports the change.
+This is a common trap. The fix is to wrap the value in a `DataSource` subclass (see above) so that `state_token()` reports the change.
 
 ### Don't put side effects or expensive work in the resolver
 
@@ -184,22 +176,22 @@ A transiently failing resolver (e.g. a temporary `OSError`) therefore does not b
 
 Two things to watch:
 
-- **Resolver cost.** It runs on every call, so the overhead lands on cache hits too. `FileDataSource(path)` calls `os.path.getmtime` in its constructor — one stat per source, usually sub-millisecond. Custom subclasses that do anything heavier should cache internally.
+- **Resolver cost.** It runs on every call, so the overhead lands on cache hits too. `FileDataSource(path)` costs one `os.path.getmtime` when its token is read — one stat per source, usually sub-millisecond. Custom subclasses that do anything heavier should cache internally.
 - **`DataSource` reuse.** Returning a fresh `FileDataSource(path)` from the resolver every call means a new stat every call. That's fine for filesystem reads but if your custom `DataSource` is expensive to construct, consider memoising the resolver itself (a plain `functools.lru_cache` over `(path,)` is enough).
 
 ## Caveats
 
 - **Resolver errors fail closed.** A resolver that raises or returns something other than a `DataSource` makes each such call run uncached, with a warning, rather than keying it without the dependency.
-- **`FileDataSource.__init__` snapshots mtime eagerly.** Each call constructs a fresh source, so the snapshot is the *current* mtime at the moment the resolver runs — exactly what you want for dynamic tracking. (`file_depends_on=` works differently: it checks the file's content, the way an automatically tracked read is checked. See [Custom File Sources](custom-file-sources.md).)
+- **`FileDataSource` reads the mtime when the key is built.** Its token is the file's *current* mtime at the moment the resolver runs — exactly what you want for dynamic tracking. (`file_depends_on=` works differently: it checks the file's content, the way an automatically tracked read is checked. See [Custom File Sources](custom-file-sources.md).)
 - **Closures over mutable state are a footgun.** See the example above — if a closure changes which `DataSource` you return without changing the function arguments, the cache may not notice. Encode anything that varies across calls into the arguments.
 
 ## API reference
 
 | Symbol | Surface | Effect |
 |---|---|---|
-| `dynamic_depends_on=callable` | `@cash.cache` kwarg | Calls *callable* with the function's args; expects a `DataSource` or list of them. Folded into the cache key as a sorted SHA-256 of each source's mtime (or `has_changed()` fallback). |
+| `dynamic_depends_on=callable` | `@cash.cache` kwarg | Calls *callable* with the function's args; expects a `DataSource` or list of them. Folded into the cache key as a sorted SHA-256 of each source's `state_token()`. |
 | `dynamic_depends_on=[callable1, callable2, ...]` | `@cash.cache` kwarg | Each resolver is called independently; results are pooled and hashed together. Equivalent to one resolver that concatenates the lists. |
-| `cash.DataSource` | Public ABC | Subclass to track anything other than file mtime. Implement `get_id`, `has_changed`, `update_state`. |
+| `cash.DataSource` | Public ABC | Subclass to track anything other than file mtime. Implement `get_id` and `state_token`. |
 | `cash.FileDataSource(path)` | Public class | mtime-based source for a single file. The canonical thing to return from a resolver. |
 | `CashCacheIneffectiveWarning` | Warning | Fires once per function when a resolver raises or returns something that is not a `DataSource`; the call runs uncached. |
 | `f.explain(*args).reason == 'key_uncomputable'` | Diagnostic | What `explain()` reports when the resolver itself raises (the silent variant re-raises and is caught upstream). |

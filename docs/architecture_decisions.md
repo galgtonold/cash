@@ -200,7 +200,6 @@ Cash identifies cached functions using `f"{func.__module__}.{func.__qualname__}"
 ### Consequences
 - Cache keys from v0.2.0 are incompatible (one-time cache invalidation on upgrade)
 - Slightly longer cache keys (negligible impact)
-- `_func_key_cache` dictionary avoids repeated `__module__` + `__qualname__` lookups
 
 ---
 

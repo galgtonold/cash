@@ -29,6 +29,8 @@ import sys
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from .data_source import state_token_of
+
 if TYPE_CHECKING:
     from .data_source import DataSource
     from .graph import DependencyGraph
@@ -187,16 +189,9 @@ class DependencyStateHasher:
             else:
                 hashes.append(self._source_hashes.get(node, ""))
         elif node in self._data_sources:
-            ds = self._data_sources[node]
-            # state_token() is the source's change token (mtime / version /
-            # digest). It warns if a source mistakenly returns a bool, which
-            # can't track changes.
-            token = (
-                ds.state_token()
-                if hasattr(ds, "state_token")
-                else (ds._get_mtime() if hasattr(ds, "_get_mtime") else ds.has_changed())
-            )
-            hashes.append(str(token))
+            # The source's change token (mtime / version / digest); warns if a
+            # source mistakenly returns a bool, which can't track changes.
+            hashes.append(state_token_of(self._data_sources[node]))
         elif node in self._declared_dep_snapshots:
             # A declared plain-callable dep: re-resolve its live
             # source hash so a disk edit + reload is seen; fall back to the
