@@ -1,17 +1,22 @@
 name: Docs
 
+# src/ is in the paths because mkdocstrings renders its docstrings into the site.
 on:
   push:
     branches: [main]
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      - "mkdocs_hooks.py"
       - ".readthedocs.yaml"
-      - "src/**/*.py"
+      - "src/**"
   pull_request:
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      - "mkdocs_hooks.py"
+      - ".readthedocs.yaml"
+      - "src/**"
 
 jobs:
   # Validate the docs build locally on every PR so broken docs don't reach main
@@ -29,8 +34,10 @@ jobs:
       - name: Install docs dependencies
         run: pip install -e ".[docs]"
 
+      # --strict turns every mkdocs warning (a broken link, a docstring
+      # mkdocstrings cannot render) into a failure.
       - name: Build docs
-        run: python -m mkdocs build
+        run: python -m mkdocs build --strict
 
 # NOTE: there is deliberately no ReadTheDocs trigger job here.
 # ReadTheDocs builds this project through its own GitHub integration, which
