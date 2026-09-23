@@ -51,8 +51,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..analysis.cacheability_decision import identity_coupled_reason
-from .cache_key import CacheKeyContext, is_cash_instrumentation
+from .cache_key import CacheKeyContext
 from .consumables import is_consumable_unrestorable
+from .lineage_formula import is_cash_instrumentation
 
 __all__ = [
     "eligible_call_nodes",

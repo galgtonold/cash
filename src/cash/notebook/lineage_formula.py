@@ -32,6 +32,54 @@ from ..tracking.module_symbols import closure_digest, static_attribute_reads
 logger = logging.getLogger(__name__)
 
 
+def is_cash_instrumentation(val: object) -> bool:
+    """True when *val* is I/O instrumentation rather than a notebook value:
+    one of cash's own I/O-tracking wrappers, or the ``open`` IPython puts in
+    ``user_ns``.
+
+    Neither can be pickled, so ``compute_hash`` falls back to a memory
+    address and every statement mentioning one would get a per-kernel key and
+    lineage. In a plain interpreter ``open`` is a builtin and a wrapped reader
+    stands for the library's own function, so neither is an input.
+
+    Tested with ``is True``, not truthiness: an object with a permissive
+    ``__getattr__`` (``MagicMock``, RPC proxies) has a truthy attribute for
+    any name, and treating it as instrumentation would drop a real input.
+    """
+    if getattr(val, "_is_file_tracker_patch", False) is True:
+        return True
+    shell = sys.modules.get("IPython.core.interactiveshell")
+    return shell is not None and val is getattr(shell, "_modified_open", _NO_SHELL_OPEN)
+
+
+_NO_SHELL_OPEN = object()
+
+
+def is_module_like(var_name: str, val: object, virtual_modules: Iterable[str]) -> bool:
+    """Whether *val* is valued as a module: by its tracked lineage alone, never
+    by its content.
+
+    A module (or a bound method, or an IPython internal) cannot be pickled, so
+    ``compute_hash`` falls back to its memory address, which changes with
+    every kernel. The cache key, the runtime's output lineage and the
+    simulation's must all apply this same test, or a restart re-keys
+    everything downstream.
+    """
+    if var_name in virtual_modules:
+        return True
+    if val is None:
+        return False
+    try:
+        if isinstance(val, types.ModuleType):
+            return True
+        # IPython internals and bound methods behave like modules -- skip them
+        if callable(val) and (var_name.startswith("_") or hasattr(val, "__self__")):
+            return True
+    except (AttributeError, TypeError) as exc:
+        logger.debug("[CACHE_KEY] Failed to check module/callable type for '%s': %s", var_name, exc)
+    return False
+
+
 def read_module_source_hash(mod_file: str, dep_files: set[str] | None = None) -> str | None:
     # Imported on use: the ``statement`` package imports this module.
     # Local: import cycle lineage_formula -> statement.file_deps -> ... -> lineage_formula.

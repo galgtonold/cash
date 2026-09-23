@@ -56,8 +56,6 @@ from ..cache_key import (
     compute_cache_key,
     control_outcome_key,
     import_bindings_key,
-    is_cash_instrumentation,
-    is_module_like,
     mutation_verdict_key,
     statement_source_hash,
     virtual_callable_key,
@@ -68,6 +66,8 @@ from ..call_refs import resolve_call_refs
 from ..control_structures import extract_target_names, get_control_structure_type, is_control_structure
 from ..lineage_formula import (
     callable_source_component,
+    is_cash_instrumentation,
+    is_module_like,
     module_read_lineage,
     module_source_component,
     output_lineage,

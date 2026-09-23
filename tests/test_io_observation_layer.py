@@ -239,7 +239,7 @@ def test_the_shells_own_open_is_not_a_notebook_input(mock_shell):
     after a restart."""
     import IPython.core.interactiveshell as shell_module
 
-    from cash.notebook.cache_key import is_cash_instrumentation
+    from cash.notebook.lineage_formula import is_cash_instrumentation
 
     assert is_cash_instrumentation(shell_module._modified_open)
 

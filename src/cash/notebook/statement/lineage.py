@@ -32,9 +32,11 @@ from typing import TYPE_CHECKING, Any
 
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...tracking.randomness import hidden_lineage_reads
-from ..cache_key import is_cash_instrumentation, is_module_like, statement_source_hash
+from ..cache_key import statement_source_hash
 from ..lineage_formula import (
     callable_source_component,
+    is_cash_instrumentation,
+    is_module_like,
     module_read_lineage,
     module_source_component,
     output_lineage,
@@ -238,7 +240,7 @@ class StatementLineageBuilder:
     ) -> tuple[list[str], dict[str, str]]:
         """Build input lineage hashes list and map for a set of input variables.
 
-        Mirrors the cache-key READ path (:func:`cache_key.is_module_like`): an
+        Mirrors the cache-key READ path (:func:`lineage_formula.is_module_like`): an
         untracked module contributes NOTHING. It previously fell through to
         ``compute_hash(module)``, which cannot pickle a module and so returns
         ``sha256(str(id(module)))`` -- a memory address, therefore a different

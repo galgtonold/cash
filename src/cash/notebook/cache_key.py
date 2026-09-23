@@ -12,7 +12,6 @@ import builtins
 import dis
 import hashlib
 import logging
-import sys
 import types
 from dataclasses import dataclass, field
 
@@ -23,7 +22,12 @@ from typing import Any, NamedTuple, Protocol, runtime_checkable
 from cash.notebook.lineage_store import LineageStore
 from cash.source_norm import unparse_without_docstrings
 
-from .lineage_formula import module_read_lineage, statement_environment_component
+from .lineage_formula import (
+    is_cash_instrumentation,
+    is_module_like,
+    module_read_lineage,
+    statement_environment_component,
+)
 
 __all__ = [
     "CacheKeyContext",
@@ -206,74 +210,6 @@ class CacheKeyResult(NamedTuple):
 
     module_source_hashes: list[str]
     """``['var:hash', ...]`` for tracked module dependencies."""
-
-
-def is_cash_instrumentation(val: object) -> bool:
-    """True when *val* is I/O instrumentation rather than a notebook value:
-    one of cash's own I/O-tracking wrappers, or the ``open`` IPython puts in
-    ``user_ns``.
-
-    While a tracker is open the file tracker replaces readers such as
-    ``pd.read_parquet`` with dispatcher wrappers, and a name bound to one (a
-    ``from pandas import read_parquet`` run meanwhile) keeps it. A wrapper is a
-    closure, so it cannot be pickled, so ``compute_hash`` falls back to
-    ``sha256(str(id(obj)))`` -- a memory address that is different in every
-    kernel. IPython's ``open`` (a wrapper of ``io.open`` that refuses the
-    standard streams' descriptors) cannot be pickled either: it claims to be
-    ``io.open`` and is not.
-
-    Any statement mentioning such a name therefore got a per-session cache
-    key, its output lineage inherited that volatility, and every downstream key
-    drifted with it: nothing restored after a restart and ``.cash`` grew a
-    duplicate copy each time. It first happened with ``open``: every ``def``
-    that writes a log line reads it.
-
-    Skipping is not merely a workaround, it restores the truth: in a plain
-    interpreter ``open`` is a builtin, which is not an input, and a wrapped
-    reader stands for the library's own function, which is code. Cash's own
-    instrumentation must be invisible to the key it computes.
-
-    Tested with ``is True``, not truthiness: any object with a permissive
-    ``__getattr__`` (``MagicMock``, RPC/ORM proxies) auto-creates a truthy
-    attribute for ANY name, and treating those as instrumentation would drop a
-    real input from the key -- trading this over-invalidation bug for an
-    under-invalidation one, which is far worse. The wrapper sets the marker to
-    literal ``True`` (``file_tracker.py`` ``_install_module_patches``), so an
-    identity test is both sufficient and safe.
-    """
-    if getattr(val, "_is_file_tracker_patch", False) is True:
-        return True
-    shell = sys.modules.get("IPython.core.interactiveshell")
-    return shell is not None and val is getattr(shell, "_modified_open", _NO_SHELL_OPEN)
-
-
-_NO_SHELL_OPEN = object()
-
-
-def is_module_like(var_name: str, val: object, virtual_modules: set[str]) -> bool:
-    """Return True if the value should be treated as a module (skipped from input_hashes).
-
-    PUBLIC because the lineage WRITE path and the upstream simulation must apply
-    the identical test. They previously did not, and the asymmetry was:
-    this read path skips a module, while the write path fell through to
-    ``compute_hash(module)``, which cannot pickle a module and returns
-    ``sha256(str(id(module)))`` -- a memory address, fresh on every kernel start.
-    That poisoned the output lineage of the defining statement, which is an input
-    hash for every downstream key, so nothing restored after a restart.
-    """
-    if var_name in virtual_modules:
-        return True
-    if val is None:
-        return False
-    try:
-        if isinstance(val, types.ModuleType):
-            return True
-        # IPython internals and bound methods behave like modules — skip them
-        if callable(val) and (var_name.startswith("_") or hasattr(val, "__self__")):
-            return True
-    except (AttributeError, TypeError) as exc:
-        logger.debug("[CACHE_KEY] Failed to check module/callable type for '%s': %s", var_name, exc)
-    return False
 
 
 class VirtualNamespace(NamedTuple):
