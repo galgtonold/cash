@@ -17,6 +17,7 @@ pytest.importorskip("IPython")
 from cash import Cash
 from cash.notebook.ipython.magics import CashMagics
 from cash.source_norm import source_identity_digest
+from tests._cell_driver import run_cash_cell
 from tests.conftest import MockShell
 
 
@@ -30,7 +31,7 @@ def cell_runner():
     shell.user_ns["c"] = cash
 
     def run(cell: str):
-        magics.cash("", cell)
+        run_cash_cell(magics, cell)
         return shell.user_ns
 
     return run

@@ -18,6 +18,7 @@ from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.call_refs import CallRef
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 class _Shell(Configurable):
@@ -38,7 +39,7 @@ def nb():
     shell = _Shell()
     magics = CashMagics(shell, Cash(backend=backend, register_magic=False))
     magics._auto_cache_enabled = True
-    magics.cash("", "import time\ndef fit(k):\n    time.sleep(0.12)\n    return list(range(k * 1000))")
+    run_cash_cell(magics, "import time\ndef fit(k):\n    time.sleep(0.12)\n    return list(range(k * 1000))")
     yield magics, shell, backend
     backend.clear()
 
@@ -52,42 +53,42 @@ def _stored(backend, needle):
 
 def _statuses(magics, shell, code, name):
     shell.user_ns.pop(name, None)
-    magics.cash("", code)
+    run_cash_cell(magics, code)
     return shell.user_ns[name]
 
 
 def test_a_dict_of_call_results_is_stored_as_references(nb):
     magics, shell, backend = nb
     code = "models = {k: fit(k) for k in range(1, 4)}"
-    magics.cash("", code)
+    run_cash_cell(magics, code)
     stored = _stored(backend, code)["models"]
     assert all(isinstance(v, CallRef) for v in stored.values()), stored
 
     shell.user_ns.pop("models")
-    magics.cash("", code)  # restored: the references are read back
+    run_cash_cell(magics, code)  # restored: the references are read back
     assert shell.user_ns["models"] == {k: list(range(k * 1000)) for k in range(1, 4)}
 
 
 def test_a_result_changed_after_the_call_is_stored_by_value(nb):
     magics, shell, backend = nb
     code = "m = fit(2).__iadd__([-1])"
-    magics.cash("", code)
+    run_cash_cell(magics, code)
     stored = _stored(backend, code)["m"]
     assert not isinstance(stored, CallRef) and stored[-1] == -1, type(stored)
     shell.user_ns.pop("m")
-    magics.cash("", code)
+    run_cash_cell(magics, code)
     assert shell.user_ns["m"][-1] == -1 and len(shell.user_ns["m"]) == 2001
 
 
 def test_a_statement_whose_call_entry_is_gone_recomputes(nb):
     magics, shell, backend = nb
     code = "models = {k: fit(k) for k in range(1, 3)}"
-    magics.cash("", code)
+    run_cash_cell(magics, code)
     for meta in list(backend.list_entries() or ()):
         if str(meta.get("key", "")).startswith("call:"):
             backend.delete(meta["key"])
     shell.user_ns.pop("models")
-    magics.cash("", code)
+    run_cash_cell(magics, code)
     assert shell.user_ns["models"] == {k: list(range(k * 1000)) for k in range(1, 3)}
 
 

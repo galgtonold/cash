@@ -40,6 +40,7 @@ from traitlets.config import Configurable
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 class _MockShell(Configurable):
@@ -91,9 +92,9 @@ def test_a_forbidden_call_is_never_wrapped_even_though_it_is_structurally_eligib
     """
     captured = _spy_on_wrap_eligible_calls(monkeypatch)
     magics, shell, _, _ = magics_fixture
-    magics.cash("", "import time\nout = []")
+    run_cash_cell(magics, "import time\nout = []")
 
-    magics.cash("", "out.append(time.time())")
+    run_cash_cell(magics, "out.append(time.time())")
 
     assert captured["sites"] == [], "a forbidden call must not survive the gate"
 
@@ -104,9 +105,9 @@ def test_an_ordinary_eligible_call_is_wrapped(magics_fixture, monkeypatch):
     """
     captured = _spy_on_wrap_eligible_calls(monkeypatch)
     magics, shell, _, _ = magics_fixture
-    magics.cash("", "def compute(x):\n    return x + 1\nout = []\nx = 1")
+    run_cash_cell(magics, "def compute(x):\n    return x + 1\nout = []\nx = 1")
 
-    magics.cash("", "out.append(compute(x))")
+    run_cash_cell(magics, "out.append(compute(x))")
 
     assert len(captured["sites"]) == 1, f"a genuinely cacheable call was not wrapped: {captured['sites']!r}"
 
@@ -132,11 +133,11 @@ def test_a_gate_exception_fails_closed_instead_of_crashing_the_cell(magics_fixtu
     monkeypatch.setattr(processor_module, "call_site_is_cacheable", _raise)
 
     magics, shell, _, _ = magics_fixture
-    magics.cash("", "def compute(x):\n    return x + 1\nout = []\nx = 1")
+    run_cash_cell(magics, "def compute(x):\n    return x + 1\nout = []\nx = 1")
 
     # Must not raise -- a caching optimisation must never be why user code
     # fails, and the statement must still actually run.
-    magics.cash("", "out.append(compute(x))")
+    run_cash_cell(magics, "out.append(compute(x))")
     assert shell.user_ns["out"] == [2], "the statement did not run to completion"
 
 
@@ -164,8 +165,8 @@ def test_the_gate_is_given_variable_lineage(magics_fixture, monkeypatch):
     monkeypatch.setattr(processor_module, "call_site_is_cacheable", _spy)
 
     magics, shell, _, _ = magics_fixture
-    magics.cash("", "def compute(x):\n    return x + 1\nout = []\nx = 1")
-    magics.cash("", "out.append(compute(x))")
+    run_cash_cell(magics, "def compute(x):\n    return x + 1\nout = []\nx = 1")
+    run_cash_cell(magics, "out.append(compute(x))")
 
     assert "variable_lineage" in captured_kwargs, (
         "the gate never passes variable_lineage, even though a real lineage table is in scope at this call site"
@@ -212,8 +213,8 @@ def test_a_no_cache_statement_never_reaches_the_gate(magics_fixture, monkeypatch
     monkeypatch.setattr(processor_module, "call_site_is_cacheable", _spy)
 
     magics, shell, _, _ = magics_fixture
-    magics.cash("", "def compute(x):\n    return x + 1\nout = []\nx = 1")
-    magics.cash("", "# @cash:no-cache\nout.append(compute(x))")
+    run_cash_cell(magics, "def compute(x):\n    return x + 1\nout = []\nx = 1")
+    run_cash_cell(magics, "# @cash:no-cache\nout.append(compute(x))")
 
     assert captured_calls == [], (
         "the gate was invoked for a no-cache statement -- "
@@ -250,7 +251,7 @@ def test_identity_contract_holds_on_the_no_eligible_call_and_opt_out_branches(ma
     import types
 
     magics, shell, _, _ = magics_fixture
-    magics.cash("", "out = []")
+    run_cash_cell(magics, "out = []")
     processor = magics._statement_processor
 
     # Branch 1: no eligible call anywhere in the statement.
@@ -263,7 +264,7 @@ def test_identity_contract_holds_on_the_no_eligible_call_and_opt_out_branches(ma
     # Branch 2: the `no_cache_calls` opt-out, short-circuiting BEFORE
     # `wrap_eligible_calls` runs at all -- even though `compute(x)` below is
     # structurally eligible (proven by the control that follows).
-    magics.cash("", "def compute(x):\n    return x + 1\nx = 1")
+    run_cash_cell(magics, "def compute(x):\n    return x + 1\nx = 1")
     code = "out.append(compute(x))"
     tree = ast.parse(code)
     opted_out = types.SimpleNamespace(no_cache_calls=True, no_cache=False)

@@ -45,6 +45,7 @@ from cash.notebook.statement.miss_guard import (
     MissGuard,
     resolve_cache_dir,
 )
+from tests._cell_driver import run_cash_cell
 
 # ---------------------------------------------------------------------------
 # State-machine unit tests — no processor, no backend.
@@ -313,7 +314,7 @@ class _Session:
         self.shell.user_ns["big"] = list(range(1000))
         self.magics.tracking_state.variable_lineage["big"] = lineage
         self.metrics.clear()
-        self.magics.cash("", code)
+        run_cash_cell(self.magics, code)
         assert self.metrics, "no metrics captured"
         return self.metrics[-1]
 

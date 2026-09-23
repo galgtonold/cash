@@ -17,6 +17,7 @@ from traitlets.config import Configurable
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 class _MockShell(Configurable):
@@ -58,7 +59,7 @@ def test_analyze_statement_called_once_per_processed_statement(magics_fixture):
         "cash.notebook.statement.processor.analyze_statement",
         wraps=real_analyze,
     ) as spy:
-        magics.cash("", "y = 1 + 2")
+        run_cash_cell(magics, "y = 1 + 2")
 
     # The cell runs one statement (`y = 1 + 2`). Pre-fix this was 2 calls; the
     # de-dup contract is exactly 1 per processed statement.

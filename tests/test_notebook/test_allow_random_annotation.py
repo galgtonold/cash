@@ -32,6 +32,7 @@ from cash.core import Cash
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.magics import CashMagics
 from cash.tracking.randomness import CashRandomnessWarning
+from tests._cell_driver import run_cash_cell
 
 
 class _MockShell(Configurable):
@@ -69,7 +70,7 @@ def _last_metric(magics, code: str) -> dict:
 
     magics.render_interactive_badge = capture  # type: ignore[assignment]
     try:
-        magics.cash("", code)
+        run_cash_cell(magics, code)
     finally:
         magics.render_interactive_badge = real_render  # type: ignore[assignment]
     assert captured, "no metrics captured"
@@ -80,7 +81,7 @@ def _run_capturing_warnings(magics, code: str) -> list[warnings.WarningMessage]:
     """Execute *code* and return only the randomness warnings it raised."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        magics.cash("", code)
+        run_cash_cell(magics, code)
     return [w for w in caught if issubclass(w.category, CashRandomnessWarning)]
 
 
@@ -156,7 +157,7 @@ class TestWarningClassContract:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             warnings.filterwarnings("ignore", category=cash.CashWarning)
-            magics.cash("", "import numpy as np\nx = np.random.rand(1000)")
+            run_cash_cell(magics, "import numpy as np\nx = np.random.rand(1000)")
         assert [w for w in caught if issubclass(w.category, CashRandomnessWarning)] == []
 
     def test_attributed_to_the_cash_pseudo_file(self, magics_fixture):
@@ -213,7 +214,7 @@ class TestSeededControl:
     def test_seeding_persists_across_cells(self, magics_fixture):
         """Seeding is session state: a seed in one cell quiets a later cell."""
         magics, _shell, _backend, _cash = magics_fixture
-        magics.cash("", "import numpy as np\nnp.random.seed(42)")
+        run_cash_cell(magics, "import numpy as np\nnp.random.seed(42)")
         caught = _run_capturing_warnings(magics, "x = np.random.rand(1000)")
         assert caught == []
 
@@ -221,7 +222,7 @@ class TestSeededControl:
         """Seeding numpy must NOT quiet a stdlib ``random`` draw — they are
         independent RNGs, and pretending otherwise would hide a real hazard."""
         magics, _shell, _backend, _cash = magics_fixture
-        magics.cash("", "import numpy as np\nimport random\nnp.random.seed(42)")
+        run_cash_cell(magics, "import numpy as np\nimport random\nnp.random.seed(42)")
         caught = _run_capturing_warnings(magics, "x = random.random()")
         assert len(caught) == 1
         assert "random.random" in str(caught[0].message)
@@ -326,7 +327,7 @@ class TestAnnotationDoesNotChangeCacheability:
     def test_annotated_statement_still_restores_from_cache(self, magics_fixture):
         magics, _shell, _backend, _cash = magics_fixture
         code = "import numpy as np\n# @cash:persist\n# @cash:allow-random\nx = np.random.rand(1000)"
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         m = _last_metric(magics, code)
         assert m["status"] == CacheStatus.RESTORED
 
@@ -334,7 +335,7 @@ class TestAnnotationDoesNotChangeCacheability:
         """The baseline: randomness never blocked caching, annotation or not."""
         magics, _shell, _backend, _cash = magics_fixture
         code = "import numpy as np\n# @cash:persist\nx = np.random.rand(1000)"
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         m = _last_metric(magics, code)
         assert m["status"] == CacheStatus.RESTORED
 
@@ -385,7 +386,7 @@ class TestStaleRandomnessAnnouncedOnRestore:
         for _ in range(runs):
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
-                magics.cash("", code)
+                run_cash_cell(magics, code)
             per_run.append([str(w.message) for w in caught if issubclass(w.category, CashRandomnessWarning)])
         return per_run
 
@@ -442,7 +443,7 @@ class TestStaleRandomnessAnnouncedOnRestore:
         import numpy as np
 
         shell.user_ns["np"] = np
-        magics.cash("", "np.random.seed(0)")
+        run_cash_cell(magics, "np.random.seed(0)")
         runs = self._restore_warnings(
             magics,
             "# @cash:persist\nx = np.random.rand(200000)",

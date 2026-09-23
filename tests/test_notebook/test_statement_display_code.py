@@ -12,6 +12,7 @@ from cash.analysis.annotations import CacheAnnotation
 from cash.backends import InMemoryBackend
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 pytest.importorskip("IPython")
 
@@ -107,8 +108,8 @@ def test_a_control_body_statement_has_no_display_code(processor_fixture):
     keep showing what actually RAN. Their source is not what executed, so
     showing it would mislead rather than help.
 
-    This drives a REAL ``for`` loop through the full ``%%cash`` pipeline
-    (``CashMagics.cash`` -> ``CellExecutor`` -> ``ControlStructureProcessor``)
+    This drives a REAL ``for`` loop through the full cell pipeline
+    (``run_cash_cell`` -> ``CellExecutor`` -> ``ControlStructureProcessor``)
     rather than calling ``process_statement`` directly, because the thing
     being pinned is a fact about WIRING, not about ``process_statement``
     itself: ``process_statement`` happily accepts a ``display_code`` kwarg
@@ -136,7 +137,7 @@ def test_a_control_body_statement_has_no_display_code(processor_fixture):
     cell = "for i in xs:\n    y = i + 1\nz = 99\n"
 
     with patch.object(magics, "render_interactive_badge") as mock_badge:
-        magics.cash("", cell)
+        run_cash_cell(magics, cell)
 
     # Premises: both the loop body and the sibling statement actually ran,
     # so a false pass can't hide behind a cell that silently did nothing.

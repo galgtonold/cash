@@ -35,6 +35,7 @@ from cash.notebook.control_structures.for_handler import (
     _stamp_call_events_loop_header,
 )
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 def _event(source, occ, hit, key="call:abcdef0123456789", **extra):
@@ -347,7 +348,7 @@ def test_real_for_loop_stamps_call_events_with_loop_header(magics_fixture):
 
 
 def _run_real_for_loop_and_capture_metrics(magics_obj, shell, code: str) -> list:
-    """Run *code* through the real ``%%cash`` pipeline and return the raw
+    """Run *code* through the real cell pipeline and return the raw
     ``metrics_list`` the LAST badge render saw (every statement's complete
     ``ProcessResult`` dict, decorator_calls/loop_header included).
 
@@ -362,7 +363,7 @@ def _run_real_for_loop_and_capture_metrics(magics_obj, shell, code: str) -> list
         return original_render(metrics_list, *args, **kwargs)
 
     magics_obj.render_interactive_badge = _spy
-    magics_obj.cash("", code.strip())
+    run_cash_cell(magics_obj, code.strip())
     assert captured_metrics_lists, "badge render was never called"
     return max(captured_metrics_lists, key=len)
 

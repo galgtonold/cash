@@ -24,6 +24,8 @@ import tempfile
 
 import pytest
 
+from tests._cell_driver import run_cash_cell
+
 pytest.importorskip("IPython")
 np = pytest.importorskip("numpy")
 
@@ -65,7 +67,7 @@ def test_a_loop_target_is_not_hashed_twice_per_iteration(counting_magics):
     """The duplicate. `build_iteration_context` must reuse the digest
     `_process_one_iteration` already computed for the same value."""
     magics, counts = counting_magics
-    magics.cash("", CELL)
+    run_cash_cell(magics, CELL)
 
     duplicated = {obj_id: n for obj_id, n in counts.items() if n > 1}
     assert not duplicated, (
@@ -86,7 +88,7 @@ def test_the_loop_target_is_still_hashed_at_all(counting_magics):
     the test above and reintroduce it.
     """
     magics, counts = counting_magics
-    magics.cash("", CELL)
+    run_cash_cell(magics, CELL)
 
     assert len(counts) >= ITERATIONS, (
         f"expected at least one full hash per iteration ({ITERATIONS}), "
@@ -98,7 +100,7 @@ def test_iterations_still_produce_distinct_results(counting_magics):
     """Behavioural backstop: whatever the hashing does, the loop's own answers
     must stay per-iteration correct."""
     magics, counts = counting_magics
-    magics.cash("", CELL)
+    run_cash_cell(magics, CELL)
 
     expected = [float((np.arange(1000, dtype=float) + i).sum()) for i in range(ITERATIONS)]
     assert magics.shell.user_ns["seen"] == expected

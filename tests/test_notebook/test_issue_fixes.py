@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from cash.analysis.code_analyzer import CodeAnalyzer
 from cash.notebook.upstream._types import SimulationCacheEntry
+from tests._cell_driver import run_cash_cell
 
 # ===========================================================================
 # Issue 24: Comprehension variable scoping
@@ -381,13 +382,13 @@ class TestTransitiveLoopMutation:
         """
         # Simulate loop-mutated variable
         mock_shell.user_ns["events"] = [1, 2, 3, 4, 5]
-        cash_magics.cash("", "events = []")
+        run_cash_cell(cash_magics, "events = []")
 
         # Simulate the loop populating events
         mock_shell.user_ns["events"] = [1, 2, 3, 4, 5]  # As if loop populated it
 
         # Now create derived variable
-        cash_magics.cash("", "total = len(events)")
+        run_cash_cell(cash_magics, "total = len(events)")
         assert mock_shell.user_ns["total"] == 5
 
     def test_safety_guard_blocks_empty_restore(self):
@@ -489,16 +490,16 @@ class TestSkipWithoutRestore:
         file_path = str(test_file).replace("\\", "/")
 
         # Execute a statement that reads a file
-        cash_magics.cash("", "import csv")
+        run_cash_cell(cash_magics, "import csv")
 
         # First execution
         code = f"data = open('{file_path}').read()"
-        cash_magics.cash("", code)
+        run_cash_cell(cash_magics, code)
         assert "data" in mock_shell.user_ns
         first_value = mock_shell.user_ns["data"]
 
         # Second execution — should be SKIPPED (file unchanged)
-        cash_magics.cash("", code)
+        run_cash_cell(cash_magics, code)
         assert mock_shell.user_ns["data"] == first_value
 
     def test_file_deps_reexecuted_when_changed(self, cash_magics, mock_shell, tmp_path):
@@ -509,7 +510,7 @@ class TestSkipWithoutRestore:
 
         # First execution
         code = f"data = open('{file_path}').read()"
-        cash_magics.cash("", code)
+        run_cash_cell(cash_magics, code)
         first_value = mock_shell.user_ns["data"]
 
         # Modify the file
@@ -517,7 +518,7 @@ class TestSkipWithoutRestore:
         test_file.write_text("a,b\n5,6\n7,8\n")
 
         # Second execution — should detect file change and re-execute
-        cash_magics.cash("", code)
+        run_cash_cell(cash_magics, code)
         # The value should reflect the new file content
         new_value = mock_shell.user_ns["data"]
         assert new_value != first_value, "File changed, statement should have re-executed"
@@ -584,11 +585,11 @@ for item in data:
             mock_get_ids.return_value = []
 
             magics.cash_on("")
-            magics.cash("", loop_code)
+            run_cash_cell(magics, loop_code)
             assert shell.user_ns["total"] == 150
 
             # Run downstream cell
-            magics.cash("", downstream_code)
+            run_cash_cell(magics, downstream_code)
             assert shell.user_ns["average"] == 30.0
 
             # Key: re-running downstream should NOT trigger upstream re-execution
@@ -600,7 +601,7 @@ for item in data:
 
             f = io.StringIO()
             with contextlib.redirect_stdout(f):
-                magics.cash("", downstream_code)
+                run_cash_cell(magics, downstream_code)
 
             debug_output = f.getvalue()
             # Should NOT see "Marking as broken" for total
@@ -649,7 +650,7 @@ for item in data:
             mock_get_ids.return_value = []
 
             magics.cash_on("")
-            magics.cash("", loop_code)
+            run_cash_cell(magics, loop_code)
 
             # Now trigger upstream check on downstream cell to exercise simulation
 
@@ -658,7 +659,7 @@ for item in data:
 
             # We need to check that loop_target_vars gets populated
             # The simplest way: just check that simulation doesn't break downstream
-            magics.cash("", downstream_code)
+            run_cash_cell(magics, downstream_code)
 
     def test_tuple_unpacking_loop_target(self, cash_magics, mock_shell, tmp_path):
         """
@@ -704,10 +705,10 @@ for k, v in pairs:
             mock_get_ids.return_value = []
 
             magics.cash_on("")
-            magics.cash("", loop_code)
+            run_cash_cell(magics, loop_code)
             assert shell.user_ns["result"] == ["1=a", "2=b", "3=c"]
 
-            magics.cash("", downstream_code)
+            run_cash_cell(magics, downstream_code)
             assert shell.user_ns["summary"] == "1=a, 2=b, 3=c"
 
             # Re-run downstream - should not trigger false broken detection
@@ -718,7 +719,7 @@ for k, v in pairs:
 
             f = io.StringIO()
             with contextlib.redirect_stdout(f):
-                magics.cash("", downstream_code)
+                run_cash_cell(magics, downstream_code)
 
             debug_output = f.getvalue()
             assert "Marking as broken" not in debug_output, (

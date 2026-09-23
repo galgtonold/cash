@@ -7,6 +7,7 @@ from traitlets.config import Configurable
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 # Captured at import time, before conftest's autouse ``disable_auto_magic_
 # registration`` fixture stubs ``Cash.register_magic`` to a no-op. The
@@ -59,7 +60,7 @@ class TestCashMagics(unittest.TestCase):
         # 1. First run: Calculate a = 1 + 1
         # @cash:persist forces caching regardless of the 10 ms min-execution-time floor
         cell = "# @cash:persist\na = 1 + 1"
-        self.magics.cash("", cell)
+        run_cash_cell(self.magics, cell)
 
         self.assertEqual(self.shell.user_ns.get("a"), 2)
         # With incremental caching, we store per statement.
@@ -69,7 +70,7 @@ class TestCashMagics(unittest.TestCase):
         self.shell.user_ns["a"] = 99
 
         # 3. Second run: Should restore 'a' = 2
-        self.magics.cash("", cell)
+        run_cash_cell(self.magics, cell)
         self.assertEqual(self.shell.user_ns.get("a"), 2)
 
     def test_incremental_caching(self):
@@ -82,7 +83,7 @@ x = 10
 y = x + 5
 """
         # 1. First run
-        self.magics.cash("", cell)
+        run_cash_cell(self.magics, cell)
         self.assertEqual(self.shell.user_ns.get("x"), 10)
         self.assertEqual(self.shell.user_ns.get("y"), 15)
         self.assertEqual(len(self.backend.list_entries()), 2)  # Two statements cached
@@ -93,7 +94,7 @@ x = 10
 # @cash:persist
 y = x + 10
 """
-        self.magics.cash("", cell_v2)
+        run_cash_cell(self.magics, cell_v2)
 
         # Verify behavior: x should be restored from cache, y should be recomputed
         self.assertEqual(self.shell.user_ns.get("x"), 10)
@@ -120,26 +121,26 @@ y = x + 10
 
         # 2. First run: y = x * 2
         cell = "y = x * 2"
-        self.magics.cash("", cell)
+        run_cash_cell(self.magics, cell)
         self.assertEqual(self.shell.user_ns.get("y"), 20)
 
         # 3. Change input
         self.shell.user_ns["x"] = 5
 
         # 4. Second run: Should recompute y = 10 (cache miss due to input change)
-        self.magics.cash("", cell)
+        run_cash_cell(self.magics, cell)
         self.assertEqual(self.shell.user_ns.get("y"), 10)
 
     def test_ttl(self):
         cell = "z = 100"
-        self.magics.cash("ttl=1", cell)
+        run_cash_cell(self.magics, cell, ttl=1)
         self.assertEqual(self.shell.user_ns.get("z"), 100)
 
         # Modify z
         self.shell.user_ns["z"] = 0
 
         # Immediate re-run -> Restore
-        self.magics.cash("ttl=1", cell)
+        run_cash_cell(self.magics, cell, ttl=1)
         self.assertEqual(self.shell.user_ns.get("z"), 100)
 
         # Wait for TTL
@@ -147,7 +148,7 @@ y = x + 10
         self.shell.user_ns["z"] = 0
 
         # Re-run -> Recompute
-        self.magics.cash("ttl=1", cell)
+        run_cash_cell(self.magics, cell, ttl=1)
         self.assertEqual(self.shell.user_ns.get("z"), 100)
 
         # Verify that we actually recomputed (mock side effect check?)
@@ -158,14 +159,14 @@ y = x + 10
 p = 10
 q = 20
 """
-        self.magics.cash("", cell)
+        run_cash_cell(self.magics, cell)
         self.assertEqual(self.shell.user_ns.get("p"), 10)
         self.assertEqual(self.shell.user_ns.get("q"), 20)
 
         self.shell.user_ns["p"] = 0
         self.shell.user_ns["q"] = 0
 
-        self.magics.cash("", cell)
+        run_cash_cell(self.magics, cell)
         self.assertEqual(self.shell.user_ns.get("p"), 10)
         self.assertEqual(self.shell.user_ns.get("q"), 20)
 
@@ -180,7 +181,7 @@ q = 20
 import time
 y = x * 2
 """
-        self.magics.cash("", cell)
+        run_cash_cell(self.magics, cell)
         self.assertEqual(self.shell.user_ns.get("y"), 20)
 
     def test_output_capture(self):
@@ -201,7 +202,7 @@ y = x * 2
         sys.stdout = captured_stdout
 
         try:
-            self.magics.cash("", cell)
+            run_cash_cell(self.magics, cell)
         finally:
             sys.stdout = original_stdout
 
@@ -214,7 +215,7 @@ y = x * 2
         sys.stdout = captured_stdout
 
         try:
-            self.magics.cash("", cell)
+            run_cash_cell(self.magics, cell)
         finally:
             sys.stdout = original_stdout
 
@@ -233,14 +234,14 @@ print(f"Computing with multiplier {multiplier}...")
 final_value = result * multiplier
 """
         # 1. First run
-        self.magics.cash("", cell)
+        run_cash_cell(self.magics, cell)
         self.assertEqual(self.shell.user_ns.get("final_value"), 420)
 
         # 2. Change multiplier
         self.shell.user_ns["multiplier"] = 5
 
         # 3. Second run - Should recompute
-        self.magics.cash("", cell)
+        run_cash_cell(self.magics, cell)
         self.assertEqual(self.shell.user_ns.get("final_value"), 210)
 
     def test_rich_output_capture(self):
@@ -267,7 +268,7 @@ final_value = result * multiplier
             mock_captured.outputs = [mock_output]
             mock_capture.return_value.__enter__.return_value = mock_captured
 
-            self.magics.cash("", cell)
+            run_cash_cell(self.magics, cell)
 
             # Verify it was stored
             entries = self.backend.list_entries()
@@ -284,7 +285,7 @@ final_value = result * multiplier
             patch("IPython.display.publish_display_data") as mock_publish_sp,
             patch("cash.notebook.ipython.magics.publish_display_data") as mock_publish_magics,
         ):
-            self.magics.cash("", cell)
+            run_cash_cell(self.magics, cell)
 
             # Verify publish_display_data was called in at least one location
             # The call might come from magics (for buffered outputs) or statement_processor

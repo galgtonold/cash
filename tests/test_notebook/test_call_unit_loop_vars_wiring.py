@@ -13,7 +13,7 @@ A test that constructs `CallUnit`/`CallCache` directly and hands `loop_vars`
 straight to `call_cache_key` proves nothing about this wiring -- it never
 touches `for_handler.py`, `StatementProcessor.loop_vars_scope`, or the
 `loop_vars_provider` plumbing at all. Every test below goes through the REAL
-production pipeline (`CashMagics.cash()` -> `StatementProcessor` ->
+production pipeline (`run_cash_cell` -> `CellExecutor` -> `StatementProcessor` ->
 `ForLoopHandler` -> `CallCache`/`CallUnit`), the same one
 `test_badge_sub_units.py`'s `MockShell` exercises for the loop-header
 stamping wiring.
@@ -32,6 +32,7 @@ from cash.core import Cash
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.magics import CashMagics
 from cash.notebook.statement import StatementProcessor
+from tests._cell_driver import run_cash_cell
 
 
 class MockShell(Configurable):
@@ -116,8 +117,8 @@ def test_hidden_state_call_gets_a_distinct_value_per_iteration(magics_fixture):
     `{1: 1, 2: 1, 3: 1} != {1: 1, 2: 2, 3: 3}`.
     """
     magics_obj, shell, backend = magics_fixture
-    magics_obj.cash("", _DEFS_CELL.strip())
-    magics_obj.cash("", _LOOP_CELL.strip())
+    run_cash_cell(magics_obj, _DEFS_CELL.strip())
+    run_cash_cell(magics_obj, _LOOP_CELL.strip())
     assert shell.user_ns["results"] == {1: 1, 2: 2, 3: 3}
     assert shell.user_ns["counter"]["n"] == 3, (
         "fetch_next() ran a different number of times than there were "
@@ -151,12 +152,12 @@ def test_hidden_state_loop_vars_still_discriminate_on_a_rerun(magics_fixture):
     `test_notebook_integration/test_callee_global_capture.py`.
     """
     magics_obj, shell, backend = magics_fixture
-    magics_obj.cash("", _DEFS_CELL.strip())
-    magics_obj.cash("", _LOOP_CELL.strip())
+    run_cash_cell(magics_obj, _DEFS_CELL.strip())
+    run_cash_cell(magics_obj, _LOOP_CELL.strip())
     assert shell.user_ns["results"] == {1: 1, 2: 2, 3: 3}
     assert shell.user_ns["counter"]["n"] == 3
 
-    magics_obj.cash("", _LOOP_CELL.strip())
+    run_cash_cell(magics_obj, _LOOP_CELL.strip())
     rerun = shell.user_ns["results"]
     assert len(set(rerun.values())) == 3, (
         f"the rerun's three iterations collapsed onto shared entries ({rerun}) "

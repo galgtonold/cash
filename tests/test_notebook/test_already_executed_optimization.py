@@ -29,6 +29,7 @@ from traitlets.config import Configurable
 from cash import Cash
 from cash.backends import InMemoryBackend
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 # Force caching regardless of the 10 ms min-execution-time floor.
 _PERSIST = CacheAnnotation(persist=True)
@@ -641,12 +642,12 @@ class TestAccumulatorInitSkip:
             mock_get_ids.return_value = []
 
             magics.cash_on("")
-            magics.cash("", loop_code_v1)
+            run_cash_cell(magics, loop_code_v1)
 
             assert "results" in shell.user_ns
             assert shell.user_ns["results"] == {"A": "AA", "B": "BB", "C": "CC", "D": "DD"}
 
-            magics.cash("", keys_code)
+            run_cash_cell(magics, keys_code)
             assert shell.user_ns["keys"] == ["A", "B", "C", "D"]
 
         notebook_v2 = {
@@ -674,7 +675,7 @@ class TestAccumulatorInitSkip:
             mock_get_cells.side_effect = get_cells_v2
             mock_get_ids.return_value = []
 
-            magics.cash("", keys_code)
+            run_cash_cell(magics, keys_code)
 
             results = shell.user_ns.get("results", {})
             assert "A" in results, f"Missing 'A' in results: {results}"
@@ -694,7 +695,7 @@ class TestAccumulatorInitSkip:
             del shell.user_ns["results"]
 
         magics.cash_on("")
-        magics.cash("", "results = {}\nfor x in ['A', 'B']:\n    results[x] = x * 2\n")
+        run_cash_cell(magics, "results = {}\nfor x in ['A', 'B']:\n    results[x] = x * 2\n")
         assert shell.user_ns["results"] == {"A": "AA", "B": "BB"}
 
     def test_init_runs_if_existing_data_empty(self, cash_magics, mock_shell):
@@ -704,7 +705,7 @@ class TestAccumulatorInitSkip:
 
         shell.user_ns["results"] = {}
         magics.cash_on("")
-        magics.cash("", "results = {}\nfor x in ['A', 'B']:\n    results[x] = x * 2\n")
+        run_cash_cell(magics, "results = {}\nfor x in ['A', 'B']:\n    results[x] = x * 2\n")
         assert shell.user_ns["results"] == {"A": "AA", "B": "BB"}
 
     def test_list_accumulator(self, cash_magics, mock_shell):
@@ -713,5 +714,5 @@ class TestAccumulatorInitSkip:
         shell = mock_shell
 
         magics.cash_on("")
-        magics.cash("", "results = []\nfor x in ['A', 'B', 'C', 'D']:\n    results.append(x)\n")
+        run_cash_cell(magics, "results = []\nfor x in ['A', 'B', 'C', 'D']:\n    results.append(x)\n")
         assert shell.user_ns["results"] == ["A", "B", "C", "D"]

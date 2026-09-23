@@ -9,6 +9,7 @@ Tests cover:
 """
 
 from cash.purity import KNOWN_PURE_BUILTINS, is_known_pure, is_pure, is_stateful, pure, stateful
+from tests._cell_driver import run_cash_cell
 
 # ===========================================================================
 # Unit tests for decorators and checkers
@@ -247,12 +248,12 @@ class TestPurityStatementProcessorIntegration:
         mock_shell.user_ns["data"] = [1, 2, 3]
 
         # Execute the statement
-        cash_magics.cash("", "result = train(data)")
+        run_cash_cell(cash_magics, "result = train(data)")
         assert mock_shell.user_ns["result"] == 6
 
         # Execute again - should NOT be cached (stateful)
         mock_shell.user_ns["data"] = [4, 5, 6]
-        cash_magics.cash("", "result = train(data)")
+        run_cash_cell(cash_magics, "result = train(data)")
         assert mock_shell.user_ns["result"] == 15
 
     def test_pure_function_allows_caching(self, cash_magics, mock_shell):
@@ -266,11 +267,11 @@ class TestPurityStatementProcessorIntegration:
         mock_shell.user_ns["x"] = 5
 
         # Execute the statement
-        cash_magics.cash("", "result = compute(x)")
+        run_cash_cell(cash_magics, "result = compute(x)")
         assert mock_shell.user_ns["result"] == 25
 
         # Execute again with same inputs - should be cached
-        cash_magics.cash("", "result = compute(x)")
+        run_cash_cell(cash_magics, "result = compute(x)")
         assert mock_shell.user_ns["result"] == 25
 
     def test_pure_function_skips_mutation_detection(self, cash_magics, mock_shell):
@@ -284,7 +285,7 @@ class TestPurityStatementProcessorIntegration:
         mock_shell.user_ns["data"] = [3, 1, 2]
 
         # Even though 'data' is a mutable type, @pure should skip mutation checks
-        cash_magics.cash("", "result = transform(data)")
+        run_cash_cell(cash_magics, "result = transform(data)")
         assert mock_shell.user_ns["result"] == [1, 2, 3]
 
     def test_unmarked_function_uses_default_behavior(self, cash_magics, mock_shell):
@@ -296,7 +297,7 @@ class TestPurityStatementProcessorIntegration:
         mock_shell.user_ns["regular_func"] = regular_func
         mock_shell.user_ns["x"] = 10
 
-        cash_magics.cash("", "result = regular_func(x)")
+        run_cash_cell(cash_magics, "result = regular_func(x)")
         assert mock_shell.user_ns["result"] == 11
 
     def test_mixed_pure_and_unmarked_not_all_pure(self, cash_magics, mock_shell):
@@ -314,7 +315,7 @@ class TestPurityStatementProcessorIntegration:
         mock_shell.user_ns["x"] = 5
 
         # Both functions called - not all pure, so normal mutation detection applies
-        cash_magics.cash("", "result = pure_func(x) + unmarked_func(x)")
+        run_cash_cell(cash_magics, "result = pure_func(x) + unmarked_func(x)")
         assert mock_shell.user_ns["result"] == 16  # 10 + 6
 
     def test_stateful_with_debug(self, cash_magics, mock_shell):
@@ -327,7 +328,7 @@ class TestPurityStatementProcessorIntegration:
 
         mock_shell.user_ns["update_db"] = update_db
 
-        cash_magics.cash("", "status = update_db()")
+        run_cash_cell(cash_magics, "status = update_db()")
         assert mock_shell.user_ns["status"] == "updated"
 
     def test_stateful_reruns_every_time(self, cash_magics, mock_shell):
@@ -341,18 +342,18 @@ class TestPurityStatementProcessorIntegration:
 
         # First call: computes normally
         mock_shell.user_ns["n"] = 1
-        cash_magics.cash("", "v = increment(n)")
+        run_cash_cell(cash_magics, "v = increment(n)")
         assert mock_shell.user_ns["v"] == 2
 
         # Change input: should recompute because stateful skips cache
         mock_shell.user_ns["n"] = 10
-        cash_magics.cash("", "v = increment(n)")
+        run_cash_cell(cash_magics, "v = increment(n)")
         assert mock_shell.user_ns["v"] == 11
 
     def test_no_function_calls_no_purity_effect(self, cash_magics, mock_shell):
         """Statements with no function calls should not be affected by purity system."""
         mock_shell.user_ns["x"] = 10
-        cash_magics.cash("", "y = x * 2")
+        run_cash_cell(cash_magics, "y = x * 2")
         assert mock_shell.user_ns["y"] == 20
 
     def test_method_call_not_detected_as_name(self, cash_magics, mock_shell):
@@ -368,7 +369,7 @@ class TestPurityStatementProcessorIntegration:
 
         # obj.do_something() is an Attribute call, not a Name call
         # So purity system should not detect it (current implementation only checks ast.Name)
-        cash_magics.cash("", "result = obj.do_something()")
+        run_cash_cell(cash_magics, "result = obj.do_something()")
         assert mock_shell.user_ns["result"] == 42
 
 
@@ -479,13 +480,13 @@ class TestKnownPureIntegration:
     def test_sorted_skips_mutation_detection(self, cash_magics, mock_shell):
         """sorted() is a known-pure builtin — mutation detection should be skipped."""
         mock_shell.user_ns["data"] = [3, 1, 2]
-        cash_magics.cash("", "result = sorted(data)")
+        run_cash_cell(cash_magics, "result = sorted(data)")
         assert mock_shell.user_ns["result"] == [1, 2, 3]
 
     def test_len_skips_mutation_detection(self, cash_magics, mock_shell):
         """len() is a known-pure builtin."""
         mock_shell.user_ns["items"] = [10, 20, 30]
-        cash_magics.cash("", "n = len(items)")
+        run_cash_cell(cash_magics, "n = len(items)")
         assert mock_shell.user_ns["n"] == 3
 
     def test_mixed_known_pure_and_user_pure(self, cash_magics, mock_shell):
@@ -497,7 +498,7 @@ class TestKnownPureIntegration:
 
         mock_shell.user_ns["double"] = double
         mock_shell.user_ns["x"] = 5
-        cash_magics.cash("", "result = max(double(x), 0)")
+        run_cash_cell(cash_magics, "result = max(double(x), 0)")
         assert mock_shell.user_ns["result"] == 10
 
     def test_known_pure_with_unknown_function(self, cash_magics, mock_shell):
@@ -509,5 +510,5 @@ class TestKnownPureIntegration:
         mock_shell.user_ns["unknown_func"] = unknown_func
         mock_shell.user_ns["data"] = [1, 2, 3]
         # sorted is known pure, but unknown_func is not → not all_calls_pure
-        cash_magics.cash("", "result = sorted(data) + [unknown_func(1)]")
+        run_cash_cell(cash_magics, "result = sorted(data) + [unknown_func(1)]")
         assert mock_shell.user_ns["result"] == [1, 2, 3, 2]

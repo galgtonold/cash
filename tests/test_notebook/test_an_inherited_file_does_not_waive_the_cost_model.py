@@ -9,6 +9,8 @@ anyway, and served as a hit (~400 MiB frames restoring in
 ~10 s against ~4 s of compute, "1/1 cache hits" on the badge).
 """
 
+from tests._cell_driver import run_cash_cell
+
 
 def _waivers(cash_magics, tmp_path):
     from cash.notebook.statement.processor import StatementProcessor
@@ -25,10 +27,10 @@ def _waivers(cash_magics, tmp_path):
     try:
         path = tmp_path / "data.csv"
         path.write_text("a,b\n" + "\n".join(f"{i},{i * 2}" for i in range(2000)), encoding="utf-8")
-        cash_magics.cash("", f"import pandas as pd\ndf = pd.read_csv(r'{path}')")
+        run_cash_cell(cash_magics, f"import pandas as pd\ndf = pd.read_csv(r'{path}')")
         # Real work, so it clears the too-cheap floor and reaches the check.
-        cash_magics.cash(
-            "", "big = pd.concat([df] * 50, ignore_index=True).assign(w=sum(i * i for i in range(400_000)))"
+        run_cash_cell(
+            cash_magics, "big = pd.concat([df] * 50, ignore_index=True).assign(w=sum(i * i for i in range(400_000)))"
         )
     finally:
         StatementProcessor._should_skip_large_object_caching = orig

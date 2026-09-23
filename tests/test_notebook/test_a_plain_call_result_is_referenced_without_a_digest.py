@@ -14,6 +14,8 @@ Anything else still proves "unchanged" by digesting.
 
 import pytest
 
+from tests._cell_driver import run_cash_cell
+
 pd = pytest.importorskip("pandas")
 np = pytest.importorskip("numpy")
 
@@ -51,9 +53,9 @@ def seen(monkeypatch):
 
 def test_unpacked_names_refer_to_items_of_the_result(cash_magics, seen):
     stored, digests = seen
-    cash_magics.cash("", BUILD)
+    run_cash_cell(cash_magics, BUILD)
     stored.clear()
-    cash_magics.cash("", "a, b = build()")
+    run_cash_cell(cash_magics, "a, b = build()")
     ns = cash_magics.shell.user_ns
     assert ns["b"] == 7 and len(ns["a"]) == 6_000_000
     variables = stored[-1]
@@ -63,15 +65,15 @@ def test_unpacked_names_refer_to_items_of_the_result(cash_magics, seen):
 
     # served from the cache: the references resolve to the values
     del ns["a"], ns["b"]
-    cash_magics.cash("", "a, b = build()")
+    run_cash_cell(cash_magics, "a, b = build()")
     assert ns["b"] == 7 and float(ns["a"]["x"].iloc[5]) == 5.0
 
 
 def test_a_result_changed_after_its_call_is_not_referenced(cash_magics, seen):
     stored, _digests = seen
-    cash_magics.cash("", BUILD)
+    run_cash_cell(cash_magics, BUILD)
     stored.clear()
-    cash_magics.cash("", "p = bump(build())")
+    run_cash_cell(cash_magics, "p = bump(build())")
     variables = stored[-1]
     assert not isinstance(variables["p"], call_refs.CallRef)
     assert float(cash_magics.shell.user_ns["p"][0]["x"].iloc[0]) == -1.0
@@ -79,9 +81,9 @@ def test_a_result_changed_after_its_call_is_not_referenced(cash_magics, seen):
 
 def test_a_subscript_of_the_result_is_not_trusted(cash_magics, seen):
     stored, digests = seen
-    cash_magics.cash("", BUILD)
+    run_cash_cell(cash_magics, BUILD)
     stored.clear()
-    cash_magics.cash("", "first = build()[0]")
+    run_cash_cell(cash_magics, "first = build()[0]")
     assert not isinstance(stored[-1]["first"], call_refs.CallRef)
 
 
@@ -89,23 +91,25 @@ def test_a_plain_value_worth_keeping_is_not_pickled_either(cash_magics, seen):
     """A real result of 402 MiB for 3.7 s: worth keeping, and the digest the
     statement's trusted reference does not need took 2.6 s."""
     stored, digests = seen
-    cash_magics.cash(
-        "", BUILD + "def small():\n    time.sleep(0.12)\n    return pd.DataFrame({'x': np.arange(1000, dtype=float)})\n"
+    run_cash_cell(
+        cash_magics,
+        BUILD + "def small():\n    time.sleep(0.12)\n    return pd.DataFrame({'x': np.arange(1000, dtype=float)})\n",
     )
     stored.clear()
-    cash_magics.cash("", "s = small()")
+    run_cash_cell(cash_magics, "s = small()")
     assert isinstance(stored[-1]["s"], call_refs.CallRef)
     assert digests == []
     del cash_magics.shell.user_ns["s"]
-    cash_magics.cash("", "s = small()")
+    run_cash_cell(cash_magics, "s = small()")
     assert float(cash_magics.shell.user_ns["s"]["x"].iloc[999]) == 999.0
 
 
 def test_a_value_used_elsewhere_is_still_digested(cash_magics, seen):
     stored, digests = seen
-    cash_magics.cash(
-        "", BUILD + "def small():\n    time.sleep(0.12)\n    return pd.DataFrame({'x': np.arange(1000, dtype=float)})\n"
+    run_cash_cell(
+        cash_magics,
+        BUILD + "def small():\n    time.sleep(0.12)\n    return pd.DataFrame({'x': np.arange(1000, dtype=float)})\n",
     )
-    cash_magics.cash("", "acc = []")
-    cash_magics.cash("", "acc.append(small())")
+    run_cash_cell(cash_magics, "acc = []")
+    run_cash_cell(cash_magics, "acc.append(small())")
     assert digests, "a call that is not its statement's plain value is digested as before"

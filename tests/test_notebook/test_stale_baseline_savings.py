@@ -39,6 +39,7 @@ from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 class _MockShell(Configurable):
@@ -231,13 +232,13 @@ class TestVerificationFiresOnTheRealPipeline:
         # import (imports are cheap and separately cached).
         cell = "slow = sum(i * i for i in range(2_000_000))"
 
-        magics.cash("", cell)
+        run_cash_cell(magics, cell)
         stats = magics._session.stats
         assert stats["statements_computed"] == 1
         # The baseline was measured HERE, keyed by the statement source.
         assert magics._session.measured_compute, "no baseline recorded for a COMPUTED statement"
 
-        magics.cash("", cell)
+        run_cash_cell(magics, cell)
         assert stats["statements_restored"] == 1, "second run did not hit the cache"
         # THE CONTRACT: the restore found the baseline this session measured, so
         # the saving is verified rather than taken on faith from the cache.
@@ -247,7 +248,7 @@ class TestVerificationFiresOnTheRealPipeline:
     def test_stats_reset_forgets_the_measured_baselines(self, magics_fixture, capsys):
         magics, _shell, _backend = magics_fixture
         magics.badge_mode = "off"
-        magics.cash("", "slow2 = sum(i * i for i in range(2_000_000))")
+        run_cash_cell(magics, "slow2 = sum(i * i for i in range(2_000_000))")
         assert magics._session.measured_compute
 
         magics.cash_stats("reset")
@@ -265,7 +266,7 @@ class TestCertainLossStillReadsAsALoss:
     def test_no_savings_at_all_still_says_cash_cost_you(self, magics_fixture, capsys):
         magics, _shell, _backend = magics_fixture
         for i in range(6):
-            magics.cash("", f"cheap_{i} = {i} + 1")
+            run_cash_cell(magics, f"cheap_{i} = {i} + 1")
         capsys.readouterr()
         magics.cash_stats("")
         out = capsys.readouterr().out

@@ -21,6 +21,7 @@ from unittest.mock import patch
 
 from cash.analysis.cacheability import analyze_statement
 from cash.analysis.code_analyzer import CodeAnalyzer
+from tests._cell_driver import run_cash_cell
 
 # ============================================================================
 # Group 1: Dict Mutation in Loops
@@ -41,7 +42,7 @@ class TestLoopDictMutation:
 for x in ["A", "B", "C"]:
     results[x] = x.lower()
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == {"A": "a", "B": "b", "C": "c"}
 
     def test_loop_dict_subscript_second_run_from_cache(self, cash_magics, mock_shell):
@@ -56,11 +57,11 @@ for x in ["A", "B", "C"]:
     results[x] = x.lower()
 """
         # First run
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == {"A": "a", "B": "b", "C": "c"}
 
         # Second run — should use cache
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == {"A": "a", "B": "b", "C": "c"}
 
     def test_loop_dict_update_method(self, cash_magics, mock_shell):
@@ -74,7 +75,7 @@ for x in ["A", "B", "C"]:
 for x in ["A", "B", "C"]:
     results.update({x: x * 2})
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == {"A": "AA", "B": "BB", "C": "CC"}
 
     def test_loop_dict_setdefault(self, cash_magics, mock_shell):
@@ -88,7 +89,7 @@ for x in ["A", "B", "C"]:
 for x in ["A", "B", "C"]:
     results.setdefault(x, x * 3)
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == {"A": "AAA", "B": "BBB", "C": "CCC"}
 
     def test_loop_dict_multiple_mutations(self, cash_magics, mock_shell):
@@ -104,7 +105,7 @@ for x in ["A", "B", "C"]:
     names[x] = x.lower()
     counts[x] = len(x)
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["names"] == {"A": "a", "B": "b", "C": "c"}
         assert shell.user_ns["counts"] == {"A": 1, "B": 1, "C": 1}
 
@@ -128,7 +129,7 @@ class TestLoopListMutation:
 for x in [1, 2, 3]:
     results.append(x * 10)
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == [10, 20, 30]
 
     def test_loop_list_extend(self, cash_magics, mock_shell):
@@ -142,7 +143,7 @@ for x in [1, 2, 3]:
 for x in [1, 2, 3]:
     results.extend([x, x * 2])
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == [1, 2, 2, 4, 3, 6]
 
     def test_loop_list_index_assignment(self, cash_magics, mock_shell):
@@ -156,7 +157,7 @@ for x in [1, 2, 3]:
 for i in range(3):
     results[i] = i * 5
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == [0, 5, 10]
 
     def test_loop_augmented_assign_int(self, cash_magics, mock_shell):
@@ -170,7 +171,7 @@ for i in range(3):
 for x in [10, 20, 30]:
     total += x
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["total"] == 60
 
 
@@ -193,7 +194,7 @@ class TestLoopSetMutation:
 for x in [1, 2, 3, 2, 1]:
     seen.add(x)
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["seen"] == {1, 2, 3}
 
     def test_loop_set_discard(self, cash_magics, mock_shell):
@@ -207,7 +208,7 @@ for x in [1, 2, 3, 2, 1]:
 for x in [2, 4]:
     items.discard(x)
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["items"] == {1, 3, 5}
 
 
@@ -230,7 +231,7 @@ class TestLoopIteratorVariations:
 for i in range(4):
     results.append(i ** 2)
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == [0, 1, 4, 9]
 
     def test_loop_over_list_variable(self, cash_magics, mock_shell):
@@ -246,7 +247,7 @@ for i in range(4):
 for x in items:
     results.append(x.upper())
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == ["CAT", "DOG", "BIRD"]
 
     def test_loop_over_dict_items(self, cash_magics, mock_shell):
@@ -262,7 +263,7 @@ for x in items:
 for k, v in data.items():
     results[k] = v * 10
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == {"a": 10, "b": 20}
 
     def test_loop_over_enumerate(self, cash_magics, mock_shell):
@@ -278,7 +279,7 @@ for k, v in data.items():
 for i, x in enumerate(items):
     results[i] = x
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == {0: "a", 1: "b", 2: "c"}
 
     def test_loop_over_zip(self, cash_magics, mock_shell):
@@ -295,7 +296,7 @@ for i, x in enumerate(items):
 for k, v in zip(keys, vals):
     results[k] = v
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == {"x": 10, "y": 20, "z": 30}
 
 
@@ -318,7 +319,7 @@ class TestWhileLoopMutation:
 while count < 5:
     count += 1
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["count"] == 5
 
     def test_while_loop_list_append(self, cash_magics, mock_shell):
@@ -334,7 +335,7 @@ while i < 3:
     results.append(i * 10)
     i += 1
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == [0, 10, 20]
         assert shell.user_ns["i"] == 3
 
@@ -351,7 +352,7 @@ while len(queue) > 0:
     item = queue.pop(0)
     processed.append(item * 2)
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["processed"] == [2, 4, 6]
         assert shell.user_ns["queue"] == []
 
@@ -392,7 +393,7 @@ class TestUpstreamLoopTrust:
         ):
             mock_get_cells.side_effect = get_cells
             mock_get_ids.return_value = []
-            magics.cash("", code)
+            run_cash_cell(magics, code)
 
     def test_upstream_trusts_loop_vars_when_unchanged(self, cash_magics, mock_shell, tmp_path):
         """When upstream code hasn't changed, loop-mutated vars should be trusted in-memory."""
@@ -575,7 +576,7 @@ class TestLoopEdgeCases:
 for x in []:
     results.append(x)
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == []
 
     def test_single_iteration_loop(self, cash_magics, mock_shell):
@@ -589,7 +590,7 @@ for x in []:
 for x in ["only"]:
     results[x] = 42
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == {"only": 42}
 
     def test_nested_loop_dict_mutation(self, cash_magics, mock_shell):
@@ -604,7 +605,7 @@ for i in range(2):
     for j in range(2):
         results[(i, j)] = i * 10 + j
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["results"] == {(0, 0): 0, (0, 1): 1, (1, 0): 10, (1, 1): 11}
 
     def test_loop_with_if_inside(self, cash_magics, mock_shell):
@@ -622,7 +623,7 @@ for x in range(6):
     else:
         odds.append(x)
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["evens"] == [0, 2, 4]
         assert shell.user_ns["odds"] == [1, 3, 5]
 
@@ -639,7 +640,7 @@ for x in [1, 2, 3]:
     total += x
     items.append(x * 2)
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["total"] == 6
         assert shell.user_ns["items"] == [2, 4, 6]
 
@@ -654,7 +655,7 @@ for x in [1, 2, 3]:
 for c in ["hello", " ", "world"]:
     s += c
 """
-        magics.cash("", code)
+        run_cash_cell(magics, code)
         assert shell.user_ns["s"] == "hello world"
 
 

@@ -25,6 +25,7 @@ from cash.notebook.compiled_source import (
     register_cell_source,
 )
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 class MockShell(Configurable):
@@ -95,7 +96,7 @@ def test_is_cash_filename(name, expected):
 def test_traceback_shows_source_of_cell_defined_function(magics_fixture):
     """The failing line appears in the traceback, not a bare '<cash>' frame."""
     magics, shell = magics_fixture
-    magics.cash("", "def compute_ratio(a, b):\n    scaled = a * 100\n    return scaled / b")
+    run_cash_cell(magics, "def compute_ratio(a, b):\n    scaled = a * 100\n    return scaled / b")
 
     fn = shell.user_ns["compute_ratio"]
     assert is_cash_filename(fn.__code__.co_filename)
@@ -115,7 +116,7 @@ def test_traceback_shows_source_of_cell_defined_function(magics_fixture):
 def test_inspect_getsource_works_on_cell_defined_function(magics_fixture):
     """``inspect.getsource`` no longer raises "could not get source code"."""
     magics, shell = magics_fixture
-    magics.cash("", "def greet(name):\n    return f'hi {name}'")
+    run_cash_cell(magics, "def greet(name):\n    return f'hi {name}'")
 
     src = inspect.getsource(shell.user_ns["greet"])
     assert "def greet(name):" in src

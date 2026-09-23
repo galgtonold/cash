@@ -27,6 +27,7 @@ pytest.importorskip("IPython")
 from cash import Cash
 from cash.notebook.ipython.cell_executor import PipelineSyntaxError
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 from tests.conftest import MockShell
 
 
@@ -43,7 +44,7 @@ def cell_runner():
     def run(cell: str) -> int:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            magics.cash("", cell)
+            run_cash_cell(magics, cell)
         return len([w for w in caught if "Impurity" in type(w.message).__name__])
 
     return run
@@ -98,7 +99,7 @@ def test_a_pep614_parenthesised_decorator_does_not_kill_the_cell():
 
     cell = "@(\n    c.cache\n)\ndef f(n):\n    return n  # @cash:assume-safe\nf(3)\n"
 
-    magics.cash("", cell)  # must not raise -- this is the regression itself
+    run_cash_cell(magics, cell)  # must not raise -- this is the regression itself
 
     assert "f" in shell.user_ns, "the cell aborted before the def bound the name"
     assert shell.user_ns["f"](3) == 3, "the fallback-executed function must still work"
@@ -108,7 +109,7 @@ def test_a_pep614_parenthesised_decorator_does_not_kill_the_cell():
 def async_cell_runner():
     """Async twin of ``cell_runner``.
 
-    ``%%cash`` (``magics.cash(...)``) is a purely SYNC entry point -- its
+    ``run_cash_cell`` (``CellExecutor.execute_cell``) is a purely SYNC entry point -- its
     split loop (``_execute_cell_statements``) only ever calls
     ``process_statement`` (never the ``_async`` twin), so it cannot exercise
     ``_execute_statement_async`` no matter what the cell contains. The

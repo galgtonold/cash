@@ -24,6 +24,7 @@ from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
 from cash.tracking.function_tracker import FunctionTracker
+from tests._cell_driver import run_cash_cell
 
 # ============================================================================
 # Fixtures
@@ -188,7 +189,7 @@ class TestModuleReloadInvalidation:
         sp.recently_reloaded_modules.add(module_name)
 
         # Execute a simple non-import cell via cash magic
-        magics.cash("", "x = 1")
+        run_cash_cell(magics, "x = 1")
 
         # Should PERSIST after non-import cell execution (the module flag
         # must survive until the actual import statement re-executes)
@@ -198,7 +199,7 @@ class TestModuleReloadInvalidation:
         # We need the module to be importable for this to work
         try:
             sp.recently_reloaded_modules.add(module_name)
-            magics.cash("", f"import {module_name}")
+            run_cash_cell(magics, f"import {module_name}")
             # Should be cleared now because the import ran
             assert module_name not in sp.recently_reloaded_modules
         except Exception:
@@ -390,7 +391,7 @@ class TestExceptionSurfacing:
         magics, shell, backend = magics_fixture
 
         with pytest.raises(Exception) as exc_info:
-            magics.cash("", "import nonexistent_module_xyz_123")
+            run_cash_cell(magics, "import nonexistent_module_xyz_123")
 
         # Should be a ModuleNotFoundError (subclass of ImportError)
         assert "nonexistent_module_xyz_123" in str(exc_info.value)
@@ -400,14 +401,14 @@ class TestExceptionSurfacing:
         magics, shell, backend = magics_fixture
 
         with pytest.raises(ValueError, match="test error message"):
-            magics.cash("", "raise ValueError('test error message')")
+            run_cash_cell(magics, "raise ValueError('test error message')")
 
     def test_name_error_surfaces_in_cash_magic(self, magics_fixture):
         """NameError from referencing undefined variable should be raised."""
         magics, shell, backend = magics_fixture
 
         with pytest.raises(NameError):
-            magics.cash("", "print(undefined_variable_xyz)")
+            run_cash_cell(magics, "print(undefined_variable_xyz)")
 
     def test_error_in_multi_statement_cell_stops_execution(self, magics_fixture):
         """Error in first statement should prevent second statement from running."""
@@ -415,7 +416,7 @@ class TestExceptionSurfacing:
 
         cell = "raise ValueError('stop here')\nx = 42"
         with pytest.raises(ValueError, match="stop here"):
-            magics.cash("", cell)
+            run_cash_cell(magics, cell)
 
         # Second statement should not have executed
         assert "x" not in shell.user_ns
@@ -426,7 +427,7 @@ class TestExceptionSurfacing:
 
         cell = "x = 42\nraise ValueError('second fails')"
         with pytest.raises(ValueError, match="second fails"):
-            magics.cash("", cell)
+            run_cash_cell(magics, cell)
 
         # First statement should have executed
         assert shell.user_ns.get("x") == 42
@@ -437,7 +438,7 @@ class TestExceptionSurfacing:
 
         # SyntaxError is handled before statement processing (in ast.parse)
         # It should return None, not crash
-        magics.cash("", "def foo(")
+        run_cash_cell(magics, "def foo(")
         # Should not raise
 
     def test_error_metrics_contain_error_info(self, magics_fixture):
@@ -726,7 +727,7 @@ class TestPipelineParity:
             return original(raw_cell)
 
         executor._detect_module_changes = spy
-        magics.cash("", "x = 1")
+        run_cash_cell(magics, "x = 1")
         assert called_with == ["x = 1"]
 
     def test_cash_magic_invokes_pre_execution_notifications(self, magics_fixture):
@@ -741,14 +742,14 @@ class TestPipelineParity:
             return original(raw_cell, pre_upstream_metrics, upstream_metrics)
 
         executor._build_pre_execution_notifications = spy
-        magics.cash("", "x = 1")
+        run_cash_cell(magics, "x = 1")
         assert call_count[0] == 1
 
     def test_both_magics_populate_last_cell_metrics(self, magics_fixture):
         """Both routes must populate `_last_cell_metrics` with the same shape."""
         magics, _, _ = magics_fixture
 
-        magics.cash("", "a_via_cash_magic = 1")
+        run_cash_cell(magics, "a_via_cash_magic = 1")
         metrics_cash = magics._last_cell_metrics
         assert metrics_cash is not None
         assert "statements" in metrics_cash

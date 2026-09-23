@@ -17,6 +17,7 @@ from traitlets.config import Configurable
 from cash import Cash
 from cash.backends import InMemoryBackend
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 class MockShell(Configurable):
@@ -55,14 +56,14 @@ def test_three_cell_cascade(transitive_magics):
     """Test that changing a affects b affects c across 3 cells.
 
     NOTE: This test is xfail because transitive upstream re-execution
-    requires the full _execute_cell pipeline with a real notebook file.
-    The %%cash magic (used in unit tests) only processes individual
-    statements without upstream dependency resolution.
+    requires a real notebook file to read the upstream cells from, and
+    ``run_cash_cell`` (used in unit tests) runs a cell with no notebook
+    behind it, so there is nothing upstream to resolve.
     See test_interaction_dependencies.py for proper integration tests.
     """
     pytest.xfail(
         "Transitive re-execution requires _execute_cell + notebook file, "
-        "not %%cash magic. Covered by integration tests."
+        "not run_cash_cell. Covered by integration tests."
     )
 
 
@@ -72,12 +73,12 @@ def test_direct_dependency_invalidation(transitive_magics):
 
     # Cell 1: x = 10
     cell1 = "x = 10"
-    magics.cash("", cell1)
+    run_cash_cell(magics, cell1)
     assert shell.user_ns["x"] == 10, "x should be 10"
 
     # Cell 2: y = x + 5 (should be 15)
     cell2 = "y = x + 5"
-    magics.cash("", cell2)
+    run_cash_cell(magics, cell2)
     assert shell.user_ns["y"] == 15, "y should be 15 (10 + 5)"
 
     # Change x directly in namespace (simulating upstream change)
@@ -89,5 +90,5 @@ def test_direct_dependency_invalidation(transitive_magics):
         del magics.tracking_state.variable_lineage["x"]
 
     # Re-run Cell 2: y should be recalculated to 25
-    magics.cash("", cell2)
+    run_cash_cell(magics, cell2)
     assert shell.user_ns["y"] == 25, "y should be recalculated to 25 after x changed to 20"

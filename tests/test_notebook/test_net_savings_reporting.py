@@ -26,6 +26,7 @@ from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 class _MockShell(Configurable):
@@ -115,7 +116,7 @@ class TestNetNegativeOrZero:
         # stored and nothing is ever restored → gross stays 0 while cash's
         # per-cell overhead accrues.
         for i in range(6):
-            magics.cash("", f"cheap_{i} = {i} + 1")
+            run_cash_cell(magics, f"cheap_{i} = {i} + 1")
 
         data = _stats_json(magics, capsys)
         assert data["total_time_saved"] == 0.0
@@ -127,7 +128,7 @@ class TestNetNegativeOrZero:
     def test_negative_net_shown_honestly_in_human_output(self, magics_fixture, capsys):
         magics, _shell, _backend = magics_fixture
         for i in range(6):
-            magics.cash("", f"cheapo_{i} = {i} + 1")
+            run_cash_cell(magics, f"cheapo_{i} = {i} + 1")
         capsys.readouterr()
         magics.cash_stats("")
         out = capsys.readouterr().out
@@ -149,7 +150,7 @@ class TestOverheadAccountingIsCheap:
         magics._statement_processor.analytics_manager = am
 
         for i in range(10):
-            magics.cash("", f"guard_{i} = {i} + 1")
+            run_cash_cell(magics, f"guard_{i} = {i} + 1")
 
         # Overhead was accumulated purely in memory ...
         assert magics._session.stats["total_overhead"] > 0.0

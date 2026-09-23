@@ -23,6 +23,7 @@ from traitlets.config.configurable import Configurable
 from cash.backends import FileBackend, InMemoryBackend
 from cash.core import Cash
 from cash.notebook.statement import StatementProcessor
+from tests._cell_driver import run_cash_cell
 
 
 class MockShell(Configurable):
@@ -263,13 +264,13 @@ class TestReadCsvCachingUnit:
 
         shell.user_ns["pd"] = pandas
         # Execute to give pd a lineage
-        magics.cash("", "import pandas as pd")
+        run_cash_cell(magics, "import pandas as pd")
 
         # Set data_path
-        magics.cash("", f"data_path = '{csv_path_str}'")
+        run_cash_cell(magics, f"data_path = '{csv_path_str}'")
 
         # Now read the CSV - this should be cached despite large size
-        magics.cash("", "df = pd.read_csv(data_path)")
+        run_cash_cell(magics, "df = pd.read_csv(data_path)")
 
         assert "df" in shell.user_ns
         assert len(shell.user_ns["df"]) == n_rows

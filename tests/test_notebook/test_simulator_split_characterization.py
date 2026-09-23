@@ -17,6 +17,7 @@ from traitlets.config.configurable import Configurable
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 # ---------------------------------------------------------------------------
 # Shared fixture (defined locally — magics_fixture has no shared conftest)
@@ -78,8 +79,8 @@ def _snapshot_tracking_state(simulator):
 def test_clean_notebook_no_changes_returns_empty_plan(magics_fixture):
     """A notebook with no modifications produces no re-execution work."""
     magics, shell, _backend = magics_fixture
-    magics.cash("", "x = 1")
-    magics.cash("", "y = x + 1")
+    run_cash_cell(magics, "x = 1")
+    run_cash_cell(magics, "y = x + 1")
 
     simulator = magics._upstream_checker.simulator
     before = _snapshot_tracking_state(simulator)
@@ -101,8 +102,8 @@ def test_clean_notebook_no_changes_returns_empty_plan(magics_fixture):
 def test_modified_upstream_cell_schedules_reexecution(magics_fixture):
     """Editing an upstream cell flags dependent stmts for re-run."""
     magics, shell, _backend = magics_fixture
-    magics.cash("", "x = 1")
-    magics.cash("", "y = x + 1")
+    run_cash_cell(magics, "x = 1")
+    run_cash_cell(magics, "y = x + 1")
 
     simulator = magics._upstream_checker.simulator
 
@@ -124,7 +125,7 @@ def test_modified_upstream_cell_schedules_reexecution(magics_fixture):
 def test_simulate_upstream_return_types(magics_fixture):
     """simulate_upstream always returns (list, list, float)."""
     magics, shell, _backend = magics_fixture
-    magics.cash("", "data = [1, 2, 3]")
+    run_cash_cell(magics, "data = [1, 2, 3]")
 
     simulator = magics._upstream_checker.simulator
 
@@ -144,7 +145,7 @@ def test_simulate_upstream_return_types(magics_fixture):
 def test_reset_caches_clears_simulator_state(magics_fixture):
     """reset_caches() empties all three simulator-owned caches."""
     magics, shell, _backend = magics_fixture
-    magics.cash("", "x = 1")
+    run_cash_cell(magics, "x = 1")
 
     simulator = magics._upstream_checker.simulator
 

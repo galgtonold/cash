@@ -17,6 +17,7 @@ from traitlets.config import Configurable
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 class MockShell(Configurable):
@@ -58,7 +59,7 @@ total = 0
 for i in [1, 2, 3, 4, 5]:
     total += i
 """
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
         assert shell.user_ns["total"] == 15
 
     def test_second_run_correct(self, magics_fixture):
@@ -70,10 +71,10 @@ total = 0
 for i in [1, 2, 3, 4, 5]:
     total += i
 """
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
         assert shell.user_ns["total"] == 15
 
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
         assert shell.user_ns["total"] == 15
 
     def test_loop_with_append_correct(self, magics_fixture):
@@ -85,10 +86,10 @@ results = []
 for x in ['a', 'b', 'c', 'd']:
     results.append(x.upper())
 """
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
         assert shell.user_ns["results"] == ["A", "B", "C", "D"]
 
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
         assert shell.user_ns["results"] == ["A", "B", "C", "D"]
 
     def test_pure_body_statements_cached(self, magics_fixture):
@@ -102,11 +103,11 @@ for i in [1, 2, 3]:
     x = sum(range(5_000_000)) * 0 + i * 100
 """
         # First run: compute
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
         assert shell.user_ns["x"] == 300  # Last iteration value
 
         # Second run: should restore from cache
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
         assert shell.user_ns["x"] == 300
 
         # Check that iterations were cached (look at metrics)
@@ -123,11 +124,11 @@ acc = []
 for v in [10, 20]:
     acc.append(v)
 """
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
         assert shell.user_ns["acc"] == [10, 20]
 
         # On second run, mutation statements re-execute
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
         assert shell.user_ns["acc"] == [10, 20]
 
     def test_mixed_cache_and_mutation(self, magics_fixture):
@@ -140,12 +141,12 @@ for key in ['x', 'y']:
     val = sum(range(100))
     results[key] = val
 """
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
         assert shell.user_ns["results"] == {"x": 4950, "y": 4950}
 
         # Second run: val = sum(range(100)) should restore from cache
         # results[key] = val is a subscript assignment on results, but results IS output
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
         assert shell.user_ns["results"] == {"x": 4950, "y": 4950}
 
 
@@ -161,7 +162,7 @@ if x > 5:
 else:
     result = 'small'
 """
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
         assert shell.user_ns["result"] == "big"
 
     def test_if_false_branch(self, magics_fixture):
@@ -173,7 +174,7 @@ if x > 5:
 else:
     result = 'small'
 """
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
         assert shell.user_ns["result"] == "small"
 
 
@@ -189,7 +190,7 @@ while i < 5:
     counter += 1
     i += 1
 """
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
         assert shell.user_ns["counter"] == 5
         assert shell.user_ns["i"] == 5
 
@@ -205,7 +206,7 @@ class TestBadgeDisplayWithPerIteration:
 for key in ['a', 'b']:
     val = len(key)
 """
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
 
         statements = magics._last_cell_metrics.get("statements", [])
         loop_stmts = [s for s in statements if "# __iteration_context__:" in s.get("code", "")]
@@ -222,7 +223,7 @@ if x > 0:
 else:
     y = -1
 """
-        magics.cash("", code.strip())
+        run_cash_cell(magics, code.strip())
 
         statements = magics._last_cell_metrics.get("statements", [])
         for s in statements:
@@ -246,7 +247,7 @@ for x in ['a', 'b', 'c']:
     result = stats['mean'][0]
 """
         with pytest.raises(TypeError, match="not subscriptable"):
-            magics.cash("", code.strip())
+            run_cash_cell(magics, code.strip())
 
     def test_error_on_first_iteration_not_masked(self, magics_fixture):
         """Error must occur on the very first iteration, not be silently cached."""
@@ -259,7 +260,7 @@ for x in ['a']:
     val = d['key'][0]
 """
         with pytest.raises(TypeError):
-            magics.cash("", code.strip())
+            run_cash_cell(magics, code.strip())
 
     def test_error_after_code_change_not_masked(self, magics_fixture):
         """If code changes to introduce a bug, the error should NOT be masked by old cache."""
@@ -271,7 +272,7 @@ for x in ['a', 'b']:
     stats = {'mean': [1.0, 2.0]}
     val = stats['mean'][0]
 """
-        magics.cash("", code_v1.strip())
+        run_cash_cell(magics, code_v1.strip())
         assert shell.user_ns["val"] == 1.0
 
         # Run 2: modified code introduces a bug (overwrite list with int)
@@ -282,7 +283,7 @@ for x in ['a', 'b']:
     val = stats['mean'][0]
 """
         with pytest.raises(TypeError, match="not subscriptable"):
-            magics.cash("", code_v2.strip())
+            run_cash_cell(magics, code_v2.strip())
 
 
 class TestErrorLineNumberAnnotation:
@@ -302,7 +303,7 @@ class TestErrorLineNumberAnnotation:
     val = d['key'][0]"""
 
         try:
-            magics.cash("", code.strip())
+            run_cash_cell(magics, code.strip())
             pytest.fail("Expected TypeError")
         except TypeError as e:
             # The error should be annotated with line 4 (the body statement),
@@ -322,7 +323,7 @@ if x > 0:
     val = 1 / 0"""
 
         try:
-            magics.cash("", code.strip())
+            run_cash_cell(magics, code.strip())
             pytest.fail("Expected ZeroDivisionError")
         except ZeroDivisionError as e:
             # The if-block starts at line 2 in the cell.  The error is on
@@ -342,7 +343,7 @@ if x > 0:
         val = 1 / 0"""
 
         try:
-            magics.cash("", code.strip())
+            run_cash_cell(magics, code.strip())
             pytest.fail("Expected ZeroDivisionError")
         except ZeroDivisionError as e:
             assert hasattr(e, "_cash_error_lineno"), "_cash_error_lineno not set on exception"

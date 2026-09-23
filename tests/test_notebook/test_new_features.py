@@ -8,6 +8,8 @@ Side-effect detection tests live in test_cacheability.py.
 
 from unittest.mock import MagicMock
 
+from tests._cell_driver import run_cash_cell
+
 # ===========================================================================
 # Size-Aware Caching Tests
 # ===========================================================================
@@ -170,12 +172,12 @@ class TestNarrowFileDependencyPropagation:
         pd.DataFrame({"a": [1, 2, 3]}).to_csv(csv_path, index=False)
 
         # Cell 1: Load CSV
-        magics.cash("", f"import pandas as pd; df = pd.read_csv('{csv_path_str}')")
+        run_cash_cell(magics, f"import pandas as pd; df = pd.read_csv('{csv_path_str}')")
         # Manually set file deps as if FileAccessTracker tracked it
         sp.executed_file_deps["df"] = {csv_path_str}
 
         # Cell 2: Compute scalar from DataFrame
-        magics.cash("", "n_rows = len(df)")
+        run_cash_cell(magics, "n_rows = len(df)")
 
         # n_rows (int) should NOT have file deps
         assert "n_rows" not in sp.executed_file_deps or len(sp.executed_file_deps.get("n_rows", set())) == 0
@@ -191,11 +193,11 @@ class TestNarrowFileDependencyPropagation:
         csv_path_str = str(csv_path).replace("\\", "/")
         pd.DataFrame({"a": [1, 2, 3]}).to_csv(csv_path, index=False)
 
-        magics.cash("", f"import pandas as pd; df = pd.read_csv('{csv_path_str}')")
+        run_cash_cell(magics, f"import pandas as pd; df = pd.read_csv('{csv_path_str}')")
         sp.executed_file_deps["df"] = {csv_path_str}
 
         # Cell 2: Transform DataFrame
-        magics.cash("", "df2 = df[df['a'] > 1]")
+        run_cash_cell(magics, "df2 = df[df['a'] > 1]")
 
         # df2 (DataFrame) SHOULD have file deps
         assert "df2" in sp.executed_file_deps
@@ -212,11 +214,11 @@ class TestNarrowFileDependencyPropagation:
         csv_path_str = str(csv_path).replace("\\", "/")
         pd.DataFrame({"a": [1, 2, 3]}).to_csv(csv_path, index=False)
 
-        magics.cash("", f"import pandas as pd; df = pd.read_csv('{csv_path_str}')")
+        run_cash_cell(magics, f"import pandas as pd; df = pd.read_csv('{csv_path_str}')")
         sp.executed_file_deps["df"] = {csv_path_str}
 
         # Cell 2: Convert to list (data-bearing type)
-        magics.cash("", "values = df['a'].tolist()")
+        run_cash_cell(magics, "values = df['a'].tolist()")
 
         # values (list) SHOULD have file deps
         assert "values" in sp.executed_file_deps
@@ -233,11 +235,11 @@ class TestNarrowFileDependencyPropagation:
         csv_path_str = str(csv_path).replace("\\", "/")
         pd.DataFrame({"a": [1.0, 2.0, 3.0]}).to_csv(csv_path, index=False)
 
-        magics.cash("", f"import pandas as pd; df = pd.read_csv('{csv_path_str}')")
+        run_cash_cell(magics, f"import pandas as pd; df = pd.read_csv('{csv_path_str}')")
         sp.executed_file_deps["df"] = {csv_path_str}
 
         # Cell 2: Compute float from DataFrame
-        magics.cash("", "mean_val = df['a'].mean()")
+        run_cash_cell(magics, "mean_val = df['a'].mean()")
 
         # mean_val (float) should NOT have file deps
         assert "mean_val" not in sp.executed_file_deps or len(sp.executed_file_deps.get("mean_val", set())) == 0
@@ -253,11 +255,11 @@ class TestNarrowFileDependencyPropagation:
         csv_path_str = str(csv_path).replace("\\", "/")
         pd.DataFrame({"a": [1, 2, 3]}).to_csv(csv_path, index=False)
 
-        magics.cash("", f"import pandas as pd; df = pd.read_csv('{csv_path_str}')")
+        run_cash_cell(magics, f"import pandas as pd; df = pd.read_csv('{csv_path_str}')")
         sp.executed_file_deps["df"] = {csv_path_str}
 
         # Cell 2: Compute bool from DataFrame
-        magics.cash("", "has_data = len(df) > 0")
+        run_cash_cell(magics, "has_data = len(df) > 0")
 
         # has_data (bool) should NOT have file deps
         assert "has_data" not in sp.executed_file_deps or len(sp.executed_file_deps.get("has_data", set())) == 0

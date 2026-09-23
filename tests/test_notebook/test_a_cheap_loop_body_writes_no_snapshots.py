@@ -14,6 +14,8 @@ over costly inputs an entry. Inside a loop nothing is final
 with every iteration, so every iteration qualified.
 """
 
+from tests._cell_driver import run_cash_cell
+
 SETUP = (
     "import pandas as pd, numpy as np\n"
     "idx = pd.date_range('2013-01-01', periods=300)\n"
@@ -43,9 +45,9 @@ def _expected():
 
 
 def test_a_cheap_loop_body_stores_no_entry_per_iteration(cash_magics):
-    cash_magics.cash("", SETUP)
+    run_cash_cell(cash_magics, SETUP)
     before = _entries(cash_magics)
-    cash_magics.cash("", LOOP)
+    run_cash_cell(cash_magics, LOOP)
     written = _entries(cash_magics) - before
     assert written < 20, (
         f"{written} entries written for a 120-iteration loop whose body costs "
@@ -55,9 +57,9 @@ def test_a_cheap_loop_body_stores_no_entry_per_iteration(cash_magics):
 
 
 def test_the_loop_is_still_right_when_run_again(cash_magics):
-    cash_magics.cash("", SETUP)
-    cash_magics.cash("", LOOP)
-    cash_magics.cash("", LOOP)
+    run_cash_cell(cash_magics, SETUP)
+    run_cash_cell(cash_magics, LOOP)
+    run_cash_cell(cash_magics, LOOP)
     assert int(cash_magics.shell.user_ns["members"].values.sum()) == _expected()
 
 
@@ -80,8 +82,8 @@ def test_a_long_cheap_itertuples_loop_runs_as_one_unit(cash_magics):
 
     ForLoopHandler._should_execute_loop_as_single_unit = spy
     try:
-        cash_magics.cash("", SETUP)
-        cash_magics.cash("", LOOP)
+        run_cash_cell(cash_magics, SETUP)
+        run_cash_cell(cash_magics, LOOP)
     finally:
         ForLoopHandler._should_execute_loop_as_single_unit = orig
     assert calls and calls[0] is True, calls
@@ -91,6 +93,6 @@ def test_a_long_cheap_itertuples_loop_runs_as_one_unit(cash_magics):
 def test_a_stored_iterator_still_never_runs_twice(cash_magics):
     """The safety the re-evaluation check exists for: a Name bound to a
     generator yields nothing the second time."""
-    cash_magics.cash("", "rows = iter(range(200))")
-    cash_magics.cash("", "out = []\nfor r in rows:\n    out.append(r * 2)")
+    run_cash_cell(cash_magics, "rows = iter(range(200))")
+    run_cash_cell(cash_magics, "out = []\nfor r in rows:\n    out.append(r * 2)")
     assert cash_magics.shell.user_ns["out"] == [r * 2 for r in range(200)]

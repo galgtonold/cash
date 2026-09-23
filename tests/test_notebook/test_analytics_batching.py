@@ -31,6 +31,7 @@ from cash.analytics import AnalyticsManager
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 class _MockShell(Configurable):
@@ -74,7 +75,7 @@ class TestPerCellDoesNotFsync:
 
         n_cells = 10  # well under the flush threshold
         for i in range(n_cells):
-            magics.cash("", f"batch_var_{i} = {i} + 1")
+            run_cash_cell(magics, f"batch_var_{i} = {i} + 1")
 
         # Each first-run compute records a MISS event, so the buffer must have
         # grown — proving events ARE being recorded, not silently dropped.

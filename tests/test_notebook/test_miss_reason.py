@@ -35,6 +35,7 @@ from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 class _MockShell(Configurable):
@@ -72,7 +73,7 @@ def _last_metric(shell, magics, code: str) -> dict:
 
     magics.render_interactive_badge = capture  # type: ignore[assignment]
     try:
-        magics.cash("", code)
+        run_cash_cell(magics, code)
     finally:
         magics.render_interactive_badge = real_render  # type: ignore[assignment]
     assert captured, "no metrics captured"
@@ -92,7 +93,7 @@ class TestMissReasonAttribution:
     def test_unchanged_re_run_is_restored_and_has_no_miss_reason(self, magics_fixture):
         magics, shell, _backend, _cash = magics_fixture
         # @cash:persist forces caching regardless of the 10 ms min-execution-time floor
-        magics.cash("", "# @cash:persist\nx = 21")  # first run, populates cache
+        run_cash_cell(magics, "# @cash:persist\nx = 21")  # first run, populates cache
         m = _last_metric(shell, magics, "# @cash:persist\nx = 21")  # re-run, expect hit
         assert m["status"] == CacheStatus.RESTORED
         # RESTORED rows don't have a miss to attribute.
@@ -106,9 +107,9 @@ class TestMissReasonAttribution:
         O(inputs) dict walk and no backend access.
         """
         magics, shell, _backend, _cash = magics_fixture
-        magics.cash("", "a = 1")
-        magics.cash("", "b = a + 1")
-        magics.cash("", "a = 2")
+        run_cash_cell(magics, "a = 1")
+        run_cash_cell(magics, "b = a + 1")
+        run_cash_cell(magics, "a = 2")
         m = _last_metric(shell, magics, "b = a + 1")
         assert m["status"] == CacheStatus.COMPUTED
         assert m.get("miss_reason") == "input changed: a", m.get("miss_reason")
@@ -120,10 +121,10 @@ class TestMissReasonAttribution:
         statement would pass the test above while telling the user nothing.
         """
         magics, shell, _backend, _cash = magics_fixture
-        magics.cash("", "a = 1")
-        magics.cash("", "c = 100")
-        magics.cash("", "b = a + c")
-        magics.cash("", "a = 2")  # only `a` moves; `c` is untouched
+        run_cash_cell(magics, "a = 1")
+        run_cash_cell(magics, "c = 100")
+        run_cash_cell(magics, "b = a + c")
+        run_cash_cell(magics, "a = 2")  # only `a` moves; `c` is untouched
         m = _last_metric(shell, magics, "b = a + c")
         assert m["status"] == CacheStatus.COMPUTED
         assert m.get("miss_reason") == "input changed: a", m.get("miss_reason")
@@ -137,7 +138,7 @@ class TestMissReasonAttribution:
         variable.
         """
         magics, shell, _backend, _cash = magics_fixture
-        magics.cash("", "a = 1")
-        magics.cash("", "# @cash:no-cache\nb = a + 1")
+        run_cash_cell(magics, "a = 1")
+        run_cash_cell(magics, "# @cash:no-cache\nb = a + 1")
         m = _last_metric(shell, magics, "# @cash:no-cache\nb = a + 1")
         assert m.get("miss_reason") is None, m.get("miss_reason")

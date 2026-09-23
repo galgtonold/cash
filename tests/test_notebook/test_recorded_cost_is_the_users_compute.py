@@ -19,6 +19,7 @@ from traitlets.config import Configurable
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 class _Shell(Configurable):
@@ -55,9 +56,9 @@ DEFS = "import time\ndef slow(i):\n    time.sleep(0.2)\n    return i"
 
 def test_calls_served_from_the_cache_count_toward_the_statements_cost(magics_fixture):
     magics, shell, backend = magics_fixture
-    magics.cash("", DEFS)
-    magics.cash("", "r = [slow(i) for i in range(3)]")
-    magics.cash("", "r2 = [slow(i) for i in range(3)] + []")  # a new statement; its calls hit
+    run_cash_cell(magics, DEFS)
+    run_cash_cell(magics, "r = [slow(i) for i in range(3)]")
+    run_cash_cell(magics, "r2 = [slow(i) for i in range(3)] + []")  # a new statement; its calls hit
     assert shell.user_ns["r2"] == [0, 1, 2]
     assert _cost_of(backend, "+ []") >= 0.5, "the served calls' compute was left out"
 
@@ -76,6 +77,6 @@ def test_cash_tracking_time_is_not_counted_as_the_statements(magics_fixture, mon
         return clock[0]
 
     monkeypatch.setattr("cash.notebook.statement.processor.tracking_seconds", tracked)
-    magics.cash("", "import time\nx = (time.sleep(0.5), 7)[1]")
+    run_cash_cell(magics, "import time\nx = (time.sleep(0.5), 7)[1]")
     assert shell.user_ns["x"] == 7
     assert _cost_of(backend, "time.sleep(0.5)") < 0.4

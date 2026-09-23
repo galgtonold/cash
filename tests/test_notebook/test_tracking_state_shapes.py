@@ -18,7 +18,7 @@ declared type that told the fixture otherwise.
 
 Deliberately NOT pinned: what cash does when handed a string anyway. It depends
 on which writer touches the value first -- the hook path bails out with a
-NOTEBOOK-BAILOUT warning, the magic path re-raises into the caller -- and a test
+NOTEBOOK-BAILOUT warning, ``run_cash_cell`` re-raises into the caller -- and a test
 that asserted one of those would be pinning the environment, not the contract.
 """
 
@@ -34,6 +34,7 @@ pytest.importorskip("IPython")
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 class _MockShell(Configurable):
@@ -61,7 +62,7 @@ def magics():
 
 
 def test_a_real_run_records_a_set_per_variable(magics):
-    magics.cash("", "a = 1\nb = a + 1\n")
+    run_cash_cell(magics, "a = 1\nb = a + 1\n")
     recorded = magics.tracking_state.executed_cell_hashes
     assert recorded, "nothing was recorded; the run never reached the writer"
     wrong = {k: type(v).__name__ for k, v in recorded.items() if not isinstance(v, set)}
@@ -70,8 +71,8 @@ def test_a_real_run_records_a_set_per_variable(magics):
 
 def test_redefining_a_variable_accumulates_rather_than_replaces(magics):
     """The reason it is a set at all -- one variable, two defining statements."""
-    magics.cash("", "a = 1\n")
-    magics.cash("", "a = 2\n")
+    run_cash_cell(magics, "a = 1\n")
+    run_cash_cell(magics, "a = 2\n")
     assert len(magics.tracking_state.executed_cell_hashes["a"]) == 2
 
 

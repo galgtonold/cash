@@ -27,6 +27,7 @@ from traitlets.config.configurable import Configurable
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 class MockShell(Configurable):
@@ -97,7 +98,7 @@ class TestRealisticCommentedCodeScenario(unittest.TestCase):
             "df_clean['revenue'] = df_clean['sales'] * df_clean['units']\n"
             "df_clean['month'] = df_clean['date'].dt.to_period('M')"
         )
-        self.magics.cash("", original_cell)
+        run_cash_cell(self.magics, original_cell)
         self.assertIn("revenue", self.shell.user_ns["df_clean"].columns)
         self.assertIn("month", self.shell.user_ns["df_clean"].columns)
 
@@ -107,7 +108,7 @@ class TestRealisticCommentedCodeScenario(unittest.TestCase):
             "df_clean['month'] = df_clean['date'].dt.to_period('M')"
         )
         self._fresh_df_clean()
-        self.magics.cash("", commented_cell)
+        run_cash_cell(self.magics, commented_cell)
 
         # The commented-out mutation must not be restored from cache.
         self.assertNotIn(
@@ -129,7 +130,7 @@ class TestRealisticCommentedCodeScenario(unittest.TestCase):
             "df_clean['revenue'] = df_clean['sales'] * df_clean['units']\n"
             "df_clean['month'] = df_clean['date'].dt.to_period('M')"
         )
-        self.magics.cash("", original_cell)
+        run_cash_cell(self.magics, original_cell)
         self.assertIn("revenue", self.shell.user_ns["df_clean"].columns)
 
         commented_cell = (
@@ -137,7 +138,7 @@ class TestRealisticCommentedCodeScenario(unittest.TestCase):
             "df_clean['month'] = df_clean['date'].dt.to_period('M')"
         )
         self._fresh_df_clean()
-        self.magics.cash("", commented_cell)
+        run_cash_cell(self.magics, commented_cell)
 
         self.assertNotIn(
             "revenue",

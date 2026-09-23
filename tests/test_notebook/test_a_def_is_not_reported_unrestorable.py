@@ -19,6 +19,7 @@ from traitlets.config import Configurable
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
 class _Shell(Configurable):
@@ -49,8 +50,8 @@ def test_a_def_reading_file_loaded_data_has_no_skip_reason(magics, tmp_path):
     m, seen = magics
     data = tmp_path / "a.txt"
     data.write_text("1\n2\n3\n")
-    m.cash("", f"import time\nrows = open(r'{data}').read().split()\ntime.sleep(0.02)")
-    m.cash("", "def draw(ax):\n    return len(rows)")
+    run_cash_cell(m, f"import time\nrows = open(r'{data}').read().split()\ntime.sleep(0.02)")
+    run_cash_cell(m, "def draw(ax):\n    return len(rows)")
     [row] = [x for x in seen[-1] if str(x.get("code", "")).startswith("def draw")]
     assert not row.get("skipped_reason"), row.get("skipped_reason")
     assert m.shell.user_ns["draw"](None) == 3
@@ -60,8 +61,8 @@ def test_a_function_made_by_a_call_keeps_its_reason(magics, tmp_path):
     m, seen = magics
     data = tmp_path / "a.txt"
     data.write_text("1\n2\n3\n")
-    m.cash("", f"import time\nrows = open(r'{data}').read().split()\ntime.sleep(0.02)")
-    m.cash("", "def make():\n    def inner():\n        return len(rows)\n    return inner")
-    m.cash("", "import time\nf = (time.sleep(0.02), make())[1]")
+    run_cash_cell(m, f"import time\nrows = open(r'{data}').read().split()\ntime.sleep(0.02)")
+    run_cash_cell(m, "def make():\n    def inner():\n        return len(rows)\n    return inner")
+    run_cash_cell(m, "import time\nf = (time.sleep(0.02), make())[1]")
     [row] = [x for x in seen[-1] if str(x.get("code", "")).startswith("f = ")]
     assert "unrestorable by value" in (row.get("skipped_reason") or ""), row
