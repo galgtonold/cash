@@ -1416,7 +1416,7 @@ answering it after the restart. The same happened to the cached function
 itself, in a worker that imported the old code and made its first call after
 the deploy landed.
 
-<!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin._pin_own_source @7b4fb07b -->
+<!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin._pin_own_source @8024db55 -->
 So cash keys that code by what is **actually running** instead: a cached
 function by the source it was imported with (its identity is taken when the
 decorator runs, not at its first call — and by its loaded bytecode when even

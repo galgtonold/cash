@@ -382,10 +382,10 @@ class Cash(
         self._populated: set[str] = set()
         self._effective_ttl_cache: dict[str, int | None] = {}
         self._deref_writes: dict = {}  # code object -> frozenset of reassigned freevars
-        # id(func) -> decoration-pinned own-source identity. The
-        # wrapper closure keeps *func* alive, so the id stays valid for the
-        # wrapper's lifetime.
-        self._own_pins: dict[int, str] = {}
+        # id(func) -> (reference to func, decoration-pinned own-source
+        # identity). The reference is checked on every read: a redefined
+        # function's id can go to a later definition once the old one dies.
+        self._own_pins: dict[int, tuple[Callable[[], Any], str]] = {}
         # Pins taken at decoration whose file has not yet been compared with
         # the loaded code; the first call does it once (see _pin_own_source).
         self._own_pins_unverified: set[int] = set()
