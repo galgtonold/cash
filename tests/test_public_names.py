@@ -18,11 +18,31 @@ class TestOneImportPath:
         with pytest.raises(ImportError):
             importlib.import_module("cash.experimental")
 
-    def test_the_markers_have_one_spelling(self):
+    @pytest.mark.parametrize(
+        "canonical, removed",
+        [("opaque", "mark_opaque"), ("pure", "mark_pure"), ("stateful", "mark_stateful")],
+    )
+    def test_the_markers_have_one_spelling(self, canonical, removed):
         import cash
 
-        for name in ("mark_opaque", "mark_pure", "mark_stateful", "CascadingBackend"):
-            assert not hasattr(cash, name)
+        assert callable(getattr(cash, canonical))
+        assert canonical in cash.__all__
+        assert not hasattr(cash, removed)
+        assert removed not in cash.__all__
+
+    def test_cascading_backend_is_gone_from_every_import_path(self):
+        """``TieredBackend`` is the only name for the tier chain. The backends
+        package resolves optional backends lazily, so a stale entry there would
+        still import even with the module attribute gone."""
+        import cash
+        import cash.backends
+
+        for module in (cash, cash.backends):
+            assert not hasattr(module, "CascadingBackend")
+            assert "CascadingBackend" not in module.__all__
+            assert "CascadingBackend" not in dir(module)
+        with pytest.raises(ImportError):
+            from cash.backends import CascadingBackend  # noqa: F401
 
     def test_opaque_leaves_the_class_unmodified(self):
         """`cash.opaque` marks a class once, in the registry, and does not
