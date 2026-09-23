@@ -1,16 +1,14 @@
 """Names a statement binds to an object another variable already holds.
 
 A cache hit rebinds such a name to a deserialised copy, so the identity the
-alias relied on breaks; these are refused. Pure AST apart from telling a
-module apart from an ordinary object (:func:`reference_alias_targets`).
+alias relied on breaks; these are refused. Pure AST: which names are bound to
+modules, the one fact about the namespace :func:`reference_alias_targets`
+needs, is passed in by the caller.
 """
 
 from __future__ import annotations
 
 import ast
-import types
-from collections.abc import Mapping
-from typing import Any
 
 from .mutations import _module_level_stmts
 
@@ -262,7 +260,7 @@ def _root_name(node: ast.expr) -> str | None:
 
 def reference_alias_targets(
     tree: ast.Module | None,
-    user_ns: Mapping[str, Any] | None = None,
+    module_names: frozenset[str] | set[str] = frozenset(),
 ) -> frozenset[str]:
     """Names bound by a pure DEREFERENCE of live state — the dereference half.
 
@@ -275,6 +273,9 @@ def reference_alias_targets(
 
     Same enforcement as :func:`bare_alias_targets`: the statement still executes
     and still participates in lineage; only store/restore is refused.
+
+    *module_names* are the names bound to modules right now; a dereference of
+    one is exempt (below). Left empty, every dereference is refused.
     """
     if tree is None:
         return frozenset()
@@ -296,12 +297,9 @@ def reference_alias_targets(
         # refusing: module-level names are overwhelmingly immutable constants and
         # functions, so there is no live object whose identity a restore could
         # break -- and granular module-dependency invalidation relies on these
-        # bindings being cached. Only skip when we can SEE it is a module; with
-        # no namespace we keep the conservative refusal.
-        if user_ns is not None:
-            root = _root_name(node.value)
-            if root is not None and isinstance(user_ns.get(root), types.ModuleType):
-                continue
+        # bindings being cached. Only skip when the caller SAW it is a module.
+        if _root_name(node.value) in module_names:
+            continue
         if all(isinstance(t, ast.Name) for t in node.targets):
             out.update(t.id for t in node.targets if isinstance(t, ast.Name))
     return frozenset(out)

@@ -10,12 +10,9 @@ from __future__ import annotations
 import ast
 import functools
 import textwrap
-from collections.abc import Mapping
-from typing import Any
 
 from .ast_util import CallScope, called_names
 from .mutations import _iter_store_targets, _MutationVisitor
-from .namespace_effects import capturable_globals
 
 __all__ = [
     "params_mutated_in_function",
@@ -272,15 +269,15 @@ def callee_global_mutations(
     resolve_source,
     *,
     scope: CallScope = "all",
-    namespace: Mapping[str, Any] | None = None,
 ) -> frozenset[str]:
     """Globals mutated in place by the functions *tree* calls by name.
 
     *resolve_source* maps a called name to its source (or None when it is not a
     user function); each resolved callee contributes
     :func:`source_global_mutations`. *scope* picks the calls (see
-    :data:`~cash.analysis.ast_util.CallScope`). With *namespace*, the result is
-    narrowed to :func:`capturable_globals`.
+    :data:`~cash.analysis.ast_util.CallScope`). A caller holding the namespace
+    narrows the result with
+    :func:`~cash.analysis.namespace_effects.capturable_globals`.
 
     Only the callee's own body counts: a global mutated by a helper the callee
     calls is not detected (the write is then skipped on a hit, as for any call
@@ -302,8 +299,6 @@ def callee_global_mutations(
             continue
         if source:
             out |= source_global_mutations(source)
-    if namespace is not None:
-        return capturable_globals(out, namespace)
     return frozenset(out)
 
 

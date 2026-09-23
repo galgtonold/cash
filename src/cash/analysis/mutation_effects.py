@@ -53,7 +53,7 @@ from .mutations import (
     subscript_view_bindings,
     top_level_call_argument_bases,
 )
-from .namespace_effects import fits_its_receiver
+from .namespace_effects import capturable_globals, fits_its_receiver
 from .object_protocol import object_protocol_mutations
 
 __all__ = [
@@ -567,7 +567,9 @@ def statement_effects(
     inputs, outputs = CodeAnalyzer.analyze_code_block(code, tree=tree, resolve_source=resolve_source, user_ns=namespace)
     callee_globals: frozenset[str] = frozenset()
     if not control_body:
-        callee_globals = callee_global_mutations(tree, resolve_source, scope="no_control_bodies", namespace=namespace)
+        callee_globals = callee_global_mutations(tree, resolve_source, scope="no_control_bodies")
+        if namespace is not None:
+            callee_globals = capturable_globals(callee_globals, namespace)
     arg_mutations: frozenset[str] = frozenset()
     try:
         if standalone_call_arg_targets(tree):

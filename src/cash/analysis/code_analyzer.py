@@ -25,6 +25,7 @@ from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from .ast_util import parse_cached
 from .callee_effects import callee_global_mutations
 from .file_effects import NOTEBOOK_POLICY, SCANNED_KINDS
+from .namespace_effects import capturable_globals
 
 __all__ = ["CodeAnalyzer", "clean_cell_source", "parse_cell_source"]
 
@@ -763,7 +764,9 @@ class CodeAnalyzer:
         inputs, outputs = visitor.real_inputs, visitor.outputs
         if resolve_source is not None:
             try:
-                extra = callee_global_mutations(tree, resolve_source, namespace=user_ns)
+                extra = callee_global_mutations(tree, resolve_source)
+                if user_ns is not None:
+                    extra = capturable_globals(extra, user_ns)
             except Exception:  # noqa: BLE001 - analysis must never break a cell
                 extra = frozenset()
             if extra:

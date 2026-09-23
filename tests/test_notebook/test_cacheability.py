@@ -34,6 +34,7 @@ from cash.analysis.mutations import (
     standalone_method_mutation_receivers,
     subscript_view_bindings,
 )
+from cash.analysis.namespace_effects import capturable_globals
 from cash.analysis.object_protocol import object_protocol_mutations
 
 # ---------------------------------------------------------------------------
@@ -1348,7 +1349,7 @@ class TestCalleeGlobalMutations:
     def test_namespace_keeps_only_bound_non_module_names(self):
         code = "x = compute(1)\nbump()\nadd()"
         namespace = {"CALLS": [], "g": ast}  # `items` unbound, `g` a module
-        assert self._f(code, namespace=namespace) == {"CALLS"}
+        assert capturable_globals(self._f(code), namespace) == {"CALLS"}
 
     def test_source_verdict_ignores_non_functions(self):
         assert source_global_mutations("x = 1") == frozenset()
@@ -2064,3 +2065,21 @@ def test_a_file_write_is_reported_once(code):
 
     reasons = analyze_statement(code, ast.parse(code)).skip_reasons(set())
     assert sum(r.count("to_csv()") for r in reasons) == 1, reasons
+
+
+@pytest.mark.parametrize("module", ["aliases", "callee_effects", "file_effects", "mutations", "object_protocol"])
+def test_the_pure_analysis_modules_import_nothing_that_reads_a_namespace(module):
+    """These modules are pure AST: the same source gives the same answer in any
+    kernel, which is what lets the upstream simulation run them on cell text.
+    Whatever needs the live objects belongs in ``namespace_effects``."""
+    import importlib.util
+
+    path = importlib.util.find_spec(f"cash.analysis.{module}").origin
+    tree = ast.parse(open(path, encoding="utf-8").read())
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            imported.add(node.module or "")
+    assert not imported & {"inspect", "types", "namespace_effects", "cacheability", "sys"}, imported

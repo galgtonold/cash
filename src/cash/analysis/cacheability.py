@@ -189,15 +189,15 @@ def analyze_statement(
     callee source can change under it. The result is a frozen dataclass of
     immutable fields, so sharing it is safe.
     """
-    if resolve_source is not None:
-        return _analyze_statement(code, tree, user_ns, resolve_source)
-    modules = frozenset()
+    modules: frozenset[str] = frozenset()
     if user_ns is not None:
         modules = frozenset(n for n in set(_IDENTIFIER.findall(code)) if isinstance(user_ns.get(n), types.ModuleType))
+    if resolve_source is not None:
+        return _analyze_statement(code, tree, modules, resolve_source)
     key = (code, modules)
     found = _ANALYSIS_MEMO.get(key)
     if found is None:
-        found = _analyze_statement(code, tree, user_ns, resolve_source)
+        found = _analyze_statement(code, tree, modules, resolve_source)
         if len(_ANALYSIS_MEMO) >= _ANALYSIS_MEMO_MAX:
             _ANALYSIS_MEMO.clear()
         _ANALYSIS_MEMO[key] = found
@@ -207,22 +207,22 @@ def analyze_statement(
 def _analyze_statement(
     code: str,
     tree: ast.Module | None,
-    user_ns: Mapping[str, Any] | None = None,
+    module_names: frozenset[str] = frozenset(),
     resolve_source=None,
 ) -> StatementAnalysis:
     """Return a :class:`StatementAnalysis` for *code* using pure-AST analysis.
 
-    Analysis is pure AST with one exception: *user_ns*, when supplied, is read
-    ONLY to tell a module apart from an ordinary object, so
-    :func:`reference_alias_targets` can exempt ``v = mod.CONST`` from the alias
-    refusal. Omitting it keeps the conservative refusal.
+    *module_names* are the identifiers in *code* bound to modules, which
+    :func:`reference_alias_targets` exempts from the alias refusal
+    (``v = mod.CONST``); :func:`analyze_statement` reads them from the
+    namespace.
 
     Args:
         code: Python source code of the statement.
         tree: Optional pre-parsed AST.  When ``None`` the code is parsed
               here; a :class:`SyntaxError` produces an empty analysis
               rather than raising.
-        user_ns: Optional live namespace, used only for the module check above.
+        module_names: Names bound to modules, for the check above.
         resolve_source: Optional ``name -> source`` for called functions. When
             supplied, globals a CALLEE mutates in place are propagated into
             the mutation sets as though the mutation had been written inline
@@ -288,5 +288,5 @@ def _analyze_statement(
         side_effects=tuple(se_visitor.effects),
         called_names=called_names(tree),
         accumulator_mutated_vars=accumulator_mutated,
-        alias_targets=bare_alias_targets(tree) | reference_alias_targets(tree, user_ns),
+        alias_targets=bare_alias_targets(tree) | reference_alias_targets(tree, module_names),
     )
