@@ -660,7 +660,7 @@ file is actually there.
 
 ## CONFIG-FILE-MISSING {#config-file-missing}
 
-<!-- claim: cash/config.py:_resolve_config @afb12473 -->
+<!-- claim: cash/config.py:_resolve_config @18f97088 -->
 **What happened.** Your code passed `Cash(config_path=...)` naming a file that
 does not exist. Cash resolved its configuration from the other layers —
 defaults, the user and project files, `CASH_*` variables — as if the argument

@@ -216,11 +216,10 @@ cash info
   that is not a setting, or a value cash could not use, is left out of the
   list and reported as a warning.
 
-<!-- claim: cash/__main__.py:cmd_inspect @0975006f, cash/__main__.py:_inspect_cache_dir @79ce6b6f, cash/__main__.py:_inspect_notebook @22209429 -->
+<!-- claim: cash/__main__.py:cmd_inspect @0975006f, cash/__main__.py:_inspect_cache_dir @79ce6b6f, cash/__main__.py:_inspect_notebook @d58d3a2b, cash/__main__.py:notebook_cache_dir @01920332 -->
 ### `cash inspect [path] [--function NAME]` { #cash-inspect-path }
 
-Summarise a cache directory, or report on a notebook and its sibling `.cash`
-directory.
+Summarise a cache directory, or report on a notebook and its cache.
 
 **Usage:** `cash inspect [path] [--function NAME]`
 
@@ -229,8 +228,10 @@ directory.
 - `path` — *Optional.* One of:
     - **A `.ipynb` file.** Reads the notebook with `nbformat`, counts code
       and markdown cells, detects whether `%cash_on` is used, and
-      then inspects the sibling `.cash` directory next to the notebook (if
-      any).
+      then inspects the notebook's cache (if any): the directory a kernel
+      started for it uses, which is `.cash` beside the notebook unless a
+      `pyproject.toml` above it (`[tool.cash] cache_dir`) or
+      `CASH_CACHE_DIR` says otherwise.
     - **A directory.** Treated as a cache directory; cash walks it
       recursively.
     - **Omitted.** Defaults to **the cache the library is using** — the same
@@ -315,8 +316,8 @@ REPL, `python -c`, or a notebook kernel.
 
 - Code-cell and markdown-cell counts.
 - `Uses cash: Yes/No` based on a textual scan for `%cash_on`.
-- The cache summary above if a sibling `.cash/` exists; otherwise
-  `Cache: not found (no .cash directory)`.
+- The cache summary above if the notebook's cache exists; otherwise
+  `Cache: not found (no directory at <path>)`.
 
 **Behaviour notes:**
 
@@ -335,7 +336,7 @@ REPL, `python -c`, or a notebook kernel.
 
 ## Clearing caches
 
-<!-- claim: cash/__main__.py:cmd_clear @a2a0458b -->
+<!-- claim: cash/__main__.py:cmd_clear @a08b9044, cash/__main__.py:_refuse_entry_flags_on_sqlite @0ab0f255 -->
 ### `cash clear [path] [--all] [--function NAME]` { #cash-clear-path-all }
 
 Delete a cache directory, or just one function's entries.
@@ -367,9 +368,11 @@ Delete a cache directory, or just one function's entries.
 - `path` — *Optional.* One of:
     - **A directory.** Removed in full via `shutil.rmtree` — if it looks like
       a cache (see the warning above); otherwise refused unless `--force`.
-    - **A `.ipynb` file.** Cash removes the sibling `.cash/` directory next
-      to the notebook (if any). If there's no sibling cache, prints
-      `No cache found for <path>` and exits 0.
+    - **A `.ipynb` file.** Cash removes the notebook's cache (if any), found
+      as `cash inspect` finds it: `.cash` beside the notebook unless its
+      project's `[tool.cash] cache_dir` or `CASH_CACHE_DIR` moves it. If there
+      is none, prints `No cache found for <path>`, names where it looked, and
+      exits 0.
     - **Anything else.** Prints `Not found: <path>` and exits 1.
 - `--all` — *Optional.* Clear **the cache the library is using** — the same
   directory `cash info` reports, not `./.cash` unless that is where it
@@ -403,6 +406,9 @@ Delete a cache directory, or just one function's entries.
   *current* `default_ttl` when that is lower, while a `ttl=` given on the
   decorator is kept as written. `cash inspect` shows the same expiry. Cannot
   be combined with `--function` or `--entry` (exit 2).
+- `--function`, `--entry` and `--expired` work on a file cache's entries. On
+  a SQLite cache (one `cache.db`) they are refused with a message (exit 2);
+  clear it whole with `cash clear <dir>`.
 - `--tool NAME` — *Optional.* Act on the per-user cache of the installed
   console script `NAME` instead of the cache in use. On its own it clears
   that tool's whole cache; with `--function` or `--entry`, only those
@@ -417,7 +423,7 @@ cash clear --function ray.build_grid   # drop one function, keep the rest
 cash clear --function notebook         # drop the notebook statements only
 cash clear --all                       # nuke the cache in use
 cash clear ./.cash                     # same thing, explicit
-cash clear ./notebooks/analysis.ipynb  # nuke the sibling .cash next to the notebook
+cash clear ./notebooks/analysis.ipynb  # nuke the cache that notebook's kernel uses
 cash clear /tmp/some-cache-dir         # nuke any directory
 ```
 

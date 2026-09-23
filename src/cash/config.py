@@ -828,6 +828,7 @@ def get_config(
     user_config_path: Any = _USE_DEFAULT_PATH,
     project_config_path: Any = _USE_DEFAULT_PATH,
     overrides: dict[str, Any] | None = None,
+    anchor: Path | None = None,
 ) -> CashConfig:
     """Resolve the merged Cash configuration -- see `_resolve_config`.
 
@@ -842,6 +843,7 @@ def get_config(
             user_config_path=user_config_path,
             project_config_path=project_config_path,
             overrides=overrides,
+            anchor=anchor,
         )
 
 
@@ -851,6 +853,7 @@ def _resolve_config(
     user_config_path: Any = _USE_DEFAULT_PATH,
     project_config_path: Any = _USE_DEFAULT_PATH,
     overrides: dict[str, Any] | None = None,
+    anchor: Path | None = None,
 ) -> CashConfig:
     """Resolve the merged Cash configuration.
 
@@ -867,6 +870,10 @@ def _resolve_config(
             skip; omit to walk up from cwd.
         overrides: Highest-priority overrides (mirrors what
             ``Cash(**kwargs)`` does internally).
+        anchor: The project anchor to resolve as, in place of this
+            process's (`project_anchor`): where the default ``cache_dir`` is
+            and where the walk for ``pyproject.toml`` starts. The CLI passes a
+            notebook's directory, the anchor of a kernel started for it.
 
     Returns:
         The merged `CashConfig`.
@@ -896,7 +903,9 @@ def _resolve_config(
         )
 
     user_path = default_user_config_path() if user_config_path is _USE_DEFAULT_PATH else user_config_path
-    project_path = default_project_config_path() if project_config_path is _USE_DEFAULT_PATH else project_config_path
+    project_path = (
+        default_project_config_path(anchor) if project_config_path is _USE_DEFAULT_PATH else project_config_path
+    )
     env_data = _load_env_config()
     kwarg_data = _validated_layer(overrides, "Cash(...) arguments", strict=True) if overrides else {}
 
@@ -921,7 +930,7 @@ def _resolve_config(
     }
     # Where a relative ``cache_dir`` is resolved from: the project anchor for
     # the default ``.cash``, else the layer that set it.
-    cache_dir_origin: Path | object = project_anchor()
+    cache_dir_origin: Path | object = project_anchor() if anchor is None else anchor
     #: Only when no layer set ``cache_dir`` may an installed console script
     #: be redirected to a per-user location.
     cache_dir_was_configured = False
@@ -939,7 +948,9 @@ def _resolve_config(
             cache_dir_origin = relative_to
             cache_dir_was_configured = True
 
-    if not cache_dir_was_configured:
+    # Not for a given anchor: that resolves as a process anchored there (a
+    # notebook's kernel), not as the installed tool this one is.
+    if not cache_dir_was_configured and anchor is None:
         installed = installed_entry_point_cache_dir()
         if installed is not None:
             merged["cache_dir"] = str(installed)

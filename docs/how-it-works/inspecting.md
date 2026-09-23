@@ -249,12 +249,12 @@ cash clear [path]       # delete a cache directory (see below)
 cash autoload on|off    # load cash in every new kernel via an IPython startup hook
 ```
 
-<!-- claim: cash/__main__.py:cmd_clear @a2a0458b -->
+<!-- claim: cash/__main__.py:cmd_clear @a08b9044 -->
 !!! warning "`cash clear` deletes a whole directory"
     `cash clear` is directory-granular, not notebook-granular. Pointing it at a
-    notebook (`cash clear analysis.ipynb`) removes the entire `.cash/` folder
-    sitting next to that notebook — including the entries belonging to every
-    *other* notebook in the same folder, since they all share it. `--all` does
+    notebook (`cash clear analysis.ipynb`) removes that notebook's whole cache
+    directory (`.cash/` beside it, unless the project's `cache_dir` moves it) —
+    including the entries belonging to every *other* notebook that shares it. `--all` does
     the same to the cache in use — the directory `cash info` reports, which
     follows the project you are standing in rather than being `./.cash` — and
     `--tool NAME` to an installed tool's per-user cache. There is still no

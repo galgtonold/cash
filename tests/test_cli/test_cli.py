@@ -190,8 +190,9 @@ class TestCLIClear:
         with pytest.raises(SystemExit):
             cmd_clear(SimpleNamespace(path="/nonexistent/path", all=False))
 
-    def test_clear_notebook_with_cache(self, tmp_path, capsys):
+    def test_clear_notebook_with_cache(self, tmp_path, capsys, monkeypatch):
         """Clear using a notebook path clears its .cash directory."""
+        monkeypatch.delenv("CASH_CACHE_DIR", raising=False)  # the kernel would use it too
         # Create a fake notebook and cache
         nb_path = tmp_path / "test.ipynb"
         nb_path.write_text('{"cells":[]}', encoding="utf-8")
@@ -296,8 +297,9 @@ class TestCLIInspectNotebook:
         assert "Uses cash: No" in captured.out
         assert "Cache: not found" in captured.out
 
-    def test_inspect_notebook_with_cache(self, tmp_path, capsys):
+    def test_inspect_notebook_with_cache(self, tmp_path, capsys, monkeypatch):
         """Inspect notebook that has a .cash directory."""
+        monkeypatch.delenv("CASH_CACHE_DIR", raising=False)  # the kernel would use it too
         nb_path = tmp_path / "test.ipynb"
         nb_content = {
             "cells": [{"cell_type": "code", "source": "x = 1", "metadata": {}, "outputs": []}],
