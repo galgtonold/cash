@@ -140,7 +140,7 @@ class ModuleInvalidator:
                     lineage[:12],
                 )
 
-            processor.recently_reloaded_modules.add(mod_name)
+            processor.mark_module_reloaded(mod_name)
 
         return old_module_lineages
 

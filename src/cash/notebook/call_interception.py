@@ -48,12 +48,15 @@ import types
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..analysis.cacheability_decision import identity_coupled_reason
 from .cache_key import CacheKeyContext
 from .consumables import is_consumable_unrestorable
 from .lineage_formula import is_cash_instrumentation
+
+if TYPE_CHECKING:
+    from .call_unit import CallUnit
 
 __all__ = [
     "eligible_call_nodes",
@@ -390,6 +393,11 @@ class CallCache:
 
     def begin_cell(self) -> None:
         self._call_unit.begin_cell()
+
+    @property
+    def call_unit(self) -> CallUnit:
+        """The unit that keys, stores and serves this cache's calls."""
+        return self._call_unit
 
     def held_results(self) -> dict:
         return self._call_unit.held_results

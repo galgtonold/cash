@@ -132,6 +132,7 @@ class StatementProcessor:
         debug: bool = False,
         compute_hash_fn: Callable[[Any], str] | None = None,
         tracking_state: TrackingState | None = None,
+        function_tracker: FunctionTracker | None = None,
     ) -> None:
         self.shell: ShellProtocol = shell
         self.cash_instance: CashInstanceProtocol = cash_instance
@@ -152,8 +153,9 @@ class StatementProcessor:
             enabled=getattr(getattr(cash_instance, "config", None), "analytics", True) is not False
         )
 
-        # Document: function_tracker must be explicitly passed to UpstreamChecker
-        self.function_tracker = FunctionTracker()
+        # Shared with the upstream checker (the magics pass the same one to
+        # both), so the simulation keys calls with the same source hashes.
+        self.function_tracker = function_tracker if function_tracker is not None else FunctionTracker()
 
         # The one shared record of lineage and dependency state (see
         # TrackingState); the processor never aliases its fields.
@@ -336,6 +338,11 @@ class StatementProcessor:
         """Tell the store which names a later top-level statement of the cell
         writes (see :meth:`StatementStore.set_written_later_in_cell`)."""
         self._store.set_written_later_in_cell(names)
+
+    def mark_module_reloaded(self, module_name: str) -> None:
+        """Note that *module_name* was just reloaded, so the next import of it
+        runs instead of being skipped as redundant."""
+        self.recently_reloaded_modules.add(module_name)
 
     def loop_vars_scope(self, loop_vars: dict[str, Any], loop_var_digests: dict[str, str] | None = None):
         """Push one loop iteration's variables for the calls in its body

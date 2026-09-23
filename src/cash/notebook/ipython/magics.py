@@ -28,6 +28,7 @@ from ...backends._writes import all_pending_writes
 from ...core import Cash
 from ...object_hashing import compute_hash
 from ...tracking import io_watch
+from ...tracking.function_tracker import FunctionTracker
 from .. import badge_renderer as _badge
 from .. import compute_baselines
 from .._protocols import ShellProtocol, TrackingState
@@ -246,22 +247,24 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         Wires shared tracking state and function tracker so all components
         use the same lineage dictionaries and source hashes.
         """
+        # One function tracker for both, so the upstream simulation computes
+        # cache keys with the same func_source_hashes as the statement processor.
+        function_tracker = FunctionTracker()
         self._statement_processor = StatementProcessor(
             shell,
             cash_instance,
             debug=self._debug,
             compute_hash_fn=compute_hash,
             tracking_state=self.tracking_state,
+            function_tracker=function_tracker,
         )
 
-        # The processor's function tracker, so the upstream simulation computes
-        # cache keys with the same func_source_hashes as the runtime.
         self._upstream_checker = UpstreamChecker(
             shell,
             cash_instance=cash_instance,
             compute_hash_fn=compute_hash,
             tracking_state=self.tracking_state,
-            function_tracker=self._statement_processor.function_tracker,
+            function_tracker=function_tracker,
         )
 
         self._control_structure_processor = ControlStructureProcessor(

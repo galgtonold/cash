@@ -515,7 +515,7 @@ class CallRouting:
     def cash_time_marks(self) -> tuple[float, Any, float, float]:
         """Cash's own clocks, read around a statement (see :meth:`statement_cost`)."""
 
-        unit = getattr(self._call_cache, "_call_unit", None)
+        unit = self._call_cache.call_unit if self._call_cache is not None else None
         return (tracking_seconds(), unit, getattr(unit, "overhead_s", 0.0), getattr(unit, "hits_saved_s", 0.0))
 
     def _statement_tax(self, marks: tuple[float, Any, float, float]) -> tuple[float, float]:
@@ -535,7 +535,7 @@ class CallRouting:
 
         tracking0, unit0, overhead0, saved0 = marks
         tracking = max(0.0, tracking_seconds() - tracking0)
-        unit = getattr(self._call_cache, "_call_unit", None)
+        unit = self._call_cache.call_unit if self._call_cache is not None else None
         overhead = saved = 0.0
         if unit is not None:
             base_overhead, base_saved = (overhead0, saved0) if unit is unit0 else (0.0, 0.0)
