@@ -11,48 +11,17 @@ though `df` had been computed from prior cells.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
 
-import pytest
-from traitlets.config.configurable import Configurable
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
-
-
-class MockShell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-
-
-@pytest.fixture
-def magics_fixture():
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    yield magics, shell, backend
-    backend.clear()
-
-
-def test_metrics_carries_inputs_on_cache_miss(magics_fixture):
+def test_metrics_carries_inputs_on_cache_miss(cash_magics, mock_shell):
     """A fresh compute populates metrics['inputs'] with the analyzed inputs."""
-    magics, shell, _ = magics_fixture
-    shell.user_ns["a"] = 1
-    shell.user_ns["b"] = 2
-    metrics = magics._statement_processor.process_statement("c = a + b")
+    mock_shell.user_ns["a"] = 1
+    mock_shell.user_ns["b"] = 2
+    metrics = cash_magics._statement_processor.process_statement("c = a + b")
     assert str(metrics["status"]).upper().endswith("COMPUTED")
     assert set(metrics.get("inputs", [])) >= {"a", "b"}
 
 
-def test_metrics_carries_inputs_on_second_run(magics_fixture):
+def test_metrics_carries_inputs_on_second_run(cash_magics, mock_shell):
     """A second run — whatever path it takes — still surfaces metrics['inputs'].
 
     With the trivial `a + b` example the cost-model gate may or may not cache
@@ -62,27 +31,25 @@ def test_metrics_carries_inputs_on_second_run(magics_fixture):
     """
     from cash.analysis.annotations import CacheAnnotation
 
-    magics, shell, _ = magics_fixture
-    shell.user_ns["a"] = 1
-    shell.user_ns["b"] = 2
+    mock_shell.user_ns["a"] = 1
+    mock_shell.user_ns["b"] = 2
     annotation = CacheAnnotation(persist=True)
-    magics._statement_processor.process_statement("c = a + b", annotation=annotation)
-    shell.user_ns.pop("c", None)
-    metrics2 = magics._statement_processor.process_statement("c = a + b", annotation=annotation)
+    cash_magics._statement_processor.process_statement("c = a + b", annotation=annotation)
+    mock_shell.user_ns.pop("c", None)
+    metrics2 = cash_magics._statement_processor.process_statement("c = a + b", annotation=annotation)
     assert set(metrics2.get("inputs", [])) >= {"a", "b"}, (
         f"inputs missing on second-run metrics; status={metrics2['status']}, got inputs={metrics2.get('inputs')}"
     )
 
 
-def test_provenance_dependency_graph_is_populated(magics_fixture):
+def test_provenance_dependency_graph_is_populated(cash_magics, mock_shell):
     """End-to-end: after a compute, %cash_provenance shows a real graph."""
-    magics, shell, _ = magics_fixture
-    shell.user_ns["a"] = 1
-    shell.user_ns["b"] = 2
+    mock_shell.user_ns["a"] = 1
+    mock_shell.user_ns["b"] = 2
     # Compute c from a and b, then drain into provenance via the magic flow.
-    metrics = magics._statement_processor.process_statement("c = a + b")
-    magics._record_provenance([metrics])
-    deps = set(magics._session.provenance.get_latest("c").inputs)
+    metrics = cash_magics._statement_processor.process_statement("c = a + b")
+    cash_magics._record_provenance([metrics])
+    deps = set(cash_magics._session.provenance.get_latest("c").inputs)
     assert "a" in deps, f"expected 'a' in dependencies of c, got {deps}"
     assert "b" in deps, f"expected 'b' in dependencies of c, got {deps}"
 

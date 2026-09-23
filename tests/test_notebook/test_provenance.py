@@ -5,8 +5,6 @@ Tests for provenance tracking module.
 import json
 import time
 
-import pytest
-
 from cash.notebook.provenance import ProvenanceRecord, ProvenanceTracker
 
 
@@ -166,68 +164,37 @@ class TestProvenanceTracker:
 class TestCashProvenanceMagic:
     """Tests for the %cash_provenance magic command."""
 
-    @pytest.fixture
-    def magics_fixture(self):
-        from unittest.mock import MagicMock
-
-        from traitlets.config.configurable import Configurable
-
-        from cash.backends import InMemoryBackend
-        from cash.core import Cash
-        from cash.notebook.ipython.magics import CashMagics
-
-        class MockShell(Configurable):
-            def __init__(self):
-                super().__init__()
-                self.user_ns = {}
-                self.input_transformers_cleanup = []
-                self.run_cell = MagicMock()
-                self.events = MagicMock()
-                self.ast_transformers = []
-                self.user_global_ns = self.user_ns
-
-        backend = InMemoryBackend()
-        cash = Cash(backend=backend, register_magic=False)
-        shell = MockShell()
-        magics = CashMagics(shell, cash)
-        magics._auto_cache_enabled = True
-        yield magics, shell, backend
-        backend.clear()
-
-    def test_list_empty(self, magics_fixture, capsys):
-        magics, _, _ = magics_fixture
-        magics.cash_provenance("--all")
+    def test_list_empty(self, cash_magics, capsys):
+        cash_magics.cash_provenance("--all")
         output = capsys.readouterr().out
         assert "No provenance" in output
 
-    def test_list_with_data(self, magics_fixture, capsys):
-        magics, _, _ = magics_fixture
-        magics._session.provenance.record("x", "x = 1", [], status="computed")
-        magics.cash_provenance("--all")
+    def test_list_with_data(self, cash_magics, capsys):
+        cash_magics._session.provenance.record("x", "x = 1", [], status="computed")
+        cash_magics.cash_provenance("--all")
         output = capsys.readouterr().out
         assert "x" in output
         assert "1 records" in output
 
-    def test_show_variable(self, magics_fixture, capsys):
-        magics, _, _ = magics_fixture
-        magics._session.provenance.record("result", "result = calc()", ["data"], status="computed", duration_ms=50.0)
-        magics.cash_provenance("result")
+    def test_show_variable(self, cash_magics, capsys):
+        cash_magics._session.provenance.record(
+            "result", "result = calc()", ["data"], status="computed", duration_ms=50.0
+        )
+        cash_magics.cash_provenance("result")
         output = capsys.readouterr().out
         assert "result" in output
         assert "computed" in output
 
-    def test_clear(self, magics_fixture, capsys):
-        magics, _, _ = magics_fixture
-        magics._session.provenance.record("x", "x = 1", [])
-        magics.cash_provenance("--clear")
+    def test_clear(self, cash_magics, capsys):
+        cash_magics._session.provenance.record("x", "x = 1", [])
+        cash_magics.cash_provenance("--clear")
         output = capsys.readouterr().out
         assert "cleared" in output
-        assert len(magics._session.provenance.tracked_variables) == 0
+        assert len(cash_magics._session.provenance.tracked_variables) == 0
 
-    def test_json_output(self, magics_fixture, capsys):
-        magics, _, _ = magics_fixture
-        magics._session.provenance.record("x", "x = 1", [])
-        magics.cash_provenance("x --json")
+    def test_json_output(self, cash_magics, capsys):
+        cash_magics._session.provenance.record("x", "x = 1", [])
+        cash_magics.cash_provenance("x --json")
         output = capsys.readouterr().out
         data = json.loads(output)
         assert len(data) == 1

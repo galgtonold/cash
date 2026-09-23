@@ -30,40 +30,11 @@ reported, explicitly as an unverified upper bound. These tests pin:
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock
 
 import pytest
-from traitlets.config import Configurable
 
-from cash.backends import InMemoryBackend
-from cash.core import Cash
 from cash.notebook.cache_status import CacheStatus
-from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
-
-
-class _MockShell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-
-
-@pytest.fixture
-def magics_fixture():
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = _MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    yield magics, shell, backend
-    backend.clear()
-    shell.user_ns.clear()
 
 
 def _stats_json(magics, capsys) -> dict:
@@ -97,11 +68,10 @@ class TestStaleBaselineCannotPrintAWin:
     """The headline net on the reported session. Fails on the old baseline,
     which reports net = 75.0 − 24.0 = +51.0s for a session that lost time."""
 
-    def test_restore_dominated_stale_session_nets_non_positive(self, magics_fixture, capsys):
-        magics, _shell, _backend = magics_fixture
-        _replay_retail_etl(magics)
+    def test_restore_dominated_stale_session_nets_non_positive(self, cash_magics, capsys):
+        _replay_retail_etl(cash_magics)
 
-        data = _stats_json(magics, capsys)
+        data = _stats_json(cash_magics, capsys)
         # The stale credit is huge and the session still must not read as a win.
         assert data["total_time_saved"] == pytest.approx(75.0)
         assert data["total_overhead"] == pytest.approx(24.0)
@@ -112,24 +82,22 @@ class TestStaleBaselineCannotPrintAWin:
         assert data["net_time_saved"] == pytest.approx(-24.0)
         assert data["net_sign_verified"] is False
 
-    def test_arbitrarily_large_stale_credit_still_cannot_net_positive(self, magics_fixture, capsys):
-        magics, _shell, _backend = magics_fixture
+    def test_arbitrarily_large_stale_credit_still_cannot_net_positive(self, cash_magics, capsys):
         # A pathological stale baseline: an hour of "saving" credited from cache
         # metadata, on a cell that cost 5s of real wall time and verified nothing.
-        magics._update_session_stats(
+        cash_magics._update_session_stats(
             [{"status": CacheStatus.RESTORED, "saved_time": 3600.0, "execution_time": 0.0, "code": "huge = load()"}],
             cell_total_time=5.0,
         )
-        data = _stats_json(magics, capsys)
+        data = _stats_json(cash_magics, capsys)
         # No quantity of unverified credit can buy a positive headline.
         assert data["net_time_saved"] <= 0.0
         assert data["net_sign_verified"] is False
 
-    def test_human_output_does_not_assert_a_positive_net(self, magics_fixture, capsys):
-        magics, _shell, _backend = magics_fixture
-        _replay_retail_etl(magics)
+    def test_human_output_does_not_assert_a_positive_net(self, cash_magics, capsys):
+        _replay_retail_etl(cash_magics)
         capsys.readouterr()
-        magics.cash_stats("")
+        cash_magics.cash_stats("")
         out = capsys.readouterr().out
 
         net_line = next(line for line in out.splitlines() if "Net time saved:" in line)
@@ -148,37 +116,35 @@ class TestVerifiedSavingsStillRead:
     """The fix must not just zero the metric out: a saving cash can stand
     behind must still print as a win."""
 
-    def test_same_session_recompute_verifies_the_saving(self, magics_fixture, capsys):
-        magics, _shell, _backend = magics_fixture
+    def test_same_session_recompute_verifies_the_saving(self, cash_magics, capsys):
         # Cell computes a 30s fit HERE — that is a baseline measured under
         # today's conditions ...
-        magics._update_session_stats(
+        cash_magics._update_session_stats(
             [{"status": CacheStatus.COMPUTED, "execution_time": 30.0, "code": "model = fit(X)"}],
             cell_total_time=30.2,
         )
         # ... and re-running the cell restores it in 0.2s.
-        magics._update_session_stats(
+        cash_magics._update_session_stats(
             [{"status": CacheStatus.RESTORED, "saved_time": 30.0, "execution_time": 0.0, "code": "model = fit(X)"}],
             cell_total_time=0.2,
         )
-        data = _stats_json(magics, capsys)
+        data = _stats_json(cash_magics, capsys)
         assert data["total_verified_saved"] == pytest.approx(30.0)
         # Verified: overhead is the 0.4s of both cells, so the net is a real win.
         assert data["net_time_saved"] == pytest.approx(29.6)
         assert data["net_sign_verified"] is True
 
-    def test_verified_win_is_labelled_and_not_hedged(self, magics_fixture, capsys):
-        magics, _shell, _backend = magics_fixture
-        magics._update_session_stats(
+    def test_verified_win_is_labelled_and_not_hedged(self, cash_magics, capsys):
+        cash_magics._update_session_stats(
             [{"status": CacheStatus.COMPUTED, "execution_time": 30.0, "code": "model = fit(X)"}],
             cell_total_time=30.2,
         )
-        magics._update_session_stats(
+        cash_magics._update_session_stats(
             [{"status": CacheStatus.RESTORED, "saved_time": 30.0, "execution_time": 0.0, "code": "model = fit(X)"}],
             cell_total_time=0.2,
         )
         capsys.readouterr()
-        magics.cash_stats("")
+        cash_magics.cash_stats("")
         out = capsys.readouterr().out
         net_line = next(line for line in out.splitlines() if "Net time saved:" in line)
         assert "(verified)" in net_line
@@ -186,15 +152,14 @@ class TestVerifiedSavingsStillRead:
         assert "at best" not in net_line
         assert "cash cost you" not in out
 
-    def test_stale_high_baseline_is_credited_at_the_remeasured_cost(self, magics_fixture, capsys):
-        magics, _shell, _backend = magics_fixture
+    def test_stale_high_baseline_is_credited_at_the_remeasured_cost(self, cash_magics, capsys):
         # The P1 pathology in miniature: the cache says the frame cost 25s (cold),
         # but this session re-parsed it in 6s (warm). Only the 6s is defensible.
-        magics._update_session_stats(
+        cash_magics._update_session_stats(
             [{"status": CacheStatus.COMPUTED, "execution_time": 6.0, "code": "df = pd.read_csv(p)"}],
             cell_total_time=6.1,
         )
-        magics._update_session_stats(
+        cash_magics._update_session_stats(
             [
                 {
                     "status": CacheStatus.RESTORED,
@@ -205,7 +170,7 @@ class TestVerifiedSavingsStillRead:
             ],
             cell_total_time=8.0,
         )
-        data = _stats_json(magics, capsys)
+        data = _stats_json(cash_magics, capsys)
         # Gross still carries the cache's stale 25s ...
         assert data["total_time_saved"] == pytest.approx(25.0)
         # ... but only the re-measured 6s is credited as verified.
@@ -225,37 +190,35 @@ class TestVerificationFiresOnTheRealPipeline:
     a silent understatement, which no other test here would catch.
     """
 
-    def test_compute_then_restore_credits_a_verified_saving(self, magics_fixture):
-        magics, shell, _backend = magics_fixture
-        magics.badges.mode = "off"
+    def test_compute_then_restore_credits_a_verified_saving(self, cash_magics):
+        cash_magics.badges.mode = "off"
         # A statement expensive enough to clear the 10ms cache floor, with no
         # import (imports are cheap and separately cached).
         cell = "slow = sum(i * i for i in range(2_000_000))"
 
-        run_cash_cell(magics, cell)
-        stats = magics._session.stats
+        run_cash_cell(cash_magics, cell)
+        stats = cash_magics._session.stats
         assert stats["statements_computed"] == 1
         # The baseline was measured HERE, keyed by the statement source.
-        assert magics._session.measured_compute, "no baseline recorded for a COMPUTED statement"
+        assert cash_magics._session.measured_compute, "no baseline recorded for a COMPUTED statement"
 
-        run_cash_cell(magics, cell)
+        run_cash_cell(cash_magics, cell)
         assert stats["statements_restored"] == 1, "second run did not hit the cache"
         # THE CONTRACT: the restore found the baseline this session measured, so
         # the saving is verified rather than taken on faith from the cache.
         assert stats["total_verified_saved"] > 0.0
         assert stats["total_verified_saved"] == pytest.approx(stats["total_time_saved"])
 
-    def test_stats_reset_forgets_the_measured_baselines(self, magics_fixture, capsys):
-        magics, _shell, _backend = magics_fixture
-        magics.badges.mode = "off"
-        run_cash_cell(magics, "slow2 = sum(i * i for i in range(2_000_000))")
-        assert magics._session.measured_compute
+    def test_stats_reset_forgets_the_measured_baselines(self, cash_magics, capsys):
+        cash_magics.badges.mode = "off"
+        run_cash_cell(cash_magics, "slow2 = sum(i * i for i in range(2_000_000))")
+        assert cash_magics._session.measured_compute
 
-        magics.cash_stats("reset")
+        cash_magics.cash_stats("reset")
         # A reset that kept the baselines would go on verifying savings against
         # measurements it claims to have forgotten.
-        assert magics._session.measured_compute == {}
-        data = _stats_json(magics, capsys)
+        assert cash_magics._session.measured_compute == {}
+        data = _stats_json(cash_magics, capsys)
         assert data["total_verified_saved"] == 0.0
 
 
@@ -263,12 +226,11 @@ class TestCertainLossStillReadsAsALoss:
     """The negative case must survive: where even the most generous
     reading of the cache's baselines is a loss, say so plainly."""
 
-    def test_no_savings_at_all_still_says_cash_cost_you(self, magics_fixture, capsys):
-        magics, _shell, _backend = magics_fixture
+    def test_no_savings_at_all_still_says_cash_cost_you(self, cash_magics, capsys):
         for i in range(6):
-            run_cash_cell(magics, f"cheap_{i} = {i} + 1")
+            run_cash_cell(cash_magics, f"cheap_{i} = {i} + 1")
         capsys.readouterr()
-        magics.cash_stats("")
+        cash_magics.cash_stats("")
         out = capsys.readouterr().out
         # Nothing was cached, so no baseline is in question and the sign is
         # certain without verifying anything — report it bluntly, not as a range.
@@ -287,11 +249,10 @@ class TestUpstreamComputeIsNotOverhead:
     overstated.
     """
 
-    def test_upstream_recompute_counts_as_user_compute(self, magics_fixture, capsys):
-        magics, _shell, _backend = magics_fixture
+    def test_upstream_recompute_counts_as_user_compute(self, cash_magics, capsys):
         # 40s of upstream ETL re-run inside a 41s cell: cash's own tax is the 1s,
         # not the 41s.
-        magics._update_session_stats(
+        cash_magics._update_session_stats(
             [
                 {"status": CacheStatus.COMPUTED, "execution_time": 40.0, "is_upstream": True, "code": "df = etl()"},
                 {
@@ -303,14 +264,13 @@ class TestUpstreamComputeIsNotOverhead:
             ],
             cell_total_time=41.0,
         )
-        data = _stats_json(magics, capsys)
+        data = _stats_json(cash_magics, capsys)
         assert data["total_compute_time"] == pytest.approx(40.01)
         assert data["total_overhead"] == pytest.approx(0.99, abs=1e-6)
 
-    def test_stale_overstatement_occurs_with_zero_upstream_compute(self, magics_fixture, capsys):
-        magics, _shell, _backend = magics_fixture
-        _replay_retail_etl(magics)
-        data = _stats_json(magics, capsys)
+    def test_stale_overstatement_occurs_with_zero_upstream_compute(self, cash_magics, capsys):
+        _replay_retail_etl(cash_magics)
+        data = _stats_json(cash_magics, capsys)
         # The reported session ran no upstream compute at all, so reclassifying
         # upstream time could not have moved its net by a single millisecond.
         assert data["total_compute_time"] == 0.0

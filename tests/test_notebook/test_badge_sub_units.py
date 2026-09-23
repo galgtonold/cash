@@ -16,13 +16,6 @@ under the loop and renders it as a sibling instead.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
-import pytest
-from traitlets.config import Configurable
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
 from cash.notebook.badge_renderer.renderers.html import render_html
 from cash.notebook.badge_renderer.renderers.text import render_text
 from cash.notebook.badge_renderer.view import SubUnitGroup
@@ -31,7 +24,6 @@ from cash.notebook.control_structures.for_handler import (
     _stamp_call_events_body_index,
     _stamp_call_events_loop_header,
 )
-from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
 
 
@@ -253,37 +245,7 @@ def test_stamp_call_events_no_decorator_calls_key_is_a_noop():
 # --------------------------------------------------------- real pipeline (e2e)
 
 
-class MockShell(Configurable):
-    """Same mock shell ``test_single_unit_caching.py`` uses for real per-
-    iteration for-loop tests -- runs the actual production pipeline
-    (``CashMagics`` -> ``StatementProcessor`` -> ``ForLoopHandler`` ->
-    ``CallCache``/``CallUnit``), just with IPython's shell mocked out.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-
-
-@pytest.fixture
-def magics_fixture():
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    yield magics, shell, backend
-    backend.clear()
-    shell.user_ns.clear()
-
-
-def test_real_for_loop_stamps_call_events_with_loop_header(magics_fixture):
+def test_real_for_loop_stamps_call_events_with_loop_header(cash_magics, mock_shell):
     """End-to-end: an intercepted call raised inside a REAL for-loop body
     (through the actual processor/for_handler/call_cache pipeline, not a
     hand-built dict) comes out with the same loop stamps its enclosing
@@ -321,9 +283,8 @@ def test_real_for_loop_stamps_call_events_with_loop_header(magics_fixture):
     # call_unit.py) or the call is never recorded at all regardless of
     # whether it was intercepted (confirmed: without the sleep, zero events
     # were logged even though the directive engaged with no warning).
-    magics_obj, shell, backend = magics_fixture
-    all_metrics = _run_real_for_loop_and_capture_metrics(magics_obj, shell, _LOOP_CODE)
-    assert shell.user_ns["results"] == {1: 2, 2: 3, 3: 4}
+    all_metrics = _run_real_for_loop_and_capture_metrics(cash_magics, mock_shell, _LOOP_CODE)
+    assert mock_shell.user_ns["results"] == {1: 2, 2: 3, 3: 4}
 
     body_stmts = [m for m in all_metrics if "# __iteration_context__:" in m.get("code", "")]
     assert body_stmts, "expected per-iteration body metrics"
@@ -380,7 +341,7 @@ for t in [1, 2, 3]:
 """
 
 
-def test_real_for_loop_renders_sub_calls_nested_under_the_loop(magics_fixture):
+def test_real_for_loop_renders_sub_calls_nested_under_the_loop(cash_magics, mock_shell):
     """Render-level counterpart to the stamping test above.
 
     A loop-body statement renders through ``IterationRow`` via
@@ -395,9 +356,8 @@ def test_real_for_loop_renders_sub_calls_nested_under_the_loop(magics_fixture):
     it calls the real renderers on the real pipeline's output, not just
     inspects the metrics dicts.
     """
-    magics_obj, shell, backend = magics_fixture
-    all_metrics = _run_real_for_loop_and_capture_metrics(magics_obj, shell, _LOOP_CODE)
-    assert shell.user_ns["results"] == {1: 2, 2: 3, 3: 4}
+    all_metrics = _run_real_for_loop_and_capture_metrics(cash_magics, mock_shell, _LOOP_CODE)
+    assert mock_shell.user_ns["results"] == {1: 2, 2: 3, 3: 4}
 
     badge = build_interactive_badge(all_metrics)
     html = render_html(badge)

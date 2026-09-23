@@ -9,46 +9,13 @@ to make a refactor easier — fix the refactor instead.
 from __future__ import annotations
 
 import copy
-from unittest.mock import MagicMock
-
-import pytest
-from traitlets.config.configurable import Configurable
 
 from cash.analysis.mutation_effects import CellEffects
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
 
 # ---------------------------------------------------------------------------
 # Shared fixture (defined locally — magics_fixture has no shared conftest)
 # ---------------------------------------------------------------------------
-
-
-class MockShell(Configurable):
-    """Minimal mock IPython shell."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-
-
-@pytest.fixture
-def magics_fixture():
-    """Provide CashMagics + shell + backend (3-tuple, matching repo convention)."""
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    yield magics, shell, backend
-    backend.clear()
-    shell.user_ns.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -77,13 +44,12 @@ def _snapshot_tracking_state(simulator):
 # ---------------------------------------------------------------------------
 
 
-def test_clean_notebook_no_changes_returns_empty_plan(magics_fixture):
+def test_clean_notebook_no_changes_returns_empty_plan(cash_magics):
     """A notebook with no modifications produces no re-execution work."""
-    magics, shell, _backend = magics_fixture
-    run_cash_cell(magics, "x = 1")
-    run_cash_cell(magics, "y = x + 1")
+    run_cash_cell(cash_magics, "x = 1")
+    run_cash_cell(cash_magics, "y = x + 1")
 
-    simulator = magics._upstream_checker.simulator
+    simulator = cash_magics._upstream_checker.simulator
     before = _snapshot_tracking_state(simulator)
 
     stmts, restored, total_t = simulator.simulate_upstream(
@@ -100,13 +66,12 @@ def test_clean_notebook_no_changes_returns_empty_plan(magics_fixture):
     assert after == before, "clean simulation must not mutate tracking_state"
 
 
-def test_modified_upstream_cell_schedules_reexecution(magics_fixture):
+def test_modified_upstream_cell_schedules_reexecution(cash_magics):
     """Editing an upstream cell flags dependent stmts for re-run."""
-    magics, shell, _backend = magics_fixture
-    run_cash_cell(magics, "x = 1")
-    run_cash_cell(magics, "y = x + 1")
+    run_cash_cell(cash_magics, "x = 1")
+    run_cash_cell(cash_magics, "y = x + 1")
 
-    simulator = magics._upstream_checker.simulator
+    simulator = cash_magics._upstream_checker.simulator
 
     # Present a modified version of cell 0 to the simulator so it detects
     # a code change.
@@ -123,12 +88,11 @@ def test_modified_upstream_cell_schedules_reexecution(magics_fixture):
     assert any("x" in s for s in stmts), f"expected a statement involving 'x' in re-execution plan, got {stmts!r}"
 
 
-def test_simulate_upstream_return_types(magics_fixture):
+def test_simulate_upstream_return_types(cash_magics):
     """simulate_upstream always returns (list, list, float)."""
-    magics, shell, _backend = magics_fixture
-    run_cash_cell(magics, "data = [1, 2, 3]")
+    run_cash_cell(cash_magics, "data = [1, 2, 3]")
 
-    simulator = magics._upstream_checker.simulator
+    simulator = cash_magics._upstream_checker.simulator
 
     stmts, restored, t = simulator.simulate_upstream(
         current_cell_idx=1,
@@ -143,12 +107,11 @@ def test_simulate_upstream_return_types(magics_fixture):
     assert t == 0.0
 
 
-def test_reset_caches_clears_simulator_state(magics_fixture):
+def test_reset_caches_clears_simulator_state(cash_magics):
     """reset_caches() empties the simulator-owned caches."""
-    magics, shell, _backend = magics_fixture
-    run_cash_cell(magics, "x = 1")
+    run_cash_cell(cash_magics, "x = 1")
 
-    simulator = magics._upstream_checker.simulator
+    simulator = cash_magics._upstream_checker.simulator
 
     # Warm up the simulator so caches are populated.
     simulator.simulate_upstream(

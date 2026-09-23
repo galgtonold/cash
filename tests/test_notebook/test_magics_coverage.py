@@ -10,39 +10,6 @@ their tests live in `test_object_hashing.py`.
 
 from unittest.mock import MagicMock
 
-import pytest
-from traitlets.config.configurable import Configurable
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-
-
-@pytest.fixture
-def magics_fixture():
-    """Provide CashMagics instance for testing."""
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    yield magics, shell, backend
-    backend.clear()
-    shell.user_ns.clear()
-
 
 class TestSaveHintLiveReaderAware:
     """The 'save your upstream edits' hint is for the FILE reader only.
@@ -61,48 +28,44 @@ class TestSaveHintLiveReaderAware:
         monkeypatch.setattr("cash.notebook.ipython.magics.in_colab", lambda: colab)
         monkeypatch.setattr("cash.notebook.ipython.magics.labextension_installed", lambda: labext)
 
-    def test_hint_shown_when_no_live_reader(self, magics_fixture, capsys, monkeypatch):
-        magics, _shell, _backend = magics_fixture
+    def test_hint_shown_when_no_live_reader(self, cash_magics, capsys, monkeypatch):
         self._gates(monkeypatch, colab=False, labext=False)
-        magics._save_hint_shown = False
-        magics.cash_on("")
+        cash_magics._save_hint_shown = False
+        cash_magics.cash_on("")
         out = capsys.readouterr().out
         assert "saved notebook file" in out
         assert "Save (Ctrl+S)" in out
 
-    def test_hint_suppressed_in_colab(self, magics_fixture, capsys, monkeypatch):
-        magics, _shell, _backend = magics_fixture
+    def test_hint_suppressed_in_colab(self, cash_magics, capsys, monkeypatch):
         self._gates(monkeypatch, colab=True, labext=False)
-        magics._save_hint_shown = False
-        magics.cash_on("")
+        cash_magics._save_hint_shown = False
+        cash_magics.cash_on("")
         out = capsys.readouterr().out
         assert "Cash enabled" in out  # cash_on still ran normally
         assert "Save (Ctrl+S)" not in out  # but the save hint is suppressed
         assert "saved notebook file" not in out
 
-    def test_hint_suppressed_when_the_labextension_is_installed(self, magics_fixture, capsys, monkeypatch):
+    def test_hint_suppressed_when_the_labextension_is_installed(self, cash_magics, capsys, monkeypatch):
         """The extension makes the save advice false."""
-        magics, _shell, _backend = magics_fixture
         self._gates(monkeypatch, colab=False, labext=True)
-        magics._save_hint_shown = False
-        magics.cash_on("")
+        cash_magics._save_hint_shown = False
+        cash_magics.cash_on("")
         out = capsys.readouterr().out
         assert "Cash enabled" in out
         assert "Save (Ctrl+S)" not in out
         assert "saved notebook file" not in out
 
-    def test_a_broken_probe_keeps_the_hint_rather_than_withdrawing_it(self, magics_fixture, capsys, monkeypatch):
+    def test_a_broken_probe_keeps_the_hint_rather_than_withdrawing_it(self, cash_magics, capsys, monkeypatch):
         """The probe must never raise, and its failure must not silence advice
         that is correct for everyone without the extension."""
 
         def _boom():
             raise RuntimeError("no filesystem for you")
 
-        magics, _shell, _backend = magics_fixture
         monkeypatch.setattr("cash.notebook.ipython.magics.in_colab", lambda: False)
         monkeypatch.setattr("os.path.isdir", lambda *_a, **_k: _boom())
-        magics._save_hint_shown = False
-        magics.cash_on("")  # must not raise
+        cash_magics._save_hint_shown = False
+        cash_magics.cash_on("")  # must not raise
         out = capsys.readouterr().out
         assert "Save (Ctrl+S)" in out
 
@@ -115,39 +78,34 @@ class TestSaveHintLiveReaderAware:
 class TestCashBadge:
     """Test %cash_badge magic command."""
 
-    def test_set_badge_html(self, magics_fixture, capsys):
-        magics, _, _ = magics_fixture
-        magics.cash_badge("html")
-        assert magics.badges.mode == "html"
+    def test_set_badge_html(self, cash_magics, capsys):
+        cash_magics.cash_badge("html")
+        assert cash_magics.badges.mode == "html"
         captured = capsys.readouterr()
         assert "Badge mode set to: html" in captured.out
 
-    def test_set_badge_print(self, magics_fixture, capsys):
-        magics, _, _ = magics_fixture
-        magics.cash_badge("print")
-        assert magics.badges.mode == "print"
+    def test_set_badge_print(self, cash_magics, capsys):
+        cash_magics.cash_badge("print")
+        assert cash_magics.badges.mode == "print"
         captured = capsys.readouterr()
         assert "Badge mode set to: print" in captured.out
 
-    def test_set_badge_off(self, magics_fixture, capsys):
-        magics, _, _ = magics_fixture
-        magics.cash_badge("off")
-        assert magics.badges.mode == "off"
+    def test_set_badge_off(self, cash_magics, capsys):
+        cash_magics.cash_badge("off")
+        assert cash_magics.badges.mode == "off"
         captured = capsys.readouterr()
         assert "Badge mode set to: off" in captured.out
 
-    def test_badge_invalid_shows_current(self, magics_fixture, capsys):
-        magics, _, _ = magics_fixture
-        magics.badges.mode = "print"
-        magics.cash_badge("invalid_mode")
+    def test_badge_invalid_shows_current(self, cash_magics, capsys):
+        cash_magics.badges.mode = "print"
+        cash_magics.cash_badge("invalid_mode")
         captured = capsys.readouterr()
         assert "Current badge mode: print" in captured.out
         assert "Usage:" in captured.out
 
-    def test_badge_empty_shows_current(self, magics_fixture, capsys):
-        magics, _, _ = magics_fixture
-        magics.badges.mode = "html"
-        magics.cash_badge("")
+    def test_badge_empty_shows_current(self, cash_magics, capsys):
+        cash_magics.badges.mode = "html"
+        cash_magics.cash_badge("")
         captured = capsys.readouterr()
         assert "Current badge mode: html" in captured.out
 
@@ -160,9 +118,8 @@ class TestCashBadge:
 class TestCashStatus:
     """Test %cash_status magic command."""
 
-    def test_status_print_mode(self, magics_fixture, capsys):
-        magics, _, _ = magics_fixture
-        result = magics.cash_status("")
+    def test_status_print_mode(self, cash_magics, capsys):
+        result = cash_magics.cash_status("")
         assert isinstance(result, dict)
         assert "lineage" in result
         assert "auto_cache_enabled" in result
@@ -170,50 +127,45 @@ class TestCashStatus:
         captured = capsys.readouterr()
         assert captured.out.strip()  # Should print something
 
-    def test_status_dict_mode(self, magics_fixture):
-        magics, _, _ = magics_fixture
-        result = magics.cash_status("dict")
+    def test_status_dict_mode(self, cash_magics):
+        result = cash_magics.cash_status("dict")
         assert isinstance(result, dict)
         assert "last_cell" in result
         assert "lineage" in result
         assert "cache_stats" in result
 
-    def test_status_counts_entries_without_listing_them(self, magics_fixture, monkeypatch):
+    def test_status_counts_entries_without_listing_them(self, cash_magics, clean_backend, monkeypatch):
         """The count comes from ``entry_count``: ``list_entries`` reads every
         entry's metadata, seconds on a large file cache."""
-        magics, _, backend = magics_fixture
-        backend.set("k1", 1, {})
-        backend.set("k2", 2, {})
+        clean_backend.set("k1", 1, {})
+        clean_backend.set("k2", 2, {})
 
         def no_listing():
             raise AssertionError("%cash_status listed the backend to count it")
 
-        monkeypatch.setattr(backend, "list_entries", no_listing)
-        assert magics.cash_status("dict")["cache_stats"] == {"keys": 2}
+        monkeypatch.setattr(clean_backend, "list_entries", no_listing)
+        assert cash_magics.cash_status("dict")["cache_stats"] == {"keys": 2}
 
-    def test_status_json_mode(self, magics_fixture):
-        magics, _, _ = magics_fixture
-        result = magics.cash_status("json")
+    def test_status_json_mode(self, cash_magics):
+        result = cash_magics.cash_status("json")
         assert isinstance(result, str)
         import json
 
         parsed = json.loads(result)
         assert "lineage" in parsed
 
-    def test_status_reflects_execution(self, magics_fixture):
+    def test_status_reflects_execution(self, cash_magics):
         """After executing a statement, status should reflect it."""
-        magics, shell, _ = magics_fixture
-        processor = magics._statement_processor
+        processor = cash_magics._statement_processor
         processor.process_statement("x = 42")
-        result = magics.cash_status("dict")
+        result = cash_magics.cash_status("dict")
         assert "x" in result["executed_codes"]
 
-    def test_last_cell_metrics_empty_status_is_none(self, magics_fixture):
+    def test_last_cell_metrics_empty_status_is_none(self, cash_magics):
         """A cell that produced no statement metrics yields overall status None (magics.py 778)."""
-        magics, _, _ = magics_fixture
-        magics._update_last_cell_metrics([], 0.0)
-        assert magics._last_cell_metrics["status"] is None
-        assert magics._last_cell_metrics["statements"] == []
+        cash_magics._update_last_cell_metrics([], 0.0)
+        assert cash_magics._last_cell_metrics["status"] is None
+        assert cash_magics._last_cell_metrics["statements"] == []
 
 
 # ============================================================================
@@ -224,64 +176,57 @@ class TestCashStatus:
 class TestCaptureCellId:
     """Test _capture_cell_id method."""
 
-    def test_capture_from_info_cell_id(self, magics_fixture):
-        magics, _, _ = magics_fixture
+    def test_capture_from_info_cell_id(self, cash_magics):
         info = MagicMock()
         info.cell_id = "test-cell-123"
-        magics._capture_cell_id(info)
-        assert magics.current_cell_id == "test-cell-123"
+        cash_magics._capture_cell_id(info)
+        assert cash_magics.current_cell_id == "test-cell-123"
 
-    def test_capture_from_vscode_metadata(self, magics_fixture):
-        magics, shell, _ = magics_fixture
+    def test_capture_from_vscode_metadata(self, cash_magics, mock_shell):
         info = MagicMock(spec=[])  # No cell_id attribute
         # Simulate VS Code parent header
-        shell.get_parent = MagicMock(return_value={"metadata": {"vscode": {"cellId": "vscode-cell-456"}}})
-        magics._capture_cell_id(info)
-        assert magics.current_cell_id == "vscode-cell-456"
+        mock_shell.get_parent = MagicMock(return_value={"metadata": {"vscode": {"cellId": "vscode-cell-456"}}})
+        cash_magics._capture_cell_id(info)
+        assert cash_magics.current_cell_id == "vscode-cell-456"
 
-    def test_capture_from_parent_metadata_cellId(self, magics_fixture):
-        magics, shell, _ = magics_fixture
+    def test_capture_from_parent_metadata_cellId(self, cash_magics, mock_shell):
         info = MagicMock(spec=[])
-        shell.get_parent = MagicMock(return_value={"metadata": {"cellId": "parent-cell-789"}})
-        magics._capture_cell_id(info)
-        assert magics.current_cell_id == "parent-cell-789"
+        mock_shell.get_parent = MagicMock(return_value={"metadata": {"cellId": "parent-cell-789"}})
+        cash_magics._capture_cell_id(info)
+        assert cash_magics.current_cell_id == "parent-cell-789"
 
-    def test_capture_no_cell_id_available(self, magics_fixture):
-        magics, _, _ = magics_fixture
+    def test_capture_no_cell_id_available(self, cash_magics):
         info = MagicMock(spec=[])
-        magics._capture_cell_id(info)
-        assert magics.current_cell_id is None
+        cash_magics._capture_cell_id(info)
+        assert cash_magics.current_cell_id is None
 
-    def test_capture_exception_handled(self, magics_fixture):
+    def test_capture_exception_handled(self, cash_magics, mock_shell):
         """Exceptions in capture_cell_id should not propagate."""
-        magics, shell, _ = magics_fixture
         # Create an info object where accessing cell_id raises
         info = MagicMock(spec=[])  # No cell_id
         # Make shell.get_parent raise an exception
-        shell.get_parent = MagicMock(side_effect=RuntimeError("test error"))
+        mock_shell.get_parent = MagicMock(side_effect=RuntimeError("test error"))
         # This should not raise
-        magics._capture_cell_id(info)
-        assert magics.current_cell_id is None
+        cash_magics._capture_cell_id(info)
+        assert cash_magics.current_cell_id is None
 
-    def test_capture_debug_output(self, magics_fixture, caplog):
+    def test_capture_debug_output(self, cash_magics, caplog):
         """cell_id capture emits a DEBUG log record, not a raw stdout print."""
         import logging
 
-        magics, _, _ = magics_fixture
-        magics._debug = True
+        cash_magics._debug = True
         info = MagicMock()
         info.cell_id = "debug-cell"
         with caplog.at_level(logging.DEBUG, logger="cash.notebook.ipython.magics"):
-            magics._capture_cell_id(info)
+            cash_magics._capture_cell_id(info)
         messages = [r.getMessage() for r in caplog.records]
         assert any("[CELL_ID]" in m and "debug-cell" in m for m in messages), messages
 
-    def test_capture_no_cell_id_does_not_print(self, magics_fixture, capsys):
+    def test_capture_no_cell_id_does_not_print(self, cash_magics, capsys):
         """The no-cell_id path must not write to stdout (was noisy every cell)."""
-        magics, _, _ = magics_fixture
-        magics._debug = True
+        cash_magics._debug = True
         info = MagicMock(spec=[])  # no cell_id attribute
-        magics._capture_cell_id(info)
+        cash_magics._capture_cell_id(info)
         assert "[CELL_ID]" not in capsys.readouterr().out
 
 
@@ -311,9 +256,8 @@ class TestCashDebugConsoleHandler:
         for h in _cash_debug_handlers():
             cash_logger.removeHandler(h)
 
-    def test_on_installs_handler_routing_debug_to_stdout(self, magics_fixture, capsys):
-        magics, _, _ = magics_fixture
-        magics.cash_debug("on")
+    def test_on_installs_handler_routing_debug_to_stdout(self, cash_magics, capsys):
+        cash_magics.cash_debug("on")
 
         handlers = _cash_debug_handlers()
         assert len(handlers) == 1
@@ -325,19 +269,17 @@ class TestCashDebugConsoleHandler:
         assert "[UPSTREAM_DEBUG] hello" in out
         assert "[cash.notebook.unittest]" in out
 
-    def test_on_is_idempotent(self, magics_fixture):
-        magics, _, _ = magics_fixture
-        magics.cash_debug("on")
-        magics.cash_debug("on")
+    def test_on_is_idempotent(self, cash_magics):
+        cash_magics.cash_debug("on")
+        cash_magics.cash_debug("on")
         # Never add the console handler twice.
         assert len(_cash_debug_handlers()) == 1
 
-    def test_off_quiets_handler(self, magics_fixture, capsys):
-        magics, _, _ = magics_fixture
-        magics.cash_debug("on")
+    def test_off_quiets_handler(self, cash_magics, capsys):
+        cash_magics.cash_debug("on")
         capsys.readouterr()  # drop the "enabled" message
 
-        magics.cash_debug("off")
+        cash_magics.cash_debug("off")
         # Handler is left attached but raised above DEBUG so nothing emits.
         handlers = _cash_debug_handlers()
         assert len(handlers) == 1
@@ -347,13 +289,12 @@ class TestCashDebugConsoleHandler:
         out = capsys.readouterr().out
         assert "[UPSTREAM_DEBUG] silent" not in out
 
-    def test_handler_follows_current_stdout(self, magics_fixture):
+    def test_handler_follows_current_stdout(self, cash_magics):
         """The handler resolves sys.stdout lazily (per cell), not at install."""
         import io
         import sys
 
-        magics, _, _ = magics_fixture
-        magics.cash_debug("on")
+        cash_magics.cash_debug("on")
         handler = _cash_debug_handlers()[0]
 
         new_stream = io.StringIO()

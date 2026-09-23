@@ -9,49 +9,18 @@ statement on the hot path.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
-from traitlets.config import Configurable
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
 
 
-class _MockShell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-
-
-@pytest.fixture
-def magics_fixture():
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = _MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    yield magics, shell, backend
-    backend.clear()
-    shell.user_ns.clear()
-
-
-def test_analyze_statement_called_once_per_processed_statement(magics_fixture):
+def test_analyze_statement_called_once_per_processed_statement(cash_magics):
     """A single cacheable assignment must trigger exactly one analyze_statement
     call, not two.
 
     We patch at the call site (statement_processor) rather than at the source
     (cacheability) so that internal cacheability tests are unaffected.
     """
-    magics, shell, _ = magics_fixture
 
     real_analyze = __import__("cash.notebook.statement.processor", fromlist=["analyze_statement"]).analyze_statement
 
@@ -59,7 +28,7 @@ def test_analyze_statement_called_once_per_processed_statement(magics_fixture):
         "cash.notebook.statement.processor.analyze_statement",
         wraps=real_analyze,
     ) as spy:
-        run_cash_cell(magics, "y = 1 + 2")
+        run_cash_cell(cash_magics, "y = 1 + 2")
 
     # The cell runs one statement (`y = 1 + 2`). Pre-fix this was 2 calls; the
     # de-dup contract is exactly 1 per processed statement.

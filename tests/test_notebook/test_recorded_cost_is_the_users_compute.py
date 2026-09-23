@@ -11,37 +11,7 @@ it served would have cost goes on.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
-import pytest
-from traitlets.config import Configurable
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
-
-
-class _Shell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("Pub", (), {"publish": MagicMock()})()
-
-
-@pytest.fixture
-def magics_fixture():
-    backend = InMemoryBackend()
-    shell = _Shell()
-    magics = CashMagics(shell, Cash(backend=backend, register_magic=False))
-    magics._auto_cache_enabled = True
-    yield magics, shell, backend
-    backend.clear()
 
 
 def _cost_of(backend, needle):
@@ -54,17 +24,15 @@ def _cost_of(backend, needle):
 DEFS = "import time\ndef slow(i):\n    time.sleep(0.2)\n    return i"
 
 
-def test_calls_served_from_the_cache_count_toward_the_statements_cost(magics_fixture):
-    magics, shell, backend = magics_fixture
-    run_cash_cell(magics, DEFS)
-    run_cash_cell(magics, "r = [slow(i) for i in range(3)]")
-    run_cash_cell(magics, "r2 = [slow(i) for i in range(3)] + []")  # a new statement; its calls hit
-    assert shell.user_ns["r2"] == [0, 1, 2]
-    assert _cost_of(backend, "+ []") >= 0.5, "the served calls' compute was left out"
+def test_calls_served_from_the_cache_count_toward_the_statements_cost(cash_magics, mock_shell, clean_backend):
+    run_cash_cell(cash_magics, DEFS)
+    run_cash_cell(cash_magics, "r = [slow(i) for i in range(3)]")
+    run_cash_cell(cash_magics, "r2 = [slow(i) for i in range(3)] + []")  # a new statement; its calls hit
+    assert mock_shell.user_ns["r2"] == [0, 1, 2]
+    assert _cost_of(clean_backend, "+ []") >= 0.5, "the served calls' compute was left out"
 
 
-def test_cash_tracking_time_is_not_counted_as_the_statements(magics_fixture, monkeypatch):
-    magics, shell, backend = magics_fixture
+def test_cash_tracking_time_is_not_counted_as_the_statements(cash_magics, mock_shell, clean_backend, monkeypatch):
     clock = [0.0]
 
     # Every statement is charged 0.45 s of tracking against a 0.5 s sleep, so
@@ -77,6 +45,6 @@ def test_cash_tracking_time_is_not_counted_as_the_statements(magics_fixture, mon
         return clock[0]
 
     monkeypatch.setattr("cash.notebook.statement.call_routing.tracking_seconds", tracked)
-    run_cash_cell(magics, "import time\nx = (time.sleep(0.5), 7)[1]")
-    assert shell.user_ns["x"] == 7
-    assert _cost_of(backend, "time.sleep(0.5)") < 0.4
+    run_cash_cell(cash_magics, "import time\nx = (time.sleep(0.5), 7)[1]")
+    assert mock_shell.user_ns["x"] == 7
+    assert _cost_of(clean_backend, "time.sleep(0.5)") < 0.4

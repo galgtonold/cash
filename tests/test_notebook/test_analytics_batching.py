@@ -22,40 +22,9 @@ from __future__ import annotations
 
 import gc
 import sqlite3
-from unittest.mock import MagicMock
-
-import pytest
-from traitlets.config import Configurable
 
 from cash.analytics import AnalyticsManager
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
-
-
-class _MockShell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-
-
-@pytest.fixture
-def magics_fixture():
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = _MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    yield magics, shell, backend
-    backend.clear()
-    shell.user_ns.clear()
 
 
 def _committed_row_count(db_path: str) -> int:
@@ -66,16 +35,15 @@ def _committed_row_count(db_path: str) -> int:
 class TestPerCellDoesNotFsync:
     """The core guard: no commit-per-cell."""
 
-    def test_running_cells_does_not_commit_per_cell(self, magics_fixture, tmp_path):
-        magics, _shell, _backend = magics_fixture
+    def test_running_cells_does_not_commit_per_cell(self, cash_magics, tmp_path):
 
         # Point the processor at an isolated DB so we can count committed rows.
         am = AnalyticsManager(db_path=str(tmp_path / "analytics.db"))
-        magics._statement_processor.analytics_manager = am
+        cash_magics._statement_processor.analytics_manager = am
 
         n_cells = 10  # well under the flush threshold
         for i in range(n_cells):
-            run_cash_cell(magics, f"batch_var_{i} = {i} + 1")
+            run_cash_cell(cash_magics, f"batch_var_{i} = {i} + 1")
 
         # Each first-run compute records a MISS event, so the buffer must have
         # grown — proving events ARE being recorded, not silently dropped.

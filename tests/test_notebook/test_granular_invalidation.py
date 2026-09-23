@@ -22,15 +22,10 @@ import hashlib
 import importlib
 import sys
 import time
-from unittest.mock import MagicMock
 
 import pytest
-from traitlets.config.configurable import Configurable
 
 from cash.analysis.annotations import CacheAnnotation
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
 from cash.tracking.function_tracker import FunctionTracker
 
 # Force caching regardless of the 10 ms min-execution-time floor.
@@ -40,33 +35,6 @@ _PERSIST = CacheAnnotation(persist=True)
 # ============================================================================
 # Fixtures
 # ============================================================================
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-
-
-@pytest.fixture
-def magics_fixture():
-    """Provide CashMagics + shell + backend."""
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    yield magics, shell, backend
-    backend.clear()
-    shell.user_ns.clear()
 
 
 @pytest.fixture
@@ -517,15 +485,14 @@ class TestComputeModuleSymbolHash:
 class TestGranularInvalidation:
     """Tests for _invalidate_module_lineages with per-symbol granularity."""
 
-    def test_only_changed_symbol_users_invalidated(self, magics_fixture, temp_module):
+    def test_only_changed_symbol_users_invalidated(self, cash_magics, mock_shell, temp_module):
         """Variables using only unchanged symbols should be preserved."""
-        magics, shell, backend = magics_fixture
         module_name, module_file, _ = temp_module
-        sp = magics._statement_processor
+        sp = cash_magics._statement_processor
 
         # Import and track the module
         mod = importlib.import_module(module_name)
-        shell.user_ns[module_name] = mod
+        mock_shell.user_ns[module_name] = mod
         sp.function_tracker.track_module(module_name)
 
         # Setup: variable 'result' depends on module.compute
@@ -546,9 +513,9 @@ class TestGranularInvalidation:
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: {"compute"}}
 
-        magics._module_invalidator.invalidate(
+        cash_magics._module_invalidator.invalidate(
             changed_modules,
-            magics._statement_processor,
+            cash_magics._statement_processor,
             per_module_changed_symbols,
         )
 
@@ -561,11 +528,10 @@ class TestGranularInvalidation:
         assert sp.tracking_state.variable_lineage["version_str"] == "version_hash"
         assert "version_str" in sp.tracking_state.executed_cell_codes
 
-    def test_no_granular_info_full_invalidation(self, magics_fixture, temp_module):
+    def test_no_granular_info_full_invalidation(self, cash_magics, temp_module):
         """When per_module_changed_symbols is None, full invalidation happens."""
-        magics, shell, backend = magics_fixture
         module_name, module_file, _ = temp_module
-        sp = magics._statement_processor
+        sp = cash_magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
         sp.tracking_state.lineage.record(module_name, old_lineage)
@@ -583,9 +549,9 @@ class TestGranularInvalidation:
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: None}
 
-        magics._module_invalidator.invalidate(
+        cash_magics._module_invalidator.invalidate(
             changed_modules,
-            magics._statement_processor,
+            cash_magics._statement_processor,
             per_module_changed_symbols,
         )
 
@@ -593,11 +559,10 @@ class TestGranularInvalidation:
         assert "result" not in sp.tracking_state.variable_lineage
         assert "version_str" not in sp.tracking_state.variable_lineage
 
-    def test_no_attribute_deps_full_invalidation(self, magics_fixture, temp_module):
+    def test_no_attribute_deps_full_invalidation(self, cash_magics, temp_module):
         """When module_attribute_deps is not set for a var, full invalidation for safety."""
-        magics, shell, backend = magics_fixture
         module_name, module_file, _ = temp_module
-        sp = magics._statement_processor
+        sp = cash_magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
         sp.tracking_state.lineage.record(module_name, old_lineage)
@@ -609,20 +574,19 @@ class TestGranularInvalidation:
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: {"compute"}}
 
-        magics._module_invalidator.invalidate(
+        cash_magics._module_invalidator.invalidate(
             changed_modules,
-            magics._statement_processor,
+            cash_magics._statement_processor,
             per_module_changed_symbols,
         )
 
         # Should still be invalidated (no granular info about which attrs are used)
         assert "result" not in sp.tracking_state.variable_lineage
 
-    def test_empty_changed_symbols_preserves_all(self, magics_fixture, temp_module):
+    def test_empty_changed_symbols_preserves_all(self, cash_magics, temp_module):
         """If no symbols actually changed (e.g., whitespace only), preserve all vars."""
-        magics, shell, backend = magics_fixture
         module_name, module_file, _ = temp_module
-        sp = magics._statement_processor
+        sp = cash_magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
         sp.tracking_state.lineage.record(module_name, old_lineage)
@@ -635,20 +599,19 @@ class TestGranularInvalidation:
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: set()}
 
-        magics._module_invalidator.invalidate(
+        cash_magics._module_invalidator.invalidate(
             changed_modules,
-            magics._statement_processor,
+            cash_magics._statement_processor,
             per_module_changed_symbols,
         )
 
         # 'result' should be preserved (nothing actually changed)
         assert "result" in sp.tracking_state.variable_lineage
 
-    def test_backward_compat_without_per_module_symbols(self, magics_fixture, temp_module):
+    def test_backward_compat_without_per_module_symbols(self, cash_magics, temp_module):
         """Calling without per_module_changed_symbols falls back to full invalidation."""
-        magics, shell, backend = magics_fixture
         module_name, module_file, _ = temp_module
-        sp = magics._statement_processor
+        sp = cash_magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
         sp.tracking_state.lineage.record(module_name, old_lineage)
@@ -658,18 +621,17 @@ class TestGranularInvalidation:
 
         changed_modules = {module_name: module_file}
         # Don't pass per_module_changed_symbols
-        magics._module_invalidator.invalidate(
+        cash_magics._module_invalidator.invalidate(
             changed_modules,
-            magics._statement_processor,
+            cash_magics._statement_processor,
         )
 
         # Should still invalidate (backward compatible)
         assert "result" not in sp.tracking_state.variable_lineage
 
-    def test_multiple_modules_granular(self, magics_fixture, tmp_path):
+    def test_multiple_modules_granular(self, cash_magics, tmp_path):
         """Granular invalidation works across multiple changed modules."""
-        magics, shell, backend = magics_fixture
-        sp = magics._statement_processor
+        sp = cash_magics._statement_processor
 
         # Create two modules
         mod_a_name = f"_test_gran_a_{id(tmp_path)}"
@@ -713,9 +675,9 @@ class TestGranularInvalidation:
             mod_b_name: {"CONST_B"},
         }
 
-        magics._module_invalidator.invalidate(
+        cash_magics._module_invalidator.invalidate(
             changed_modules,
-            magics._statement_processor,
+            cash_magics._statement_processor,
             per_module_changed_symbols,
         )
 
@@ -737,12 +699,11 @@ class TestGranularInvalidation:
 class TestGranularEndToEnd:
     """End-to-end tests combining all components."""
 
-    def test_full_flow_granular_invalidation(self, magics_fixture, tmp_path):
+    def test_full_flow_granular_invalidation(self, cash_magics, mock_shell, tmp_path):
         """E2E: change one function in module → only its users are invalidated.
         _PERSIST overrides the 10 ms min-execution-time floor so trivial module
         calls are actually stored in cache."""
-        magics, shell, backend = magics_fixture
-        sp = magics._statement_processor
+        sp = cash_magics._statement_processor
         ft = sp.function_tracker
 
         # Create module with two functions
@@ -756,7 +717,7 @@ class TestGranularEndToEnd:
         try:
             # Import the module
             mod = importlib.import_module(module_name)
-            shell.user_ns[module_name] = mod
+            mock_shell.user_ns[module_name] = mod
             ft.track_module(module_name)
 
             # Execute import
@@ -765,17 +726,17 @@ class TestGranularEndToEnd:
             # Execute: use compute
             metrics1 = sp.process_statement(f"result = {module_name}.compute(5)", silent=True, annotation=_PERSIST)
             assert metrics1["status"] == CacheStatus.COMPUTED
-            assert shell.user_ns.get("result") == 10
+            assert mock_shell.user_ns.get("result") == 10
 
             # Execute: use VERSION
             metrics2 = sp.process_statement(f"v = {module_name}.VERSION", silent=True, annotation=_PERSIST)
             assert metrics2["status"] == CacheStatus.COMPUTED
-            assert shell.user_ns.get("v") == "1.0"
+            assert mock_shell.user_ns.get("v") == "1.0"
 
             # Execute: use format_result
             metrics3 = sp.process_statement(f"fmt = {module_name}.format_result(42)", silent=True, annotation=_PERSIST)
             assert metrics3["status"] == CacheStatus.COMPUTED
-            assert shell.user_ns.get("fmt") == "Result: 42"
+            assert mock_shell.user_ns.get("fmt") == "Result: 42"
 
             # Re-run all — should be SKIPPED/RESTORED
             metrics1b = sp.process_statement(f"result = {module_name}.compute(5)", silent=True, annotation=_PERSIST)
@@ -796,7 +757,7 @@ class TestGranularEndToEnd:
             )
 
             # Simulate cell execution: check and reload
-            changed_modules, per_mod_syms = ft.check_and_reload_changed_modules(shell.user_ns)
+            changed_modules, per_mod_syms = ft.check_and_reload_changed_modules(mock_shell.user_ns)
             assert module_name in changed_modules
 
             # Verify granular detection
@@ -805,9 +766,9 @@ class TestGranularEndToEnd:
             assert "compute" in changed_syms
 
             # Invalidate with granular info
-            magics._module_invalidator.invalidate(
+            cash_magics._module_invalidator.invalidate(
                 changed_modules,
-                magics._statement_processor,
+                cash_magics._statement_processor,
                 per_mod_syms,
             )
 
@@ -817,7 +778,7 @@ class TestGranularEndToEnd:
             # Re-run compute — should be COMPUTED (invalidated)
             metrics1c = sp.process_statement(f"result = {module_name}.compute(5)", silent=True, annotation=_PERSIST)
             assert metrics1c["status"] == CacheStatus.COMPUTED
-            assert shell.user_ns.get("result") == 500  # 5 * 100
+            assert mock_shell.user_ns.get("result") == 500  # 5 * 100
 
             # VERSION didn't change → may still be SKIPPED/RESTORED or COMPUTED
             # (module reload changes module lineage which can affect cache keys)
@@ -833,10 +794,9 @@ class TestGranularEndToEnd:
             if module_name in sys.modules:
                 del sys.modules[module_name]
 
-    def test_full_flow_change_constant_only(self, magics_fixture, tmp_path):
+    def test_full_flow_change_constant_only(self, cash_magics, mock_shell, tmp_path):
         """E2E: change a constant → only constant users are invalidated."""
-        magics, shell, backend = magics_fixture
-        sp = magics._statement_processor
+        sp = cash_magics._statement_processor
         ft = sp.function_tracker
 
         module_name = f"_test_e2e_const_{id(tmp_path)}"
@@ -846,15 +806,15 @@ class TestGranularEndToEnd:
         sys.path.insert(0, str(tmp_path))
         try:
             mod = importlib.import_module(module_name)
-            shell.user_ns[module_name] = mod
+            mock_shell.user_ns[module_name] = mod
             ft.track_module(module_name)
             sp.process_statement(f"import {module_name}", silent=True)
 
             # Use both
             sp.process_statement(f"result = {module_name}.compute(5)", silent=True)
-            assert shell.user_ns["result"] == 10
+            assert mock_shell.user_ns["result"] == 10
             sp.process_statement(f"v = {module_name}.VERSION", silent=True)
-            assert shell.user_ns["v"] == "1.0"
+            assert mock_shell.user_ns["v"] == "1.0"
 
             # Change only VERSION
             time.sleep(0.05)
@@ -863,10 +823,10 @@ class TestGranularEndToEnd:
                 "def compute(x):\n    return x * 2\n"
             )
 
-            changed_modules, per_mod_syms = ft.check_and_reload_changed_modules(shell.user_ns)
-            magics._module_invalidator.invalidate(
+            changed_modules, per_mod_syms = ft.check_and_reload_changed_modules(mock_shell.user_ns)
+            cash_magics._module_invalidator.invalidate(
                 changed_modules,
-                magics._statement_processor,
+                cash_magics._statement_processor,
                 per_mod_syms,
             )
             sp.process_statement(f"import {module_name}", silent=True)
@@ -879,7 +839,7 @@ class TestGranularEndToEnd:
             # VERSION changed → should be COMPUTED
             m2 = sp.process_statement(f"v = {module_name}.VERSION", silent=True)
             assert m2["status"] == CacheStatus.COMPUTED
-            assert shell.user_ns["v"] == "2.0"
+            assert mock_shell.user_ns["v"] == "2.0"
 
         finally:
             sys.path.remove(str(tmp_path))
@@ -937,11 +897,10 @@ class TestGranularEdgeCases:
         changed = ft.get_changed_symbols(module_name)
         assert changed == set()
 
-    def test_multiple_variables_using_same_changed_symbol(self, magics_fixture, temp_module):
+    def test_multiple_variables_using_same_changed_symbol(self, cash_magics, temp_module):
         """Multiple variables using the same changed symbol should all be invalidated."""
-        magics, shell, backend = magics_fixture
         module_name, module_file, _ = temp_module
-        sp = magics._statement_processor
+        sp = cash_magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
         sp.tracking_state.lineage.record(module_name, old_lineage)
@@ -962,9 +921,9 @@ class TestGranularEdgeCases:
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: {"compute"}}
 
-        magics._module_invalidator.invalidate(
+        cash_magics._module_invalidator.invalidate(
             changed_modules,
-            magics._statement_processor,
+            cash_magics._statement_processor,
             per_module_changed_symbols,
         )
 
@@ -972,11 +931,10 @@ class TestGranularEdgeCases:
         assert "b" not in sp.tracking_state.variable_lineage
         assert "c" in sp.tracking_state.variable_lineage
 
-    def test_variable_using_multiple_attrs_including_changed(self, magics_fixture, temp_module):
+    def test_variable_using_multiple_attrs_including_changed(self, cash_magics, temp_module):
         """If a variable uses both changed and unchanged attrs, it should be invalidated."""
-        magics, shell, backend = magics_fixture
         module_name, module_file, _ = temp_module
-        sp = magics._statement_processor
+        sp = cash_magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
         sp.tracking_state.lineage.record(module_name, old_lineage)
@@ -991,20 +949,19 @@ class TestGranularEdgeCases:
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: {"compute"}}
 
-        magics._module_invalidator.invalidate(
+        cash_magics._module_invalidator.invalidate(
             changed_modules,
-            magics._statement_processor,
+            cash_magics._statement_processor,
             per_module_changed_symbols,
         )
 
         # Should be invalidated because one of its deps (compute) changed
         assert "mixed" not in sp.tracking_state.variable_lineage
 
-    def test_module_attribute_deps_cleared_on_invalidation(self, magics_fixture, temp_module):
+    def test_module_attribute_deps_cleared_on_invalidation(self, cash_magics, temp_module):
         """module_attribute_deps should be cleared for invalidated variables."""
-        magics, shell, backend = magics_fixture
         module_name, module_file, _ = temp_module
-        sp = magics._statement_processor
+        sp = cash_magics._statement_processor
 
         old_lineage = hashlib.sha256(b"old").hexdigest()
         sp.tracking_state.lineage.record(module_name, old_lineage)
@@ -1016,9 +973,9 @@ class TestGranularEdgeCases:
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: {"compute"}}
 
-        magics._module_invalidator.invalidate(
+        cash_magics._module_invalidator.invalidate(
             changed_modules,
-            magics._statement_processor,
+            cash_magics._statement_processor,
             per_module_changed_symbols,
         )
 

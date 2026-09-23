@@ -25,42 +25,10 @@ scenario S6.
 
 import ast
 import asyncio
-from unittest.mock import MagicMock
 
 import pytest
-from traitlets.config import Configurable
 
-from cash.backends import InMemoryBackend
-from cash.core import Cash
 from cash.notebook.control_structures import contains_top_level_await
-from cash.notebook.ipython.magics import CashMagics
-
-
-class MockShell(Configurable):
-    """Minimal IPython-compatible shell (mirrors test_single_unit_caching)."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-
-
-@pytest.fixture
-def magics_fixture():
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    yield magics, shell, backend
-    backend.clear()
-    shell.user_ns.clear()
-
 
 # --------------------------------------------------------------------------
 # (1) the routing decision
@@ -95,10 +63,9 @@ def test_contains_top_level_await(code, expected):
 # --------------------------------------------------------------------------
 
 
-def test_process_await_unit_runs_await_loop(magics_fixture):
+def test_process_await_unit_runs_await_loop(cash_magics, mock_shell):
     """The fix: an await-bearing for-loop runs via the flag-capable async unit,
     producing correct results -- before the fix it SyntaxError'd at compile."""
-    magics, shell, _backend = magics_fixture
 
     calls = []
 
@@ -107,32 +74,31 @@ def test_process_await_unit_runs_await_loop(magics_fixture):
         await asyncio.sleep(0)
         return x * 10
 
-    shell.user_ns.update(fetch=fetch, xs=[1, 2, 3], results=[])
+    mock_shell.user_ns.update(fetch=fetch, xs=[1, 2, 3], results=[])
 
     code = "for x in xs:\n    r = await fetch(x)\n    results.append(r)"
     node = ast.parse(code).body[0]
     assert contains_top_level_await(node)
 
-    result = asyncio.run(magics._control_structure_processor.process_await_unit(node, silent=True))
+    result = asyncio.run(cash_magics._control_structure_processor.process_await_unit(node, silent=True))
 
     assert result.success, getattr(result, "error", None)
-    assert shell.user_ns["results"] == [10, 20, 30]
+    assert mock_shell.user_ns["results"] == [10, 20, 30]
     assert calls == [1, 2, 3]
 
 
-def test_process_await_unit_reports_body_error(magics_fixture):
+def test_process_await_unit_reports_body_error(cash_magics, mock_shell):
     """A genuine runtime error inside the awaited body surfaces as a failed
     result (not swallowed) -- the awaited unit still routes errors."""
-    magics, shell, _backend = magics_fixture
 
     async def boom(_x):
         await asyncio.sleep(0)
         raise ValueError("kaboom")
 
-    shell.user_ns.update(boom=boom, xs=[1])
+    mock_shell.user_ns.update(boom=boom, xs=[1])
 
     code = "for x in xs:\n    r = await boom(x)"
     node = ast.parse(code).body[0]
 
-    result = asyncio.run(magics._control_structure_processor.process_await_unit(node, silent=True))
+    result = asyncio.run(cash_magics._control_structure_processor.process_await_unit(node, silent=True))
     assert not result.success

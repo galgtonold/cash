@@ -25,43 +25,13 @@ import ast
 from unittest.mock import MagicMock
 
 import pytest
-from traitlets.config import Configurable
 
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook._protocols import TrackingState
 from cash.notebook.cache_status import CacheStatus
-from cash.notebook.ipython.magics import CashMagics
 from cash.notebook.statement import StatementProcessor
 from tests._cell_driver import run_cash_cell
-
-
-class MockShell(Configurable):
-    """Same shape as `test_badge_sub_units.py`'s `MockShell` -- runs the real
-    production pipeline with only IPython's shell mocked out."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-
-
-@pytest.fixture
-def magics_fixture():
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    yield magics, shell, backend
-    backend.clear()
-    shell.user_ns.clear()
-
 
 # Split into a "defs" cell and a "loop" cell -- like a real notebook, and
 # critically unlike re-running one cell that also re-executes
@@ -102,7 +72,7 @@ for t in [1, 2, 3]:
 """
 
 
-def test_hidden_state_call_gets_a_distinct_value_per_iteration(magics_fixture):
+def test_hidden_state_call_gets_a_distinct_value_per_iteration(cash_magics, mock_shell):
     """The bug this task exists to fix, reproduced through the real pipeline.
 
     Without `loop_vars` reaching the key, all three iterations build an
@@ -117,18 +87,17 @@ def test_hidden_state_call_gets_a_distinct_value_per_iteration(magics_fixture):
     hand: with that reversion this assertion fails with
     `{1: 1, 2: 1, 3: 1} != {1: 1, 2: 2, 3: 3}`.
     """
-    magics_obj, shell, backend = magics_fixture
-    run_cash_cell(magics_obj, _DEFS_CELL.strip())
-    run_cash_cell(magics_obj, _LOOP_CELL.strip())
-    assert shell.user_ns["results"] == {1: 1, 2: 2, 3: 3}
-    assert shell.user_ns["counter"]["n"] == 3, (
+    run_cash_cell(cash_magics, _DEFS_CELL.strip())
+    run_cash_cell(cash_magics, _LOOP_CELL.strip())
+    assert mock_shell.user_ns["results"] == {1: 1, 2: 2, 3: 3}
+    assert mock_shell.user_ns["counter"]["n"] == 3, (
         "fetch_next() ran a different number of times than there were "
         "iterations -- either under-called (a false hit) or over-called "
         "(caching never engaged)"
     )
 
 
-def test_hidden_state_loop_vars_still_discriminate_on_a_rerun(magics_fixture):
+def test_hidden_state_loop_vars_still_discriminate_on_a_rerun(cash_magics, mock_shell):
     """A rerun must still mint three DISTINCT keys -- the reuse half of the
     same bug: a wiring mistake that pushed the wrong (e.g. stale, or unpopped)
     loop_vars could pass the single-run test above by accident while collapsing
@@ -152,14 +121,13 @@ def test_hidden_state_loop_vars_still_discriminate_on_a_rerun(magics_fixture):
     where a checker exists, in
     `test_notebook_integration/test_callee_global_capture.py`.
     """
-    magics_obj, shell, backend = magics_fixture
-    run_cash_cell(magics_obj, _DEFS_CELL.strip())
-    run_cash_cell(magics_obj, _LOOP_CELL.strip())
-    assert shell.user_ns["results"] == {1: 1, 2: 2, 3: 3}
-    assert shell.user_ns["counter"]["n"] == 3
+    run_cash_cell(cash_magics, _DEFS_CELL.strip())
+    run_cash_cell(cash_magics, _LOOP_CELL.strip())
+    assert mock_shell.user_ns["results"] == {1: 1, 2: 2, 3: 3}
+    assert mock_shell.user_ns["counter"]["n"] == 3
 
-    run_cash_cell(magics_obj, _LOOP_CELL.strip())
-    rerun = shell.user_ns["results"]
+    run_cash_cell(cash_magics, _LOOP_CELL.strip())
+    rerun = mock_shell.user_ns["results"]
     assert len(set(rerun.values())) == 3, (
         f"the rerun's three iterations collapsed onto shared entries ({rerun}) "
         "-- loop_vars stopped discriminating across cells"

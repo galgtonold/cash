@@ -283,11 +283,19 @@ def cash_with_file_backend(file_backend):
 
 
 class MockShell(Configurable):
-    """Mock IPython shell with all required attributes."""
+    """The IPython shell every unit test of the notebook code runs against.
+
+    Just the attributes cash reads from a real ``InteractiveShell``: the
+    namespace (``user_global_ns`` is the same dict, as in IPython), the input
+    history, the event registry, the transformer lists, ``run_cell`` and the
+    display publisher. Use it through the ``mock_shell`` and ``cash_magics``
+    fixtures below rather than copying it.
+    """
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.user_ns = {}
+        self.user_global_ns = self.user_ns
         self.user_ns["_ih"] = []  # Input history
         self.events = MagicMock()
         self.events.register = MagicMock(return_value=None)
@@ -346,12 +354,27 @@ def simple_mock_shell():
 
 @pytest.fixture
 def cash_magics(mock_shell, cash_instance):
-    """Provide CashMagics instance with mock shell and clean backend."""
+    """The CashMagics every notebook unit test uses: ``mock_shell`` in front,
+    ``cash_instance`` (and so ``clean_backend``) behind.
+
+    As ``%load_ext cash`` leaves it, before ``%cash_on``: run a cell through
+    it with ``tests._cell_driver.run_cash_cell``. A test that needs other
+    settings builds on this fixture and says what it changes; it does not
+    construct its own shell or magics.
+    """
     magics = CashMagics(mock_shell, cash_instance)
     yield magics
     # Cleanup
     cash_instance.backend.clear()
     mock_shell.reset()
+
+
+@pytest.fixture
+def statement_processor(cash_magics):
+    """The StatementProcessor inside ``cash_magics``, wired to the same shell,
+    backend and tracking state, for tests that drive one statement at a time.
+    """
+    return cash_magics._statement_processor
 
 
 # ============================================================================
