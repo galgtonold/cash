@@ -40,7 +40,7 @@ ALWAYS = [
     "tests/test_notebook_integration/restart/test_disk_restore_after_restart.py",
     "tests/test_notebook_integration/files/test_file_invalidation_real.py",
     "tests/test_notebook_integration/decorator/test_decorator_bridge.py",
-    "tests/test_notebook_integration/badges/test_badge_integration.py",
+    "tests/test_notebook_integration/badges/test_badge_groups_loops_and_skipped_steps.py",
     "tests/test_notebook_integration/upstream/test_forward_probe_upstream_skip.py",
     "tests/test_notebook_integration/files/test_file_dep_path_fallback.py",
 ]
