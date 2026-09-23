@@ -97,6 +97,7 @@ from .purity_analyzer import (
     resolve_binding,
     resolve_local_import,
 )
+from .reconfigure import apply_overrides
 from .remote_source import measured_validation, validation_is_expensive, warn_validation_cost_once
 from .source_norm import (
     bytecode_identity,
@@ -1679,10 +1680,8 @@ class Cash:
         # coalesces, which is what the docs promise.
         self._async_inflight: dict[str, Any] = {}
         self._async_inflight_lock = threading.Lock()
-        self.debug = debug  # Debug mode flag
         self.use_locking = use_locking
-        self.verbose = bool(self.config.verbose)
-        verbose = self.verbose
+        verbose = self.config.verbose
         # Asking for debug output has to produce some. The flag used to set
         # nothing but this attribute, and a script has no logging configured,
         # so `CASH_DEBUG=1` printed not one line (round 17, three testers).
@@ -1811,6 +1810,31 @@ class Cash:
     def backend_if_built(self) -> CacheBackend | None:
         """The backend if one has been built, else ``None``; never builds one."""
         return self._backend
+
+    @property
+    def debug(self) -> bool:
+        """``config.debug``: log every cache decision."""
+        return bool(self.config.debug)
+
+    @debug.setter
+    def debug(self, value: bool) -> None:
+        self.config.debug = bool(value)
+
+    @property
+    def verbose(self) -> bool:
+        """``config.verbose``: log one line per decorated call."""
+        return bool(self.config.verbose)
+
+    @verbose.setter
+    def verbose(self, value: bool) -> None:
+        self.config.verbose = bool(value)
+
+    def reconfigure(self, **overrides: Any) -> None:
+        """Change settings at runtime, rebuilding the backend only when the
+        tiers it is built from changed. See ``cash.configure``."""
+        apply_overrides(self, overrides)
+        if overrides.get("debug") or overrides.get("verbose"):
+            enable_cash_logging(logging.DEBUG if self.debug else logging.INFO)
 
     def __repr__(self) -> str:
         backend_name = type(self._backend).__name__ if self._backend is not None else "<deferred>"

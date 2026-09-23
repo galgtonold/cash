@@ -377,7 +377,7 @@ configures a tool — a `tests/pyproject.toml` holding `[tool.ruff]` — does no
 so running from `tests/` still finds the repository's project and its
 `[tool.cash]`.
 
-<!-- claim: cash/__init__.py:configure @43a991e3 -->
+<!-- claim: cash/__init__.py:configure @945b5c80 -->
 ## Runtime mutation: `cash.configure()`
 
 Change the active configuration of the default singleton at runtime
@@ -404,16 +404,16 @@ cash.configure(backend="redis")   # uses the staging host you pre-set
 file. The function is in-memory only — persistence requires editing
 those files directly.
 
-**What gets rebuilt**: the function distinguishes "hot" fields (debug,
-verbose, persist_all, ...) from "backend-affecting" fields
-(cache_dir, compress, max_cache_size, max_memory_entries,
-flush_interval, backend, tiers, all connection details). Hot fields just update the
-dataclass. `min_cache_savings_pct` is handed to the running backend's
-persistence policy in place, so it applies from the next write without a
-rebuild.
-Backend-affecting fields drain the old backend's pending
-writes via `shutdown()`, build a fresh backend from the new config,
-and swap it in.
+**What gets rebuilt**: the backend, only when the change alters the tiers
+it is built from — `cache_dir`, `compress`, `max_cache_size`,
+`max_memory_entries`, `flush_interval`, `backend`, `tiers`, or a connection
+detail of a tier in use. Then the old backend drains its pending writes via
+`shutdown()`, and a fresh one is built from the new config. A connection
+detail of a backend not in use (`redis_host` on the RAM + disk stack) is
+stored for later and rebuilds nothing. `min_cache_savings_pct` is handed to
+the running backend's persistence policy in place. Every other setting —
+`debug`, `verbose`, `persist_all`, ... — is read by the next operation.
+`Cash.reconfigure(**settings)` does the same for an instance of your own.
 
 ## Notebook-only knobs
 

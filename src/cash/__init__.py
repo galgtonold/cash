@@ -17,24 +17,13 @@ part of the public API; import them from ``cash``, e.g. ``from cash import pure`
 from __future__ import annotations
 
 import contextlib
-
-# Aliased: importing the ``cash.logging`` submodule rebinds ``cash.logging``.
-import logging as _stdlib_logging
 from collections.abc import Iterator
-from dataclasses import fields as _dataclass_fields
 from typing import Any
 
 from .backends import FileBackend, InMemoryBackend, TieredBackend
-
-# The helpers configure() uses are imported under private names, so they stay
-# out of the `cash.` namespace users tab-complete.
-from .backends.factory import apply_persistence_settings as _apply_persistence_settings
-from .backends.factory import build_backend_from_config as _build_backend_from_config
 from .backends.sqlite_backend import SQLiteBackend
 from .config import CashConfig, create_default_config, get_config
-from .config import validate_value as _validate_value
 from .core import CacheExplanation, Cash
-from .core import enable_cash_logging as _enable_cash_logging
 from .data_source import DataSource, FileDataSource
 from .exceptions import (
     AmbiguousCellError,
@@ -168,102 +157,23 @@ def configure(**overrides: Any) -> None:
     swaps in a fresh Redis-backed backend, draining any pending writes
     on the previous one first.
 
-    Resolution semantics — the kwargs are validated against the
-    ``CashConfig`` field set, then applied to the active config in
-    place. Fields that affect backend construction (cache_dir,
-    max_cache_size, max_memory_entries, flush_interval, compress,
-    backend, tiers, and all per-backend connection details) trigger:
-
-        1. ``current_backend.shutdown()`` — drain in-flight writes.
-        2. Build a fresh backend from the updated config.
-        3. Swap it in atomically.
-
-    Hot fields (debug, verbose, ...) are applied to the dataclass in place
-    and read by the next operation. ``min_cache_savings_pct`` is applied
-    to the running backend's persistence policy in place, without a
-    rebuild.
-
-    Stale fields (e.g. ``redis_host`` when there's no Redis tier
-    currently active) are stored silently — the next switch to a Redis
-    backend will pick them up.
+    The kwargs are validated against the ``CashConfig`` fields (a bad key
+    or value raises ``ValueError`` and changes nothing), then applied to
+    the active config in place. When that changes the tiers the backend
+    is built from (``cache_dir``, ``backend``, ``tiers``, the connection
+    details of a tier in use, ...), the running backend drains its
+    pending writes and a fresh one is built. A setting no tier uses --
+    ``redis_host`` on a RAM + disk stack -- is stored for later and
+    rebuilds nothing. ``min_cache_savings_pct`` reaches the running
+    backend's persistence policy without a rebuild; every other setting
+    is read by the next operation.
 
     This function never writes to disk. To persist changes across
     process invocations, edit ``pyproject.toml`` ``[tool.cash]`` or the
     XDG user config file directly.
     """
-    if not overrides:
-        return
-
-    valid_fields = {f.name for f in _dataclass_fields(CashConfig) if not f.name.startswith("_")}
-    unknown = set(overrides) - valid_fields
-    if unknown:
-        raise ValueError(f"{sorted(unknown)!r} is not a configurable field. Valid keys: {sorted(valid_fields)!r}")
-
-    # Checked before anything is applied, so a bad value leaves the running
-    # configuration exactly as it was -- see `config.validate_value`.
-    overrides = {key: (val if key == "tiers" else _validate_value(key, val)) for key, val in overrides.items()}
-
-    c = _get_global_cash()
-
-    # Hot vs backend-affecting fields. Anything that influences which
-    # concrete backend(s) get constructed needs a rebuild.
-    BACKEND_AFFECTING = {
-        "cache_dir",
-        "compress",
-        "max_cache_size",
-        "max_memory_entries",
-        "flush_interval",
-        "backend",
-        "tiers",
-        "redis_host",
-        "redis_port",
-        "redis_db",
-        "redis_password",
-        "redis_prefix",
-        "s3_bucket",
-        "s3_region",
-        "s3_prefix",
-    }
-
-    needs_rebuild = bool(set(overrides) & BACKEND_AFFECTING)
-
-    # If the user changed a backend-affecting field, decide WHETHER the
-    # change actually affects the currently-active backend. If no active
-    # tier uses the field (e.g. setting redis_host while running RAM+disk),
-    # we skip the rebuild — the value is stored on the dataclass for later.
-    if needs_rebuild and not _change_affects_active_backend(c, set(overrides)):
-        needs_rebuild = False
-
-    # Apply overrides to the config dataclass in place.
-    for key, val in overrides.items():
-        setattr(c.config, key, val)
-
-    # Propagate the `debug` flag onto the Cash instance attribute too —
-    # statement_processor reads it from there in some paths.
-    if "debug" in overrides:
-        c.debug = bool(overrides["debug"])
-        if c.debug:
-            # Same as the constructor: asking for debug output produces some.
-            _enable_cash_logging(_stdlib_logging.DEBUG)
-    if "verbose" in overrides:
-        c.verbose = bool(overrides["verbose"])
-        if c.verbose:
-            _enable_cash_logging(_stdlib_logging.INFO)
-
-    if not needs_rebuild and "min_cache_savings_pct" in overrides and c.backend_if_built is not None:
-        _apply_persistence_settings(c.backend_if_built, c.config)
-
-    if needs_rebuild:
-        old_backend = c.backend_if_built
-        if old_backend is not None:
-            try:
-                old_backend.shutdown()
-            except Exception as e:  # noqa: BLE001 — best-effort drain
-                _stdlib_logging.getLogger(__name__).warning(
-                    "Old backend shutdown failed during configure(): %s",
-                    e,
-                )
-        c.backend = _build_backend_from_config(c.config)
+    if overrides:
+        _get_global_cash().reconfigure(**overrides)
 
 
 @contextlib.contextmanager
@@ -305,40 +215,6 @@ def cleanup(max_age: int | None = None) -> int:
         Number of entries removed.
     """
     return _get_global_cash().cleanup(max_age)
-
-
-def _change_affects_active_backend(c: Cash, changed: set[str]) -> bool:
-    """Decide whether *changed* config fields would change the active stack.
-
-    Conservatively returns True for any non-connection field (cache_dir,
-    compress, etc.). For connection fields (redis_*, s3_*) it inspects
-    the current backend stack — if no live tier of that type is present,
-    the change is dormant.
-    """
-    # Fields that always force rebuild when changed.
-    UNCONDITIONAL = {
-        "cache_dir",
-        "compress",
-        "max_cache_size",
-        "max_memory_entries",
-        "flush_interval",
-        "backend",
-        "tiers",
-    }
-    if changed & UNCONDITIONAL:
-        return True
-
-    # Connection fields: only relevant if a tier of that backend is live.
-    redis_fields = {"redis_host", "redis_port", "redis_db", "redis_password", "redis_prefix"}
-    s3_fields = {"s3_bucket", "s3_region", "s3_prefix"}
-
-    backend = c.backend_if_built
-    labels = backend.tier_labels() if backend is not None else []
-    if changed & redis_fields and "REDIS" in labels:
-        return True
-    if changed & s3_fields and "S3" in labels:
-        return True
-    return False
 
 
 # The coding-agent guide entry point: ``cash.help()`` prints/returns the compact

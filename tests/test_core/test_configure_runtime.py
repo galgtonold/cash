@@ -36,6 +36,19 @@ class TestHotFields:
         assert cash._get_global_cash().config.debug is True
         assert cash._get_global_cash().debug is True
 
+    def test_debug_and_verbose_are_the_config_itself(self):
+        """One copy of each flag: what the instance reports is its config,
+        whichever side changed it."""
+        import cash
+
+        c = cash._get_global_cash()
+        cash.configure(verbose=True)
+        assert c.verbose is True
+        c.config.verbose = False
+        assert c.verbose is False
+        c.debug = True
+        assert c.config.debug is True
+
     def test_configure_min_cache_savings_pct(self):
         import cash
 
