@@ -23,9 +23,9 @@ from IPython.display import HTML, display, publish_display_data
 
 from ... import __version__
 from ..._console import safe_text
+from ..._log import setup_logging
 from ...backends._writes import all_pending_writes
 from ...core import Cash
-from ...logging import setup_logging
 from ...object_hashing import compute_hash
 from ...tracking import io_watch
 from .. import badge_renderer as _badge

@@ -6,7 +6,7 @@ import json
 import logging
 import os
 
-from cash.logging import JsonFormatter, setup_logging
+from cash._log import JsonFormatter, setup_logging
 
 
 class TestJsonFormatter:
