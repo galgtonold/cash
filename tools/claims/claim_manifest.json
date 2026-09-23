@@ -197,7 +197,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/production-transition.md": {
-    "anchors": 5,
+    "anchors": 0,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/purity-decorators.md": {
@@ -225,7 +225,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/use-cases/data-science.md": {
-    "anchors": 3,
+    "anchors": 1,
     "audited": "2026-07-27"
   },
   "docs/tutorials/use-cases/llm-api-calls.md": {
