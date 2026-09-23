@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash import cost_model
+from cash.notebook._memo import LruMemo
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON
 from cash.object_hashing import estimate_object_size
@@ -153,7 +154,8 @@ class StatementStore:
         self.written_later_in_cell: frozenset[str] = frozenset()
         #: The file snapshots each producing entry recorded, by cache key,
         #: under the ``"__epoch__"`` of the hash scheme they were taken with.
-        self._producer_snapshots: dict[str, Any] = {}
+        self._producer_snapshots: LruMemo[str, dict[str, dict]] = LruMemo(64)
+        self._producer_snapshots_epoch: Any = None
 
     def set_written_later_in_cell(self, names: frozenset[str]) -> None:
         """Record the names a later top-level statement of the cell writes.
@@ -242,20 +244,18 @@ class StatementStore:
         if not key or backend is None:
             return {}
 
-        epoch = file_dep_snapshot.HASH_EPOCH
         memo = self._producer_snapshots
-        if memo.get("__epoch__") != epoch:
+        if self._producer_snapshots_epoch != file_dep_snapshot.HASH_EPOCH:
             memo.clear()
-            memo["__epoch__"] = epoch
-        if key in memo:
-            return memo[key]
+            self._producer_snapshots_epoch = file_dep_snapshot.HASH_EPOCH
+        cached = memo.get(key)
+        if cached is not None:
+            return cached
         try:
             meta = backend.peek_metadata(key)
         except Exception:  # noqa: BLE001 - a snapshot it cannot read is taken afresh
             meta = None
         snaps = (meta or {}).get("file_dependencies") or {} if isinstance(meta, dict) else {}
-        if len(memo) > 64:
-            memo.clear()
         memo[key] = snaps
         return snaps
 

@@ -50,6 +50,7 @@ from cash.backends._base import ttl_expired
 from cash.backends.value_policy import worth_its_bytes
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
 from cash.install_paths import is_user_path
+from cash.notebook._memo import LruMemo
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_interception import CallSite, names_read
@@ -187,10 +188,8 @@ def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, st
 #: intercepted call. A redefined function has a new code object, so an edit is
 #: never served the old verdict. It is the code of the function ``getsource``
 #: reads, after ``inspect.unwrap``: every function one ``functools.wraps``
-#: decorator returns shares the wrapper's code. Cleared when it reaches
-#: :data:`_GLOBAL_MUTATION_CACHE_MAX` entries.
-_GLOBAL_MUTATION_CACHE: dict[Any, tuple[str, ...]] = {}
-_GLOBAL_MUTATION_CACHE_MAX = 4096
+#: decorator returns shares the wrapper's code.
+_GLOBAL_MUTATION_CACHE: LruMemo[Any, tuple[str, ...]] = LruMemo(4096)
 
 
 def callee_mutated_globals(fn) -> tuple[str, ...]:
@@ -217,8 +216,6 @@ def callee_mutated_globals(fn) -> tuple[str, ...]:
         except SOURCE_RETRIEVAL_ERRORS:
             cached = ()
         if memo_key is not None:
-            if len(_GLOBAL_MUTATION_CACHE) >= _GLOBAL_MUTATION_CACHE_MAX:
-                _GLOBAL_MUTATION_CACHE.clear()
             _GLOBAL_MUTATION_CACHE[memo_key] = cached
     # Filtered per call, not memoised: whether a name is bound (and not a
     # module) can change between calls, and the memo is about the source.

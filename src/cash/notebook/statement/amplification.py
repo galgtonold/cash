@@ -32,6 +32,7 @@ from cash.backends.adaptive_caps import human_bytes
 from cash.control_markers import has_marker, strip_markers
 from cash.diagnostics import warn_diagnostic
 from cash.exceptions import CashCacheIneffectiveWarning
+from cash.notebook._memo import LruMemo
 
 __all__ = ["AMPLIFICATION_SKIP_REASON", "AmplificationGuard"]
 
@@ -53,10 +54,13 @@ class AmplificationGuard:
     statement warns once, not once per iteration.
     """
 
+    #: Statements tracked at once; the least recently written drops out.
+    MAX_STATEMENTS = 4096
+
     def __init__(self) -> None:
-        self._bytes_by_stmt: dict[str, int] = {}
-        self._last_size_by_stmt: dict[str, int] = {}
-        self._warned: set[str] = set()
+        self._bytes_by_stmt: LruMemo[str, int] = LruMemo(self.MAX_STATEMENTS)
+        self._last_size_by_stmt: LruMemo[str, int] = LruMemo(self.MAX_STATEMENTS)
+        self._warned: LruMemo[str, bool] = LruMemo(self.MAX_STATEMENTS)
 
     @staticmethod
     def _size(prediction: dict[str, Any] | None) -> int:
@@ -124,7 +128,7 @@ class AmplificationGuard:
 
         cumulative = self._bytes_by_stmt.get(stmt_id, 0)
         if cumulative > _PERSIST_AMPLIFICATION_FLOOR_BYTES and cumulative > _PERSIST_AMPLIFICATION_LIMIT * size:
-            self._warned.add(stmt_id)
+            self._warned[stmt_id] = True
             self._warn(stmt_id, cumulative, size, annotated=annotated)
             return True, AMPLIFICATION_SKIP_REASON
         return False, None
