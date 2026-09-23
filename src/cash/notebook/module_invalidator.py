@@ -41,14 +41,14 @@ class ModuleInvalidator:
     """Encapsulates module-change detection and lineage invalidation.
 
     Constructed once by :class:`CashMagics` and reused for the lifetime
-    of the session.  All mutable state lives on the ``StatementProcessor``
-    — this class is stateless aside from the ``debug`` flag and the
-    ``shell`` reference (needed to refresh ``user_ns`` values).
+    of the session. It holds no state of its own beyond the ``shell`` (needed
+    to refresh ``user_ns`` values): what it changes is the session's
+    :class:`TrackingState`, and a variable's recorded lineage is dropped
+    only through :meth:`StatementProcessor.forget_variable`.
     """
 
-    def __init__(self, shell: ShellProtocol, *, debug: bool = False) -> None:
+    def __init__(self, shell: ShellProtocol) -> None:
         self._shell = shell
-        self._debug = debug
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -132,14 +132,15 @@ class ModuleInvalidator:
                 old_lineage = processor.variable_lineage.get(name)
                 if old_lineage:
                     old_module_lineages[name] = old_lineage
-                processor.variable_lineage[name] = self._lineage_as_imported(name, processor) or new_lineage
-                processor.executed_cell_codes.pop(name, None)
-                processor.executed_input_lineages.pop(name, None)
-                processor.current_session_hashes.pop(name, None)
-
-                if self._debug:
-                    old_short = (old_lineage or "NONE")[:12]
-                    print(f"[MODULE_INVALIDATE] Updated lineage for '{name}': {old_short}... -> {new_lineage[:12]}...")
+                lineage = self._lineage_as_imported(name, processor) or new_lineage
+                processor.forget_variable(name)
+                processor.variable_lineage[name] = lineage
+                logger.debug(
+                    "[MODULE_INVALIDATE] Updated lineage for %r: %s... -> %s...",
+                    name,
+                    (old_lineage or "NONE")[:12],
+                    lineage[:12],
+                )
 
             processor.recently_reloaded_modules.add(mod_name)
 
@@ -242,13 +243,10 @@ class ModuleInvalidator:
             if value_module and (value_module == mod_name or value_module.startswith(mod_name + ".")):
                 if self._keep_unchanged_from_import(var_name, var_value, processor):
                     continue
-                processor.tracking_state.from_import_components.pop(var_name, None)
-                processor.executed_cell_codes.pop(var_name, None)
-                processor.executed_input_lineages.pop(var_name, None)
-                processor.current_session_hashes.pop(var_name, None)
-                processor.variable_lineage.pop(var_name, None)
-                if self._debug:
-                    print(f"[MODULE_INVALIDATE] Cleared tracking for from-imported '{var_name}' (module: {mod_name})")
+                processor.forget_variable(var_name)
+                logger.debug(
+                    "[MODULE_INVALIDATE] Cleared tracking for from-imported %r (module: %s)", var_name, mod_name
+                )
 
     def _keep_unchanged_from_import(
         self,
@@ -287,8 +285,7 @@ class ModuleInvalidator:
         # a function it matters beyond the value: the old object's line numbers
         # describe the old file, and its source hash is read by them.
         self._shell.user_ns[var_name] = fresh
-        if self._debug:
-            print(f"[MODULE_INVALIDATE] Kept '{var_name}': what it reaches in the module is unchanged")
+        logger.debug("[MODULE_INVALIDATE] Kept %r: what it reaches in the module is unchanged", var_name)
         return True
 
     def _clear_constant_from_imports(self, mod_name: str, processor: StatementProcessor, reloaded_mod: Any) -> None:
@@ -300,27 +297,19 @@ class ModuleInvalidator:
             # -- and dropped -- every name Category 1 had just kept.
             if self._keep_unchanged_from_import(var_name, self._shell.user_ns.get(var_name), processor):
                 continue
-            processor.tracking_state.from_import_components.pop(var_name, None)
-            processor.executed_cell_codes.pop(var_name, None)
-            processor.executed_input_lineages.pop(var_name, None)
-            processor.current_session_hashes.pop(var_name, None)
-            processor.variable_lineage.pop(var_name, None)
+            processor.forget_variable(var_name)
 
             actual_mod = sys.modules.get(src_mod) if src_mod != mod_name else reloaded_mod
             if actual_mod and hasattr(actual_mod, var_name):
-                new_val = getattr(actual_mod, var_name)
-                self._shell.user_ns[var_name] = new_val
-                if self._debug:
-                    print(
-                        f"[MODULE_INVALIDATE] Updated value for "
-                        f"from-imported constant '{var_name}' = "
-                        f"{repr(new_val)[:50]} (source module: {src_mod})"
-                    )
-            elif self._debug:
-                print(
-                    f"[MODULE_INVALIDATE] Cleared tracking for "
-                    f"from-imported constant '{var_name}' "
-                    f"(source module: {src_mod})"
+                self._shell.user_ns[var_name] = getattr(actual_mod, var_name)
+                logger.debug(
+                    "[MODULE_INVALIDATE] Refreshed from-imported constant %r (source module: %s)", var_name, src_mod
+                )
+            else:
+                logger.debug(
+                    "[MODULE_INVALIDATE] Cleared tracking for from-imported constant %r (source module: %s)",
+                    var_name,
+                    src_mod,
                 )
 
     def _clear_from_imported_tracking(
@@ -358,20 +347,16 @@ class ModuleInvalidator:
         if changed_syms is None:
             return "invalidate"
         if len(changed_syms) == 0:
-            if self._debug:
-                print(f"[GRANULAR] Preserving '{var_name}': no symbols changed in '{input_var}'")
+            logger.debug("[GRANULAR] Preserving %r: no symbols changed in %r", var_name, input_var)
             return "preserve"
         var_attrs = processor.tracking_state.module_attribute_deps.get(var_name, {}).get(input_var)
         if var_attrs:
             if var_attrs & changed_syms:
-                if self._debug:
-                    print(f"[GRANULAR] Invalidating '{var_name}': uses changed symbols {var_attrs & changed_syms}")
+                logger.debug("[GRANULAR] Invalidating %r: uses changed symbols %s", var_name, var_attrs & changed_syms)
                 return "invalidate"
-            if self._debug:
-                print(f"[GRANULAR] Preserving '{var_name}': uses {var_attrs}, changed: {changed_syms}")
+            logger.debug("[GRANULAR] Preserving %r: uses %s, changed: %s", var_name, var_attrs, changed_syms)
             return "preserve"
-        if self._debug:
-            print(f"[GRANULAR] Invalidating '{var_name}': unknown attribute access on '{input_var}'")
+        logger.debug("[GRANULAR] Invalidating %r: unknown attribute access on %r", var_name, input_var)
         return "invalidate"
 
     def _classify_var_invalidation(
@@ -397,11 +382,7 @@ class ModuleInvalidator:
 
     def _invalidate_var(self, var_name: str, processor: StatementProcessor) -> None:
         """Clear all cached lineage state for one downstream variable."""
-        processor.variable_lineage.pop(var_name, None)
-        processor.executed_cell_codes.pop(var_name, None)
-        processor.executed_input_lineages.pop(var_name, None)
-        processor.current_session_hashes.pop(var_name, None)
-        processor.tracking_state.module_attribute_deps.pop(var_name, None)
+        processor.forget_variable(var_name)
         # The value is still in memory, built by the pre-edit module. Dropping
         # its lineage makes a READER of it recompute, but a cell further down
         # reading only something built from it compared lineages and saw
@@ -409,8 +390,7 @@ class ModuleInvalidator:
         # for its binding to be re-run instead -- TrackingState.rerun_bindings.
         if var_name in self._shell.user_ns:
             processor.tracking_state.rerun_bindings.add(var_name)
-        if self._debug:
-            print(f"[MODULE_INVALIDATE] Cleared lineage for dependent var '{var_name}'")
+        logger.debug("[MODULE_INVALIDATE] Cleared lineage for dependent var %r", var_name)
 
     def _register_preserved_var(
         self,
@@ -423,8 +403,7 @@ class ModuleInvalidator:
         for mod_name_key in old_module_lineages:
             if mod_name_key in input_map:
                 processor.tracking_state.granular_preserved_vars.setdefault(mod_name_key, set()).add(var_name)
-                if self._debug:
-                    print(f"[GRANULAR] Registered '{var_name}' for deferred lineage update on '{mod_name_key}'")
+                logger.debug("[GRANULAR] Registered %r for deferred lineage update on %r", var_name, mod_name_key)
 
     def _propagate_module_invalidation(
         self,
@@ -463,8 +442,8 @@ class ModuleInvalidator:
             self._invalidate_var(var_name, processor)
         for var_name in vars_preserved:
             self._register_preserved_var(var_name, old_module_lineages, processor)
-        if self._debug and vars_preserved:
-            print(f"[GRANULAR] Preserved {len(vars_preserved)} variable(s): {vars_preserved}")
+        if vars_preserved:
+            logger.debug("[GRANULAR] Preserved %d variable(s): %s", len(vars_preserved), vars_preserved)
 
     # ------------------------------------------------------------------
     # Helpers

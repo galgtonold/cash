@@ -1071,6 +1071,21 @@ class StatementProcessor:
         # routing through the call cache -- see _code_and_tree_for_execution.
         self._calls_not_worth_wrapping: set[str] = set()
 
+    def forget_variable(self, name: str) -> None:
+        """Drop everything recorded about how *name* was computed.
+
+        Its lineage, defining code, input lineages, session hash, narrowed
+        from-import component and module-attribute accesses all go, so the
+        next statement that reads *name* treats it as having no lineage. The
+        value in ``user_ns`` is left alone.
+        """
+        self.variable_lineage.pop(name, None)
+        self.executed_cell_codes.pop(name, None)
+        self.executed_input_lineages.pop(name, None)
+        self.current_session_hashes.pop(name, None)
+        self.tracking_state.from_import_components.pop(name, None)
+        self.tracking_state.module_attribute_deps.pop(name, None)
+
     def process_statement(
         self,
         code: str,

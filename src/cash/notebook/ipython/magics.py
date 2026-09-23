@@ -272,7 +272,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             debug=self._debug,
         )
 
-        self._module_invalidator = ModuleInvalidator(shell, debug=self._debug)
+        self._module_invalidator = ModuleInvalidator(shell)
 
         self._restorer = Restorer(
             shell,
