@@ -14,8 +14,6 @@ a cell that turned out to be correct, because the message sent them there.
 
 from __future__ import annotations
 
-import ast
-
 import pytest
 
 pytest.importorskip("IPython")
@@ -62,7 +60,6 @@ class _Checker(UpstreamChecker):
     def __init__(self, executed_cell_codes):  # noqa: D107 - test double
         self.executed_cell_codes = executed_cell_codes
         self.debug = False
-        self.simulator = type("_Sim", (), {"get_cached_ast": staticmethod(ast.parse)})()
 
 
 def test_a_missing_name_with_a_known_producer_names_it_as_a_cash_gap():

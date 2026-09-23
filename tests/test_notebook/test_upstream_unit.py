@@ -91,40 +91,6 @@ class TestUpstreamCheckerSetTrackingState:
         assert any(isinstance(n, ast.Assign) for n in nodes)
 
 
-class TestUpstreamASTCache:
-    """Test AST cache in UpstreamChecker."""
-
-    def test_ast_cache_hit(self):
-        mock_shell = MagicMock()
-        mock_shell.user_ns = {}
-        checker = UpstreamChecker(mock_shell)
-
-        code = "x = 1 + 2"
-        tree1 = checker.simulator.virtual_lineage.get_cached_ast(code)
-        assert tree1 is not None
-        tree2 = checker.simulator.virtual_lineage.get_cached_ast(code)
-        assert tree2 is tree1
-
-    def test_ast_cache_syntax_error(self):
-        mock_shell = MagicMock()
-        mock_shell.user_ns = {}
-        checker = UpstreamChecker(mock_shell)
-
-        tree = checker.simulator.virtual_lineage.get_cached_ast("def :")
-        assert tree is None
-
-    def test_ast_cache_eviction(self):
-        mock_shell = MagicMock()
-        mock_shell.user_ns = {}
-        checker = UpstreamChecker(mock_shell)
-        checker.simulator.virtual_lineage._ast_cache_max_size = 4
-
-        for i in range(6):
-            checker.simulator.virtual_lineage.get_cached_ast(f"x_{i} = {i}")
-
-        assert len(checker.simulator.virtual_lineage._ast_cache) <= 6
-
-
 class TestUpdateTrackingAfterRestoreFileDeps:
     """Test that _update_tracking_after_restore propagates file dependencies."""
 

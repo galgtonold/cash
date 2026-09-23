@@ -144,7 +144,7 @@ def test_simulate_upstream_return_types(magics_fixture):
 
 
 def test_reset_caches_clears_simulator_state(magics_fixture):
-    """reset_caches() empties all three simulator-owned caches."""
+    """reset_caches() empties the simulator-owned caches."""
     magics, shell, _backend = magics_fixture
     run_cash_cell(magics, "x = 1")
 
@@ -162,4 +162,3 @@ def test_reset_caches_clears_simulator_state(magics_fixture):
 
     assert simulator.virtual_lineage.simulation_cache == []
     assert simulator.virtual_lineage._simulation_cell_hashes == {}
-    assert simulator.virtual_lineage._ast_cache == {}

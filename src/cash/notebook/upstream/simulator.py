@@ -25,7 +25,7 @@ from typing import Any
 
 from cash.control_markers import strip_markers
 
-from ...analysis.ast_util import resolve_callee
+from ...analysis.ast_util import parse_cached, resolve_callee
 from ...analysis.cacheability import (
     analyze_statement,
     consumed_input_names,
@@ -168,7 +168,7 @@ class NotebookSimulator:
             self.classifier.set_tracking_state(state)
 
     def reset_caches(self) -> None:
-        """Clear simulation and AST caches.
+        """Forget the previous simulation.
 
         Called only by ``%cash_on``, so it also arms the one adoption of
         untracked names -- see ``_adopt_untracked_names``.
@@ -291,9 +291,6 @@ class NotebookSimulator:
 
     def set_current_cell_id(self, cell_id: str | None) -> None:
         self.virtual_lineage.current_cell_id = cell_id
-
-    def get_cached_ast(self, code: str):
-        return self.virtual_lineage.get_cached_ast(code)
 
     def last_index_for_cell(self, cell_id: str) -> int | None:
         return self.virtual_lineage.cell_id_to_last_index.get(cell_id)
@@ -628,7 +625,7 @@ class NotebookSimulator:
         if not cell_src:
             return flagged
         try:
-            consumed = consumed_input_names(self.virtual_lineage.get_cached_ast(cell_src))
+            consumed = consumed_input_names(parse_cached(cell_src))
         except (SyntaxError, ValueError, TypeError):
             return flagged
         candidates = required_inputs & consumed

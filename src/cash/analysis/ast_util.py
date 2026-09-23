@@ -4,20 +4,22 @@ cacheability scan and the upstream simulation.
 :func:`resolve_callee` names the object a call expression refers to without
 running the user's code: an attribute is read with ``getattr`` only on a
 module; on anything else it is looked up statically, or not at all.
-:func:`called_names` lists the bare names a tree calls.
+:func:`called_names` lists the bare names a tree calls. :func:`parse_cached`
+is the one bounded parse memo for statement and cell text.
 """
 
 from __future__ import annotations
 
 import ast
 import builtins
+import functools
 import inspect
 import sys
 import types
 from collections.abc import Mapping
 from typing import Any, Literal
 
-__all__ = ["CallScope", "called_names", "resolve_callee"]
+__all__ = ["CallScope", "called_names", "parse_cached", "resolve_callee"]
 
 #: Descriptors implemented in C that bind a method and run nothing else.
 _C_METHOD_DESCRIPTORS = (
@@ -26,6 +28,18 @@ _C_METHOD_DESCRIPTORS = (
     types.ClassMethodDescriptorType,
     types.BuiltinFunctionType,
 )
+
+
+@functools.lru_cache(maxsize=1024)
+def parse_cached(code: str) -> ast.Module | None:
+    """``ast.parse(code)``, memoised; None when *code* does not parse.
+
+    The tree is shared between callers: read it, never change it.
+    """
+    try:
+        return ast.parse(code)
+    except SyntaxError:
+        return None
 
 
 def resolve_callee(

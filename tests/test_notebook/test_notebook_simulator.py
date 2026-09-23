@@ -13,6 +13,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from cash.analysis.ast_util import parse_cached
 from cash.notebook._protocols import TrackingState
 from cash.notebook.upstream import NotebookSimulator
 from cash.notebook.upstream.virtual_lineage import VirtualLineage
@@ -44,7 +45,6 @@ class TestConstructionWithoutOrchestrator:
     def test_owns_its_caches(self):
         sim = _make_simulator()
         assert sim.virtual_lineage.simulation_cache == []
-        assert sim.virtual_lineage._ast_cache == {}
         assert sim.virtual_lineage._simulation_cell_hashes == {}
         assert sim.virtual_lineage.cell_id_to_last_index == {}
 
@@ -89,39 +89,24 @@ class TestStaticHelpers:
         assert missing not in result
 
 
-class TestAstCacheEviction:
-    """The simulator caches AST parses with a size-limited LRU-ish eviction.
-
-    A regression test on its own surface, not through UpstreamChecker.
-    """
+class TestParseCached:
+    """Cell and statement text is parsed once, through one bounded memo."""
 
     def test_returns_none_for_syntax_error(self):
-        sim = _make_simulator()
-        assert sim.virtual_lineage.get_cached_ast("def (:") is None
+        assert parse_cached("def (:") is None
 
     def test_caches_parsed_tree(self):
-        sim = _make_simulator()
-        tree1 = sim.virtual_lineage.get_cached_ast("x = 1")
-        tree2 = sim.virtual_lineage.get_cached_ast("x = 1")
-        assert tree1 is tree2
+        assert parse_cached("x = 1") is parse_cached("x = 1")
 
-    def test_evicts_when_over_capacity(self):
-        sim = _make_simulator()
-        sim.virtual_lineage._ast_cache_max_size = 4
-        for i in range(8):
-            sim.virtual_lineage.get_cached_ast(f"a{i} = {i}")
-        # Eviction removes the first quarter when at capacity, so a few
-        # entries survive but not all 8.
-        assert 0 < len(sim.virtual_lineage._ast_cache) < 8
+    def test_is_bounded(self):
+        assert parse_cached.cache_info().maxsize is not None
 
 
 class TestResetCaches:
     def test_clears_all_simulator_caches(self):
         sim = _make_simulator()
-        sim.virtual_lineage.get_cached_ast("x = 1")
         sim.virtual_lineage.simulation_cache.append(MagicMock())
         sim.virtual_lineage._simulation_cell_hashes[0] = "h"
         sim.reset_caches()
-        assert sim.virtual_lineage._ast_cache == {}
         assert sim.virtual_lineage.simulation_cache == []
         assert sim.virtual_lineage._simulation_cell_hashes == {}

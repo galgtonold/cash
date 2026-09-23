@@ -389,11 +389,9 @@ class TestResetCaches:
 
     def test_clears_all_caches(self):
         checker = _make_checker()
-        checker.simulator.virtual_lineage._ast_cache["code"] = MagicMock()
         checker.simulator.virtual_lineage.simulation_cache.append(MagicMock())
         checker.simulator.virtual_lineage._simulation_cell_hashes[0] = "hash"
         checker.reset_caches()
-        assert len(checker.simulator.virtual_lineage._ast_cache) == 0
         assert len(checker.simulator.virtual_lineage.simulation_cache) == 0
         assert len(checker.simulator.virtual_lineage._simulation_cell_hashes) == 0
 
@@ -645,10 +643,6 @@ class TestUpstreamCheckerInit:
         state.variable_lineage["test"] = "hash"
         checker = _make_checker(tracking_state=state)
         assert checker.variable_lineage["test"] == "hash"
-
-    def test_ast_cache_starts_empty(self):
-        checker = _make_checker()
-        assert len(checker.simulator.virtual_lineage._ast_cache) == 0
 
     def test_simulation_cache_starts_empty(self):
         checker = _make_checker()

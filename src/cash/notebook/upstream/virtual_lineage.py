@@ -1,7 +1,7 @@
 """Phase 1 of the notebook simulator: forward simulation + cache probing.
 
 Extracted from ``NotebookSimulator``. Owns the simulator-internal caches
-(``simulation_cache``, ``_ast_cache``, ``_simulation_cell_hashes``,
+(``simulation_cache``, ``_simulation_cell_hashes``,
 ``cell_id_to_last_index``) and shares ``tracking_state`` dict references
 with :class:`NotebookSimulator` and :class:`MismatchClassifier`. Pure-phase
 invariants land in a later refactor.
@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from cash.control_markers import iteration_digest, strip_markers
 
-from ...analysis.ast_util import called_names
+from ...analysis.ast_util import called_names, parse_cached
 from ...analysis.cacheability import (
     analyze_statement,
     bare_call_argument_names,
@@ -261,8 +261,6 @@ class VirtualLineage:
         # Resolved on first loop-split lookup; None means 'not yet
         # resolved', not 'no splits'. See ``_loop_split_k``.
         self._split_store = None
-        self._ast_cache: dict[str, ast.Module] = {}
-        self._ast_cache_max_size: int = 200
         self.simulation_cache: list[SimulationCacheEntry] = []
         self._simulation_cell_hashes: dict[int, str] = {}
         self.cell_id_to_last_index: dict[str, int] = {}
@@ -374,10 +372,9 @@ class VirtualLineage:
         return set(classes.mutated | classes.unknown_receivers)
 
     def reset_caches(self) -> None:
-        """Clear simulation and AST caches."""
+        """Forget every cell snapshot of the previous simulation."""
         self.simulation_cache.clear()
         self._simulation_cell_hashes.clear()
-        self._ast_cache.clear()
         self.__dict__.pop("_import_bindings_memo", None)
 
     def _get_metadata_only(self, cache_key: str) -> dict | None:
@@ -394,22 +391,6 @@ class VirtualLineage:
         if backend is None:
             return None
         return backend.get_metadata(cache_key)
-
-    def get_cached_ast(self, code: str) -> ast.Module | None:
-        """Parse code with AST caching. Returns None on SyntaxError."""
-        if code in self._ast_cache:
-            return self._ast_cache[code]
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
-            logger.debug("AST parse failed for code: %.80s...", code)
-            return None
-        if len(self._ast_cache) >= self._ast_cache_max_size:
-            keys = list(self._ast_cache.keys())
-            for evict_key in keys[: len(keys) // 4]:
-                del self._ast_cache[evict_key]
-        self._ast_cache[code] = tree
-        return tree
 
     def record_replayed_file_deps(self, rerecorded: set[str]) -> None:
         """Add the files behind the *rerecorded* variables to the snapshots of
@@ -678,7 +659,7 @@ class VirtualLineage:
             try:
                 clean_code = CodeAnalyzer.strip_magics(cell_code.replace("\r\n", "\n"))
                 if clean_code.strip():
-                    tree = self.get_cached_ast(clean_code)
+                    tree = parse_cached(clean_code)
                     if tree is not None:
                         for node in tree.body:
                             try:
@@ -1194,7 +1175,7 @@ class VirtualLineage:
             normalized = strip_markers(entry.stmt_code).strip()
             simulation_trace_codes.add(normalized)
             try:
-                tree = self.get_cached_ast(normalized)
+                tree = parse_cached(normalized)
                 if tree and len(tree.body) == 1 and is_control_structure(tree.body[0]):
                     for body_node in self._iter_body_nodes(tree.body[0]):
                         try:
@@ -1379,7 +1360,7 @@ class VirtualLineage:
                 )
                 return
 
-            tree = self.get_cached_ast(clean_cell_code)
+            tree = parse_cached(clean_cell_code)
             if tree is None:
                 ast.parse(clean_cell_code)  # will raise SyntaxError
 
@@ -2450,7 +2431,7 @@ class VirtualLineage:
             # notebook's cell text as the source of called functions: the two
             # engines must agree on what a statement reads and writes, or they
             # mint different keys.
-            mutation_tree = self.get_cached_ast(stmt_code)
+            mutation_tree = parse_cached(stmt_code)
             effects = statement_effects(
                 stmt_code,
                 mutation_tree,
@@ -3057,7 +3038,7 @@ class VirtualLineage:
                 if not clean_cell.strip():
                     continue
                 try:
-                    cell_tree = self.get_cached_ast(clean_cell)
+                    cell_tree = parse_cached(clean_cell)
                     if cell_tree is None:
                         continue
                     for node in cell_tree.body:

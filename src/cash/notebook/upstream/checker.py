@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from cash.control_markers import strip_markers
 
 from ...analysis.annotations import get_statement_annotations, parse_annotation_line
-from ...analysis.ast_util import called_names
+from ...analysis.ast_util import called_names, parse_cached
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import CellEffects, NotebookSources, cell_effects
 from ...diagnostics import log_diagnostic, warn_diagnostic
@@ -155,7 +155,7 @@ class UpstreamChecker:
         return self.simulator.virtual_lineage.function_tracker
 
     def reset_caches(self) -> None:
-        """Clear simulation and AST caches.
+        """Forget the previous simulation.
 
         Should be called when switching notebooks (e.g., on %cash_on)
         to prevent stale simulation data from a previous notebook
@@ -2040,7 +2040,7 @@ class UpstreamChecker:
 
     def _try_parse_control_structure(self, code: str) -> ast.AST | None:
         """Parse code and return the AST node if it's a single control structure."""
-        tree = self.simulator.get_cached_ast(code)
+        tree = parse_cached(code)
         if tree and len(tree.body) == 1 and is_control_structure(tree.body[0]):
             return tree.body[0]
         return None
