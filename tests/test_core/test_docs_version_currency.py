@@ -33,12 +33,13 @@ import cash
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Files a prospective user reads before they trust the project. Scoped
-# deliberately: CHANGELOG and versioning.md are FULL of version numbers that
-# are supposed to be historical or illustrative, and sweeping those in would
-# make this test noise.
+# Files a prospective user (or a coding agent) reads before they trust the
+# project. Scoped deliberately: CHANGELOG and versioning.md are FULL of version
+# numbers that are supposed to be historical or illustrative, and sweeping those
+# in would make this test noise.
 USER_FACING = (
     "README.md",
+    ".github/copilot-instructions.md",
     "docs/faq.md",
     "docs/cli.md",
     "docs/index.md",

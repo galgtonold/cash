@@ -1,533 +1,251 @@
 # Agent Instructions for Cash
 
-> **Scope:** This file is the single source of truth for AI coding assistants working in this repo —
-> GitHub Copilot, Claude Code (loaded via `CLAUDE.md` → this file), Cursor, Codex, etc.
-> If you change conventions, change them here, not in the per-tool config.
+> **Scope:** the single source of truth for AI coding assistants in this repo:
+> GitHub Copilot, Claude Code (via `CLAUDE.md`), Cursor, Codex and others.
+> Change conventions here, not in per-tool config.
 
-## Project Overview
-Cash is a smart caching library for Python with two primary use cases:
-1. **Decorator-based caching** (`@cash.cache`) for functions with automatic dependency tracking
-2. **Jupyter notebook caching** via IPython magics (`%cash_on`) with statement-level granularity
+## Project overview
 
-**Current Status:** Published on PyPI as `cash-lib`; latest release `0.4.0` (2026-08-21). Still `0.x` — the cache format may change between minor versions. The single source of truth for planning is the **private GitHub tracker** — see the *Project Management* section below.
+Cash is a Python caching library with two entry points:
 
-**Development Priority:** Work `prio:high` first, then `correctness`. New features default to `prio:low` unless they unblock a release.
+1. **`@cash.cache`**, a decorator that caches function results and tracks what they depend on.
+2. **`%cash_on`**, IPython magics that cache Jupyter notebooks statement by statement.
+
+It is published on PyPI as `cash-lib`. The version lives only in `src/cash/__init__.py`
+(`__version__`); released versions and their notes are in `CHANGELOG.md`. Cash is
+still `0.x`, so the cache format may change between minor versions.
+
+Read these instead of relying on this file for details:
+
+- `docs/contributing.md`: setup, the directory map, running and writing tests.
+- `docs/how-it-works/`: how keys, lineage, invalidation and storage work.
+- `docs/architecture_decisions.md`: the ADRs (not published on the docs site).
+- `pyproject.toml` (`[tool.pytest.ini_options]`) and `tests/conftest.py`,
+  `tests/test_notebook_integration/conftest.py`: test settings, markers and fixtures.
 
 ## Commit messages
-- **Never include `Co-Authored-By: Claude ...`** or any other AI-attribution trailer in commit messages. Author the commit normally.
-- Use Conventional-Commits-ish prefixes (`feat:`, `fix:`, `test:`, `chore:`, `build:`, `docs:`, `refactor:`) plus an optional scope (`feat(badge): ...`).
-- Subject ≤ 72 chars. Body wraps at 72. Lead with *why*, not *what*.
-- One logical change per commit. If a diff touches three concerns, split it.
+
+- **Never include `Co-Authored-By: Claude ...`** or any other AI-attribution trailer. Author the commit normally.
+- Conventional-Commits prefixes (`feat:`, `fix:`, `test:`, `chore:`, `build:`, `ci:`, `docs:`, `refactor:`), optional scope (`feat(badge): ...`).
+- Subject at most 72 characters, body wrapped at 72. Lead with *why*.
+- One logical change per commit.
+- Never reference the private tracker (see *Project management*).
 
 ## Architecture
 
-### Core Components (`src/cash/`)
-- **`core.py`** - Main `Cash` class, entry point for decorator-based caching
-- **`backends/`** - Pluggable storage backends: `InMemoryBackend`, `FileBackend`, `SQLiteBackend`, `RedisBackend`, `S3Backend`, plus two multi-backend composites, `TieredBackend` (promotion + read-repair) and `CascadingBackend`. `factory.py` maps a `TierConfig.type` string (`memory` / `file` / `sqlite` / `redis` / `s3` / `tiered`) to the class.
-- **`notebook/`** - Jupyter integration (the most complex subsystem)
-
-### Notebook Subsystem (`src/cash/notebook/`)
-The notebook caching is statement-level, not cell-level. The four biggest clusters are **packages**, not modules — see the ADR referenced on each.
-
-**Packages:**
-- **`ipython/`** - The IPython adapter (ADR-013). `magics.py` holds `CashMagics` (`%cash_on`, `%%cash`); `admin.py` the admin magics (`%cash_status`, `%cash_clear`, ...); `cell_executor.py` the `CellExecutor` that both entry points delegate to. Public surface: `CashMagics`.
-- **`statement/`** - `StatementProcessor` and its four siblings (ADR-011): `freshness.py` (`CacheFreshnessChecker`), `file_deps.py` (`StatementFileDeps`), `lineage.py` (`StatementLineageBuilder`), `restore.py` (`StatementRestorer`), plus `derivation_edges.py` (numpy-view / live-reference lineage bumps, CAS-115/89). Public surface: `StatementProcessor`, `ProcessResult`.
-- **`upstream/`** - Upstream detection + lineage simulation (ADR-010): `checker.py` (`UpstreamChecker`), `simulator.py` (`NotebookSimulator`), `virtual_lineage.py`, `mismatch_classifier.py`, `reexecution_planner.py`. Public surface: `UpstreamChecker`, `UpstreamResult`, `NotebookSimulator`.
-- **`control_structures/`** - Per-iteration caching for loops and conditionals (ADR-012): `processor.py` orchestrates, `for_handler.py` / `if_handler.py` / `try_handler.py` are the strategies, `helpers.py` the shared lineage/badge/error helpers.
-- **`badge_renderer/`** - `BadgeView` IR (`view.py`, `view_builder.py`) + the renderers under `renderers/` (HTML v3, text) and `theme.py`.
-
-**Modules:**
-- **`cache_key.py`** - **Unified cache key computation** (single source of truth for all cache key generation)
-- **`analysis.py`** - AST-based code analysis for inputs/outputs detection
-- **`cacheability.py`** - Pure-AST cacheability analysis. **Folds the former `mutation_detector.py` (in-place mutations) and `side_effects.py` (file writes, network calls) into one module** — both names are gone.
-- **`cacheability_decision.py`** - The runtime merge (`decide_cacheability`): AST analysis + annotations + `@stateful` + forbidden-function scan → `(cacheable, reasons)`
-- **`annotations.py`** - Parses `@cash:` comment directives. Six of them: `persist`, `no-cache`, `allow-random`, `cache-fit`, `cache-calls`, and `ttl=N`. Each hyphenated name also accepts a run-together alias (`nocache`, `allowrandom`, `cachefit`, `cachecalls`). An unknown directive is silently dropped — no warning, no log line.
-- **`lineage_store.py`** - `LineageStore`: the single seam for reading/writing variable lineage; owns the resolution priority ladder
-- **`restore.py`** - `Restorer`: **variable**-granular cache restoration (distinct from `statement/restore.py`, which is statement-granular)
-- **`consumables.py`** - Classification + divergence probing for consumable, unrestorable inputs (generators, file handles)
-- **`file_tracker.py`** - Intercepts file reads (pandas, numpy, polars, open, joblib, etc.) for dependency tracking
-- **`file_dep_snapshot.py`** - Pure helpers for file-dep snapshots (`{path: {mtime, size, hash}}`) and the **content-authoritative** freshness check shared by the decorator and notebook paths (CAS-98/CAS-10/CAS-119)
-- **`function_tracker.py`** - Tracks function source code changes, module hot reload
-- **`module_invalidator.py`** - Invalidates caches downstream of a changed local module
-- **`object_hashing.py`** - Pure `compute_hash` / sizing helpers for arbitrary objects
-- **`randomness.py`** - Unseeded random call detection and seed tracking
-- **`purity.py`** - `@pure` and `@stateful` decorator system
-- **`provenance.py`** - Variable computation history and dependency graphs
-- **`cache_status.py`** - Cache status enum + execution result types
-- **`cost_model.py`** - Tuned serialise/deserialise cost model behind the cache-or-not decision
-- **`server_discovery.py`** - Jupyter Server integration: notebook path discovery and cell reading
-- **`audit.py`** - Compliance audit logging
-- **`_protocols.py`** - `TrackingState` + the subsystem's Protocol types
-- **`_trace.py`** - Opt-in decision tracing for the upstream checker/simulator
+- **`src/cash/core.py`**: the `Cash` class and `@cash.cache`.
+- **`src/cash/backends/`**: storage backends. `factory.py` maps a `TierConfig.type`
+  (`memory` / `file` / `sqlite` / `redis` / `s3` / `tiered`) to a class. The default is
+  `TieredBackend([InMemoryBackend, FileBackend])`.
+- **`src/cash/notebook/`**: the notebook subsystem. Its large parts are packages:
+  `ipython/` (`CashMagics`, the cell executor), `statement/` (`StatementProcessor`
+  and its siblings), `upstream/` (`UpstreamChecker`, `NotebookSimulator`,
+  virtual lineage), `control_structures/` (per-iteration loop and branch caching)
+  and `badge_renderer/`. `cache_key.py` and `lineage_store.py` hold the rules below.
 
 ### JupyterLab extension (`labextension/`)
 
-The one part of this repo that is not Python. It pushes the notebook's live
-(unsaved) cell sources over the `cash_live_cells` comm that
-`notebook/live_cells.py` receives, which is the only way cash sees an edit that
-has not been written to the `.ipynb` yet.
+The only non-Python part. It sends the notebook's unsaved cell sources over the
+`cash_live_cells` comm that `notebook/live_cells.py` receives, the only way cash
+sees an edit not yet written to the `.ipynb`.
 
-**Node is never on your critical path.** The built bundle is committed under
-`src/cash/labextension/`, so `pip install -e .`, `pytest`, and building the wheel
-all work with no JavaScript toolchain installed. You need Node only if you change
-`labextension/src/index.ts` — then `cd labextension && npm install && npm run
-build`, and commit the regenerated `src/cash/labextension/`.
+Node is never needed to install, test or build the wheel: the bundle is
+committed under `src/cash/labextension/`. Only after changing
+`labextension/src/index.ts`, run `cd labextension && npm install && npm run build`
+and commit the regenerated bundle. `comm.commsOverSubshells = 'disabled'` in that
+file is load-bearing and guarded by a build script and
+`tests/test_notebook/test_labextension_packaging.py`; read `labextension/README.md`
+before touching it.
 
-`comm.commsOverSubshells = 'disabled'` in that file is **load-bearing** and is
-guarded twice (a build-time script and
-`tests/test_notebook/test_labextension_packaging.py`). Read
-`labextension/README.md` before touching it.
+## Critical conventions
 
-### Key Data Flows
-1. **Lineage Tracking**: Each variable gets a lineage hash = `hash(code + sorted(input_lineages) + file_deps)`
-2. **Cache Keys**: `stmt:{hash(code + input_lineage_hashes)}` for statement-level caching
-3. **Upstream Simulation**: Before running a cell, simulate all upstream cells to detect stale variables
+### Unified cache-key computation
 
-## Development Patterns
+**Every statement cache key goes through `compute_cache_key()` in
+`cash.notebook.cache_key`.** Never build a key anywhere else.
 
-### Testing Requirements
-**Every feature must have both unit tests AND integration tests before completion. Same goes for every bug fix.**
+Keys are computed at runtime (`_analyze_and_hash` in `statement/processor.py`),
+during upstream simulation and virtual restore (`_update_virtual_lineage` and
+`_try_virtual_restore` in `upstream/virtual_lineage.py`) and for call units
+(`call_unit.py`). If two of these disagree, a kernel restart turns into cache
+misses or stale values; that has caused critical bugs more than once. To change
+the key, change only `compute_cache_key()`, and add tests next to
+`tests/test_notebook/test_virtual_restore_modules.py`.
 
-#### Unit Tests (`tests/test_notebook/`)
-- Use a `magics_fixture` for mock IPython shell testing. It is **not** a shared conftest fixture — each test module defines its own (27 files under `tests/test_notebook/` do). Copy the pattern from a neighbouring test file rather than importing it.
-- Test individual components in isolation (statement processor, upstream checker, etc.)
-- Always use `tmp_path` for file-based test data to ensure isolation
+A key is `{namespace}:{sha256(...)}`, where the namespace is `stmt` for statements
+and `call` for call units, and the hash covers the statement's source hash, the
+lineage of each input, the source of called functions and modules, and the
+statement's occurrence index in the cell.
 
-```python
-# Example unit test pattern
-def test_feature_name(magics_fixture):
-    magics, shell, backend = magics_fixture
-    # Setup
-    shell.user_ns['x'] = 10
-    # Execute
-    magics.cash("", "y = x * 2")
-    # Assert
-    assert shell.user_ns['y'] == 20
+### Lineage
+
+- A variable's **lineage hash** stands for its full dependency chain: the code that
+  produced it plus the lineages of its inputs.
+- `LineageStore` (`notebook/lineage_store.py`) is the one place lineage is read and
+  written. `LineageStore.resolve` applies the priority order: the simulation's
+  `virtual_lineage` first, then the store (`variable_lineage`), then the object's
+  `_cash_lineage_hash` attribute, then `compute_hash_fn(value)`.
+- The simulator also tracks `executed_cell_codes` (variable to the code that last
+  produced it) and `executed_input_lineages` (variable to the input lineages used).
+
+## Testing
+
+- **Every feature and bug fix needs a unit test, and an integration test when it
+  touches notebook behaviour.**
+- Unit tests (`tests/test_notebook/` and the rest of `tests/`) use a real IPython
+  with a `MockShell` (`tests/conftest.py`). Use the shared `cash_magics` and
+  `mock_shell` fixtures, and `tmp_path` for files. Never mock `IPython` in
+  `sys.modules`.
+- Integration tests (`tests/test_notebook_integration/`) use `nb_runner`, which
+  drives a real kernel over a real `.ipynb`: `create_notebook`, `load`,
+  `start_kernel`, `run_all` / `run_cells` (1-based), `set_cell_source`,
+  `get_output`, `peek`. Assert on `get_output(n)` for what the user sees and on
+  `nb_runner.peek(expr)` for kernel state: a cache hit replays stdout, so printed
+  output can describe the value from when the entry was written.
+- Do not count executions of a cached callee with a counter it writes itself; the
+  write is restored on a hit. Use `os.open`/`os.write` (not `builtins.open`, which
+  the file tracker turns into a dependency).
+- `InteractiveShell.instance()` creates a process-wide shell. A test that calls it
+  must call `InteractiveShell.clear_instance()` in teardown, as
+  `tests/docs/_harness.py` and `benchmarks/tests/conftest.py` do.
+- Settings live in `pyproject.toml`: xdist workers and scheduler, reruns for
+  kernel-boot failures, the 30 s per-test timeout (override with
+  `@pytest.mark.timeout(...)`), strict xfails, and the markers. Use `-n 0` to
+  debug. Integration workers reuse one warm kernel per worker; mark a test
+  `fresh_kernel` when it needs a real restart, or set `CASH_TEST_REUSE_KERNEL=0`
+  to rule out cross-test contamination.
+- `perf` marks wall-clock threshold tests; CI's unit job skips them.
+  `benchmarks/tests/` tests the benchmark tooling and runs separately.
+
+### Choosing integration tests
+
+Never run the whole integration suite while iterating; it takes a long time.
+Run the files whose names match what you changed, at most about ten. For a
+broader check, use the core set from `tools/test_selection/`:
+
+```bash
+python tools/test_selection/run_baseline.py   # the whole suite once, with per-test coverage (slow)
+python tools/test_selection/select_core.py    # re-pick from an existing baseline
+pytest $(cat .testsel/core_set.txt)
 ```
 
-#### Integration Tests (`tests/test_notebook_integration/`)
+`select_core.py` greedily picks the passing tests that add new covered lines,
+features, feature pairs or step sequences per second of runtime, starting from
+CI's smoke list, and writes `.testsel/core_set.txt` plus a report.
 
-Use the `nb_runner` fixture:
-- Uses real notebook files that cash reads naturally (no mocking)
-- Supports cell modification with proper change detection
-- Supports selective cell execution with kernel persistence
-- Reference notebooks in `tests/test_notebook_integration/reference_notebooks/`
+### Before reporting work as done
 
-```python
-# Example using nb_runner with reference notebook
-from tests.test_notebook_integration.conftest import REFERENCE_NOTEBOOKS_DIR
-
-def test_example(nb_runner):
-    nb_runner.load(REFERENCE_NOTEBOOKS_DIR / "financial_demo.ipynb")
-    nb_runner.start_kernel()  # with_cash=True by default
-    nb_runner.run_all()
-    assert "AAPL" in nb_runner.get_output(3)
-    
-    # Modify a cell and re-run (cash detects the change!)
-    nb_runner.set_cell_source(2, "x = 100  # modified")
-    nb_runner.run_cells([2, 3])
-    output = nb_runner.get_output(3)
-
-# Example with programmatic notebook creation
-def test_programmatic(nb_runner):
-    nb_runner.create_notebook([
-        "x = 10",
-        "y = x * 2",
-        "print(f'Result: {y}')"
-    ])
-    nb_runner.start_kernel()
-    nb_runner.run_all()
-    assert "Result: 20" in nb_runner.get_output(3)
-```
-
-#### `get_output` vs `peek` — pick by what you are claiming
-
-Assert on **`get_output(cell)`** when the claim is about **what the user sees**.
-Assert on **`nb_runner.peek(expr)`** when the claim is about **kernel state**.
-Both are legitimate; conflating them is the bug.
-
-`get_output` returns text captured when that cell last ran, and a cached
-statement's stdout is *replayed on a hit* — so a printed value can report what
-was on screen when the entry was written rather than what the variable holds
-now. Measured during CAS-260: a printed reading made a broken arm look correct
-and sent a round of that investigation down a false trail; the out-of-band read
-reversed the conclusion.
-
-```python
-assert "Result: 20" in nb_runner.get_output(3)   # the user sees this
-assert nb_runner.peek("y") == "20"               # the kernel holds this
-assert nb_runner.peek("len(rows)") == "3"        # any expression works
-```
-
-`peek` runs outside the notebook's cells with `store_history=False`, so nothing
-about it is cached, replayed, or added to the notebook. A bare name is wrapped
-as `globals().get(name)`, so an undefined one reads as `"None"` rather than
-raising into silence.
-
-**Do not instrument a cached callee with a counter it writes itself** (a global
-list it appends to). Such a write is captured and restored on a hit, so the
-counter reads the same whether the call ran or was served, *and* it costs the
-call its reuse. Count executions with `os.open`/`os.write` — not
-`builtins.open`, which `FileAccessTracker` patches into a file dependency,
-changing the entry every run and silently disabling what you are measuring.
-
-### Bug Reproduction Workflow
-When debugging notebook-related bugs:
-1. Create a reproduction test notebook
-2. Use the built-in VS Code notebook tools (`edit_notebook_file`, `run_notebook_cell`, `read_notebook_cell_output`, `configure_python_notebook`) to execute cells and observe behavior. **DO NOT use the external Jupyter MCP server** — use the VS Code built-in notebook editing/execution tools only.
-3. Once the issue is reproduced, write an integration test using `nb_runner` that programmatically verifies the fix.
-
-Keep throwaway repro scripts, debug output and notes in `scratch/` at the repo root; it is gitignored.
-
-### Interactive Notebook Testing Workflow
-When performing interactive user-testing (cell-by-cell execution with edits):
-- Use `edit_notebook_file` (with `editType: "insert"`) to add cells
-- Use `edit_notebook_file` (with `editType: "edit"`) to modify cell source
-- Use `edit_notebook_file` (with `editType: "delete"`) to remove cells
-- Use `configure_python_notebook` to set up the Python kernel
-- Use `run_notebook_cell` to execute individual cells
-- Use `read_notebook_cell_output` to inspect cell results
-- Use `copilot_getNotebookSummary` to get cell IDs and status
-- **NEVER use open_browser_page or any MCP jupyter tools for notebook work**
-
-
-### Pre-Completion Checklist
-**Before reporting a feature or fix as complete, ALWAYS:**
-1. Run ALL unit tests: `pytest tests/test_notebook/ -v --tb=short`
-2. Run relevant integration tests by looking at file names and run them (max 10 most relevant ones). Never run all integration tests during development - it's too slow and makes it harder to iterate quickly.
-3. Run the specific feature tests with `-s` for debug output
-4. Verify no regressions in related test files
-
-
-**Parallel by default.** `pyproject.toml` sets `addopts = "-n 16 --dist loadscope"`, so every `pytest` run is parallel (pytest-xdist ships in the `dev` extra). Integration tests spend ~90% of wall-clock blocked on per-test Jupyter kernel boot/IPC, so a serial run pins one core and leaves the rest idle. The worker count is pinned (not `-n auto`) because the suite is boot-throttle-bound, not CPU-bound: a sweep found ~2× the boot throttle (16 ≈ 2×`CASH_TEST_BOOT_THROTTLE`) both fastest and most stable, while oversubscribing only queues kernel boots and destabilizes the run. `loadscope` keeps each module/class on a single worker, preserving the per-file ordering unit tests rely on. For interactive debugging (pdb, `-s`, single-stepping) disable parallelism with `-n0`.
-
-### Test Isolation
-Unit tests use **real IPython** with a `MockShell(Configurable)` (see `conftest.py` and `tests/test_notebook/`), not a `sys.modules['IPython'] = MagicMock()` mock. Do not reintroduce module-level IPython mocking — it pollutes `sys.modules` for whatever module xdist schedules next on the same worker and resurfaces the cross-test contamination this suite was cleaned up to avoid.
-
-**Process-global IPython singleton.** `InteractiveShell.instance()` registers a process-wide singleton, so `get_ipython()` returns a live shell for the rest of the worker even after the test that created it finishes. Any test that calls `.instance()` (the overhead-benchmark drivers, the docs harness) MUST clear it in teardown via `InteractiveShell.clear_instance()` — otherwise downstream tests that assume no active shell break (e.g. `reset_session()` re-creates the global Cash; `Cash()` auto-registers magics). `tests/test_benchmarks_overhead/conftest.py` and `tests/docs/_harness.py` already do this.
-
-### Test Commands
-
-#### Available Markers
-| Marker | Description | Example Files |
-|--------|-------------|---------------|
-| `core` | Basic caching flow | `test_basic_flow.py`, `test_financial_demo_scenario.py` |
-| `loops` | For/while loop caching | `test_control_structure_caching.py`, `test_loop_side_effects_integration.py` |
-| `control` | If/else branch caching | `test_control_structure_caching.py`, `test_stress_batch6_ifelse_regression.py` |
-| `upstream` | Upstream simulation/restore | `test_upstream_*.py`, `test_out_of_order_execution.py` |
-| `files` | File dependency tracking | `test_file_invalidation_real.py`, `test_read_csv_caching.py`, `test_chdir_*.py` |
-| `modules` | Module import/reload | `test_module_caching.py`, `test_module_reload_integration.py` |
-| `mutations` | Mutation detection | `test_mutation_accumulator_init.py`, `test_accumulator_add_item.py` |
-| `badges` | Badge display | `test_badge_integration.py` |
-| `restore` | Disk restore after restart | `test_disk_restore_after_restart.py` |
-| `libraries` | Real-world library integration | `test_real_world_libraries.py` |
-| `stress` | Comprehensive regression | `test_stress_batch1-6.py` (1000+ tests, do not run) |
-
-#### Timeout Configuration
-All integration tests have a **30-second timeout** configured in `pyproject.toml`. If a test exceeds this, it fails with a timeout error. Individual tests can override:
-```python
-@pytest.mark.timeout(60)  # Allow 60 seconds for this specific test
-def test_slow_operation(nb_runner):
-    ...
-```
-
-### Test Fixtures
-
-#### Unit Tests
-- Define a `magics_fixture` in the test module itself (see the note under *Unit Tests* above — it is per-file, not shared)
-- Always use `tmp_path` for file-based test data to ensure isolation
-
-#### Integration Tests
-- **`nb_runner`**: Uses real notebook files, supports cell modification
-  - `nb_runner.create_notebook([...])` - create notebook programmatically
-  - `nb_runner.load(path)` - load existing .ipynb file
-  - `nb_runner.start_kernel()` - start kernel (with_cash=True by default)
-  - `nb_runner.run_all()` / `run_cell(n)` / `run_cells([n, m])` - execute cells (1-based indexing)
-  - `nb_runner.get_output(n)` - get text output from cell n
-  - `nb_runner.set_cell_source(n, code)` - modify cell (cash detects changes)
-  - `nb_runner.reset_cash_state()` - clear cash's internal tracking state
-
-#### Reference Notebooks
-Store test notebooks in `tests/test_notebook_integration/reference_notebooks/` for reuse.
+1. Run the unit tests for the area you touched (`pytest tests/test_notebook/` for notebook work).
+2. Run the relevant integration tests, chosen as above.
+3. Show that a new test fails without the fix: `python scripts/fails_first.py <test file>`.
+   It stashes `src/`, runs the tests and fails if they pass anyway. Common ways a
+   test passes vacuously: the mechanism never engages (a cached function faster
+   than the persistence floor is never written to disk; sleep
+   `tests.conftest.ABOVE_PERSISTENCE_FLOOR_S`), empty input satisfies the
+   assertion, a different gate stands in for the real one, or state is checked
+   instead of behaviour. Give every filter or exclusion a positive control.
 
 ### Debugging
-Enable debug output in notebooks:
-```python
-%cash_on
-%cash_debug on
-```
-Debug output prefixes: `[UPSTREAM_DEBUG]`, `[LINEAGE_DEBUG]`, `[ALREADY_EXECUTED]`, `[TIMING_PROXY]`
 
-## Critical Conventions
-
-### Lineage System
-- **`variable_lineage`**: Maps var_name → lineage hash (full dependency chain)
-- **`executed_cell_codes`**: Maps var_name → code that last produced it
-- **`executed_input_lineages`**: Maps var_name → {input_var: lineage} used when computing
-- **`_cash_lineage_hash`**: Attribute attached to objects with their lineage hash. (There is no `_cash_hash` — the shorter name appears only inside a test name.)
-
-### Cache Key Format
-Statement cache keys: `stmt:{sha256(code + ':'.join(sorted(input_lineages)) + file_hash_component)}`
-
-### ⚠️ Unified Cache Key Computation (CRITICAL ARCHITECTURAL RULE)
-**All cache key computation MUST go through `compute_cache_key()` in `cash.notebook.cache_key`.** This is the single source of truth for building statement cache keys. Never duplicate cache key logic in other modules.
-
-**Why this matters:** Cache keys are computed in multiple contexts — runtime execution (`statement/processor.py`), upstream simulation (`upstream/virtual_lineage.py` `_update_virtual_lineage`), virtual restore (`upstream/virtual_lineage.py` `_try_virtual_restore`), and skip checks. Any divergence between these computations causes cache misses or stale data after kernel restarts. This has caused critical bugs multiple times in the past.
-
-**Call sites that use `compute_cache_key()`:**
-1. `_analyze_and_hash()` in `statement/processor.py` — runtime cache key
-2. `_update_virtual_lineage()` in `upstream/virtual_lineage.py` — simulation forward propagation
-3. `_try_virtual_restore()` in `upstream/virtual_lineage.py` — backward restore from disk
-4. Skipped statement checking in `upstream/virtual_lineage.py` — verifying skipped stmts
-
-**Input lineage priority order** (in `compute_cache_key()`):
-1. `virtual_lineage` (simulation context — checked FIRST, reflects current simulated code)
-2. `variable_lineage` (runtime state — may hold stale lineages from previous execution)
-3. `_cash_lineage_hash` attribute on the object in `user_ns`
-4. `compute_hash_fn` fallback (content-based hashing)
-
-**Module lineage propagation:** When `_update_virtual_lineage()` processes import statements (`import X` / `from X import Y`), it copies module output lineages to `self.variable_lineage`. This ensures modules are available for downstream runtime cache key computation even after kernel restart (when imports are "skipped stmts" that never go through `process()`).
-
-**When modifying cache key logic:** Change ONLY `compute_cache_key()` in `cache_key.py`. All call sites will automatically pick up the change. Add tests in `tests/test_notebook/test_virtual_restore_modules.py`.
-
-### Skip Optimization Logic
-Before executing a statement, check if it was already computed:
-1. Code matches `executed_cell_codes[var]`
-2. Output's `_cash_lineage_hash` matches stored lineage (not externally modified)
-3. No file dependencies OR file deps haven't changed
-4. Input lineages match `executed_input_lineages[var]`
-5. Special case: self-assignment (`df = df.sort_values()`) - check output lineage, not input
-
-### Metrics for Badge Display
-When returning from `process_statement()` in `statement/processor.py`, include:
-- `status`: 'COMPUTED', 'RESTORED', or 'SKIPPED'
-- `code`: The statement code
-- `outputs`: List of output variable names
-- `total_time`, `saved_time`, `storage`, etc.
-
-## Performance Guidelines
-- **Test execution time**: Always monitor test execution times. If tests take too long (>30s per test or >5min for a test suite), investigate and optimize
-- **Integration test optimization**: Use programmatic notebook creation over file-based notebooks when possible
-- **Kernel pooling**: DISABLED - caused hanging and zombie processes. Each test gets a fresh kernel
-- **Quick feedback loop**: Run subset of tests during development, full suite before completion
-
-## Prove a new test can fail
-
-A test written alongside a fix must be shown to fail **without** it:
-
-```bash
-python scripts/fails_first.py tests/test_core/test_my_new_guard.py
-```
-
-It stashes `src/`, runs the tests, restores, and exits non-zero if they all
-passed — i.e. if they never exercised the fix. This is not ceremony; vacuously
-green tests have shipped here repeatedly, in four recurring shapes:
-
-1. **The mechanism never engages.** Cross-process persistence has a ~0.1 s
-   compute floor, so a cached function cheaper than that is never written to
-   disk — a staleness test over two processes then passes whether or not the
-   bug exists. Use `tests.conftest.ABOVE_PERSISTENCE_FLOOR_S` for the sleep, and
-   assert the body ran exactly once across runs so you *know* it cached.
-2. **Empty input trivially satisfies the assertion.** "Is this output
-   encodable / valid / clean?" is true of an empty string, so a harness that
-   silently executed nothing looks green. Assert the input is non-empty first.
-3. **A different gate is substituted for the real one.** `mkdocs build
-   --strict` checks links and nav and never executes a python fence; only
-   `pytest tests/docs/` does. Passing one says nothing about the other.
-4. **State is checked instead of behaviour.** Asserting a policy object exists
-   passes even when nothing calls it. Drive the behaviour across the boundary
-   you care about.
-
-For an exclusion or filter, add a **positive control** in the same test (assert
-the thing that must survive is still there), or the assertion passes when
-everything is excluded.
+`%cash_debug on` prints the cache decisions, with prefixes such as `[UPSTREAM]`,
+`[UPSTREAM_DEBUG]`, `[CACHE_KEY]`, `[CONTROL]` and `[TIMING_PROXY]`. In VS Code,
+reproduce notebook bugs with the built-in notebook tools, not a Jupyter MCP
+server, then pin the fix with an `nb_runner` test. Keep throwaway scripts in
+`scratch/` at the repo root (gitignored).
 
 ## Writing documentation
-- **Never cite a line number.** `` `core.py:1234` `` is banned in any published
-  page and fails `tests/docs/test_doc_claims.py`. Name the **symbol**
-  (`Cash._compute_with_lock`, `MUTATING_METHODS`) — it moves with the code. The
-  ban started as a ratchet over 22 grandfathered pins; 20 of them had already
-  rotted onto unrelated code. The one exempt form appends the commit the line
-  was read at (`` `src/cash/core.py:1234@8e5f4ce` ``), which names a fixed
-  snapshot and so cannot rot — use it only for claims genuinely *about* history.
+
+- **Never cite a line number** (`` `core.py:1234` ``) in a published page;
+  `tests/docs/test_doc_claims.py` fails on it. Name the symbol instead. The one
+  exception pins a commit (`` `src/cash/core.py:1234@8e5f4ce` ``), for claims about history.
 - **Anchor every mechanism claim** to the source that decides it:
-  `<!-- claim: cash/core.py:Cash.cache @? -->`, then `python scripts/claims.py
-  --pin` fills the digest. Prefer a **value** anchor (`== 0.01`) whenever the
-  prose quotes a constant — it verifies itself forever with no human in the loop.
-- **Before changing code, run `python scripts/claims.py --report <src file>`** to
-  see which doc claims rest on it.
-- Full authoring guide: `tests/docs/README.md`.
+  `<!-- claim: cash/core.py:Cash.cache @? -->`, then `python scripts/claims.py --pin`.
+  Prefer a value anchor (`== 0.01`) when the prose quotes a constant.
+- Before changing code, `python scripts/claims.py --report <src file>` lists the
+  claims that rest on it.
+- Full guide: `tests/docs/README.md`.
 
-## Common Pitfalls
-- **File paths**: Always normalize paths (`path.replace('\\', '/')`) for cross-platform cache key consistency
-- **Windows file locking**: Use retry loops when deleting temp directories in tests
-- **nbclient execution order**: Cells run sequentially; can't skip cells to test specific orders
-- **Duplicate cells**: If two cells have identical code, use cell IDs for disambiguation
-- **Zombie processes**: After killing Python processes, may need to reconfigure environment
+## Project management
 
-## Project Management
+Planning lives in a private GitHub tracker. **Never reference it from this public
+repo**: no private issue numbers or `CAS-N` ids in commits, PR descriptions, code,
+docs or CHANGELOG entries. Describe the change on its own terms. Do not create
+roadmap files in the repo. Breaking changes go in `CHANGELOG.md` and the PR
+description.
 
-**Two trackers, different jobs.** Use the right one:
+## Release process
 
-| tracker | what goes there |
-| --- | --- |
-| **`galgtonold/cash-tracker`** (private) | Everything internal: bugs, follow-ups, tech debt, roadmap. This is the single source of truth for planning. |
-| **`galgtonold/cash`** (public) | Only issues filed by outside users — the README's bug-report link, the badge's "Report a bug" button, `%cash_feedback`. Do not file internal work here. |
-
-Board: <https://github.com/users/galgtonold/projects/1> (private) — views *All work*, *Board*, *High priority*, *Correctness*, *Docs*.
-
-**Never reference a private tracker issue from the public repo.** No `Fixes cash-tracker#12` in a commit that lands on `galgtonold/cash`, no private issue numbers in public PR descriptions or CHANGELOG entries. A public reader cannot open them, so it reads as noise. Describe the change on its own terms instead.
-
-Do **not** create or resurrect roadmap markdown. The old `planning/ROADMAP.md` no longer exists in the working tree at all (neither `planning/` nor `planning/archive/` is present) — if you need that history, read it out of git, and do not recreate the directory.
-
-**Behavioral rules for AI assistants (do these without being asked):**
-1. **Look in the tracker by default.** Before proposing what to work on, run
-   `gh issue list --repo galgtonold/cash-tracker --state open --label prio:high`
-   (and drop the label filter for the full picture). Don't ask the user to paste issue state — fetch it.
-2. **Auto-create on flag.** The moment you notice deferred work, an out-of-scope fix, a real bug, or a "do this later" — file it immediately (don't let it die in chat):
-   `gh issue create --repo galgtonold/cash-tracker --title "..." --body-file <file> --label "prio:medium" --label "type:bug"`
-   Best-guess priority is fine. Better an imperfectly-triaged issue than a lost one.
-3. **Cross-check on reference.** When the user mentions an issue — by number or description — read it (`gh issue view <n> --repo galgtonold/cash-tracker`) and work from its current state and comments, not from memory. **Ticket claims are unreliable**: roughly a third describe code that has since changed. Verify against the source before acting on a description.
-4. **Close with evidence.** When work is verified, close the issue with a comment naming what you checked (`--reason completed --comment "..."`). Don't close silently, and don't delete.
-
-**Historical `CAS-N` ids.** Issues lived in Linear (team `Cash`, prefix `CAS`) until 2026-08-21, when all 68 open ones were migrated. Commit messages and docs still cite `CAS-123` ids; those are **not** GitHub issue numbers — every migrated issue carries a canonical footer instead, so map an old id to its issue with:
-
-```bash
-gh issue list --repo galgtonold/cash-tracker --state all --limit 300 \
-  --json number,title,body \
-  --jq '.[] | select(.body | contains("Migrated from Linear `CAS-123`")) | "#\(.number) \(.title)"'
-```
-
-Match on the **backticked** id, not a bare search. `--search "CAS-19"` returns six issues (anything that merely mentions it), and an unanchored regex matches `CAS-191` inside `CAS-19`. The footer format is uniform across all 68 precisely so this stays a one-line exact lookup — keep it that way when filing new issues.
-
-**Structure:**
-- **Priority** — `prio:high` / `prio:medium` / `prio:low`. Every issue has exactly one.
-- **Type** — `type:bug`, `type:feature`, `type:improvement`, `type:docs`, `type:tech-debt`.
-- **Workstreams** — `correctness` (can serve a stale or wrong result), `cache-perf`, `release`.
-- **Area** — `area:notebook`, `area:decorator`, `area:backends`, `area:badge`, `area:tests`. Optional.
-- **`known-limitation`** is load-bearing (it replaces Linear's `xfail`): an issue with it maps to a `pytest.mark.xfail` in the suite, and closing it means flipping that marker to a passing test. Some are *documented limitations we do not intend to fix* — read the body before "fixing" one.
-
-**Other:**
-- **Breaking changes**: Document in `CHANGELOG.md` under the upcoming version and call them out in the PR description.
-- **Version control**: Commit in logical chunks with clear messages (see *Commit messages* section above).
-
-## Release Process
-
-When the user asks to **cut a release** / **bump the version** / **prepare release X.Y.Z**:
+When asked to cut a release or bump the version:
 
 ### 1. Pick the version
-The first public release is `0.1.0`. Development ran through internally-numbered
-versions up to `0.5.0b2`, none of which were ever published; versioning restarted
-at `0.1.0` so the public series begins where users actually join it. Do **not**
-resurrect the old numbers — `0.2.0`, `0.3.0` and `0.5.0*` are historical only and
-are recorded under *Pre-release development history* in `CHANGELOG.md`.
 
-- Bug-fix: `0.1.0` → `0.1.1`
-- New feature, no breaks: `0.1.0` → `0.2.0`
-- Breaking change: while `0.x`, a break goes in a minor bump (`0.1.0` → `0.2.0`)
-  and MUST be called out under **Breaking**; the API is not yet stable
-- `1.0.0` only once the API is one we're willing to freeze
+- Bug fixes only: bump the patch number.
+- New features: bump the minor number.
+- Breaking change: while `0.x`, bump the minor number and list it under **Breaking**.
+- Go to 1.0 only once the API is one we are willing to freeze.
 
-Prefer plain final versions over pre-release suffixes. `pip install cash-lib`
-ignores pre-releases unless the user passes `--pre`, so a `bN`/`rcN` release is
-invisible to most people — that is a deliberate choice, not a default.
+Never reuse a version that was published. The numbers under *Pre-release
+development history* in `CHANGELOG.md` were never published. Prefer final
+versions over `bN`/`rcN`: pip ignores pre-releases without `--pre`.
 
-### 1b. Clear the doc-claim queue
-
-Every claim in the docs is anchored to the source that decides it. Between
-releases, fingerprint drift is reported but not enforced — this is where it is
-enforced.
+### 2. Clear the doc-claim queue
 
 ```bash
 python scripts/claims.py --queue
 ```
 
-It must print `No drifted claims.` For each entry it does print, re-read the
-claim against the code shown by `--accept <page>`, then either fix the prose or
-re-pin with `--accept <page> --yes`.
+It must print `No drifted claims.` For each entry, re-read the claim against the
+code (`--accept <page>` shows it), then fix the prose or re-pin with
+`--accept <page> --yes`. Do this before the CHANGELOG: a wrong claim is often a
+**Fixed** entry. `publish.yml` re-runs this check with `CASH_CLAIMS_STRICT=1` and
+blocks the release on drift.
 
-Do this **before** the CHANGELOG: a claim found wrong is often a **Fixed**
-entry in its own right.
-
-The `build` job in `.github/workflows/publish.yml` — the workflow every
-release actually runs — sets `CASH_CLAIMS_STRICT=1` and re-runs
-`tests/docs/test_claim_anchors.py::test_no_fingerprint_drift`, promoting
-drift from advisory to blocking before the package is built. That is the real
-gate; running `--queue` above by hand is what keeps you from finding out
-about a non-empty queue only when the build fails.
-
-### 2. Write the CHANGELOG entry FROM the `git log` (curate, don't transcribe)
-
-The `git log` is the **source of truth, not the output**. Read the whole range,
-then write release notes a user would actually want — do **not** mechanically
-emit one line per commit.
+### 3. Write the CHANGELOG entry from `git log`
 
 ```bash
 PREV=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-RANGE=${PREV:+$PREV..HEAD}
-git log --no-merges --pretty=format:"%h %s" $RANGE
+git log --no-merges --pretty=format:"%h %s" ${PREV:+$PREV..HEAD}
 ```
 
-- **Ground every entry in the log.** If a commit's subject doesn't make the
-  user-facing effect clear, read its diff. Never describe a change that isn't in
-  the range and never invent one — anchoring to the log is the whole point, and
-  it is what keeps the notes honest. (This is what "don't write it by hand" always
-  meant: don't write from memory — write from the log.)
-- **Synthesize, don't transcribe.** A single change that landed as five commits
-  (implementation + three follow-up fixes + a test) is **one** entry. Group
-  related work by theme, not by commit boundary.
-- **Omit internal churn.** Test-only, CI, refactor and build-plumbing commits
-  with no user-visible effect don't belong in the notes.
-- **Lead with impact.** Say what changed for the user and *why* it matters, in
-  plain language — not the commit subject.
+The log is the source, not the output. Read the whole range (and the diff when a
+subject is unclear), then write notes a user wants:
 
-Sort the surviving entries into Keep-a-Changelog sections. Use the commit
-prefixes as a **hint**, not a rule:
+- Ground every entry in the log; never describe a change that is not in the range.
+- One entry per user-visible change, however many commits it took.
+- Leave out test, CI, refactor and build changes with no user-visible effect.
+- Lead with what changed for the user and why it matters.
 
-| Commit prefix | CHANGELOG section |
-|---|---|
-| `feat:` / `feat(...)`: | **Added** |
-| `fix:` / `fix(...)`: | **Fixed** |
-| `refactor:`, `perf:`, `build:`, `chore:` (with user-visible impact) | **Changed** |
-| `BREAKING CHANGE:` in body, or `!` in prefix (`feat!:`) | **Breaking** (top of section) |
-| `test:`, `ci:`, `chore:` (no user-visible impact) | **Omit** unless they materially change behaviour |
-| `docs:` | Mention only if user-facing docs changed |
+Sort into Keep-a-Changelog sections, using prefixes as a hint: `feat` → **Added**,
+`fix` → **Fixed**, user-visible `refactor`/`perf`/`build`/`chore` → **Changed**,
+`!` or `BREAKING CHANGE:` → **Breaking** (first). Add the section as
+`## [X.Y.Z] - YYYY-MM-DD` below `## [Unreleased]`, above the previous release.
+Leave *Pre-release development history* untouched. **The user reviews the entry
+before it is committed.**
 
-Insert the new section at the top of `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`, above `## [0.1.0]`. Leave the *Pre-release development history* block and everything under it untouched — those entries are a frozen record, not a running log. **The user reviews the entry before it's committed.**
+### 4. Bump the version
 
-### 3. Bump the version
-Edit the single `__version__ = "..."` line in `src/cash/__init__.py`. That is the **single source of truth** — `pyproject.toml` declares `dynamic = ["version"]` and hatchling reads it from there at build time (`[tool.hatch.version]`), so the wheel metadata, `cash.__version__`, and `cash version` can never disagree. Do **not** add a `version =` line back to `pyproject.toml`.
+Edit only `__version__ = "..."` in `src/cash/__init__.py`. `pyproject.toml` reads it
+(`dynamic = ["version"]`, `[tool.hatch.version]`); never add a `version =` line there.
+`tests/test_core/test_docs_version_currency.py` fails if a user-facing page names
+another version.
 
-### 4. Build & verify — **always into an empty `dist/`**
-
-`python -m build` **adds** to `dist/`; it never clears it. Left alone, `dist/`
-accumulates every build you have ever made, and old versions sit there looking
-exactly like fresh ones. Clear it *first*, every time:
+### 5. Build and verify, always into an empty `dist/`
 
 ```bash
-rm -rf dist/            # MANDATORY — never build on top of an existing dist/
+rm -rf dist/            # python -m build adds to dist/, it never clears it
 python -m build
-ls dist/                # MUST list exactly two files, both X.Y.Z: the wheel + the sdist
+ls dist/                # exactly two files, both X.Y.Z: the wheel and the sdist
 ```
 
-If `ls dist/` shows any version other than the one you are releasing, stop and
-clean it out before going near an upload — do not "just skip" the extra files.
-
-- `pytest tests/test_notebook -x --timeout=30` (unit suite green)
+- `pytest tests/test_notebook -x`
 - `twine check dist/*`
-- `pip install dist/cash_lib-X.Y.Z-py3-none-any.whl` in a fresh venv →
-  `python -c "import cash; print(cash.__version__)"` prints `X.Y.Z`
-- In that same fresh venv, `pip install "jupyterlab>=4,<5"` then
-  `jupyter labextension list` → must show `cash-live-cells vN.N.N enabled ok
-  (python, cash-lib)`. A wheel that installs fine but registers no extension is
-  the failure mode here, and nothing short of this command catches it: the
-  bundle is committed build output, so it can be stale or absent while every
-  Python check stays green.
+- In a fresh venv, `pip install dist/cash_lib-X.Y.Z-py3-none-any.whl`, then
+  `python -c "import cash; print(cash.__version__)"` prints `X.Y.Z`.
+- In that venv, `pip install "jupyterlab>=4,<5"` and `jupyter labextension list`
+  must show `cash-live-cells ... enabled OK (python, cash-lib)`. Nothing else
+  catches a wheel that installs but registers no extension.
 
-### 5. Commit & tag
-
-The version's single source of truth is `src/cash/__init__.py` (`__version__`);
-`pyproject.toml` reads it via `dynamic = ["version"]` and must NOT be edited.
+### 6. Commit and tag
 
 ```bash
 git add src/cash/__init__.py CHANGELOG.md
@@ -535,37 +253,19 @@ git commit -m "release: X.Y.Z"
 git tag vX.Y.Z
 ```
 
-Push only after the user explicitly confirms.
+Push only after the user confirms. Pushing the tag does not publish:
+`publish.yml` runs on a published GitHub Release (or a manual dispatch).
 
-**Pushing the tag does NOT publish.** `.github/workflows/publish.yml` triggers on
-`release: types: [published]` (or a manual `workflow_dispatch`), not on a tag
-push — so a tag alone leaves you with no release and nothing on PyPI. Publishing
-requires creating a GitHub Release from the tag, which is the deliberate
-irreversible-action gate: see step 6.
+### 7. Publish
 
-### 6. Publish
-
-**The normal path is the `Publish to PyPI` workflow** (`.github/workflows/publish.yml`),
-which builds from a fresh checkout and therefore *cannot* pick up local strays.
-Prefer it. Publish by hand only if that workflow is broken.
-
-If you must publish by hand: **never `twine upload dist/*`.** The glob uploads
-whatever happens to be in the directory. Name the two files explicitly, with the
-version in the filename, so the command can only ever publish what you intend:
+Publish by creating the GitHub Release, which runs `publish.yml` from a fresh
+checkout. Only if that workflow is broken, upload by hand, naming both files
+explicitly and never `dist/*`: a PyPI version can never be uploaded again, and a
+stale `dist/` has held old builds that a glob would have published.
 
 ```bash
 twine upload dist/cash_lib-X.Y.Z-py3-none-any.whl dist/cash_lib-X.Y.Z.tar.gz
 ```
 
-**Why this is not negotiable:** a PyPI upload is irreversible. A version can never
-be re-uploaded, even after you delete it — the name is burned forever. A `dist/*`
-glob over a stale directory publishes a real, wrong release. This is not
-hypothetical: this repo's `dist/` sat for months holding `cash_lib-0.2.0` **and** a
-`0.5.0b1` built from an older tree (258 KB vs the real 490 KB), so `twine upload
-dist/*` would have shipped 0.2.0 — and a `0.5.0b1` that was not the code we
-believed it was. `rm -rf dist/` before the build plus an explicit versioned
-filename at upload defeats both, independently.
-
-### 7. Verify post-publish
-- `pypi.org/project/cash-lib/X.Y.Z/` is live with correct metadata
-- `pip install cash-lib==X.Y.Z` resolves on a clean machine
+Afterwards, check that `pypi.org/project/cash-lib/X.Y.Z/` is live and
+`pip install cash-lib==X.Y.Z` resolves on a clean machine.
