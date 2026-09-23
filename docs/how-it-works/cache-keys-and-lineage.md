@@ -224,7 +224,7 @@ See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full
 
 The two paths answer "what is this object's fingerprint?" differently, and the ordering in each is deliberate.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @21c5b8c5 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @90df99e0 -->
 **Decorator — hashing a call argument** (`Cash._hash_arg_payload`):
 
 1. **Hashers registered with `override=True`** — see [overriding a built-in](../tutorials/feature-guides/custom-hashers.md#overriding-a-built-in-content-hasher). Nothing below runs for such a type.

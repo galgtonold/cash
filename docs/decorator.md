@@ -310,7 +310,7 @@ for the cases this model *can't* see.
 
 ### What else is in the key — the ones that cost a recompute
 
-<!-- claim: cash/core.py:Cash._fold_defaults @b9735923, cash/core.py:Cash._hash_arg_payload @21c5b8c5, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
+<!-- claim: cash/core.py:Cash._fold_defaults @b9735923, cash/core.py:Cash._hash_arg_payload @90df99e0, cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe -->
 None of these gives a wrong answer. Each one costs a recompute you might not
 expect, measured across fresh processes:
 
@@ -629,7 +629,7 @@ def build(schema):
 build(Schema)                    # edit Schema, call again -> used to return the old answer
 ```
 
-<!-- claim: cash/core.py:Cash._fold_code_args @1945cfc2, cash/core.py:Cash._iter_code_carriers @ef2a0021 -->
+<!-- claim: cash/core.py:Cash._fold_code_args @1945cfc2, cash/core.py:Cash._iter_code_carriers @055c013c -->
 Your code reached through the arguments now folds into `state_hash`, so editing
 it invalidates. cash finds it in a class, a function, an instance (through its
 class), any of those nested in a list/tuple/set/dict, and an instance whose
@@ -1318,7 +1318,7 @@ columns), 50 ms for a 100 MB numpy array. What cash does about it:
   treated the same way; without it, every call hashes.)
 - **In a notebook**, `%cash_on` tracks every assignment and mutation, and cash
   uses that instead of hashing a tracked object again.
-- <!-- claim: cash/core.py:_plain_key_part @9a45a6aa, cash/_plain_data.py:is_plain @8aff6fb8, cash/_plain_data.py:dict_rows @39223208, cash/_plain_data.py:pickle_unshared @841b27ff -->
+- <!-- claim: cash/core.py:_plain_key_part @2ac8336f, cash/_plain_data.py:is_plain @7f7e9e70, cash/_plain_data.py:dict_rows @39223208, cash/_plain_data.py:pickle_unshared @841b27ff -->
   **Lists and tuples of plain values** — the rows a parser returns, including
   `date`, `datetime`, `timedelta` and `Decimal` columns — and **lists of dicts**
   that share their keys (`csv.DictReader` rows, JSON records) are recognised
@@ -1385,7 +1385,7 @@ frozen, so a call receiving one runs uncached
 
 ### When a cached function changes what it was given
 
-<!-- claim: cash/core.py:Cash._argument_identities @4f205dbb, cash/_plain_data.py:identity_changed @81cc40e5 -->
+<!-- claim: cash/core.py:Cash._argument_identities @4f205dbb, cash/_plain_data.py:identity_changed @a853a1cf -->
 A call that sorts, appends to or rewrites an argument in place makes a change
 the caller sees — and a hit would not make it. Cash checks for that after each
 miss, and a call it catches is not stored: it runs every time, as it would

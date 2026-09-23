@@ -33,6 +33,7 @@ from ...remote_source import RemoteFileDataSource
 from ...source_norm import drop_docstrings, read_code_file, stat_has_settled
 from ...tracking.file_dep_snapshot import realpath_of_read_this_run
 from ...utils import normalize_path
+from ...value_types import IMMUTABLE_PRIMS
 from ..server_discovery import get_notebook_path
 
 if TYPE_CHECKING:
@@ -40,11 +41,6 @@ if TYPE_CHECKING:
     from ._metadata import StatementCacheMetadata
 
 logger = logging.getLogger(__name__)
-
-# Scalar types that DON'T inherit file dependencies — a number derived
-# from a DataFrame shouldn't invalidate when the source CSV changes.
-_SCALAR_TYPES = (int, float, str, bool, bytes, type(None))
-
 
 # ---------------------------------------------------------------------------
 # Pure helpers (used by both StatementFileDeps and StatementLineageBuilder)
@@ -305,7 +301,9 @@ class StatementFileDeps:
     def inherit_from_inputs(self, tracking_state: "TrackingState", var_name: str, inputs: set[str], value: Any) -> None:
         """Propagate file deps from *inputs* to *var_name*, skipping scalar outputs."""
         executed_file_deps = tracking_state.executed_file_deps
-        is_scalar = isinstance(value, _SCALAR_TYPES)
+        # A scalar does not inherit file dependencies: a number derived from a
+        # DataFrame shouldn't invalidate when the source CSV changes.
+        is_scalar = isinstance(value, IMMUTABLE_PRIMS)
         if not is_scalar:
             for input_var in inputs:
                 if input_var not in executed_file_deps:

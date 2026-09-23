@@ -91,14 +91,14 @@ def test_a_list_reached_twice_keys_like_two_equal_ones(key):
 
 def test_plain_data_is_recognised_and_other_data_is_not():
     rows = [(i, str(i)) for i in range(10)]
-    assert core._is_plain(rows)
-    assert core._is_plain([[1, [2, [3]]]])
-    assert not core._is_plain([{"a": 1}])
-    assert not core._is_plain([{1}])
-    assert not core._is_plain([object()])
+    assert _plain_data.is_plain(rows)
+    assert _plain_data.is_plain([[1, [2, [3]]]])
+    assert not _plain_data.is_plain([{"a": 1}])
+    assert not _plain_data.is_plain([{1}])
+    assert not _plain_data.is_plain([object()])
     cyclic: list = [1]
     cyclic.append(cyclic)
-    assert not core._is_plain(cyclic)
+    assert not _plain_data.is_plain(cyclic)
 
 
 def test_a_warm_hit_on_many_rows_does_not_walk_them(tmp_path, monkeypatch):
@@ -166,8 +166,8 @@ def test_rows_holding_dates_and_decimals_are_plain():
     """Rows with a date column cost 16x their body per call to key --
     a date took the whole list off the fast path."""
     rows = [(_dt.date(2024, 1, 1 + i % 28), _decimal.Decimal("1.50"), i) for i in range(1000)]
-    assert core._is_plain(rows)
-    assert core._is_plain([[_dt.datetime(2024, 1, 1, 12), _dt.timedelta(hours=2)]])
+    assert _plain_data.is_plain(rows)
+    assert _plain_data.is_plain([[_dt.datetime(2024, 1, 1, 12), _dt.timedelta(hours=2)]])
 
 
 def test_date_rows_key_by_content(key):

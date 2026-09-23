@@ -45,6 +45,7 @@ import tokenize
 import types
 
 from .analysis.annotations import ANNOTATION_PATTERN
+from .value_types import IMMUTABLE_PRIMS
 
 __all__ = [
     "bytecode_identity",
@@ -475,10 +476,6 @@ def source_identity_digest(source: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-# Consts that describe themselves exactly under ``repr`` -- no identity, no
-# address, stable across processes and runs.
-_PRIMITIVE_CONSTS = (bool, int, float, complex, str, bytes, type(None))
-
 # Nested code nests: a comprehension inside a closure inside a method. The cap
 # is a runaway guard, not a real limit -- eight levels is far past anything a
 # human writes, and stopping early only makes the digest coarser, never wrong.
@@ -518,7 +515,7 @@ def code_consts_without_docstring(code: types.CodeType) -> tuple:
 
 def _stabilize_const(const: object, depth: int) -> str:
     """Describe one const so the description never embeds an address."""
-    if isinstance(const, _PRIMITIVE_CONSTS):
+    if isinstance(const, IMMUTABLE_PRIMS):
         return repr(const)
     if isinstance(const, types.CodeType):
         if depth >= _MAX_CONST_DEPTH:

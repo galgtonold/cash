@@ -13,11 +13,7 @@ import concurrent.futures
 import contextlib
 import contextvars
 import dataclasses
-import datetime
-import decimal
 import dis
-import enum
-import fractions
 import functools
 import hashlib
 import importlib.util
@@ -26,7 +22,6 @@ import io
 import json
 import logging
 import os
-import pathlib
 import pickle
 import sys
 import sysconfig
@@ -34,7 +29,6 @@ import textwrap
 import threading
 import time
 import types
-import uuid
 import weakref
 from collections import Counter, OrderedDict, deque
 from collections.abc import Callable, Iterator, Sized
@@ -137,6 +131,14 @@ from .tracking.randomness import (
     seed_epochs,
 )
 from .utils import MAIN_MODULE_NAMES, normalize_path, resolve_main_module
+from .value_types import (
+    BUILTIN_CONTAINERS,
+    CODELESS_PRIMS,
+    IMMUTABLE_PRIMS,
+    IMMUTABLE_VALUE_TYPES,
+    PLAIN_SEQS,
+    writable_types,
+)
 
 if TYPE_CHECKING:
     from .ui.explorer import CacheExplorer
@@ -234,31 +236,6 @@ def get_ipython():
 # conflicting with any legitimate cached value (including None).
 _CACHE_MISS = object()
 
-# Types that can carry no user code. `_iter_code_carriers` walks EVERY argument
-# of every cached call, so this is checked once per element of a container and
-# is deliberately a module-level global (one LOAD_GLOBAL) rather than a class
-# attribute (an extra attribute lookup per element). Ordered by how often each
-# actually shows up in an argument, because `in` on a tuple scans in order.
-#
-# Tested as `type(v) in _CODELESS_PRIMS`, NOT `isinstance(v, _CODELESS_PRIMS)`:
-# isinstance is true for SUBCLASSES, so a user class deriving from str/int/
-# float/bytes -- and every IntEnum member, whose type is the user's own enum
-# class -- was skipped here and never reached the fold. That is a missed
-# invalidation on exactly the bug class this feature exists to fix.
-#
-# And a TUPLE, not a frozenset: `x in frozenset` hashes `x`, and a class whose
-# metaclass defines __eq__ without __hash__ is itself unhashable (see
-# `_is_opaque`, which carries a test for that shape), so a frozenset raises
-# TypeError on an instance of one and fails the whole fold open. Tuple `in`
-# compares with `is`/`==` and never hashes. Measured over 200k elements it is
-# also FASTER than the isinstance form it replaces: 4.0ms vs 5.1ms (ints),
-# 3.2ms vs 3.4ms (strs), 3.6ms vs 4.3ms (mixed).
-_CODELESS_PRIMS = (str, int, float, bool, type(None), bytes, complex, bytearray)
-
-#: Exact types of the builtin containers walked below. An instance of a SUBCLASS
-#: of one of these is still walked for its contents, but it is also a user
-#: object whose class carries code, so it additionally contributes that class.
-_BUILTIN_CONTAINERS = (dict, list, tuple, set, frozenset)
 
 P = ParamSpec("P")
 T = TypeVar("T")
@@ -421,18 +398,6 @@ class CyclicValueError(TypeError):
     """A value whose object graph loops back on itself and holds a set."""
 
 
-def _WRITABLE_TYPES() -> tuple:
-    """Types a caller can write INTO, for the shared-result warning."""
-    types: list[type] = [dict, list, set, bytearray]
-    for module, names in (("numpy", ("ndarray",)), ("pandas", ("DataFrame", "Series"))):
-        found = sys.modules.get(module)
-        for name in names:
-            attr = getattr(found, name, None)
-            if isinstance(attr, type):
-                types.append(attr)
-    return tuple(types)
-
-
 def _is_mutable(value) -> bool:
     """Whether a caller can write through *value*, so a copy would differ.
 
@@ -442,7 +407,7 @@ def _is_mutable(value) -> bool:
     through the name at all, so handing back a copy of one is the same value --
     warning about those made `return sum(rows), as_of` a finding.
     """
-    if isinstance(value, _WRITABLE_TYPES()):
+    if isinstance(value, writable_types()):
         return True
     return getattr(type(value), "__dictoffset__", 0) != 0 and hasattr(value, "__dict__")
 
@@ -486,7 +451,7 @@ def _stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None) -> 
     """
     if _depth > 50:
         return value
-    if type(value) in _CODELESS_PRIMS:
+    if type(value) in CODELESS_PRIMS:
         return value
     if _stack is None:
         _stack = set()
@@ -522,27 +487,6 @@ def _stable_key_repr_of(value: Any, _depth: int, _stack: set) -> Any:
     return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", sub(_object_state(value)))
 
 
-_PLAIN_SEQS = (list, tuple)
-
-
-def _is_plain(value: Any) -> bool:
-    """Is *value* PLAIN data?
-
-    Plain: exact lists and tuples, nested, over exact primitives
-    (`_CODELESS_PRIMS`) -- the rows a parser returns. Such a value holds no set,
-    no dict to put in order and no code, so the Python-level walks a key
-    otherwise makes over every element of it -- `_stable_key_repr`,
-    `_iter_code_carriers` -- can find nothing, and they were nearly all of a
-    warm hit: 8.4 s on two million rows whose body
-    took 0.04 s (round 19). This proves "plain" one level at a time at C speed
-    instead (``chain.from_iterable``, ``map(type, ...)``), about 0.2 s on the
-    same rows. Anything else -- a dict, a set, an object, a subclass, a cycle,
-    more than `_plain_data.MAX_LEVELS` levels -- is not, and the walks decide
-    as before.
-    """
-    return _plain_data.is_plain(value)
-
-
 #: A census taken while one cache key is built, shared by the code fold and the
 #: argument hash so a big argument is looked at once (`_plain_census`). None
 #: outside a key build: after the body has run, an argument may have changed.
@@ -552,7 +496,7 @@ _PLAIN_CENSUS = threading.local()
 def _plain_census(value: Any) -> tuple[str, Any] | None:
     """What kind of plain data *value* is, memoized for the key build in progress.
 
-    ``("plain", value)`` for lists and tuples of primitives (`_is_plain`),
+    ``("plain", value)`` for lists and tuples of primitives (`_plain_data.is_plain`),
     ``("dict_rows", (keys, rows))`` for a list of dicts sharing their keys
     (`_plain_data.dict_rows`), None for anything else.
     """
@@ -562,7 +506,7 @@ def _plain_census(value: Any) -> tuple[str, Any] | None:
         if hit is not None and hit[0] is value:
             return hit[1]
     found: tuple[str, Any] | None = None
-    if _is_plain(value):
+    if _plain_data.is_plain(value):
         found = ("plain", value)
     else:
         rows = _plain_data.dict_rows(value)
@@ -581,7 +525,7 @@ def _plain_key_part(value: Any) -> Any:
     when EVERY argument did: one small dict beside two million rows sent the
     whole call down the general path, 8x the cost (round 20).
     """
-    if type(value) not in _PLAIN_SEQS:
+    if type(value) not in PLAIN_SEQS:
         return value
     census = _plain_census(value)
     if census is None:
@@ -611,10 +555,10 @@ def _contains_set(value: Any, _depth: int = 0, _seen: set[int] | None = None) ->
     # a set. Without this the fall-through below called ``_object_state`` on
     # EVERY element -- which walks ``type(value).__mro__`` looking for
     # ``__slots__`` -- so hashing a 10k-element list of ints made 10k such
-    # walks per cache hit. Exact-type test, matching ``_CODELESS_PRIMS``'s own
+    # walks per cache hit. Exact-type test, matching ``CODELESS_PRIMS``'s own
     # contract: a str/int SUBCLASS can carry a ``__dict__`` holding a set and
     # must still be walked.
-    if type(value) in _CODELESS_PRIMS:
+    if type(value) in CODELESS_PRIMS:
         return False
     if isinstance(value, (set, frozenset)):
         return True
@@ -812,23 +756,6 @@ def _expose_script_function(func: Callable, wrapper: Callable) -> None:
         wrapper.__module__ = name
     except (ImportError, ValueError, OSError):
         logger.debug("could not expose %s for pickling by name", name, exc_info=True)
-
-
-@functools.lru_cache(maxsize=1)
-def _IMMUTABLE_VALUE_TYPES() -> tuple[type, ...]:  # noqa: N802 - a constant, built once
-    """Standard-library value types that cannot change once built."""
-
-    return (
-        datetime.date,
-        datetime.time,
-        datetime.timedelta,
-        datetime.tzinfo,
-        decimal.Decimal,
-        fractions.Fraction,
-        uuid.UUID,
-        pathlib.PurePath,
-        enum.Enum,
-    )
 
 
 def _backend_cache_dir(backend: Any) -> str | None:
@@ -1270,9 +1197,6 @@ _CASH_STDERR_HANDLER: logging.Handler | None = None
 #: anyone else set is theirs.
 _CASH_LEVEL_SET: int | None = None
 
-
-#: Results no lineage tag can be attached to, and that cost nothing to hash.
-_UNTAGGABLE_SCALARS = (int, float, complex, bool, str, bytes, type(None))
 
 #: Result types seen to refuse an attribute (dict, list, ndarray, ...): not
 #: tried again (`Cash._attach_lineage`).
@@ -2497,9 +2421,9 @@ class Cash:
         # argument. Returning before ``_seen`` is touched keeps a list of a
         # million numbers allocation-free; otherwise the id-set below would grow
         # to the container's length on every cached call. Mirrors
-        # ``_iter_contained``'s first line. See `_CODELESS_PRIMS` for why this
+        # ``_iter_contained``'s first line. See `CODELESS_PRIMS` for why this
         # is an exact-type test against a tuple rather than an isinstance.
-        if type(value) in _CODELESS_PRIMS:
+        if type(value) in CODELESS_PRIMS:
             return
         # A frozen function's list/tuple/dict result is keyed by the call that
         # produced it (`_remember_frozen_container`), code inside it included:
@@ -2513,9 +2437,9 @@ class Cash:
             and self._frozen_containers[id(value)][0] is value
         ):
             return
-        # Plain data carries no code (`_is_plain`); walking two
+        # Plain data carries no code (`_plain_data.is_plain`); walking two
         # million rows to find that out was 14% of a warm hit.
-        if _depth == 0 and type(value) in _PLAIN_SEQS and _plain_census(value) is not None:
+        if _depth == 0 and type(value) in PLAIN_SEQS and _plain_census(value) is not None:
             return
         if _seen is None:
             _seen = set()
@@ -2572,20 +2496,20 @@ class Cash:
                 if cls is not None:
                     yield cls
             for k, v in value.items():
-                if type(k) not in _CODELESS_PRIMS:
+                if type(k) not in CODELESS_PRIMS:
                     yield from self._iter_code_carriers(k, _depth + 1, _seen)
-                if type(v) not in _CODELESS_PRIMS:
+                if type(v) not in CODELESS_PRIMS:
                     yield from self._iter_code_carriers(v, _depth + 1, _seen)
         elif isinstance(value, (list, tuple, set, frozenset)):
             if id(value) in _seen:
                 return
             _seen.add(id(value))
-            if type(value) not in _BUILTIN_CONTAINERS:
+            if type(value) not in BUILTIN_CONTAINERS:
                 cls = self._instance_class_carrier(value, _seen)
                 if cls is not None:
                     yield cls
             for v in value:
-                if type(v) not in _CODELESS_PRIMS:
+                if type(v) not in CODELESS_PRIMS:
                     yield from self._iter_code_carriers(v, _depth + 1, _seen)
         else:
             # An instance contributes its class's code. Deliberately NOT gated
@@ -2637,7 +2561,7 @@ class Cash:
                     values.append(getattr(value, slot))
                 except AttributeError:
                     continue
-        held = [v for v in values if type(v) not in _CODELESS_PRIMS]
+        held = [v for v in values if type(v) not in CODELESS_PRIMS]
         if not held:
             return
         _seen.add(id(value))
@@ -3800,8 +3724,7 @@ class Cash:
         which says more than naming the list. When no single candidate fails
         on its own, the first non-built-in is the best remaining guess.
         """
-        BUILTIN_OK = (str, int, float, bool, type(None), bytes, list, dict, tuple, set, frozenset)
-        candidates = [a for a in (*args, *kwargs.values()) if not isinstance(a, BUILTIN_OK)]
+        candidates = [a for a in (*args, *kwargs.values()) if not isinstance(a, IMMUTABLE_PRIMS + BUILTIN_CONTAINERS)]
         for candidate in candidates:
             try:
                 self._hash_arg_payload((candidate,), {})
@@ -5788,7 +5711,7 @@ class Cash:
                 continue
             if callable(value) or isinstance(value, types.ModuleType):
                 continue
-            if not (self._is_immutable_capture(value) or isinstance(value, _IMMUTABLE_VALUE_TYPES())):
+            if not (self._is_immutable_capture(value) or isinstance(value, IMMUTABLE_VALUE_TYPES)):
                 # A container the helper only READS is data like any other:
                 # `lambda: when` with `when` a list, a dict -- or a datetime
                 # before the type list above had it -- gave every value ONE
@@ -8621,7 +8544,7 @@ class Cash:
                 [(f"#{i}", a) for i, a in enumerate(args)] + list(kwargs.items()),
                 list(hashed_args) + list(hashed_kwargs.values()),
             )
-            if digest is value and type(value) not in _CODELESS_PRIMS
+            if digest is value and type(value) not in CODELESS_PRIMS
         ]
         payload_t0 = _perf_counter()
 
@@ -9028,7 +8951,7 @@ class Cash:
         """
         if ttl is not None:
             return
-        if type(result) in _UNTAGGABLE_SCALARS:
+        if type(result) in IMMUTABLE_PRIMS:
             # Nothing to attach and nothing worth sparing a hash of: under
             # CASH_DEBUG every int result logged "Cannot attach
             # _cash_lineage_hash to int" (round 19).
@@ -11089,7 +11012,7 @@ class Cash:
             return None
         named = [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
         snapshot: dict[str, str] = {}
-        immutable = _IMMUTABLE_VALUE_TYPES()
+        immutable = IMMUTABLE_VALUE_TYPES
         candidates = [
             (name, value)
             for name, value in named

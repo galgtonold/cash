@@ -16,6 +16,7 @@ from cash.exceptions import CacheBackendError
 
 from .. import _plain_data
 from .._sizing import pandas_nbytes
+from ..value_types import IMMUTABLE_PRIMS, PLAIN_SEQS
 from ._base import CacheBackend, MetadataDict, gdsf_value
 from .serialization import Serializer
 
@@ -109,9 +110,6 @@ class InMemoryBackend(CacheBackend):
 
     #: Types whose instances cannot be mutated, so SHARING one between the
     #: stored entry and the caller is safe. Exact-type membership, never
-    #: isinstance: a subclass can carry a mutable ``__dict__``, and an IntEnum
-    #: member's type is the user's own class.
-    _IMMUTABLE_SCALARS = (int, float, str, bool, bytes, complex, type(None))
 
     @staticmethod
     def _safe_deep_copy(value: Any, key: str = "<unknown>", *, required: bool = False) -> Any:
@@ -136,8 +134,7 @@ class InMemoryBackend(CacheBackend):
                 return InMemoryBackend._copy_frame(value)
             value_type = type(value)
             if value_type is list or value_type is tuple:
-                scalars = InMemoryBackend._IMMUTABLE_SCALARS
-                if all(type(item) in scalars for item in value):
+                if all(type(item) in IMMUTABLE_PRIMS for item in value):
                     return value if value_type is tuple else list(value)
                 # Lists and tuples all the way down, over primitives: copied
                 # without a Python call per element (`_plain_data`). deepcopy
@@ -397,7 +394,7 @@ class InMemoryBackend(CacheBackend):
         # million parsed rows being promoted into this tier (round 19). At any
         # depth, not only the top: every notebook entry holds the RNG state, a
         # tuple of 625 ints one dict down (round 23: 1.7M calls in one cell).
-        if type(obj) in _plain_data.SEQS:
+        if type(obj) in PLAIN_SEQS:
             plain = _plain_data.size_of(obj)
             if plain is not None:
                 return plain

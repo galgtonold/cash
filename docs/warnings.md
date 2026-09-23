@@ -734,7 +734,7 @@ row posted to a service, the dict the caller inspects afterwards — the program
 is correct on the run that filled the cache and quietly different on every run
 after it.
 
-<!-- claim: cash/core.py:Cash._store_refusal @3815fd67, cash/core.py:Cash._argument_snapshot @20020c95 -->
+<!-- claim: cash/core.py:Cash._store_refusal @3815fd67, cash/core.py:Cash._argument_snapshot @929ba8ad -->
 `argument mutation` is handled differently, because it is the one that caught
 people out: an object the caller still holds would stop being changed. A call
 seen changing an argument is **not stored** — the line names the argument, and
@@ -744,7 +744,7 @@ invisible to the caller and never counts. The price is the caching itself, so
 the fix below is still worth making; `assume_safe=True` on the decorator stores
 such a call anyway.
 
-<!-- claim: cash/core.py:Cash._argument_identities @4f205dbb, cash/_plain_data.py:identity_changed @81cc40e5 -->
+<!-- claim: cash/core.py:Cash._argument_identities @4f205dbb, cash/_plain_data.py:identity_changed @a853a1cf -->
 A list or tuple of plain values — parsed rows, of any size — is checked by
 the identities of what it holds, level by level, which costs a fraction of
 hashing it: `rows.sort()`, an append, a `del`, `rows[i] = ...` or a field

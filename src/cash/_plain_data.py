@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import copyreg
 import datetime
-import decimal
 import io
 import operator
 import pickle
@@ -26,15 +25,8 @@ import sys
 from itertools import chain
 from typing import Any
 
-#: Leaves: exact primitives, and the immutable value types a parser puts in a
-#: row -- a ``date`` column, a ``Decimal`` amount. Without those, rows holding a
-#: date left the fast path and cost 16x their body per call to key (round 20).
-#: ``bytearray`` is a leaf for keying (it pickles by value) but is mutable, so
-#: a value holding one is not `profile`'s immutable.
-_VALUE_TYPES = (datetime.date, datetime.datetime, datetime.time, datetime.timedelta, decimal.Decimal)
-LEAF_TYPES = (str, int, float, bool, type(None), bytes, complex, bytearray, *_VALUE_TYPES)
-IMMUTABLE_LEAF_TYPES = (str, int, float, bool, type(None), bytes, complex, *_VALUE_TYPES)
-SEQS = (list, tuple)
+from .value_types import IMMUTABLE_LEAF_TYPES, LEAF_TYPES, PLAIN_SEQS
+
 MAX_LEVELS = 16
 
 
@@ -102,12 +94,12 @@ def _levels(value: Any):
         types = set(map(type, flat))
         # Before the level is yielded: a caller sizes it, and a frame asked its
         # size walks every string it holds (4.3 s of r28s5's 12 s statement).
-        if not all(t in leaves or t in SEQS for t in types):
+        if not all(t in leaves or t in PLAIN_SEQS for t in types):
             raise _NotPlain
         yield flat, types
         if all(t in leaves for t in types):
             return
-        level = flat if all(t in SEQS for t in types) else [x for x in flat if type(x) in SEQS]
+        level = flat if all(t in PLAIN_SEQS for t in types) else [x for x in flat if type(x) in PLAIN_SEQS]
     raise _NotPlain  # deeper than MAX_LEVELS, or a cycle
 
 
@@ -117,7 +109,7 @@ class _NotPlain(Exception):
 
 def is_plain(value: Any) -> bool:
     """Is *value* a list or tuple of plain data?"""
-    if type(value) not in SEQS:
+    if type(value) not in PLAIN_SEQS:
         return False
     try:
         for _level in _levels(value):
@@ -187,7 +179,7 @@ def identity_snapshot(value: Any) -> list[tuple | None] | None:
     None for anything that is not plain data, and for a ``bytearray`` leaf,
     which changes in place without changing its identity.
     """
-    if type(value) not in SEQS:
+    if type(value) not in PLAIN_SEQS:
         return None
     snapshot: list[tuple | None] = []
     parents_can_change = type(value) is list
@@ -205,7 +197,7 @@ def identity_snapshot(value: Any) -> list[tuple | None] | None:
 def identity_changed(value: Any, snapshot: list[tuple | None]) -> bool:
     """Did *value* change since `identity_snapshot` took *snapshot*?"""
     try:
-        levels = list(_levels(value)) if type(value) in SEQS else None
+        levels = list(_levels(value)) if type(value) in PLAIN_SEQS else None
     except (_NotPlain, TypeError):
         return True
     if levels is None or len(levels) != len(snapshot):
@@ -263,7 +255,7 @@ def profile(value: Any) -> tuple[int, bool, list[set]] | None:
     complete deep copy: nothing the caller holds can reach anything the copy
     holds that could change.
     """
-    if type(value) not in SEQS:
+    if type(value) not in PLAIN_SEQS:
         return None
     total = sys.getsizeof(value)
     immutable = True
@@ -287,7 +279,7 @@ def size_of(value: Any) -> int | None:
 
 def immutable_below(value: Any) -> bool:
     """The immutable half of `profile`, stopping at the first level that is not."""
-    if type(value) not in SEQS:
+    if type(value) not in PLAIN_SEQS:
         return False
     try:
         for _flat, types in _levels(value):
@@ -300,7 +292,7 @@ def immutable_below(value: Any) -> bool:
 
 def level_types(value: Any) -> list[set] | None:
     """The exact types found at each level below *value*, or None if not plain."""
-    if type(value) not in SEQS:
+    if type(value) not in PLAIN_SEQS:
         return None
     try:
         return [types for _flat, types in _levels(value)]
@@ -331,7 +323,7 @@ def copy_plain(value: Any, immutable: bool | None = None, levels: list[set] | No
         levels is not None
         and len(levels) == 2
         and all(t in IMMUTABLE_LEAF_TYPES for t in levels[1])
-        and all(t in SEQS or t in IMMUTABLE_LEAF_TYPES for t in levels[0])
+        and all(t in PLAIN_SEQS or t in IMMUTABLE_LEAF_TYPES for t in levels[0])
     ):
         rows = list(map(list, value)) if levels[0] == {list} else [list(x) if type(x) is list else x for x in value]
         return True, (tuple(rows) if type(value) is tuple else rows)

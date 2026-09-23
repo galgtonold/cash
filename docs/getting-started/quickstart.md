@@ -248,7 +248,7 @@ expensive_function(1, 2)   # second call: instant
 Results that cost more than ~0.1s persist to disk across processes and restarts;
 cheaper ones are kept in memory for the session (see the [cost model](../cost-model.md)).
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @21c5b8c5, cash/core.py:Cash._try_builtin_type_hash @964ede10 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @90df99e0, cash/core.py:Cash._try_builtin_type_hash @964ede10 -->
 ### Pass DataFrames and arrays — they just work
 
 Arguments don't need to be hashable. Cash hashes by **content**, so a DataFrame or

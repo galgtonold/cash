@@ -46,6 +46,7 @@ from ...analysis.cacheability import (
 )
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...object_hashing import compute_hash_full
+from ...value_types import IMMUTABLE_PRIMS
 from ..cache_key import called_function_globals, control_outcome_key
 from ..cache_status import CacheStatus
 from ..statement.file_deps import compute_file_hash_component
@@ -258,10 +259,6 @@ def bind_target_values(target: ast.AST, value, user_ns: dict[str, Any]) -> dict[
     return bindings
 
 
-#: Types whose ``repr`` is their full value, stable across processes. Any
-#: other loop value goes into the context hash by content digest instead.
-_PRIMITIVE_TYPES = (bool, int, float, complex, str, bytes, type(None))
-
 #: Context entries under this prefix hold the content digest of a hashable,
 #: non-primitive loop value kept by value under its own name. The dunder
 #: prefix keeps them out of ``loop_vars``, like ``__iterable_lineage__``.
@@ -269,7 +266,9 @@ _DIGEST_PREFIX = "__digest__:"
 
 
 def _is_primitive(value: Any) -> bool:
-    if type(value) in _PRIMITIVE_TYPES:
+    # A primitive's ``repr`` is its full value; any other loop value goes into
+    # the context hash by content digest instead.
+    if type(value) in IMMUTABLE_PRIMS:
         return True
     return type(value) is tuple and all(_is_primitive(v) for v in value)
 
