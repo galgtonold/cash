@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Upstream change-detection subsystem.
 
 Public surface (production):
@@ -16,6 +14,8 @@ Everything else (:class:`VirtualLineage`, :class:`MismatchClassifier`,
 :class:`ReexecutionPlanner`, the value-type IR in ``_types``) is internal to
 this package. See ADR-010 for the package-extraction rationale.
 """
+
+from __future__ import annotations
 
 from .checker import UpstreamChecker, UpstreamResult
 from .simulator import NotebookSimulator

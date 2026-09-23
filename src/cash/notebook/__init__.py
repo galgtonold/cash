@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """IPython/Jupyter notebook integration for statement-level caching."""
+
+from __future__ import annotations
 
 # Import only what doesn't cause circular dependencies
 from .analysis import CodeAnalyzer

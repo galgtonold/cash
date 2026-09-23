@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Sub-expression caching: selecting call nodes to cache independently (CAS-243).
 
 **The problem.** The unit of caching is the statement. When a statement is a
@@ -39,6 +37,8 @@ keyed on the values they receive. For the precise threshold, see
 section, whose numbers are pinned to those constants by a claim-anchor test
 (``tests/docs/test_claim_anchors.py``).
 """
+
+from __future__ import annotations
 
 import ast
 import copy

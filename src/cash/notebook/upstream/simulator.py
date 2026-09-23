@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Notebook simulator: pure-AST + cache-probing replay of upstream cells.
 
 Extracted from ``UpstreamChecker`` so the simulation logic has a clear test
@@ -12,6 +10,8 @@ plan of statements to re-execute and a list of restored statements. The
 orchestrator (``UpstreamChecker``) takes that plan and runs it via the real
 ``process_statement_callback``.
 """
+
+from __future__ import annotations
 
 import ast
 import collections

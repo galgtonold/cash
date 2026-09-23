@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Persistent audit trail of cache operations for compliance and debugging."""
+
+from __future__ import annotations
 
 import contextlib
 import json

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Lineage graph tracking for variable computation history."""
+
+from __future__ import annotations
 
 import json
 import time

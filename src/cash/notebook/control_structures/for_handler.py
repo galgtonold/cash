@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """For-loop per-iteration caching strategy.
 
 **Boundary rule:** ``ForLoopHandler`` owns the per-iteration decomposition
@@ -17,6 +15,8 @@ It does NOT own:
 Tests can construct ``ForLoopHandler`` directly with mock dependencies
 and exercise it without going through ``ControlStructureProcessor.process()``.
 """
+
+from __future__ import annotations
 
 import ast
 import contextlib

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """@pure and @stateful decorator system for caching decisions."""
+
+from __future__ import annotations
 
 import functools
 import threading

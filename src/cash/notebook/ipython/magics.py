@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """IPython magic commands for transparent cell caching in Jupyter notebooks."""
+
+from __future__ import annotations
 
 import ast
 import contextlib

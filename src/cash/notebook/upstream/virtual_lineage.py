@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Phase 1 of the notebook simulator: forward simulation + cache probing.
 
 Extracted from ``NotebookSimulator``. Owns the simulator-internal caches
@@ -8,6 +6,8 @@ Extracted from ``NotebookSimulator``. Owns the simulator-internal caches
 with :class:`NotebookSimulator` and :class:`MismatchClassifier`. Pure-phase
 invariants land in a later refactor.
 """
+
+from __future__ import annotations
 
 import inspect
 import ast

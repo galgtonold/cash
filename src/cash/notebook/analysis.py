@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """AST-based code analysis for detecting statement inputs and outputs.
 
 The :class:`CodeAnalyzer` walks Python AST trees to identify which
 variables a statement reads (inputs) and writes (outputs).  This
 analysis drives cache key computation and dependency tracking.
 """
+
+from __future__ import annotations
 
 import ast
 import builtins

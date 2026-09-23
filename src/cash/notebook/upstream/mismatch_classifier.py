@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Phase 2 of the notebook simulator: classify broken / tainted variables.
 
 Extracted from ``NotebookSimulator``. Holds references to a
@@ -7,6 +5,8 @@ Extracted from ``NotebookSimulator``. Holds references to a
 ``_check_loop_derived_trust_override``) and to the shared ``TrackingState``
 dicts. Pure-phase invariants land in a later refactor.
 """
+
+from __future__ import annotations
 
 import ast
 import functools

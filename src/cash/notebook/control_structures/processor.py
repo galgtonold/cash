@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Control Structure Processing for Statement-Level Caching
 
@@ -28,6 +26,8 @@ Loops containing ``break`` or ``continue`` are also executed as single units,
 because decomposing them per-iteration is not possible (those statements must
 execute inside a loop context).
 """
+
+from __future__ import annotations
 
 import ast
 import contextlib

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """IPython adapter for the notebook caching subsystem.
 
 The four files in this package — `magics`, `admin`, `cell_executor`,
@@ -15,6 +13,8 @@ Everything else (`CashAdminMagicsMixin`, `CellExecutor`, the value types
 `show_clean_error`, the internal pipeline sentinels) is package-internal.
 See ADR-013 for the package-extraction rationale.
 """
+
+from __future__ import annotations
 
 from .magics import CashMagics
 

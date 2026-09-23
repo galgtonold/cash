@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Shared helpers for control-structure strategy handlers.
 
 **Boundary rule:** this module owns the lineage / mutation / badge / error
@@ -11,6 +9,8 @@ Extracted from ``control_structures/processor.py`` so that ``ForLoopHandler``,
 ``IfHandler``, and ``TryHandler`` can stay focused on strategy-specific
 logic without each carrying a copy of the lineage-update plumbing.
 """
+
+from __future__ import annotations
 
 import ast
 import hashlib

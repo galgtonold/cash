@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Control-structure caching subsystem.
 
 A strategy pattern: :class:`ControlStructureProcessor` (the orchestrator)
@@ -22,6 +20,8 @@ Handler classes (`ForLoopHandler`, `IfHandler`, `TryHandler`) and the
 contents of :mod:`.helpers` are internal to this package. See ADR-012
 for the package-extraction rationale.
 """
+
+from __future__ import annotations
 
 from .processor import (
     ControlStructureProcessor,

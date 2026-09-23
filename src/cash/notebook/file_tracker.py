@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """File-read interception for tracking data file dependencies.
 
 Monkey-patches common I/O functions (``open``, ``pandas.read_csv``,
@@ -7,6 +5,8 @@ Monkey-patches common I/O functions (``open``, ``pandas.read_csv``,
 File hashes are incorporated into cache keys so that changed data
 automatically invalidates dependent cached results.
 """
+
+from __future__ import annotations
 
 import builtins
 import concurrent.futures

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Core statement processing: analysis, cache lookup, execution, and lineage tracking."""
+
+from __future__ import annotations
 
 import ast
 import contextlib

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Runtime half of sub-statement caching: keying, gating and storing a call.
 
 ``call_interception.py`` owns the AST half — which call nodes are structurally
@@ -17,6 +15,8 @@ an intercepted call is judged by the same rules as the statement containing
 it, rather than by a stricter analysis that fires on one spelling and not the
 other.
 """
+
+from __future__ import annotations
 
 import ast
 import contextlib

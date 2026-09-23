@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Track function source code changes for cache invalidation."""
+
+from __future__ import annotations
 
 import ast
 import contextlib

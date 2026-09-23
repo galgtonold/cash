@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Try/except/else/finally per-statement processing strategy.
 
 **Boundary rule:** ``TryHandler`` owns the per-statement decomposition of
@@ -17,6 +15,8 @@ It does NOT own:
 - Dispatch of nested control structures (delegated back through the
   orchestrator passed at construction time).
 """
+
+from __future__ import annotations
 
 import ast
 import hashlib

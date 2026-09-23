@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Canonical source form for code-identity hashing.
 
 Every code-identity channel in cash used to hash raw source text, so an
@@ -31,6 +29,8 @@ Deliberately COLLAPSED, beyond whitespace and comments:
   documentation, like comments: rewording one re-ran every cached result
   built on the function.
 """
+
+from __future__ import annotations
 
 import ast
 import functools

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Pure-AST cacheability analysis for notebook statements.
 
 **Boundary rule (baked here by design):** this module is pure-AST.
@@ -14,6 +12,8 @@ Both AST-visitor classes and their supporting dataclasses live here;
 their names are re-exported for any existing import sites that reference
 them directly.
 """
+
+from __future__ import annotations
 
 import ast
 import inspect

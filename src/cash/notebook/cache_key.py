@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """Unified cache key computation for statement-level caching.
 
 Single source of truth for all cache key generation. Every call site
 (runtime, simulation, virtual restore, skip checks) MUST delegate here.
 See ``copilot-instructions.md`` for the full architectural invariant.
 """
+
+from __future__ import annotations
 
 import ast
 import builtins

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Detection of unseeded random calls that compromise cache reproducibility."""
+
+from __future__ import annotations
 
 import ast
 import functools

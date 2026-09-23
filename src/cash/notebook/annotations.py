@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Parser for @cash: comment annotations that control per-statement caching."""
+
+from __future__ import annotations
 
 import ast
 import re

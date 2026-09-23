@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Statement-level caching subsystem.
 
 `StatementProcessor` plus its four sibling classes (`CacheFreshnessChecker`,
@@ -27,6 +25,8 @@ they have cross-subsystem callers (the decorator path in
 ``src/cash/core.py``, ``Restorer``, and ``upstream/virtual_lineage.py``)
 and don't belong inside ``statement/``.
 """
+
+from __future__ import annotations
 
 from .processor import (
     DecoratorCallMetric,
