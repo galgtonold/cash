@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import per_user_cache_root
+from .tracking.file_tracker import register_cache_dir
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,10 @@ class AnalyticsManager:
                 logger.debug("Analytics disabled this session (cannot create %s: %s)", self.db_path, e)
                 self._disabled = True
             else:
+                # cash's own file: the flush below can run from a finalizer in
+                # the middle of a user's statement, and its connect was
+                # recorded as a file that statement read.
+                register_cache_dir(str(Path(self.db_path).parent))
                 self._init_db()
         # Buffered events are written when the manager is collected or, on a
         # clean interpreter exit, at exit. A hard kill loses at most one
