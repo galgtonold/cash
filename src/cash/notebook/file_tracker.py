@@ -25,6 +25,7 @@ import time
 from collections.abc import Callable
 from typing import Any, Optional
 
+from cash._clock import perf_counter as _perf_counter
 from cash.utils import is_remote_url, normalize_path
 
 # A remote URL handed to a reader (``pd.read_parquet("s3://bucket/key")``)
@@ -1550,11 +1551,11 @@ class FileAccessTracker:
         return self.absent_files
 
     def _track_path(self, path):
-        started = time.perf_counter()
+        started = _perf_counter()
         try:
             self._track_path_untimed(path)
         finally:
-            _TRACKING_SECONDS[0] += time.perf_counter() - started
+            _TRACKING_SECONDS[0] += _perf_counter() - started
 
     def _track_path_untimed(self, path):
         if not isinstance(path, (str, bytes, os.PathLike)):
@@ -1687,11 +1688,11 @@ class FileAccessTracker:
         """The file's content hash as the body is about to read it."""
         from cash.notebook.file_dep_snapshot import file_content_hash
 
-        t0 = time.perf_counter()
+        t0 = _perf_counter()
         try:
             return file_content_hash(abs_path, size)
         finally:
-            self.read_hash_seconds += time.perf_counter() - t0
+            self.read_hash_seconds += _perf_counter() - t0
 
     def _note_reading_code(self, code: Any) -> None:
         self.reading_codes.add(code)

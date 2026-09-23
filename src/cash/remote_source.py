@@ -45,6 +45,7 @@ from typing import Any
 # ``import cash``, paid by everyone whether or not they touch a URL. It is
 # imported inside the HTTP path instead. ``urllib.parse`` is cheap and needed to
 # recognise a scheme, so it stays up here.
+from ._clock import perf_counter as _perf_counter
 from .data_source import DataSource
 from .diagnostics import warn_diagnostic
 from .exceptions import CashCacheIneffectiveWarning, DependencyNotFoundError
@@ -399,12 +400,12 @@ class RemoteFileDataSource(DataSource):
             entry = _token_memo.get(self.url)
             if entry is not None and (time.monotonic() - entry[0]) < max_age:
                 return entry[1]
-        started = time.perf_counter()
+        started = _perf_counter()
         token = self._resolve()
         # A pin costs no request; counting it would inflate the very number a
         # user consults to decide whether validation is worth its price.
         if self._pinned is None:
-            _record_validation(time.perf_counter() - started)
+            _record_validation(_perf_counter() - started)
         self._cached_token = token
         if max_age > 0:
             _token_memo[self.url] = (time.monotonic(), token)

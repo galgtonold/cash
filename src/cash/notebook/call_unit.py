@@ -40,6 +40,7 @@ from collections.abc import Callable, Mapping
 from types import ModuleType as _ModuleType
 from typing import Any
 
+from cash._clock import perf_counter as _perf_counter
 from cash.notebook._trace import trace_event
 from cash.notebook.annotations import CacheAnnotation
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
@@ -1163,16 +1164,16 @@ class CallUnit:
             if run is None:
                 run = self._site_runs[site] = _SiteRun()
             if run.plain:
-                started = _time.perf_counter()
+                started = _perf_counter()
                 result = fn(*args, **kwargs)
-                _log_plain(_time.perf_counter() - started)
+                _log_plain(_perf_counter() - started)
                 self.last_returned = (None, id(result), site.source)
                 return result
             if run.probing:
-                started = _time.perf_counter()
+                started = _perf_counter()
                 result = fn(*args, **kwargs)
-                run.plain_s += _time.perf_counter() - started
-                _log_plain(_time.perf_counter() - started)
+                run.plain_s += _perf_counter() - started
+                _log_plain(_perf_counter() - started)
                 run.plain_n += 1
                 if run.plain_n >= _PLAIN_SAMPLES:
                     run.probing = False
@@ -1201,12 +1202,12 @@ class CallUnit:
             # One slot per invocation: a call the callee makes through a
             # lambda it was handed runs its own `_invoke` inside this one.
             self._invoked_keys.append(None)
-            started = _time.perf_counter()
+            started = _perf_counter()
             try:
                 result = invoke(*args, **kwargs)
             finally:
                 invoked_key = self._invoked_keys.pop()
-            spent = _time.perf_counter() - started
+            spent = _perf_counter() - started
             self.last_returned = (invoked_key, id(result), site.source)
             run.total_s += spent
             if self._last_compute is not None:
@@ -1243,7 +1244,7 @@ class CallUnit:
             # a module" filter genuinely depends on the live namespace. Empty
             # for nearly every callee, and every branch below short-circuits on
             # empty, so an ordinary call pays one memo lookup.
-            key_started = _time.perf_counter()
+            key_started = _perf_counter()
             mutated_globals = callee_mutated_globals(fn)
             key = self._build_key(
                 site,
@@ -1272,9 +1273,9 @@ class CallUnit:
                 # it plain -- never look it up, never store over it.
                 return fn(*args, **kwargs)
 
-            hit_started = _time.perf_counter()
+            hit_started = _perf_counter()
             hit, value, recorded_cost, metadata = self._lookup(key)
-            self._last_key_s = _time.perf_counter() - key_started
+            self._last_key_s = _perf_counter() - key_started
             if hit:
                 value, captured_globals = _unwrap_callee_globals(value, metadata)
                 if value is _UNWRAP_FAILED:
@@ -1301,7 +1302,7 @@ class CallUnit:
                 self._record(func_name, site, key, cache_hit=True, elapsed=0.0, time_saved=recorded_cost)
                 self._last_compute = recorded_cost or 0.0
                 self._last_hit = True
-                self._drop_if_hit_costs_more(key, _time.perf_counter() - hit_started, recorded_cost)
+                self._drop_if_hit_costs_more(key, _perf_counter() - hit_started, recorded_cost)
                 return value
 
             # The call runs inside the STATEMENT's ambient capture
@@ -1340,14 +1341,14 @@ class CallUnit:
             # the miss-path "recorded for free" behaviour is unchanged.
             rng_before = capture_rng_state()
             arg_hashes_before = self._hash_args(args, kwargs)
-            started = _time.perf_counter()
+            started = _perf_counter()
             call_tracker = FileAccessTracker(
                 getattr(fn, "__globals__", None),
                 propagate_to_parent=True,
             )
             with call_tracker:
                 result, stdout_text, stderr_text = self._call_capturing_output(fn, args, kwargs)
-            elapsed = _time.perf_counter() - started
+            elapsed = _perf_counter() - started
             stored = False
 
             if rng_modules_changed(rng_before, capture_rng_state()):
