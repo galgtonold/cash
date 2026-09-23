@@ -121,7 +121,7 @@ def test_modified_upstream_cell_schedules_reexecution(magics_fixture):
     assert any("x" in s for s in stmts), f"expected a statement involving 'x' in re-execution plan, got {stmts!r}"
 
 
-def test_simulate_and_find_changes_return_types(magics_fixture):
+def test_simulate_upstream_return_types(magics_fixture):
     """simulate_upstream always returns (list, list, float)."""
     magics, shell, _backend = magics_fixture
     magics.cash("", "data = [1, 2, 3]")
