@@ -334,6 +334,13 @@ class CashConfig:
     constructor, ``cash.configure(verbose=True)``, ``CASH_VERBOSE=1``,
     ``verbose = true`` under ``[tool.cash]``."""
 
+    analytics: bool = True
+    """Record each notebook statement's hit, miss and timing in
+    ``analytics.db`` under the per-user cache root (``~/.cache/cash`` on
+    Linux), which the analytics dashboard (``cash.show_stats()``) reads.
+    Telemetry only: turning it off changes no cached result, and no file is
+    created. Read when a notebook session starts."""
+
     # --- Backend selection (simple mode) ---
     backend: str = "tiered"
     """Backend selector. ``"tiered"`` (default) builds a RAM + disk

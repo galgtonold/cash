@@ -239,17 +239,20 @@ cash inspect ./.cash
 <!-- claim: cash/__main__.py:_inspect_cache_dir @5372c14d -->
 The output gives the entry count, the total size, and a **per-function table sorted by size** — so the thing filling your disk is the first row, not something you have to work out. Drill into one with `cash inspect --function NAME` — each row shows what that entry *saves* alongside its size, so you can tell a cheap 5 MB entry from a 900-byte one worth 41 seconds — and drop what you no longer want with `cash clear --function NAME` or `cash clear --entry ID`. If a single statement rather than a function is responsible, consider `# @cash:no-cache` on cheap statements you don't need to cache, or pick a different backend (`SQLiteBackend` is more efficient for thousands of small entries — see [Choosing a backend](choosing-a-backend.md)).
 
-<!-- claim: cash/analytics.py:AnalyticsManager.__init__ @a1cb2e47 -->
-!!! note "The `~/.cash/analytics.db` telemetry file"
-    Separate from the project-local `./.cash/` cache, Cash keeps a small global
-    SQLite file at `~/.cash/analytics.db` recording per-session hit/miss/timing
-    events. It backs `cash.show_stats()`; `%cash_stats` does **not** read it --
-    that command reports in-memory session counters and deliberately never
-    walks the backend. The file is **best-effort observability,
-    never correctness** — deleting it is always safe and loses only telemetry, no
-    cached results. Cash recreates it automatically if it is missing, corrupt, or
-    oversized, so you should never see an error about it; if you want to reset the
-    telemetry, just delete the file.
+<!-- claim: cash/analytics.py:AnalyticsManager.__init__ @aec1a862 -->
+!!! note "The `analytics.db` telemetry file"
+    Separate from the project-local `./.cash/` cache, Cash keeps a small
+    SQLite file, `analytics.db`, in the per-user cache root (`~/.cache/cash` on
+    Linux, `~/Library/Caches/cash` on macOS, `%LOCALAPPDATA%\cash` on
+    Windows), recording per-session hit/miss/timing events for notebook
+    statements. It backs the `cash.show_stats()` dashboard; `%cash_stats` does
+    **not** read it -- that command reports in-memory session counters and
+    deliberately never walks the backend. The file is **best-effort
+    observability, never correctness** — deleting it is always safe and loses
+    only telemetry, no cached results. Cash recreates it automatically if it is
+    missing, corrupt, or oversized, so you should never see an error about it.
+    To stop recording, set `analytics = false` in the config, or
+    `CASH_ANALYTICS=0`; no file is created then.
 
 <!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_repair @95849d4b, cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_export @d9f6e534, cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_import @cde3d810 -->
 ## Cache management — export, import, clear

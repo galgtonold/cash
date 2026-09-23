@@ -1,16 +1,17 @@
 """Persistent analytics and cache-usage telemetry.
 
-Collects per-statement metrics (hit/miss, timing, storage) in a
-local SQLite database for performance analysis and dashboard display.
+Collects per-statement metrics (hit/miss, timing) in a local SQLite
+database. The notebook statement processor
+(``cash.notebook.statement.processor``) writes the events, and the analytics
+dashboard (``cash.ui.dashboard``, behind ``cash.show_stats()``) reads them.
 
-Used by both the decorator-based caching (``core.py``) and the notebook
-caching subsystem (``statement_processor.py``), so it lives at the
-package root rather than inside ``notebook/``.
+The database lives in the per-user cache root (``~/.cache/cash`` on Linux).
+Set ``analytics = false`` in the config, or ``CASH_ANALYTICS=0``, to stop
+recording.
 """
 
 from __future__ import annotations
 
-import atexit
 import contextlib
 import logging
 import sqlite3
@@ -29,32 +30,31 @@ logger = logging.getLogger(__name__)
 # carried forever.
 _MAX_DB_BYTES = 64 * 1024 * 1024  # 64 MiB
 
-# Live managers whose in-memory buffers may still hold un-persisted events.
-# Tracked *weakly* so this module can drain them on a clean interpreter/kernel
-# shutdown via an ``atexit`` hook WITHOUT keeping the managers alive — a strong
-# reference here would defeat ``__del__`` and leak one manager per
-# ``StatementProcessor`` across a long-running session (e.g. the test suite,
-# which builds thousands of them).
-#
-# Best-effort by design: ``atexit`` runs on a *clean* exit, so the
-# buffered analytics events survive a normal kernel shutdown. On a *hard* kill
-# (kernel crash, SIGKILL, power loss) ``atexit`` does not run and the last
-# ``< _flush_threshold`` buffered events are lost. That is acceptable because
-# analytics is best-effort observability, not correctness — losing a handful of
-# telemetry rows on a crash changes no cached result.
-_live_managers: weakref.WeakSet[AnalyticsManager] = weakref.WeakSet()
+
+def default_db_path() -> Path:
+    """Where the analytics db lives unless a path is given: the per-user cache root."""
+    from .config import _per_user_cache_root
+
+    return _per_user_cache_root() / "analytics.db"
 
 
-def _flush_live_managers_atexit() -> None:
-    """Drain every live manager's buffer at clean interpreter shutdown."""
-    for mgr in list(_live_managers):
-        # Errors during interpreter shutdown are common and harmless here;
-        # analytics is best-effort, so swallow them.
-        with contextlib.suppress(sqlite3.Error, OSError):
-            mgr.flush()
-
-
-atexit.register(_flush_live_managers_atexit)
+def _write_events(db_path: str, buffer: list[tuple]) -> None:
+    """Move every event in *buffer* into the db at *db_path*. Best-effort."""
+    if not buffer:
+        return
+    events = buffer[:]
+    buffer.clear()
+    try:
+        with contextlib.closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.executemany(
+                """
+                INSERT INTO events (session_id, timestamp, status, execution_time, saved_time, code_hash)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                events,
+            )
+    except sqlite3.Error as exc:
+        logger.debug("Failed to flush analytics events: %s", exc)
 
 
 class AnalyticsManager:
@@ -63,44 +63,40 @@ class AnalyticsManager:
     Uses a local SQLite database to track execution events, savings, and usage patterns.
     """
 
-    def __init__(self, db_path: str | None = None):
+    def __init__(self, db_path: str | None = None, *, enabled: bool = True):
         """
         Initialize the AnalyticsManager.
 
         Args:
-            db_path: Path to the SQLite database. If None, uses default ~/.cash/analytics.db
+            db_path: Path to the SQLite database. Defaults to ``analytics.db``
+                in the per-user cache root (`default_db_path`).
+            enabled: False records nothing and creates no file (the
+                ``analytics`` setting).
         """
-        if db_path is None:
-            home_dir = Path.home()
-            cash_dir = home_dir / ".cash"
-            cash_dir.mkdir(parents=True, exist_ok=True)
-            self.db_path = str(cash_dir / "analytics.db")
-        else:
-            self.db_path = db_path
-            # Ensure directory exists if manually specified
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-
+        self.db_path = str(db_path if db_path is not None else default_db_path())
         self.session_id = str(uuid.uuid4())
         self._event_buffer: list[tuple] = []
         # Events per commit. A commit is an fsync, ~12 ms on Windows; at 50 a
         # loop's 3,000 statements committed 60 times (round 23). What a hard
         # kill can lose is this many telemetry rows, never a cached result.
         self._flush_threshold = 1000
-        # Set True only if the db cannot be created even after a recreate
-        # (read-only dir, disk full). Analytics then no-ops for the session
-        # rather than retrying a doomed connect on every event.
-        self._disabled = False
-        self._init_db()
-        # Register for the clean-shutdown drain (see ``_live_managers`` above).
-        # Weak reference only, so this never blocks garbage collection.
-        _live_managers.add(self)
-
-    def __del__(self):
-        """Flush remaining buffered events on garbage collection."""
-        # Best-effort flush during GC; logging may itself fail during
-        # interpreter shutdown, so we intentionally swallow all errors.
-        with contextlib.suppress(sqlite3.Error, OSError):
-            self.flush()
+        # True when analytics is switched off, or the db cannot be created even
+        # after a recreate (read-only dir, disk full). Analytics then no-ops
+        # for the session rather than retrying a doomed connect on every event.
+        self._disabled = not enabled
+        if enabled:
+            try:
+                Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                logger.debug("Analytics disabled this session (cannot create %s: %s)", self.db_path, e)
+                self._disabled = True
+            else:
+                self._init_db()
+        # Buffered events are written when the manager is collected or, on a
+        # clean interpreter exit, at exit. A hard kill loses at most one
+        # buffer of telemetry, never a cached result. The finalizer holds the
+        # path and the buffer, not the manager, so it never keeps it alive.
+        self._finalizer = weakref.finalize(self, _write_events, self.db_path, self._event_buffer)
 
     def _init_db(self) -> None:
         """Create the schema, self-healing an unreadable or runaway db.
@@ -193,24 +189,7 @@ class AnalyticsManager:
 
     def flush(self):
         """Flush buffered events to the SQLite database."""
-        if not self._event_buffer:
-            return
-        events = self._event_buffer[:]
-        self._event_buffer.clear()
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.executemany(
-                    """
-                    INSERT INTO events (session_id, timestamp, status, execution_time, saved_time, code_hash)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                    events,
-                )
-                conn.commit()
-        except sqlite3.Error as exc:
-            # analytics should be best-effort
-            logger.debug("Failed to flush analytics events: %s", exc)
+        _write_events(self.db_path, self._event_buffer)
 
     def get_session_stats(self) -> dict[str, Any]:
         """Get statistics for the current session."""
@@ -219,6 +198,8 @@ class AnalyticsManager:
 
     def get_stats_for_session(self, session_id: str) -> dict[str, Any]:
         """Get statistics for a specific session."""
+        if self._disabled:
+            return {}
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
@@ -255,6 +236,8 @@ class AnalyticsManager:
 
     def get_global_stats(self) -> dict[str, Any]:
         """Get statistics across all recorded sessions."""
+        if self._disabled:
+            return {}
         self.flush()  # Ensure buffered events are persisted before querying
         try:
             with sqlite3.connect(self.db_path) as conn:
@@ -288,6 +271,8 @@ class AnalyticsManager:
 
     def get_daily_savings(self, limit: int = 7) -> list[tuple[str, float]]:
         """Get total saved time per day for the last 'limit' days."""
+        if self._disabled:
+            return []
         self.flush()  # Ensure buffered events are persisted before querying
         try:
             with sqlite3.connect(self.db_path) as conn:

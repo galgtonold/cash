@@ -34,14 +34,17 @@ def show_analytics_dashboard(mgr: AnalyticsManager | None = None):
     Display an interactive dashboard for Cash analytics.
 
     Args:
-        mgr: Optional AnalyticsManager instance. If None, a new one is created.
+        mgr: Optional AnalyticsManager instance. If None, one on the default
+            db is created, which reads nothing when analytics is off.
     """
     if not HAS_WIDGETS:
         print("ipywidgets is required for the dashboard.")
         return
 
     if mgr is None:
-        mgr = AnalyticsManager()
+        from ..config import get_config
+
+        mgr = AnalyticsManager(enabled=get_config().analytics)
 
     # Style
 

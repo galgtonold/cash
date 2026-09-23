@@ -687,7 +687,9 @@ class StatementProcessor:
         # outlive the scope that produced it.
         self._call_unit_loop_var_digests: list[dict[str, str]] = []
 
-        self.analytics_manager = AnalyticsManager()
+        self.analytics_manager = AnalyticsManager(
+            enabled=getattr(getattr(cash_instance, "config", None), "analytics", True) is not False
+        )
 
         self.randomness_detector = RandomnessDetector()
 

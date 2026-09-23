@@ -2,6 +2,7 @@
 
 import logging
 import os
+from unittest.mock import MagicMock
 
 from cash.analytics import _MAX_DB_BYTES, AnalyticsManager
 
@@ -15,10 +16,17 @@ class TestAnalyticsManager:
         AnalyticsManager(db_path=db_path)
         assert os.path.exists(db_path)
 
-    def test_init_default_path(self):
-        """AnalyticsManager uses default path when none given."""
+    def test_init_default_path(self, tmp_path, monkeypatch):
+        """The default db is in the per-user cache root, not a hard-coded ~/.cash."""
+        from cash.config import _per_user_cache_root
+
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
         am = AnalyticsManager()
-        assert am.db_path.endswith("analytics.db")
+        assert am.db_path == str(_per_user_cache_root() / "analytics.db")
+        assert am.db_path.startswith(str(tmp_path))
+        assert not (tmp_path / "home" / ".cash").exists()
 
     def test_session_id_generated(self, tmp_path):
         """Each instance gets a unique session ID."""
@@ -167,3 +175,31 @@ class TestCorruptDbSelfHeal:
 
         assert am2.get_session_stats()["total_events"] == 1
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+class TestAnalyticsSwitch:
+    """The ``analytics`` setting turns recording off, and no file is made."""
+
+    def test_disabled_records_nothing_and_creates_no_file(self, tmp_path):
+        db_path = tmp_path / "sub" / "analytics.db"
+        am = AnalyticsManager(db_path=str(db_path), enabled=False)
+        am.record_event("HIT", 0.1, saved_time=1.0)
+        am.flush()
+        assert am.get_session_stats() == {}
+        assert am.get_global_stats() == {}
+        assert am.get_daily_savings() == []
+        assert not db_path.parent.exists()
+
+    def test_the_setting_reaches_the_statement_processor(self, tmp_path, monkeypatch):
+        from cash.backends import InMemoryBackend
+        from cash.core import Cash
+        from cash.notebook.statement.processor import StatementProcessor
+
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        monkeypatch.setenv("CASH_ANALYTICS", "0")
+        c = Cash(backend=InMemoryBackend(), register_magic=False)
+        assert c.config.analytics is False
+        processor = StatementProcessor(MagicMock(), c)
+        assert processor.analytics_manager._disabled
+        assert not (tmp_path / "cash" / "analytics.db").exists()

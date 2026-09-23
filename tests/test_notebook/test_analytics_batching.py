@@ -8,7 +8,8 @@ wall time (~12 ms/cell measured). These tests pin the fix:
 * the per-cell path must NOT commit-per-cell — events stay buffered until the
   batch threshold, a stats query, or a clean-shutdown drain; and
 * buffered events are NOT lost on the happy path — a normal ``flush()`` (and
-  the ``atexit`` shutdown drain) persists them.
+  the manager's finalizer, which runs on collection and at a clean exit)
+  persists them.
 
 The magics-level test (``test_running_cells_does_not_commit_per_cell``) is the
 stable regression guard: it counts committed rows across N cells rather than
@@ -19,13 +20,14 @@ flush).
 
 from __future__ import annotations
 
+import gc
 import sqlite3
 from unittest.mock import MagicMock
 
 import pytest
 from traitlets.config import Configurable
 
-from cash.analytics import AnalyticsManager, _flush_live_managers_atexit
+from cash.analytics import AnalyticsManager
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
@@ -115,15 +117,24 @@ class TestBufferPolicy:
         am.flush()
         assert _committed_row_count(am.db_path) == 2
 
-    def test_atexit_drain_persists_buffered_events(self, tmp_path):
+    def test_the_exit_drain_persists_buffered_events(self, tmp_path):
         """Clean-shutdown drain: no data loss on the happy path."""
         am = AnalyticsManager(db_path=str(tmp_path / "a.db"))
         am.record_event("MISS", 0.02)
         am.record_event("MISS", 0.03)
         assert _committed_row_count(am.db_path) == 0  # still buffered
 
-        # Simulate the atexit hook firing on a clean interpreter/kernel exit.
-        _flush_live_managers_atexit()
+        # The finalizer is what a clean interpreter/kernel exit runs.
+        assert am._finalizer.atexit
+        am._finalizer()
 
         assert _committed_row_count(am.db_path) == 2
         assert am._event_buffer == []
+
+    def test_collecting_a_manager_persists_its_buffer(self, tmp_path):
+        am = AnalyticsManager(db_path=str(tmp_path / "a.db"))
+        am.record_event("MISS", 0.02)
+        db_path = am.db_path
+        del am
+        gc.collect()
+        assert _committed_row_count(db_path) == 1
