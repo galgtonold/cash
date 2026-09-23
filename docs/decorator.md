@@ -138,7 +138,7 @@ A notebook shows a badge on every statement. A script shows nothing by
 default, which makes it easy to assume caching is working when it isn't — so
 there are several ways to look.
 
-<!-- claim: cash/core.py:Cash.run_summary @5e2a67c4, cash/core.py:Cash._summary_reasons @0d5a6d85, cash/core.py:Cash._print_run_summary @edd281cb -->
+<!-- claim: cash/core.py:Cash.run_summary @5e2a67c4, cash/core.py:Cash._summary_reasons @0d5a6d85, cash/core.py:Cash._print_run_summary @f2a46f9f -->
 **What recomputed just now, and why?** Set `CASH_SUMMARY=1` and a
 per-function table prints to **stderr** when the process exits — stderr, so it
 never lands in a report, a pipe or a JSON response your program writes to
@@ -227,7 +227,7 @@ says so — `-- trusts the timestamps of big.npy (sampled: ...)` — because onl
 three regions of such a file are hashed and the rest is trusted to its
 timestamps ([why](known-limitations.md)).
 
-<!-- claim: cash/core.py:_StandDownWhenTheAppLogs.filter @1f08254a, cash/core.py:Cash._print_run_summary @edd281cb -->
+<!-- claim: cash/_log.py:_StandDownWhenTheAppLogs.filter @1f08254a, cash/core.py:Cash._print_run_summary @f2a46f9f -->
 With `CASH_DEBUG` they come with cash's other debug records. If your program configures `logging`
 itself, those records go to your handlers in your format instead, and no
 stderr handler is added. That holds when it configures logging *after*

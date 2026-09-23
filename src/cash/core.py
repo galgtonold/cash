@@ -34,7 +34,7 @@ from collections.abc import Callable, Iterator, Sized
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NamedTuple, ParamSpec, TypeVar, overload
 
-from . import _plain_data
+from . import _log, _plain_data
 from ._annotation_refs import annotation_referents
 from ._clock import perf_counter as _perf_counter
 from ._paths import MAIN_MODULE_NAMES, normalize_path, resolve_main_module
@@ -974,96 +974,9 @@ _SOURCE_CHANGED_WARNED: set[str] = set()
 #: `CASH_DEBUG=1` or `verbose=True` asks for it.
 _calls_logger = logging.getLogger("cash.calls")
 
-#: The stderr handler `enable_cash_logging` installed, if it installed one.
-_CASH_STDERR_HANDLER: logging.Handler | None = None
-
-#: The level `enable_cash_logging` last set on the `cash` logger; a level
-#: anyone else set is theirs.
-_CASH_LEVEL_SET: int | None = None
-
-
 #: Result types seen to refuse an attribute (dict, list, ndarray, ...): not
 #: tried again (`Cash._attach_lineage`).
 _UNTAGGABLE_TYPES: set[type] = set()
-
-
-def _real_handlers(logger: logging.Logger) -> list[logging.Handler]:
-    """Handlers that would PRINT a record from *logger*, walking up like logging.
-
-    Two kinds do not count. pytest's logging plugin puts capture handlers on the
-    root logger, so under pytest "something is configured" was always true and
-    `CASH_DEBUG=1` printed nothing, even with `-s` (round 18). A NullHandler
-    prints nothing by definition. cash's own stderr handler is left out too, so
-    the answer means "the application configured logging".
-    """
-    found = []
-    current: logging.Logger | None = logger
-    while current is not None:
-        for handler in current.handlers:
-            if handler is _CASH_STDERR_HANDLER or isinstance(handler, logging.NullHandler):
-                continue
-            if (type(handler).__module__ or "").startswith("_pytest"):
-                continue
-            found.append(handler)
-        if not current.propagate:
-            break
-        current = current.parent
-    return found
-
-
-def enable_cash_logging(level: int) -> None:
-    """Make `cash` log records at *level* reach the user.
-
-    Sets the `cash` logger's level unless someone else already has, and --
-    only when nothing would print a record, which is a script's default (and a
-    pytest run's) -- attaches one stderr handler. An application that
-    configured logging keeps its own handlers, format and levels: it starts
-    receiving cash's records, and a `cash` level it set is respected rather
-    than lowered under it on every Cash() (round 18: dictConfig's INFO was
-    overridden). stderr, not stdout: stdout is often the program's output.
-    """
-    global _CASH_STDERR_HANDLER, _CASH_LEVEL_SET
-    cash_logger = logging.getLogger("cash")
-    if cash_logger.level == logging.NOTSET or (cash_logger.level == _CASH_LEVEL_SET and cash_logger.level > level):
-        cash_logger.setLevel(level)
-        _CASH_LEVEL_SET = level
-    if _CASH_STDERR_HANDLER is None and not _real_handlers(cash_logger):
-        handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
-        handler.addFilter(_StandDownWhenTheAppLogs())
-        cash_logger.addHandler(handler)
-        _CASH_STDERR_HANDLER = handler
-
-
-def _app_would_emit(levelno: int) -> bool:
-    """Would a handler of the application's print a `cash` record at *levelno*?
-
-    The `cash` logger's own level first: a record it drops reaches no handler,
-    and routing the exit summary to such a log lost it altogether.
-    """
-    cash_logger = logging.getLogger("cash")
-    if not cash_logger.isEnabledFor(levelno):
-        return False
-    return any(h.level <= levelno for h in _real_handlers(cash_logger))
-
-
-class _StandDownWhenTheAppLogs(logging.Filter):
-    """Keep cash's own stderr handler quiet once the application logs.
-
-    It is added when nothing would print cash's records -- a script's
-    default. A program that configures logging AFTER ``import cash``, the
-    usual order for a CLI (imports at the top, ``basicConfig`` in ``main``),
-    then got every line twice: once from this handler, once from its own
-    (round 19). Checked per record, so it follows the application's setup as
-    it changes.
-    """
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        # The exit summary is only logged when the application has a handler
-        # for it, and written to stderr directly otherwise.
-        if record.name == "cash.summary":
-            return False
-        return not _app_would_emit(record.levelno)
 
 
 # Why a call missed. The KIND is what the summary counts; the detail goes to
@@ -1682,11 +1595,10 @@ class Cash:
         self._async_inflight_lock = threading.Lock()
         self.use_locking = use_locking
         verbose = self.config.verbose
-        # Asking for debug output has to produce some. The flag used to set
-        # nothing but this attribute, and a script has no logging configured,
-        # so `CASH_DEBUG=1` printed not one line (round 17, three testers).
+        # Asking for debug output has to produce some, also in a script that
+        # configured no logging.
         if debug or verbose:
-            enable_cash_logging(logging.DEBUG if debug else logging.INFO)
+            _log.enable(logging.DEBUG if debug else logging.INFO)
 
         # What a miss was, for the people asking "why did that recompute?".
         # All three are in-process memory only, and bounded: they explain,
@@ -1834,7 +1746,7 @@ class Cash:
         tiers it is built from changed. See ``cash.configure``."""
         apply_overrides(self, overrides)
         if overrides.get("debug") or overrides.get("verbose"):
-            enable_cash_logging(logging.DEBUG if self.debug else logging.INFO)
+            _log.enable(logging.DEBUG if self.debug else logging.INFO)
 
     def __repr__(self) -> str:
         backend_name = type(self._backend).__name__ if self._backend is not None else "<deferred>"
@@ -10301,7 +10213,7 @@ class Cash:
                 # block came through the app's formatter at INFO and raw at
                 # WARNING, two shapes for a log shipper to parse (round 20).
                 cash_logger = logging.getLogger("cash")
-                if any(h.level <= logging.INFO for h in _real_handlers(cash_logger)):
+                if any(h.level <= logging.INFO for h in _log.application_handlers(cash_logger)):
                     summary_logger = logging.getLogger("cash.summary")
                     summary_logger.handle(
                         summary_logger.makeRecord(

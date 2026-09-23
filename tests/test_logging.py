@@ -5,8 +5,25 @@ Tests for Cash structured logging module.
 import json
 import logging
 import os
+import sys
 
+import pytest
+
+from cash import _log
 from cash._log import JsonFormatter, setup_logging
+
+
+@pytest.fixture(autouse=True)
+def _restore_cash_logger():
+    """Leave the ``cash`` logger and cash's record of its handlers as found."""
+    cash_logger = logging.getLogger("cash")
+    handlers, level = list(cash_logger.handlers), cash_logger.level
+    own, level_set = list(_log._OWN_HANDLERS), _log._LEVEL_SET
+    yield
+    cash_logger.handlers[:] = handlers
+    cash_logger.setLevel(level)
+    _log._OWN_HANDLERS[:] = own
+    _log._LEVEL_SET = level_set
 
 
 class TestJsonFormatter:
@@ -77,3 +94,35 @@ class TestSetupLogging:
         setup_logging(level=logging.INFO)
         handler_count_2 = len(logging.getLogger("cash").handlers)
         assert handler_count_2 == handler_count_1
+
+
+class TestOneConfiguration:
+    """`enable` and `setup_logging` share one record of cash's own handlers."""
+
+    def _clean(self):
+        cash_logger = logging.getLogger("cash")
+        for handler in list(_log._OWN_HANDLERS):
+            cash_logger.removeHandler(handler)
+        _log._OWN_HANDLERS.clear()
+        cash_logger.setLevel(logging.NOTSET)
+        cash_logger.propagate = True
+        return cash_logger
+
+    def test_enable_after_setup_logging_adds_no_second_console(self, monkeypatch):
+        cash_logger = self._clean()
+        monkeypatch.setattr(_log, "application_handlers", lambda logger: [])
+        _log.enable(logging.DEBUG)
+        assert [h for h in cash_logger.handlers if getattr(h, "stream", None) is sys.stderr]
+        setup_logging(level=logging.DEBUG)
+        _log.enable(logging.DEBUG)
+        own = [h for h in cash_logger.handlers if h in _log._OWN_HANDLERS]
+        assert len(own) == 1, "setup_logging's console handler, and nothing added after it"
+
+    def test_setup_logging_keeps_the_applications_handler(self):
+        cash_logger = self._clean()
+        app_handler = logging.NullHandler()
+        cash_logger.addHandler(app_handler)
+        setup_logging(level=logging.INFO)
+        setup_logging(level=logging.INFO)
+        assert app_handler in cash_logger.handlers
+        assert len([h for h in cash_logger.handlers if h in _log._OWN_HANDLERS]) == 1
