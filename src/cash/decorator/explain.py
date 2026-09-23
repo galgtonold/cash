@@ -510,7 +510,7 @@ class ExplainMixin:
         This process's own history first. With none -- the first call of a
         function in a fresh process, which is where a script's misses are --
         the keys earlier runs stored for this function, recorded beside the
-        cache (`_record_stored_key`). Without them every such miss read "no
+        cache (`StoredKeyRecord`). Without them every such miss read "no
         earlier run left one on disk", including after a code edit and a TTL
         expiry, whose entries were in fact on disk (round 18, all five
         testers).
@@ -526,7 +526,7 @@ class ExplainMixin:
             return MISS_GONE, ("stored earlier in this process and since evicted or cleared")
         previous = self._last_key.get(func_name)
         since = "since the last call"
-        doc = self._stored_doc(func_name)
+        doc = self._stored_keys.read(func_name)
         record = doc["keys"]
         if cache_key in record:
             stored_at, written_ttl = record[cache_key][:2]

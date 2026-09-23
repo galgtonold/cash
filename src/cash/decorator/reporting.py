@@ -339,17 +339,12 @@ class ReportingMixin:
             self.backend  # the first call is about to build it for its lookup anyway
         except Exception:  # noqa: BLE001 - no backend, no record: show it
             return True
-        if self._stored_keys_path(func_name) is None:
+        if self._stored_keys.path(func_name) is None:
             return True
         digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16]
-        if digest in self._stored_doc(func_name).get("warned", {}):
+        if digest in self._stored_keys.read(func_name)["warned"]:
             return False
-        # Written with the record's next write, never now: this runs before
-        # the first call's lookup, and creating (and stamping) the cache
-        # directory here reordered the stamps the clear check reads -- a
-        # clear under a process that started cold went unnoticed on Linux.
-        with self._ram_only_lock:
-            self._warned_pending.setdefault(func_name, {})[digest] = time.time()
+        self._stored_keys.note_warning_shown(func_name, digest)
         return True
 
     def _definition_site(self, func_name: str) -> tuple[str, int] | None:

@@ -3,6 +3,7 @@ lineage tag it carries."""
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import logging
 import pickle
@@ -346,10 +347,11 @@ class StoreMixin:
                     "not_persisted": not_persisted,
                 },
             )
+            ledger = functools.partial(self._flat_ledger, func_name)
             if not_persisted is None:
-                self._record_stored_key(func_name, cache_key, ttl)
+                self._stored_keys.note_stored(func_name, cache_key, ttl, ledger)
             else:
-                self._remember_ram_only(func_name, cache_key, not_persisted)
+                self._stored_keys.note_ram_only(func_name, cache_key, not_persisted, ledger)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError, CacheBackendError) as e:
             self._note_not_stored(cache_key, "the backend refused the write")
             backend_name = type(self.backend).__name__

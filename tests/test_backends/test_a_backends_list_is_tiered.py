@@ -37,6 +37,7 @@ def test_a_backends_list_builds_the_tiered_stack(tmp_path, monkeypatch):
     # `cash clear --all` removes the directory under a running process. The
     # RAM tier must notice and stop serving the cleared result.
     disk._writes.wait_all()
+    c._stored_keys.flush()  # and the stored-key record's
     shutil.rmtree(cache_dir)
     assert double(21) == 42
     assert calls == [21, 21], "the RAM tier served a result cleared from disk"

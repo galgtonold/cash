@@ -65,7 +65,7 @@ from .decorator.rng import RngMixin
 from .decorator.runtime import RuntimeMixin
 from .decorator.script_pickling import expose_script_function
 from .decorator.store import StoreMixin
-from .decorator.stored_keys import StoredKeysMixin
+from .decorator.stored_keys import StoredKeyRecord
 from .dependency_state import (
     DependencyStateHasher,
     SysModulesHelperResolver,
@@ -138,6 +138,18 @@ def _backend_cache_dir(backend: CacheBackend | None) -> str | None:
     return os.path.abspath(directory) if directory else None
 
 
+def _local_dir_of(ref: weakref.ref[Cash]) -> Callable[[], str | None]:
+    """The built backend's local directory, read through *ref* so the
+    stored-key record does not keep its `Cash` alive."""
+
+    def local_dir() -> str | None:
+        cash = ref()
+        backend = cash._backend if cash is not None else None
+        return backend.local_dir if backend is not None else None
+
+    return local_dir
+
+
 #: How many call events `Cash._decorator_call_log` holds. The notebook drains it
 #: after every statement; nothing drains it in a script or a service, so it
 #: keeps only the most recent calls rather than one entry per call forever.
@@ -155,7 +167,6 @@ class Cash(
     FileDepsMixin,
     PurityChecksMixin,
     ExplainMixin,
-    StoredKeysMixin,
     RuntimeMixin,
     StoreMixin,
     ReportingMixin,
@@ -362,19 +373,10 @@ class Cash(
         self._module_attr_cache: dict = {}
         self._local_binding_cache: dict[Any, tuple | None] = {}
         self._carrier_verdicts: dict[int, tuple[Any, bool]] = {}
-        self._stored_doc_memo: dict[str, tuple[tuple[int, int], dict]] = {}
         # (func_name, state segment) -> the ledger of the key build that first
         # produced it (`_keep_state_ledger`).
         self._state_ledgers: dict[tuple[str, str], dict] = {}
-        self._ram_only_pending: dict[str, dict[str, list]] = {}
-        # func_name -> {digest: when} of warnings shown, not yet in the record
-        # (`_first_showing`); written with the record's next write.
-        self._warned_pending: dict[str, dict[str, float]] = {}
-        self._ram_only_lock = threading.Lock()
-        # Serialises this process's reads and rewrites of the stored-key
-        # record: on Windows a read that overlaps the rewrite's rename fails,
-        # and a pool's misses read an empty record as "new arguments".
-        self._stored_doc_lock = threading.RLock()
+        self._stored_keys = StoredKeyRecord(_local_dir_of(weakref.ref(self)))
         # (first_param, self_attrs, uses_super) per code object; see
         # _analyze_method_self_deps.
         self._method_self_dep_cache: dict = {}
@@ -1607,6 +1609,5 @@ class Cash(
                 except Exception:  # noqa: BLE001 - -W error at exit, or teardown
                     pass
         if backend is not None:
-            if getattr(self, "_ram_only_pending", None) or getattr(self, "_warned_pending", None):
-                self._flush_ram_only_keys()
+            self._stored_keys.close()
             backend.shutdown()

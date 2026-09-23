@@ -82,6 +82,7 @@ def test_a_clear_under_a_running_process_empties_its_ram_tier(tmp_path, monkeypa
     assert calls == [1]
     if how == "all":
         c.backend.backends[-1]._writes.wait_all()
+        c._stored_keys.flush()  # and the stored-key record's
         shutil.rmtree(cache_dir)  # what `cash clear --all` does
     else:
         from types import SimpleNamespace
@@ -89,6 +90,7 @@ def test_a_clear_under_a_running_process_empties_its_ram_tier(tmp_path, monkeypa
         from cash.__main__ import cmd_clear
 
         c.backend.backends[-1]._writes.wait_all()
+        c._stored_keys.flush()  # and the stored-key record's
         cmd_clear(SimpleNamespace(path=str(cache_dir), all=False, function="f"))
     f(1)
     assert calls == [1, 1], "the RAM tier served a result cleared from disk"
@@ -117,6 +119,7 @@ def test_a_clear_reaches_a_process_that_started_with_no_cache(tmp_path, monkeypa
     f(1)
     assert calls == [1]
     c.backend.backends[-1]._writes.wait_all()
+    c._stored_keys.flush()  # and the stored-key record's
     if how == "all":
         shutil.rmtree(cache_dir)
     else:
@@ -157,6 +160,7 @@ def test_a_clear_during_a_call_begun_inside_the_check_window_is_seen(tmp_path, m
         @c.cache
         def long_report(x):
             disk._writes.wait_all()
+            c._stored_keys.flush()  # and the stored-key record's
             shutil.rmtree(cache_dir)  # the operator's clear, mid-call
             time.sleep(0.15)
             return x
@@ -183,8 +187,10 @@ def test_a_directory_recreated_by_a_sidecar_write_gets_its_gitignore_and_stamp(t
 
     f(1)
     c.backend.backends[-1]._writes.wait_all()
+    c._stored_keys.flush()  # and the stored-key record's
     shutil.rmtree(cache_dir)
-    c._record_stored_key("mod.f", "mod.f:key", None)
+    c._stored_keys.note_stored("mod.f", "mod.f:key", None, lambda state: None)
+    c._stored_keys.flush()
     assert (cache_dir / ".gitignore").read_text(encoding="utf-8").strip().endswith("*")
     assert (cache_dir / "CACHE_VERSION").exists()
 

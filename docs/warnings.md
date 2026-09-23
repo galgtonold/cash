@@ -942,7 +942,7 @@ response than a warning filter, because it leaves the rest of the function
 watched. Do not ignore a `mutable_global` or a `dynamic_pattern` line — those
 two are the stale-result kinds, and nothing else will tell you when they bite.
 
-<!-- claim: cash/decorator/reporting.py:ReportingMixin._first_showing @583de56d -->
+<!-- claim: cash/decorator/reporting.py:ReportingMixin._first_showing @40e2378f -->
 This warning and [KEY-AMBIENT-READ](#key-ambient-read) are shown **once per
 cache**, not once per process: the next run on the same cache, finding the
 same lines, records them in `f.cache_info()["warnings"]` without printing them
@@ -2020,7 +2020,7 @@ not affected: the reloaded code is keyed afresh.
 result to the cache failed. The message names the backend and the exception.
 Nothing was stored.
 
-<!-- claim: cash/decorator/store.py:StoreMixin._store_in_cache @604141a6 -->
+<!-- claim: cash/decorator/store.py:StoreMixin._store_in_cache @59457a8a -->
 **Why it matters.** The result you received is correct — the failure is on the
 storage side only, and Cash deliberately reports it rather than raising it into
 your code. If this happens once, it costs one recompute. If it happens on every
