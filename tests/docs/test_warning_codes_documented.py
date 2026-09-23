@@ -144,10 +144,11 @@ def test_the_category_set_is_derived_and_not_empty():
 def _raw_cash_warns() -> list[str]:
     """`warnings.warn*(...)` calls naming a Cash category, outside diagnostics.py.
 
-    ``warn_explicit`` is matched as well as ``warn``. Five sites use it -- four
-    in ``notebook/randomness.py``, one in ``notebook/upstream/checker.py`` -- and
-    a matcher checking only ``attr == "warn"`` passes while every one of them is
-    still unmigrated.
+    ``warn_explicit`` is matched as well as ``warn``. The notebook warnings that
+    blame a cell line (in ``notebook/randomness.py`` and
+    ``notebook/upstream/checker.py``) once called it directly, and a matcher
+    checking only ``attr == "warn"`` passed while every one of them was
+    unmigrated.
 
     Both call shapes are matched: ``warnings.warn(...)`` (an ``ast.Attribute``)
     and a bare ``warn(...)`` from ``from warnings import warn`` (an

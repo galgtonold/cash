@@ -129,10 +129,8 @@ def _warn_at(instance: Warning, level: int | None, fallback: tuple[str, int] | N
 
 
 #: Every diagnostic code Cash can emit. Adding a warning means adding its code
-#: here AND a section in ``docs/warnings.md``. Once both exist, the bijection
-#: test at ``tests/docs/test_warning_codes_documented.py`` will fail if either
-#: is missing; until that test lands (a later task in this plan), treat this
-#: as a contract to honour by hand.
+#: here AND a section in ``docs/warnings.md``;
+#: ``tests/docs/test_warning_codes_documented.py`` fails if either is missing.
 #:
 #: The gloss on each line is the one-sentence claim its doc section expands.
 DIAGNOSTIC_CODES: frozenset[str] = frozenset(
