@@ -23,12 +23,12 @@ from ..install_paths import installed_roots, normcase_path
 from ..purity import is_pure
 from .ast_util import resolve_callee
 from .file_effects import (
-    _WRITE_TEXT_MARKERS,
     READ_TEXT_MARKERS,
     REPEATABILITY_REPLACING,
-    _call_repeatability,
-    _locally_opened_handles,
+    WRITE_TEXT_MARKERS,
+    call_repeatability,
     get_base_name,
+    locally_opened_handles,
 )
 
 __all__ = [
@@ -133,9 +133,9 @@ def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
         tree = ast.parse(source)
     except SyntaxError:
         return None
-    handles = frozenset(_locally_opened_handles(tree))
+    handles = frozenset(locally_opened_handles(tree))
     replaces = any(
-        isinstance(node, ast.Call) and _call_repeatability(node, handles) == REPEATABILITY_REPLACING
+        isinstance(node, ast.Call) and call_repeatability(node, handles) == REPEATABILITY_REPLACING
         for node in ast.walk(tree)
     )
     found = func.__name__ if replaces else None
@@ -371,7 +371,7 @@ def statement_written_paths(
     its conservative re-fire behaviour rather than skip a writer whose effect it
     cannot verify. Failure-tolerant: any extraction ambiguity yields ``None``.
     """
-    if not any(m in code for m in _WRITE_TEXT_MARKERS):
+    if not any(m in code for m in WRITE_TEXT_MARKERS):
         return None
     if tree is None:
         try:

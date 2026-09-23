@@ -115,7 +115,7 @@ These all share one shape: a cell changes an object through a path cash does not
 
 ### Mutating through an alias
 
-<!-- claim: cash/analysis/aliases.py:bare_alias_targets @63962a47, cash/analysis/aliases.py:reference_alias_targets @f052d224 -->
+<!-- claim: cash/analysis/aliases.py:bare_alias_targets @311a21c3, cash/analysis/aliases.py:reference_alias_targets @f052d224 -->
 Cash tracks mutation through the name an object was bound to. Reach the same object through a different name and the mutation is invisible — re-running the cell applies it twice:
 
 <!-- test:skip reason="illustrative: alias-mutation shapes, need isolated cell re-runs" -->

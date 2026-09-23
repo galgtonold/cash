@@ -11,13 +11,13 @@ import ast
 import textwrap
 from dataclasses import dataclass
 
-from .callee_effects import _all_param_names, _factory_body_scope, _free_vars_mutated_in_function, _resolve_function_def
+from .callee_effects import all_param_names, factory_body_scope, free_vars_mutated_in_function, resolve_function_def
 from .mutations import (
-    _DEFERRED_SCOPES,
+    DEFERRED_SCOPES,
     MUTATING_METHODS,
     PANDAS_INPLACE_METHODS,
-    _extract_base_name,
-    _iter_store_targets,
+    extract_base_name,
+    iter_store_targets,
 )
 
 __all__ = ["ObjectProtocolResets", "object_protocol_mutations"]
@@ -145,7 +145,7 @@ def _own_class_level_attr_names(classdef: ast.ClassDef) -> frozenset[str]:
     for node in classdef.body:
         if isinstance(node, ast.Assign):
             for tgt in node.targets:
-                for leaf in _iter_store_targets(tgt):
+                for leaf in iter_store_targets(tgt):
                     if isinstance(leaf, ast.Name):
                         out.add(leaf.id)
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
@@ -181,7 +181,7 @@ def _instance_attr_names(classdef: ast.ClassDef, resolve_class_source=None) -> f
                 if not isinstance(node, ast.Assign):
                     continue
                 for tgt in node.targets:
-                    for leaf in _iter_store_targets(tgt):
+                    for leaf in iter_store_targets(tgt):
                         if (
                             isinstance(leaf, ast.Attribute)
                             and isinstance(leaf.value, ast.Name)
@@ -253,7 +253,7 @@ def _walk_executable(node: ast.AST):
     definitions."""
     yield node
     for child in ast.iter_child_nodes(node):
-        if isinstance(child, _DEFERRED_SCOPES):
+        if isinstance(child, DEFERRED_SCOPES):
             continue
         yield from _walk_executable(child)
 
@@ -296,7 +296,7 @@ def _iter_inplace_mutation_chains(method: ast.FunctionDef | ast.AsyncFunctionDef
             yield node.target
         elif isinstance(node, ast.Assign):
             for tgt in node.targets:
-                for leaf in _iter_store_targets(tgt):
+                for leaf in iter_store_targets(tgt):
                     if isinstance(leaf, ast.Subscript):
                         yield leaf.value
         elif isinstance(node, ast.Delete):
@@ -365,7 +365,7 @@ def _classify_method_mutations(
     recv = _first_param_name(method)
     is_classmethod = _has_named_decorator(method, "classmethod")
     is_staticmethod = _has_named_decorator(method, "staticmethod")
-    params = _all_param_names(method)
+    params = all_param_names(method)
     global_decls: set[str] = set()
     local_assigned: set[str] = set()
     for node in _iter_method_body_nodes(method):
@@ -373,7 +373,7 @@ def _classify_method_mutations(
             global_decls.update(node.names)
         elif isinstance(node, ast.Assign):
             for tgt in node.targets:
-                for leaf in _iter_store_targets(tgt):
+                for leaf in iter_store_targets(tgt):
                     if isinstance(leaf, ast.Name):
                         local_assigned.add(leaf.id)
     local_assigned -= global_decls
@@ -387,7 +387,7 @@ def _classify_method_mutations(
         class_targets.add(owner or recv_class_name)
 
     for chain in _iter_inplace_mutation_chains(method):
-        root = _extract_base_name(chain)
+        root = extract_base_name(chain)
         if root is None:
             continue
         if not is_staticmethod and recv is not None and root == recv:
@@ -444,11 +444,11 @@ def _decorator_free_var_mutations(
      appends to the module list ``calls``. Collect the free vars each inner
      function mutates that are NOT local to the decorator (those are the
      closure case)."""
-    scope = _factory_body_scope(decorator_def)
+    scope = factory_body_scope(decorator_def)
     out: set[str] = set()
     for node in ast.walk(decorator_def):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node is not decorator_def:
-            out |= _free_vars_mutated_in_function(node) - scope
+            out |= free_vars_mutated_in_function(node) - scope
     return frozenset(out)
 
 
@@ -602,7 +602,7 @@ def object_protocol_mutations(
             return
         method = _class_method(ddef, dunder, resolve_class_source)
         if method is not None:
-            free_vars.update(_free_vars_mutated_in_function(method))
+            free_vars.update(free_vars_mutated_in_function(method))
 
     def _dispatch_attr_set(recv_var, attr):
         """``recv.attr = v`` dispatching to a ``@property`` setter or a data
@@ -654,10 +654,10 @@ def object_protocol_mutations(
                             if method is not None:
                                 _apply_method(cdef, nm, method, None, allow_self=False)
                     else:
-                        fdef = _resolve_function_def(nm, resolve_source)
+                        fdef = resolve_function_def(nm, resolve_source)
                         if fdef is not None:
                             # A ``@contextmanager`` generator's free-var mutations,
-                            free_vars.update(_free_vars_mutated_in_function(fdef))
+                            free_vars.update(free_vars_mutated_in_function(fdef))
                             # or a plain factory ``def cm(): return Mgr()`` — the
                             # returned instance's __enter__/__exit__ run anonymously
                             # (``with cm() as x:``), so only class-var / free-var
@@ -671,7 +671,7 @@ def object_protocol_mutations(
         # --- subscript operations dispatching to custom dunders ----------------
         elif isinstance(node, ast.Assign):
             for tgt in node.targets:
-                for leaf in _iter_store_targets(tgt):
+                for leaf in iter_store_targets(tgt):
                     if isinstance(leaf, ast.Subscript) and isinstance(leaf.value, ast.Name):
                         _dispatch_dunder(leaf.value.id, "__setitem__")
                     elif isinstance(leaf, ast.Attribute) and isinstance(leaf.value, ast.Name):
@@ -747,10 +747,10 @@ def object_protocol_mutations(
                         _apply_method(icdef, cls, call_m, nm, allow_self=True)
                 # A decorated function whose wrapper mutates a free var, or a
                 # reassignment decorator ``g = counting(g)``.
-                fdef = _resolve_function_def(nm, resolve_source)
+                fdef = resolve_function_def(nm, resolve_source)
                 if fdef is not None:
                     for dname in _decorator_names(fdef):
-                        ddef = _resolve_function_def(dname, resolve_source)
+                        ddef = resolve_function_def(dname, resolve_source)
                         if ddef is not None:
                             free_vars.update(_decorator_free_var_mutations(ddef))
                 factory = resolve_var_factory(nm) if resolve_var_factory else None

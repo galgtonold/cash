@@ -1,6 +1,6 @@
 """What a statement does outside its variables: files, the network, the console.
 
-Pure AST. :class:`_SideEffectVisitor` flags the calls ``NOTEBOOK_POLICY``
+Pure AST. :class:`SideEffectVisitor` flags the calls ``NOTEBOOK_POLICY``
 refuses to cache; :func:`statement_write_repeatability` tells a write that
 replaces its file from one that appends to it. Resolving the paths a statement
 reads or writes needs the live namespace and lives in
@@ -18,14 +18,18 @@ __all__ = [
     "NOTEBOOK_POLICY",
     "SCANNED_KINDS",
     "SideEffectInfo",
+    "WRITE_TEXT_MARKERS",
     "REPEATABILITY_REPLACING",
     "REPEATABILITY_ACCUMULATING",
     "REPEATABILITY_UNKNOWN",
+    "locally_opened_handles",
+    "call_repeatability",
     "statement_write_repeatability",
     "READ_TEXT_MARKERS",
     "get_call_name",
     "get_call_module",
     "get_base_name",
+    "SideEffectVisitor",
 ]
 
 
@@ -90,7 +94,7 @@ class SideEffectInfo:
 
 # Cheap textual pre-filter for statement_writes_files: superset of the names
 # in the write-detection tables above, checked before any AST work.
-_WRITE_TEXT_MARKERS: tuple[str, ...] = (
+WRITE_TEXT_MARKERS: tuple[str, ...] = (
     "open(",
     "write",
     "to_",
@@ -204,7 +208,7 @@ def _open_mode_node(call: ast.Call) -> ast.expr | None:
     return None
 
 
-def _locally_opened_handles(tree: ast.AST) -> set[str]:
+def locally_opened_handles(tree: ast.AST) -> set[str]:
     """Names bound to an ``open()`` handle WITHIN this statement.
 
     ``with open(p, 'w') as f: f.write(x)`` and ``f = open(p, 'w'); f.write(x)``
@@ -229,7 +233,7 @@ def _locally_opened_handles(tree: ast.AST) -> set[str]:
     return handles
 
 
-def _call_repeatability(call: ast.Call, local_handles: frozenset[str] = frozenset()) -> str | None:
+def call_repeatability(call: ast.Call, local_handles: frozenset[str] = frozenset()) -> str | None:
     """Repeatability of one call node, or ``None`` if it is not a file write."""
     func = call.func
     if writes_to_console(call):
@@ -291,12 +295,12 @@ def statement_write_repeatability(code: str, tree: "ast.Module | None" = None) -
             tree = ast.parse(code)
         except (SyntaxError, ValueError, TypeError):
             return REPEATABILITY_UNKNOWN
-    local_handles = frozenset(_locally_opened_handles(tree))
+    local_handles = frozenset(locally_opened_handles(tree))
     verdicts: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        verdict = _call_repeatability(node, local_handles)
+        verdict = call_repeatability(node, local_handles)
         if verdict is not None:
             verdicts.add(verdict)
         # Module-level writers (os.remove, shutil.move, ...) are recognised
@@ -364,7 +368,7 @@ def get_base_name(node: ast.AST) -> str | None:
     return None
 
 
-class _SideEffectVisitor(ast.NodeVisitor):
+class SideEffectVisitor(ast.NodeVisitor):
     """Collects the calls a notebook statement must not be restored past:
     those whose kind :data:`NOTEBOOK_POLICY` refuses."""
 

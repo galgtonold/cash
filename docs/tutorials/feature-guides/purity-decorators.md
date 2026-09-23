@@ -302,7 +302,7 @@ def featurize_and_log(df):
 
 The first call writes one line to `/tmp/audit.log` and returns the new frame. The second call (with the same `df`) returns the *cached* frame and writes nothing. The audit log silently goes stale.
 
-The mutation visitor at the cell level (`_MutationVisitor` in `mutations.py`) catches obvious top-level side effects (`data.append(1)` written *in the cell*), but it does not enter function bodies. Side effects buried inside a `@pure` function are invisible.
+The mutation visitor at the cell level (`MutationVisitor` in `mutations.py`) catches obvious top-level side effects (`data.append(1)` written *in the cell*), but it does not enter function bodies. Side effects buried inside a `@pure` function are invisible.
 
 Rule of thumb: if you're not 100% sure, don't write `@pure`. The default is already pretty smart.
 

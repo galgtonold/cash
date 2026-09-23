@@ -12,18 +12,22 @@ import functools
 import textwrap
 
 from .ast_util import CallScope, called_names
-from .mutations import _iter_store_targets, _MutationVisitor
+from .mutations import MutationVisitor, iter_store_targets
 
 __all__ = [
+    "all_param_names",
+    "resolve_function_def",
     "params_mutated_in_function",
     "standalone_call_arg_targets",
     "function_arg_mutations",
+    "free_vars_mutated_in_function",
     "source_global_mutations",
     "callee_global_mutations",
     "stateful_self_functions",
     "partial_arg_mutations",
     "mutating_partials",
     "reduce_free_mutations",
+    "factory_body_scope",
     "stateful_closure_vars",
 ]
 
@@ -33,7 +37,7 @@ def _positional_param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> lis
     return [a.arg for a in (*func.args.posonlyargs, *func.args.args)]
 
 
-def _all_param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+def all_param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     """Every parameter name (posonly + normal + kwonly + *args + **kwargs)."""
     params = {
         a.arg
@@ -69,7 +73,7 @@ def _params_mutated_via_nested_calls(
         callee_name = node.func.id
         if callee_name in seen:
             continue  # recursion guard (mutual / self recursion)
-        callee = _resolve_function_def(callee_name, resolve_source)
+        callee = resolve_function_def(callee_name, resolve_source)
         if callee is None:
             continue
         callee_muts = params_mutated_in_function(callee, resolve_source, seen | {callee_name})
@@ -85,7 +89,7 @@ def _params_mutated_via_nested_calls(
     return out
 
 
-def _resolve_function_def(name, resolve_source):
+def resolve_function_def(name, resolve_source):
     """Parse *name*'s source via *resolve_source* into a FunctionDef, or None."""
     if resolve_source is None:
         return None
@@ -125,10 +129,10 @@ def params_mutated_in_function(
      *resolve_source* the analysis is one level deep (the original
      behaviour).
     """
-    params = _all_param_names(func)
+    params = all_param_names(func)
     if not params:
         return frozenset()
-    visitor = _MutationVisitor()
+    visitor = MutationVisitor()
     for stmt in func.body:
         visitor.visit(stmt)
     mutated = {m.variable for m in visitor.mutations} & params
@@ -188,7 +192,7 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
         return frozenset()
     out: set[str] = set()
     for func_name, positional, keywords in standalone_call_arg_targets(tree):
-        fdef = _resolve_function_def(func_name, resolve_source)
+        fdef = resolve_function_def(func_name, resolve_source)
         if fdef is None:
             continue
         mutated_params = params_mutated_in_function(fdef, resolve_source, frozenset({func_name}))
@@ -204,7 +208,7 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
     return frozenset(out)
 
 
-def _free_vars_mutated_in_function(
+def free_vars_mutated_in_function(
     func: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> frozenset[str]:
     """Module-global / free variables a function body mutates in place.
@@ -217,7 +221,7 @@ def _free_vars_mutated_in_function(
     ``acc.append``) refers to the local and is excluded, UNLESS declared
     ``global`` / ``nonlocal``.
     """
-    params = _all_param_names(func)
+    params = all_param_names(func)
     global_decls: set[str] = set()
     local_assigned: set[str] = set()
     for node in ast.walk(func):
@@ -225,10 +229,10 @@ def _free_vars_mutated_in_function(
             global_decls.update(node.names)
         elif isinstance(node, ast.Assign):
             for tgt in node.targets:
-                for leaf in _iter_store_targets(tgt):
+                for leaf in iter_store_targets(tgt):
                     if isinstance(leaf, ast.Name):
                         local_assigned.add(leaf.id)
-    visitor = _MutationVisitor()
+    visitor = MutationVisitor()
     for stmt in func.body:
         visitor.visit(stmt)
     mutated = {m.variable for m in visitor.mutations}
@@ -242,7 +246,7 @@ def source_global_mutations(source: str) -> frozenset[str]:
 
     The one per-callee answer to "which globals does calling this function
     change": the free variables its body mutates (see
-    :func:`_free_vars_mutated_in_function`). Every engine asks this, whether it
+    :func:`free_vars_mutated_in_function`). Every engine asks this, whether it
     found the source through the user namespace, the notebook's cell text or a
     live function object, so they cannot disagree on what counts as a
     callee's write.
@@ -259,7 +263,7 @@ def source_global_mutations(source: str) -> frozenset[str]:
     if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return frozenset()
     try:
-        return _free_vars_mutated_in_function(node)
+        return free_vars_mutated_in_function(node)
     except (ValueError, RecursionError):
         return frozenset()
 
@@ -385,7 +389,7 @@ def stateful_self_functions(tree: ast.Module | None, resolve_source) -> frozense
         return frozenset()
     out: set[str] = set()
     for name in called_names(tree):
-        fdef = _resolve_function_def(name, resolve_source)
+        fdef = resolve_function_def(name, resolve_source)
         if fdef is not None and _function_mutates_own_object(fdef):
             out.add(name)
     return frozenset(out)
@@ -409,7 +413,7 @@ def partial_arg_mutations(tree: ast.Module | None, resolve_partial, resolve_sour
         if binding is None:
             continue
         f_name, bound_args = binding
-        fdef = _resolve_function_def(f_name, resolve_source)
+        fdef = resolve_function_def(f_name, resolve_source)
         if fdef is None:
             continue
         mutated_params = params_mutated_in_function(fdef)
@@ -417,7 +421,7 @@ def partial_arg_mutations(tree: ast.Module | None, resolve_partial, resolve_sour
         for i, arg in enumerate(bound_args):
             if arg and i < len(pos_params) and pos_params[i] in mutated_params:
                 out.add(arg)
-        out |= _free_vars_mutated_in_function(fdef)
+        out |= free_vars_mutated_in_function(fdef)
     return frozenset(out)
 
 
@@ -438,7 +442,7 @@ def mutating_partials(tree: ast.Module | None, resolve_partial, resolve_source) 
         if binding is None:
             continue
         f_name, bound_args = binding
-        fdef = _resolve_function_def(f_name, resolve_source)
+        fdef = resolve_function_def(f_name, resolve_source)
         if fdef is None:
             continue
         mutated_params = params_mutated_in_function(fdef)
@@ -468,20 +472,20 @@ def reduce_free_mutations(tree: ast.Module | None, resolve_source) -> frozenset[
             isinstance(fn, ast.Attribute) and fn.attr == "reduce"
         )
         if is_reduce and node.args and isinstance(node.args[0], ast.Name):
-            fdef = _resolve_function_def(node.args[0].id, resolve_source)
+            fdef = resolve_function_def(node.args[0].id, resolve_source)
             if fdef is not None:
-                out |= _free_vars_mutated_in_function(fdef)
+                out |= free_vars_mutated_in_function(fdef)
     return frozenset(out)
 
 
-def _factory_body_scope(factory: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+def factory_body_scope(factory: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     """Names bound in the factory's OWN scope: its params + names assigned at its
     direct body level (the locals a returned closure captures)."""
-    scope = _all_param_names(factory)
+    scope = all_param_names(factory)
     for stmt in factory.body:
         if isinstance(stmt, ast.Assign):
             for tgt in stmt.targets:
-                for leaf in _iter_store_targets(tgt):
+                for leaf in iter_store_targets(tgt):
                     if isinstance(leaf, ast.Name):
                         scope.add(leaf.id)
         elif isinstance(stmt, (ast.AugAssign, ast.AnnAssign)) and isinstance(stmt.target, ast.Name):
@@ -497,10 +501,10 @@ def _factory_returns_stateful_closure(factory: ast.FunctionDef | ast.AsyncFuncti
     container). Such a closure carries state that persists across calls of the
     returned function and is only reset by re-running the factory (B).
     """
-    factory_scope = _factory_body_scope(factory)
+    factory_scope = factory_body_scope(factory)
     for node in ast.walk(factory):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node is not factory:
-            if _free_vars_mutated_in_function(node) & factory_scope:
+            if free_vars_mutated_in_function(node) & factory_scope:
                 return True
     return False
 

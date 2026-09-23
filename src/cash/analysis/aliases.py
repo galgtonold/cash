@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import ast
 
-from .mutations import _module_level_stmts
+from .mutations import module_level_stmts
 
-__all__ = ["aliased_sources", "bare_alias_targets", "reference_alias_targets"]
+__all__ = ["cell_alias_map", "aliased_sources", "bare_alias_targets", "reference_alias_targets"]
 
 
-def _cell_alias_map(tree: ast.Module) -> dict[str, str]:
+def cell_alias_map(tree: ast.Module) -> dict[str, str]:
     """Map each alias name in the cell to its direct source name (shared object).
 
      Recognises every binding form that makes the target share the RHS object,
@@ -53,7 +53,7 @@ def _cell_alias_map(tree: ast.Module) -> dict[str, str]:
             for elt_target, elt_value in zip(target.elts, value.elts):
                 _bind(elt_target, elt_value)
 
-    for node in _module_level_stmts(tree.body):
+    for node in module_level_stmts(tree.body):
         # Walrus binding in this statement's own expressions. (Nested control
         # bodies are visited as their own yielded statements, so restrict the
         # walk to NamedExprs that are not themselves inside a deferred scope.)
@@ -98,7 +98,7 @@ def aliased_sources(tree: ast.Module | None, names) -> frozenset[str]:
     """
     if tree is None or not names:
         return frozenset()
-    alias_map = _cell_alias_map(tree)
+    alias_map = cell_alias_map(tree)
     if not alias_map:
         return frozenset()
     out: set[str] = set()
@@ -138,7 +138,7 @@ def bare_alias_targets(tree: ast.Module | None) -> frozenset[str]:
       but they can equally be expensive, so the cost half of the argument does not
       transfer and they keep their cache.
 
-    Self-binds (``x = x``) are skipped, matching :func:`_cell_alias_map`.
+    Self-binds (``x = x``) are skipped, matching :func:`cell_alias_map`.
 
     The statement still executes and still participates in lineage: the caller
     only refuses to store/restore the value (``capture_and_track_variables`` runs

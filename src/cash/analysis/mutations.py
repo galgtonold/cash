@@ -10,7 +10,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 
-from .file_effects import _SideEffectVisitor
+from .file_effects import SideEffectVisitor
 
 __all__ = [
     "MUTATING_METHODS",
@@ -19,6 +19,11 @@ __all__ = [
     "KNOWN_PURE_METHODS",
     "RECEIVER_READONLY_WRITE_METHODS",
     "MutationInfo",
+    "extract_base_name",
+    "iter_store_targets",
+    "MutationVisitor",
+    "DEFERRED_SCOPES",
+    "module_level_stmts",
     "selfref_inplace_write_vars",
     "subscript_view_bindings",
     "crossref_reassigned_vars",
@@ -216,7 +221,7 @@ class MutationInfo:
     line: int = 0
 
 
-def _extract_base_name(node: ast.AST) -> str | None:
+def extract_base_name(node: ast.AST) -> str | None:
     """Extract the root variable name from a potentially nested AST node.
 
     Handles chained method calls like ``groups.setdefault(key, []).append(val)``
@@ -225,12 +230,12 @@ def _extract_base_name(node: ast.AST) -> str | None:
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, (ast.Subscript, ast.Attribute)):
-        return _extract_base_name(node.value)
+        return extract_base_name(node.value)
     if isinstance(node, ast.Call):
         # For chained calls like obj.method1().method2(), walk through the Call
         # to find the root variable.
         if isinstance(node.func, ast.Attribute):
-            return _extract_base_name(node.func.value)
+            return extract_base_name(node.func.value)
         if isinstance(node.func, ast.Name):
             return node.func.id
     return None
@@ -239,10 +244,10 @@ def _extract_base_name(node: ast.AST) -> str | None:
 def _extract_receiver_base_name(node: ast.AST) -> str | None:
     """Root variable of a METHOD-CALL RECEIVER, or ``None`` if it has no variable.
 
-    Differs from :func:`_extract_base_name` in exactly one case: a receiver that
+    Differs from :func:`extract_base_name` in exactly one case: a receiver that
     is a constructor/factory call spelled as a bare name — ``open(p, 'a')`` in
     ``open(p, 'a').write(x)``, or ``Path(p)`` in ``Path(p).write_text(x)``.
-    :func:`_extract_base_name` walks the Call and returns the CALLEE (``open``),
+    :func:`extract_base_name` walks the Call and returns the CALLEE (``open``),
     but the callee is not the receiver: the call builds a NEW object that no
     variable is bound to, so there is no receiver lineage to bump. Booking that
     as a mutation of ``open`` made the writer statement re-execute during
@@ -254,7 +259,7 @@ def _extract_receiver_base_name(node: ast.AST) -> str | None:
     it descends through the Attribute branch, which is retained.
 
     Used only by the method-mutation receiver helpers, so the broader
-    :func:`_extract_base_name` behaviour its other callers rely on is unchanged.
+    :func:`extract_base_name` behaviour its other callers rely on is unchanged.
     """
     if isinstance(node, ast.Name):
         return node.id
@@ -265,7 +270,7 @@ def _extract_receiver_base_name(node: ast.AST) -> str | None:
     return None
 
 
-def _iter_store_targets(target: ast.expr):
+def iter_store_targets(target: ast.expr):
     """Yield the leaf store targets of an assignment target, flattening tuple/list
     unpacking and starred elements.
 
@@ -274,15 +279,15 @@ def _iter_store_targets(target: ast.expr):
     plain ``Name`` targets). Nested tuples (``(a, (b, c))``) are recursed into.
     """
     if isinstance(target, ast.Starred):
-        yield from _iter_store_targets(target.value)
+        yield from iter_store_targets(target.value)
     elif isinstance(target, (ast.Tuple, ast.List)):
         for elt in target.elts:
-            yield from _iter_store_targets(elt)
+            yield from iter_store_targets(elt)
     else:
         yield target
 
 
-class _MutationVisitor(ast.NodeVisitor):
+class MutationVisitor(ast.NodeVisitor):
     """AST visitor that collects :class:`MutationInfo` entries."""
 
     def __init__(self) -> None:
@@ -338,7 +343,7 @@ class _MutationVisitor(ast.NodeVisitor):
                 continue
             targets = kw.value.elts if isinstance(kw.value, (ast.Tuple, ast.List)) else [kw.value]
             for tgt in targets:
-                base = _extract_base_name(tgt)
+                base = extract_base_name(tgt)
                 if base:
                     self.mutations.append(
                         MutationInfo(
@@ -352,7 +357,7 @@ class _MutationVisitor(ast.NodeVisitor):
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
         """Detect augmented assignments like x += 1, arr *= 2."""
-        base = _extract_base_name(node.target)
+        base = extract_base_name(node.target)
         if base:
             op_name = type(node.op).__name__
             self.mutations.append(
@@ -369,9 +374,9 @@ class _MutationVisitor(ast.NodeVisitor):
         """Detect subscript/attribute assignments like d[key] = val, obj.attr = val,
         including those nested in a tuple/list target (df['a'], df['b'] = ...)."""
         for target in node.targets:
-            for store in _iter_store_targets(target):
+            for store in iter_store_targets(target):
                 if isinstance(store, ast.Subscript):
-                    base = _extract_base_name(store.value)
+                    base = extract_base_name(store.value)
                     if base:
                         self.mutations.append(
                             MutationInfo(
@@ -382,7 +387,7 @@ class _MutationVisitor(ast.NodeVisitor):
                             )
                         )
                 elif isinstance(store, ast.Attribute):
-                    base = _extract_base_name(store.value)
+                    base = extract_base_name(store.value)
                     if base:
                         self.mutations.append(
                             MutationInfo(
@@ -398,7 +403,7 @@ class _MutationVisitor(ast.NodeVisitor):
         """Detect del d[key], del lst[0]."""
         for target in node.targets:
             if isinstance(target, ast.Subscript):
-                base = _extract_base_name(target.value)
+                base = extract_base_name(target.value)
                 if base:
                     self.mutations.append(
                         MutationInfo(
@@ -432,7 +437,7 @@ def _out_kwarg_target_bases(call: ast.Call) -> list[str]:
             continue
         targets = kw.value.elts if isinstance(kw.value, (ast.Tuple, ast.List)) else [kw.value]
         for tgt in targets:
-            base = _extract_base_name(tgt)
+            base = extract_base_name(tgt)
             if base:
                 bases.append(base)
     return bases
@@ -442,7 +447,7 @@ def _selfref_target_base(target: ast.expr) -> str | None:
     """Base name of a subscript/attribute store target (``df['a']``/``df.iloc[i,j]``
     /``obj.attr`` -> ``df``/``df``/``obj``); ``None`` for a plain ``Name`` store."""
     if isinstance(target, (ast.Subscript, ast.Attribute)):
-        return _extract_base_name(target)
+        return extract_base_name(target)
     return None
 
 
@@ -534,7 +539,7 @@ def _rhs_reads_same_column(rhs: ast.expr, target: ast.expr, base: str) -> bool:
     if not written:  # unknown/positional target -> defer to the exact-match path
         return False
     for sub in ast.walk(rhs):
-        if not isinstance(sub, ast.Subscript) or _extract_base_name(sub) != base:
+        if not isinstance(sub, ast.Subscript) or extract_base_name(sub) != base:
             continue
         read = _subscript_column_keys(sub)
         if read and (read & written):
@@ -544,24 +549,24 @@ def _rhs_reads_same_column(rhs: ast.expr, target: ast.expr, base: str) -> bool:
 
 # Statement scopes whose bodies run only later (when called/instantiated), so a
 # mutation inside them is NOT a module-level write of the current cell.
-_DEFERRED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+DEFERRED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
 
-def _module_level_stmts(body: list[ast.stmt]):
+def module_level_stmts(body: list[ast.stmt]):
     """Yield every statement that executes when *body* runs at module level,
     descending into control-flow bodies (if/for/while/with/try) but NOT into
     deferred scopes (def/async def/class). A column transform guarded by an
     ``if`` or run in a ``for`` loop still mutates the frame when the cell runs."""
     for node in body:
-        if isinstance(node, _DEFERRED_SCOPES):
+        if isinstance(node, DEFERRED_SCOPES):
             continue
         yield node
         for field in ("body", "orelse", "finalbody"):
             nested = getattr(node, field, None)
             if nested:
-                yield from _module_level_stmts(nested)
+                yield from module_level_stmts(nested)
         for handler in getattr(node, "handlers", []):  # try/except handler bodies
-            yield from _module_level_stmts(handler.body)
+            yield from module_level_stmts(handler.body)
 
 
 def _target_key_grows_receiver(target: ast.expr, base: str) -> bool:
@@ -580,10 +585,10 @@ def _target_key_grows_receiver(target: ast.expr, base: str) -> bool:
             isinstance(sub, ast.Call)
             and isinstance(sub.func, ast.Name)
             and sub.func.id == "len"
-            and any(_extract_base_name(a) == base for a in sub.args)
+            and any(extract_base_name(a) == base for a in sub.args)
         ):
             return True
-        if isinstance(sub, ast.Attribute) and sub.attr in ("shape", "size") and _extract_base_name(sub.value) == base:
+        if isinstance(sub, ast.Attribute) and sub.attr in ("shape", "size") and extract_base_name(sub.value) == base:
             return True
     return False
 
@@ -619,7 +624,7 @@ def selfref_inplace_write_vars(tree: ast.Module | None) -> frozenset[str]:
     * ``del`` of a subscript/attribute (``del df['b']``, ``del obj.cache``) — a
       second ``del`` raises, so the receiver must reset;
     * any of the above nested in an if/for/while/with body
-      (``if cond: df['a'] = df['a']*2``) — scanned via :func:`_module_level_stmts`
+      (``if cond: df['a'] = df['a']*2``) — scanned via :func:`module_level_stmts`
       (the reset itself uses the live value's lineage, which survives the
       simulator's control-structure collapse).
 
@@ -640,7 +645,7 @@ def selfref_inplace_write_vars(tree: ast.Module | None) -> frozenset[str]:
     if tree is None:
         return frozenset()
     out: set[str] = set()
-    for node in _module_level_stmts(tree.body):
+    for node in module_level_stmts(tree.body):
         if isinstance(node, ast.AugAssign):
             base = _selfref_target_base(node.target)
             if base:
@@ -678,14 +683,14 @@ def subscript_view_bindings(tree: ast.Module | None) -> dict[str, str]:
     if tree is None:
         return {}
     out: dict[str, str] = {}
-    for node in _module_level_stmts(tree.body):
+    for node in module_level_stmts(tree.body):
         if (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
             and isinstance(node.value, ast.Subscript)
         ):
-            base = _extract_base_name(node.value.value)
+            base = extract_base_name(node.value.value)
             if base:
                 out[node.targets[0].id] = base
     return out
@@ -714,7 +719,7 @@ def crossref_reassigned_vars(tree: ast.Module | None) -> frozenset[str]:
     if tree is None:
         return frozenset()
     flagged: set[str] = set()
-    stmts = list(_module_level_stmts(tree.body))
+    stmts = list(module_level_stmts(tree.body))
 
     # (A) element-wise tuple/list swap: ``(t_i) = (v_i)`` where a target name is
     # reused elsewhere in the RHS and is NOT assigned from itself at its own
@@ -749,7 +754,7 @@ def crossref_reassigned_vars(tree: ast.Module | None) -> frozenset[str]:
         if isinstance(node, ast.Assign):
             rhs_names = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
             for tgt in node.targets:
-                for t in _iter_store_targets(tgt):
+                for t in iter_store_targets(tgt):
                     if isinstance(t, ast.Name) and t.id in read_before and t.id not in rhs_names:
                         flagged.add(t.id)
         for n in ast.walk(node):
@@ -1270,8 +1275,8 @@ def _expr_has_side_effects_or_foreign_mutation(expr: ast.expr, acc: str) -> bool
     """True if the append-argument *expr* writes files or mutates any variable
     other than the accumulator *acc*.
 
-    Reuses the module's own file-write scanner (:class:`_SideEffectVisitor`) and
-    mutation scanner (:class:`_MutationVisitor`) so the accumulator fast path
+    Reuses the module's own file-write scanner (:class:`SideEffectVisitor`) and
+    mutation scanner (:class:`MutationVisitor`) so the accumulator fast path
     refuses exactly the inline effects the per-statement pipeline would refuse —
     ``acc.append(f.write(x))``, ``acc.append(other.pop())``. Effects hidden
     inside a called function's body are not visible here; those are caught by the
@@ -1279,11 +1284,11 @@ def _expr_has_side_effects_or_foreign_mutation(expr: ast.expr, acc: str) -> bool
     through :func:`decide_cacheability`), matching the semantics of the
     byte-identical comprehension form.
     """
-    se = _SideEffectVisitor()
+    se = SideEffectVisitor()
     se.visit(expr)
     if se.effects:
         return True
-    mv = _MutationVisitor()
+    mv = MutationVisitor()
     mv.visit(expr)
     return any(m.variable != acc for m in mv.mutations)
 

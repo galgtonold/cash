@@ -18,11 +18,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..effects import EffectKind
-from .aliases import _cell_alias_map, aliased_sources, bare_alias_targets, reference_alias_targets
+from .aliases import aliased_sources, bare_alias_targets, cell_alias_map, reference_alias_targets
 from .ast_util import called_names
 from .callee_effects import callee_global_mutations
-from .file_effects import _WRITE_TEXT_MARKERS, SideEffectInfo, _SideEffectVisitor
-from .mutations import ACCUMULATOR_METHODS, _MutationVisitor
+from .file_effects import WRITE_TEXT_MARKERS, SideEffectInfo, SideEffectVisitor
+from .mutations import ACCUMULATOR_METHODS, MutationVisitor
 
 __all__ = ["statement_writes_files", "StatementAnalysis", "alias_mutation_sources", "analyze_statement"]
 
@@ -35,7 +35,7 @@ def statement_writes_files(code: str, tree: "ast.Module | None" = None) -> bool:
     writes have no variable edge, so lineage alone never re-runs them.
     Cheap: a textual marker pre-filter runs before the AST analysis.
     """
-    if not any(m in code for m in _WRITE_TEXT_MARKERS):
+    if not any(m in code for m in WRITE_TEXT_MARKERS):
         return False
     try:
         analysis = analyze_statement(code, tree)
@@ -151,7 +151,7 @@ def alias_mutation_sources(tree: ast.Module | None) -> frozenset[str]:
     """
     if tree is None:
         return frozenset()
-    alias_map = _cell_alias_map(tree)
+    alias_map = cell_alias_map(tree)
     if not alias_map:
         return frozenset()
     try:
@@ -250,12 +250,12 @@ def _analyze_statement(
             )
 
     # --- All mutations (full tree walk) ---
-    full_visitor = _MutationVisitor()
+    full_visitor = MutationVisitor()
     full_visitor.visit(tree)
     all_mutated = frozenset(m.variable for m in full_visitor.mutations)
 
     # --- Top-level mutations (skip function/class bodies) ---
-    top_level_visitor = _MutationVisitor()
+    top_level_visitor = MutationVisitor()
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue
@@ -277,7 +277,7 @@ def _analyze_statement(
     )
 
     # --- Side effects ---
-    se_visitor = _SideEffectVisitor()
+    se_visitor = SideEffectVisitor()
     se_visitor.visit(tree)
 
     return StatementAnalysis(

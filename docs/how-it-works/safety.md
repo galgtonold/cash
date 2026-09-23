@@ -22,7 +22,7 @@ data = [1, 2, 3]      # cached snapshot: [1, 2, 3]
 data.append(4)        # data is now [1, 2, 3, 4] — but the snapshot still says [1, 2, 3]
 ```
 
-<!-- claim: cash/analysis/mutations.py:_MutationVisitor @c41cea02, cash/analysis/cacheability.py:StatementAnalysis.skip_reasons @2a71487a broad="the claim is about the visitor's whole set of visit_* patterns, not one of them" -->
+<!-- claim: cash/analysis/mutations.py:MutationVisitor @7c19f318, cash/analysis/cacheability.py:StatementAnalysis.skip_reasons @2a71487a broad="the claim is about the visitor's whole set of visit_* patterns, not one of them" -->
 Cash answers two questions about every statement, in that order:
 
 1. **Does it mutate something?** — a pure-AST scan (`analyze_statement`), plus
@@ -36,7 +36,7 @@ captured, the variable's lineage advances, and the statement caches normally. A
 mutation of some *other* variable has nowhere to hang that new version, so the
 statement is refused and re-executes every run.
 
-<!-- claim: cash/analysis/mutations.py:MUTATING_METHODS @245ce55b, cash/analysis/mutations.py:PANDAS_INPLACE_METHODS @92780608, cash/analysis/mutations.py:_MutationVisitor @c41cea02 broad="the table enumerates every pattern the visitor detects; a new visit_* method is a missing row" -->
+<!-- claim: cash/analysis/mutations.py:MUTATING_METHODS @245ce55b, cash/analysis/mutations.py:PANDAS_INPLACE_METHODS @92780608, cash/analysis/mutations.py:MutationVisitor @7c19f318 broad="the table enumerates every pattern the visitor detects; a new visit_* method is a missing row" -->
 | Pattern | Example | How it's detected | Verdict |
 |---------|---------|-------------------|---------|
 | Augmented assignment | `total += 1` | `ast.AugAssign` node | **Cached** — `total` is the statement's output |
@@ -53,7 +53,7 @@ The split looks arbitrary until you write the two forms side by side.
 statement's outputs; `d.update(o)` is a bare expression with no target at all.
 The first can be re-derived from the statement that made it; the second cannot.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @328f2f5e, cash/analysis/mutations.py:selfref_inplace_write_vars @f9e28262 -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @328f2f5e, cash/analysis/mutations.py:selfref_inplace_write_vars @c8102f53 -->
 !!! note "…but only when the base was made in the same cell"
     The **Cached** verdicts above are this classifier's per-statement decision.
     A separate rule sits on top, in the upstream checker: a variable the cell
@@ -190,7 +190,7 @@ Replaying them from cache would skip the action (a file never gets written, a
 request never gets sent). Cash's side-effect analysis flags these statements as
 **uncacheable** so they always run:
 
-<!-- claim: cash/effects.py:MODULE_CALLS @c6f9471b, cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/analysis/file_effects.py:_SideEffectVisitor @ab719d0c broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
+<!-- claim: cash/effects.py:MODULE_CALLS @c6f9471b, cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/analysis/file_effects.py:SideEffectVisitor @07c1a65b broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
 | Pattern | Examples | Why it's unsafe to replay |
 |---------|----------|---------------------------|
 | File writes | `open('f', 'w')`, `df.to_csv()`, `df.to_parquet()`, `Path(p).write_text()` | The file wouldn't be written on a cache hit |
@@ -262,7 +262,7 @@ When a statement's side effect is harmless to skip, put
 is cached, and a hit skips the call. It waives side effects only — an in-place
 change, the clock and `input()` still make the statement run every time.
 
-<!-- claim: cash/analysis/file_effects.py:statement_write_repeatability @98ad7972, cash/analysis/file_effects.py:_REPLACING_WRITE_METHODS @b3158e08, cash/analysis/file_effects.py:_is_append_mode_call @d7aef5f5 -->
+<!-- claim: cash/analysis/file_effects.py:statement_write_repeatability @5af2a939, cash/analysis/file_effects.py:_REPLACING_WRITE_METHODS @b3158e08, cash/analysis/file_effects.py:_is_append_mode_call @d7aef5f5 -->
 Being uncacheable is not the end of the story for a writer. Because a file
 write has no variable edge, nothing in the lineage graph would ever re-run one,
 so Cash separately records which statements wrote which paths and re-fires a
