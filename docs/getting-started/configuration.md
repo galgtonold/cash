@@ -101,7 +101,7 @@ cash = Cash(cache_dir="/tmp/scratch", debug=True)
 configure(debug=True, min_cache_savings_pct=0.30)
 ```
 
-<!-- claim: cash/config.py:CashConfig @c8f40d14 broad="the field table is a claim about every field of the dataclass" -->
+<!-- claim: cash/config.py:CashConfig @82e73a8f broad="the field table is a claim about every field of the dataclass" -->
 ## All `CashConfig` fields
 
 Every field below is settable via every layer. The env-var column shows
@@ -199,7 +199,7 @@ fields for that backend. Cash builds it for you.
 
 | Field | Env var | Default | Description |
 |---|---|---|---|
-| `backend` | `CASH_BACKEND` | `"tiered"` | One of `"tiered"`, `"memory"`, `"file"`, `"sqlite"`, `"redis"`, `"s3"`. Default builds `TieredBackend([RAM, FileBackend])` from `cache_dir`/`compress`/`max_cache_size`. |
+| `backend` | `CASH_BACKEND` | `"tiered"` | One of `"tiered"`, `"memory"`, `"file"`, `"sqlite"`, `"redis"`, `"s3"`. `"tiered"` is a RAM tier in front of a file tier; any other is that one backend. The other fields configure it either way. |
 
 **Redis connection (used when `backend = "redis"`):**
 
@@ -222,7 +222,12 @@ fields for that backend. Cash builds it for you.
 ### Backend selection — advanced (declarative tier stack)
 
 For multi-tier setups (RAM + Redis + DISK + S3, say), set the `tiers`
-list. When `tiers` is non-empty it takes precedence over `backend`.
+list, fastest first. When `tiers` is non-empty it replaces the stack
+`backend` names. A setting a tier leaves out comes from the top-level field
+of the same meaning -- a `file` tier with no `cache_dir` uses `cache_dir`, one
+with no `max_size_bytes` uses `max_cache_size` or, like the default stack's,
+a cap sized to the machine. A tier's `type` is one of `memory`, `file`,
+`sqlite`, `redis` or `s3`.
 
 ```toml
 [[tool.cash.tiers]]
@@ -337,7 +342,7 @@ additionally overridable element-by-element with `CASH_TIER_<N>_<FIELD>`.
 cash = Cash(config_path="./my_special_config.toml")
 ```
 
-<!-- claim: cash/config.py:_resolve_config @2a9beb1e -->
+<!-- claim: cash/config.py:_resolve_config @09078c9a -->
 Loads the named TOML above the user and project files — a file named in code
 outranks the `pyproject.toml` found by walking up from wherever the process
 started — and below environment variables and constructor kwargs. That is how
@@ -346,12 +351,12 @@ installed with the package, so ship a TOML file inside it and name it here
 (`Path(__file__).with_name("cash.toml")`). The launching
 project's `pyproject.toml` used to override it.
 
-The file may hold its settings under `[tool.cash]`, under `[cash]`, or as
-top-level keys. A relative `cache_dir` in it is resolved against the file's
+The file holds its settings under `[cash]` (or `[tool.cash]`); settings
+anywhere else are not read, and cash says so. A relative `cache_dir` in it is resolved against the file's
 own directory, and a leading `~` is your home directory — so a tool that wants
 its cache outside site-packages writes `cache_dir = "~/.cache/mytool"`.
 
-<!-- claim: cash/config.py:_resolve_config @2a9beb1e -->
+<!-- claim: cash/config.py:_resolve_config @09078c9a -->
 A path that does not exist is not silently skipped: cash warns
 [`CONFIG-FILE-MISSING`](../warnings.md#config-file-missing) and runs on the
 other layers. The usual cause is a wheel that did not include the file — list

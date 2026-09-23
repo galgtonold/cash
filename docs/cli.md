@@ -458,7 +458,7 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 ---
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @7620a17e -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @5e5a1508 -->
 ## Exit codes
 
 | Code | When |

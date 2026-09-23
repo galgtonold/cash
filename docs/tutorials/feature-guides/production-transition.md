@@ -179,7 +179,7 @@ cold, which is correct but slow. Options, in increasing order of setup:
 
 ## Running as a service or a worker pool
 
-<!-- claim: cash/backends/clear_watch.py:ClearWatcher.cleared @04551b75, cash/backends/factory.py:_build_tier @51fa5e30 -->
+<!-- claim: cash/backends/clear_watch.py:ClearWatcher.cleared @04551b75, cash/backends/factory.py:tier_specs @e55201d4 -->
 - **Clearing a live service.** `cash clear --all`, `--function` and `--entry`
   reach processes that are still running: each checks at most once a second
   whether its cache directory was cleared and, if so, drops what it holds in

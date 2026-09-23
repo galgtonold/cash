@@ -363,8 +363,8 @@ export CASH_TIER_2_TYPE=s3
 export CASH_TIER_2_BUCKET=my-team-cache
 ```
 
-<!-- claim: cash/backends/factory.py:build_backend_from_config @838026dc, cash/backends/factory.py:_build_single_backend @52da1a02 -->
-The tier list, when non-empty, takes precedence over the single-backend `CASH_BACKEND` field. The same fields are available under `[tool.cash]` in `pyproject.toml` and `[cash]` in `~/.config/cash/config.toml`. See the [Configuration reference](../../getting-started/configuration.md) for the full resolution order.
+<!-- claim: cash/backends/factory.py:build_backend_from_config @e297a382, cash/backends/factory.py:tier_specs @e55201d4 -->
+The tier list, when non-empty, replaces the stack the `CASH_BACKEND` field names; a setting a tier leaves out comes from the top-level field of the same meaning. The same fields are available under `[tool.cash]` in `pyproject.toml` and `[cash]` in `~/.config/cash/config.toml`. See the [Configuration reference](../../getting-started/configuration.md) for the full resolution order.
 
 ## Notebook vs decorator — same backend
 

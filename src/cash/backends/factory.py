@@ -1,23 +1,14 @@
-"""Build a concrete :class:`CacheBackend` from a :class:`CashConfig`.
+"""Build a :class:`CacheBackend` from a :class:`CashConfig`.
 
-This is the only place that translates declarative config into live
-backend instances. Cash's constructor delegates here; the runtime
-``cash.configure()`` mutation API delegates here on backend-affecting
-field changes.
+The only place that turns config into backends, by one path: `tier_specs`
+lists the tiers the config describes -- ``config.tiers`` when set, otherwise
+the ones ``config.backend`` names (``"tiered"``: RAM then disk) -- each with
+the top-level fields filled in where the tier leaves them unset. A tier list
+is built as a `TieredBackend` over its tiers, even a list of one; a single
+``backend`` type, as that backend alone.
 
-Three input shapes:
-
-1. ``config.tiers`` is non-empty
-   → ``TieredBackend([_build_tier(t) for t in config.tiers])``
-   The simple-mode ``config.backend`` field is ignored.
-
-2. ``config.tiers`` empty AND ``config.backend == "tiered"`` (default)
-   → ``TieredBackend([InMemoryBackend, FileBackend])`` constructed from
-   the top-level fields (cache_dir, compress, max_cache_size, ...).
-
-3. ``config.tiers`` empty AND ``config.backend`` is some other type
-   → a single backend of that type, built from the per-backend
-   simple-mode connection fields (``redis_host`` / ``s3_bucket`` / ...).
+Comparing two configs' `tier_specs` is how ``cash.configure`` tells whether a
+change needs the backend rebuilt.
 """
 
 from __future__ import annotations
@@ -40,144 +31,28 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["apply_persistence_settings", "build_backend_from_config"]
+__all__ = ["apply_persistence_settings", "build_backend_from_config", "build_tiered", "tier_specs"]
+
+#: The tiers ``backend = "tiered"`` stands for.
+DEFAULT_STACK = ("memory", "file")
+
+#: A tier as `tier_specs` resolves it: its type, and the settings it is built
+#: from, with the top-level fallbacks applied.
+TierSpec = tuple[str, tuple[tuple[str, Any], ...]]
 
 
-def build_backend_from_config(config: "CashConfig") -> CacheBackend:
-    """Construct a backend stack from *config*. See module docstring."""
-    if config.tiers:
-        return _build_tiered_from_tier_list(config)
-    if config.backend == "tiered":
-        return _build_default_tiered(config)
-    return _build_single_backend(config.backend, config)
+def build_backend_from_config(config: CashConfig) -> CacheBackend:
+    """The backend *config* describes. See the module docstring."""
+    tiers = [_build(kind, dict(settings)) for kind, settings in tier_specs(config)]
+    return build_tiered(tiers, config) if config.tiers or len(tiers) > 1 else tiers[0]
 
 
-# ---------------------------------------------------------------------------
-# Cap resolution — a single ``max_cache_size`` no longer caps every
-# tier at a flat 1 GiB. The disk tier scales to free disk, the RAM tier to
-# system memory; an explicit ``max_cache_size`` pins the DISK tier only, and
-# the RAM tier keeps its own modest auto cap either way.
-# ---------------------------------------------------------------------------
-
-
-def _sqlite_db_path(cache_dir: str) -> str:
-    """The database file for a cache directory: ``<cache_dir>/cache.db``.
-
-    A file inside the directory, so the CLI, which looks for entries inside a
-    directory, sees it. The directory is created here because SQLite will not
-    make it.
-    """
-    try:
-        os.makedirs(cache_dir, exist_ok=True)
-    except OSError:
-        logger.debug("[SQLITE] could not create %s", cache_dir)
-    return os.path.join(cache_dir, "cache.db")
-
-
-def _resolve_disk_cap(config: "CashConfig") -> int | None:
-    """Byte cap for a disk tier's LRU.
-
-    ``max_cache_size`` explicit → that value (backward compatible: it has
-    always capped the disk tier). ``None`` (auto) → a generous fraction of
-    free space on the cache volume, so the disk tier can actually retain
-    what the user persists instead of thrashing under a flat 1 GiB.
-    """
-    explicit = config.max_cache_size
-    if explicit is not None:
-        return explicit
-
-    return resolve_disk_cap(config.cache_dir)
-
-
-def _disk_cap_is_adaptive(config: "CashConfig") -> bool:
-    """Did the disk cap come from the policy rather than from the user?
-
-    Only an adaptive cap may be re-derived once the backend knows its own
-    footprint (see ``FileBackend._ensure_size_scanned``). An explicit
-    ``max_cache_size`` is the user's number and must stay exactly where they
-    put it.
-    """
-    return config.max_cache_size is None
-
-
-def _resolve_ram_cap() -> int:
-    """Byte cap for the RAM tier — always its own modest, machine-scaled cap.
-
-    Independent of ``max_cache_size`` (which caps disk): a user pinning the
-    disk cap should not accidentally make the RAM tier unbounded, and the RAM
-    tier should stay a small fraction of system memory regardless.
-    """
-
-    return resolve_ram_cap()
-
-
-# ---------------------------------------------------------------------------
-# Single-backend construction (simple mode, non-default backend)
-# ---------------------------------------------------------------------------
-
-
-def _build_single_backend(backend_type: str, config: "CashConfig") -> CacheBackend:
-    """Build one bare backend instance from the simple-mode top-level fields."""
-    if backend_type == "memory":
-        return InMemoryBackend(max_entries=config.max_memory_entries)
-    if backend_type == "file":
-        return FileBackend(
-            cache_dir=config.cache_dir,
-            compress=config.compress,
-            max_size_bytes=_resolve_disk_cap(config),
-            flush_interval=config.flush_interval,
-            adaptive_cap=_disk_cap_is_adaptive(config),
-        )
-    if backend_type == "sqlite":
-        return SQLiteBackend(
-            db_path=_sqlite_db_path(config.cache_dir),
-            max_size_bytes=_resolve_disk_cap(config),
-        )
-    if backend_type == "redis":
-        return _build_redis(
-            host=config.redis_host,
-            port=config.redis_port,
-            db=config.redis_db,
-            password=config.redis_password,
-            prefix=config.redis_prefix,
-        )
-    if backend_type == "s3":
-        return _build_s3(
-            bucket=config.s3_bucket,
-            region=config.s3_region,
-            prefix=config.s3_prefix,
-        )
-    raise ValueError(
-        f"Unknown backend type {backend_type!r}. Set config.backend to one of: tiered, memory, file, sqlite, redis, s3."
-    )
-
-
-# ---------------------------------------------------------------------------
-# Default tiered stack (RAM + file) — built from the top-level fields
-# ---------------------------------------------------------------------------
-
-
-def _build_default_tiered(config: "CashConfig") -> TieredBackend:
-    ram = InMemoryBackend(
-        max_entries=config.max_memory_entries,
-        max_size_bytes=_resolve_ram_cap(),
-    )
-    disk = FileBackend(
-        cache_dir=config.cache_dir,
-        compress=config.compress,
-        max_size_bytes=_resolve_disk_cap(config),
-        flush_interval=config.flush_interval,
-        adaptive_cap=_disk_cap_is_adaptive(config),
-    )
-
-    return _build_tiered([ram, disk], config)
-
-
-def _build_tiered(backends: list[CacheBackend], config: "CashConfig") -> TieredBackend:
+def build_tiered(backends: list[CacheBackend], config: CashConfig) -> TieredBackend:
+    """A `TieredBackend` over *backends*, with the persistence policy *config* sets."""
     return TieredBackend(backends, policy=PersistencePolicy.from_config(config))
 
 
-def apply_persistence_settings(backend: CacheBackend, config: "CashConfig") -> None:
+def apply_persistence_settings(backend: CacheBackend, config: CashConfig) -> None:
     """Give a running `TieredBackend` the persistence policy *config* asks for.
 
     For ``cash.configure``: changing the policy must not rebuild the stack,
@@ -187,73 +62,107 @@ def apply_persistence_settings(backend: CacheBackend, config: "CashConfig") -> N
         backend.policy = PersistencePolicy.from_config(config)
 
 
-# ---------------------------------------------------------------------------
-# Advanced-mode: build from explicit tier list
-# ---------------------------------------------------------------------------
+def tier_specs(config: CashConfig) -> list[TierSpec]:
+    """Each tier *config* describes, fully resolved against the top-level fields.
 
-
-def _build_tiered_from_tier_list(config: "CashConfig") -> TieredBackend:
-    backends: list[CacheBackend] = []
-    for tier in config.tiers:
-        backends.append(_build_tier(tier, config))
-    return _build_tiered(backends, config)
-
-
-def _build_tier(tier: "TierConfig", config: "CashConfig") -> CacheBackend:
-    """Build one tier from a TierConfig spec.
-
-    Falls back to the top-level CashConfig fields when the tier didn't
-    specify its own — so a minimal ``[[tool.cash.tiers]]\ntype = "redis"``
-    can still pull host/port from the simple-mode top-level fields.
+    Pure: nothing is measured or created, so two configs can be compared.
     """
+    from cash.config import TierConfig
+
+    tiers = list(config.tiers) or [TierConfig(type=t) for t in _stack_of(config.backend)]
+    return [(t.type, tuple(sorted(_settings(t, config).items()))) for t in tiers]
+
+
+def _stack_of(backend: str) -> tuple[str, ...]:
+    return DEFAULT_STACK if backend == "tiered" else (backend,)
+
+
+def _pick(own: Any, fallback: Any) -> Any:
+    return own if own is not None else fallback
+
+
+def _settings(tier: TierConfig, config: CashConfig) -> dict[str, Any]:
+    """What a tier of this type is built from: its own setting, else the top-level one."""
     t = tier.type
     if t == "memory":
-        return InMemoryBackend(
-            max_entries=tier.max_entries if tier.max_entries is not None else config.max_memory_entries,
-            max_size_bytes=tier.max_size_bytes if tier.max_size_bytes is not None else _resolve_ram_cap(),
-        )
-    if t == "file":
-        return FileBackend(
-            cache_dir=tier.cache_dir or config.cache_dir,
-            compress=tier.compress if tier.compress is not None else config.compress,
-            max_size_bytes=tier.max_size_bytes if tier.max_size_bytes is not None else _resolve_disk_cap(config),
-            flush_interval=tier.flush_interval if tier.flush_interval is not None else config.flush_interval,
-            # Dropped until round 18: a `default_ttl` on a file tier was
-            # accepted, shown by `cash info`, and never applied.
-            default_ttl=tier.default_ttl,
-        )
-    if t == "sqlite":
-        return SQLiteBackend(
-            db_path=tier.db_path or _sqlite_db_path(tier.cache_dir or config.cache_dir),
-            max_size_bytes=tier.max_size_bytes if tier.max_size_bytes is not None else _resolve_disk_cap(config),
-            default_ttl=tier.default_ttl,
-        )
+        return {
+            "max_entries": _pick(tier.max_entries, config.max_memory_entries),
+            "max_size_bytes": tier.max_size_bytes,
+        }
+    if t in ("file", "sqlite"):
+        out = {
+            "cache_dir": tier.cache_dir or config.cache_dir,
+            "max_size_bytes": _pick(tier.max_size_bytes, config.max_cache_size),
+            "default_ttl": tier.default_ttl,
+        }
+        if t == "file":
+            out["compress"] = _pick(tier.compress, config.compress)
+            out["flush_interval"] = _pick(tier.flush_interval, config.flush_interval)
+        else:
+            out["db_path"] = tier.db_path
+        return out
     if t == "redis":
-        return _build_redis(
-            host=tier.host or config.redis_host,
-            port=tier.port if tier.port is not None else config.redis_port,
-            db=tier.db if tier.db is not None else config.redis_db,
-            password=tier.password if tier.password is not None else config.redis_password,
-            prefix=tier.prefix or config.redis_prefix,
-        )
+        return {
+            "host": tier.host or config.redis_host,
+            "port": _pick(tier.port, config.redis_port),
+            "db": _pick(tier.db, config.redis_db),
+            "password": _pick(tier.password, config.redis_password),
+            "prefix": tier.prefix or config.redis_prefix,
+        }
     if t == "s3":
-        return _build_s3(
-            bucket=tier.bucket or config.s3_bucket,
-            region=tier.region or config.s3_region,
-            prefix=tier.prefix or config.s3_prefix,
+        return {
+            "bucket": tier.bucket or config.s3_bucket,
+            "region": tier.region or config.s3_region,
+            "prefix": tier.prefix or config.s3_prefix,
+        }
+    raise ValueError(f"Unknown tier type {t!r}: one of memory, file, sqlite, redis, s3.")
+
+
+def _build(kind: str, s: dict[str, Any]) -> CacheBackend:
+    """One backend from its resolved settings.
+
+    A size left unset is sized to the machine: the RAM tier to system memory,
+    a disk tier to the free space on its volume, re-derived as the cache grows
+    (``adaptive_cap``). A size that was set is kept exactly.
+    """
+    if kind == "memory":
+        cap = s["max_size_bytes"]
+        return InMemoryBackend(max_entries=s["max_entries"], max_size_bytes=resolve_ram_cap() if cap is None else cap)
+    cap = s.get("max_size_bytes")
+    if kind in ("file", "sqlite") and cap is None:
+        cap = resolve_disk_cap(s["cache_dir"])
+    if kind == "file":
+        return FileBackend(
+            cache_dir=s["cache_dir"],
+            compress=s["compress"],
+            max_size_bytes=cap,
+            flush_interval=s["flush_interval"],
+            adaptive_cap=s["max_size_bytes"] is None,
+            default_ttl=s["default_ttl"],
         )
-    if t == "tiered":
-        # Nested tiered is unusual but legal; we don't recurse into config
-        # so a tier of type=tiered with no further config is just a default
-        # tiered stack.
-        return _build_default_tiered(config)
-    raise ValueError(f"Unknown tier type: {t!r}")
+    if kind == "sqlite":
+        return SQLiteBackend(
+            db_path=s["db_path"] or _sqlite_db_path(s["cache_dir"]),
+            max_size_bytes=cap,
+            default_ttl=s["default_ttl"],
+        )
+    if kind == "redis":
+        return _build_redis(**s)
+    return _build_s3(**s)
 
 
-# ---------------------------------------------------------------------------
-# Optional backend imports — kept lazy so missing extras don't break
+def _sqlite_db_path(cache_dir: str) -> str:
+    """``<cache_dir>/cache.db``, inside the directory so the CLI finds it.
+    The directory is created here because SQLite will not make it."""
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+    except OSError:
+        logger.debug("[SQLITE] could not create %s", cache_dir)
+    return os.path.join(cache_dir, "cache.db")
+
+
+# The remote backends are imported lazily, so a missing extra does not break
 # importing this module.
-# ---------------------------------------------------------------------------
 
 
 def _build_redis(**kwargs: Any) -> CacheBackend:

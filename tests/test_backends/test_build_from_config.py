@@ -12,9 +12,8 @@ The factory turns a declarative config into a concrete CacheBackend
        per-backend connection fields (redis_host, s3_bucket, etc.).
 
   3. Non-empty tier list
-     → TieredBackend([...]) built from the explicit tier specs. Each
-       TierConfig overrides nothing at the top level — its own fields
-       are authoritative.
+     → TieredBackend([...]) built from the explicit tier specs. A field
+       a TierConfig leaves unset comes from the top-level field.
 """
 
 from __future__ import annotations
@@ -204,15 +203,9 @@ class TestCashConstructorUsesFactory:
 
 
 # ---------------------------------------------------------------------------
-# The smart-persistence compute floor.
-#
-# `TieredBackend`'s own default is 1.0s, but the DEFAULT stack the factory
-# builds overrides it to 0.1s. Every tiered test until now constructed
-# TieredBackend directly, so they all exercised the 1.0s fallback and nothing
-# pinned the value users actually get. The 0.1s figure is documented on
-# docs/how-it-works/storage.md and is the reason a 0.3s statement persists at
-# all -- a silent drift back to 1.0s would stop mid-cost work surviving a
-# kernel restart, with no test to say so.
+# The persistence compute floor: 0.1 s, documented on
+# docs/how-it-works/storage.md, and the reason a 0.3 s statement survives a
+# kernel restart at all.
 # ---------------------------------------------------------------------------
 
 
@@ -260,3 +253,36 @@ def test_floor_decides_promotion_either_side_of_the_boundary(tmp_path):
     size = 5 * 1024 * 1024  # 5 MB: cheap to restore, so compute time decides
     assert backend.policy.pays_to_restore(0.05, size) is False, "0.05s is under the floor and must stay RAM-only"
     assert backend.policy.pays_to_restore(0.50, size) is True, "0.50s clears the floor and should persist"
+
+
+# ---------------------------------------------------------------------------
+# One way to describe a backend
+# ---------------------------------------------------------------------------
+
+
+def test_a_file_tier_from_a_list_is_sized_to_the_machine_like_the_default(tmp_path):
+    """A tier list's file tier with no size set gets the adaptive cap the
+    default stack's file tier gets, not a cap frozen at start-up."""
+    backend = _build(
+        CashConfig(cache_dir=str(tmp_path / "c"), tiers=[TierConfig(type="memory"), TierConfig(type="file")])
+    )
+    assert backend.backends[1].evictor.adaptive is True
+    pinned = _build(
+        CashConfig(cache_dir=str(tmp_path / "d"), tiers=[TierConfig(type="file", max_size_bytes=10_000_000)])
+    )
+    assert pinned.backends[0].evictor.adaptive is False
+
+
+def test_tiered_is_not_a_tier_type():
+    with pytest.raises(ValueError, match="tiered"):
+        TierConfig(type="tiered")
+
+
+def test_a_setting_no_tier_uses_leaves_the_described_stack_alone(tmp_path):
+    from cash.backends.factory import tier_specs
+
+    base = CashConfig(cache_dir=str(tmp_path / "c"))
+    assert tier_specs(base) == tier_specs(CashConfig(cache_dir=str(tmp_path / "c"), redis_host="elsewhere"))
+    assert tier_specs(base) != tier_specs(CashConfig(cache_dir=str(tmp_path / "other")))
+    on_redis = CashConfig(backend="redis")
+    assert tier_specs(on_redis) != tier_specs(CashConfig(backend="redis", redis_host="elsewhere"))

@@ -40,10 +40,10 @@ from ._clock import perf_counter as _perf_counter
 from .analysis.annotations import parse_annotation_line
 from .analysis.cacheability_decision import identity_coupled_reason
 from .analysis.code_analyzer import CodeAnalyzer
-from .backends import CacheBackend, CacheMetadata, TieredBackend
+from .backends import CacheBackend, CacheMetadata
 from .backends._base import ttl_expired
 from .backends._writes import in_multiprocessing_child
-from .backends.factory import build_backend_from_config
+from .backends.factory import build_backend_from_config, build_tiered
 from .backends.file_backend import recreate_cache_dir
 from .backends.serialization import get_serializer
 from .config import CashConfig, get_config
@@ -1478,13 +1478,13 @@ class Cash:
         debug: bool | None = None,
         use_locking: bool = False,
         config_path: str | None = None,
-        verbose: bool = False,
+        verbose: bool | None = None,
         **config_overrides: Any,
     ) -> None:
         # Map the explicit convenience kwargs (cache_dir, compress, debug)
         # into the overrides dict so the config layer treats them with the
         # same priority as any other constructor-supplied override (highest).
-        for key, val in (("cache_dir", cache_dir), ("compress", compress), ("debug", debug)):
+        for key, val in (("cache_dir", cache_dir), ("compress", compress), ("debug", debug), ("verbose", verbose)):
             if val is not None:
                 config_overrides.setdefault(key, val)
         self.config = get_config(config_path=config_path, overrides=config_overrides or None)
@@ -1499,7 +1499,7 @@ class Cash:
             self._backend = backend
         elif backends:
             if len(backends) > 1:
-                self._backend = TieredBackend(backends)
+                self._backend = build_tiered(backends, self.config)
             else:
                 self._backend = backends[0]
 
@@ -1681,7 +1681,7 @@ class Cash:
         self._async_inflight_lock = threading.Lock()
         self.debug = debug  # Debug mode flag
         self.use_locking = use_locking
-        self.verbose = bool(verbose) or bool(getattr(self.config, "verbose", False))
+        self.verbose = bool(self.config.verbose)
         verbose = self.verbose
         # Asking for debug output has to produce some. The flag used to set
         # nothing but this attribute, and a script has no logging configured,

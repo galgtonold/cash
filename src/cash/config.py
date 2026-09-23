@@ -46,15 +46,12 @@ __all__ = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Supported tier types — must align with cash.backends.* classes.
-# ---------------------------------------------------------------------------
+#: The backend types a tier can be (``cash.backends.factory``).
+_SUPPORTED_TIER_TYPES = frozenset({"memory", "file", "sqlite", "redis", "s3"})
 
-_SUPPORTED_TIER_TYPES = frozenset({"memory", "file", "sqlite", "redis", "s3", "tiered"})
-
-#: Settings whose value must be one of a fixed set, by the dataclass they
-#: belong to (see ``validate_value``).
-_NAMED_CHOICES = {"backend": _SUPPORTED_TIER_TYPES, "type": _SUPPORTED_TIER_TYPES}
+#: Settings whose value must be one of a fixed set (see ``validate_value``).
+#: ``backend = "tiered"`` is the RAM + disk stack; any other is one tier.
+_NAMED_CHOICES = {"backend": _SUPPORTED_TIER_TYPES | {"tiered"}, "type": _SUPPORTED_TIER_TYPES}
 
 
 def _check_choice(name: str, value: Any) -> None:
@@ -79,8 +76,7 @@ class TierConfig:
 
     type: str
     """Backend type. One of ``"memory"``, ``"file"``, ``"sqlite"``,
-    ``"redis"``, ``"s3"``, ``"tiered"``. Raises ``ValueError`` on
-    unknown values."""
+    ``"redis"``, ``"s3"``. Raises ``ValueError`` on unknown values."""
 
     # memory / file / sqlite shared:
     max_size_bytes: int | None = None
@@ -336,13 +332,13 @@ class CashConfig:
     Telemetry only: turning it off changes no cached result, and no file is
     created. Read when a notebook session starts."""
 
-    # --- Backend selection (simple mode) ---
+    # --- Backend selection ---
     backend: str = "tiered"
-    """Backend selector. ``"tiered"`` (default) builds a RAM + disk
-    stack from ``cache_dir`` and ``compress``. ``"memory"`` /
-    ``"file"`` / ``"sqlite"`` / ``"redis"`` / ``"s3"`` builds a
-    single backend of that type from the connection fields below.
-    Ignored when ``tiers`` is non-empty."""
+    """Backend selector. ``"tiered"`` (default) is a RAM tier in front
+    of a file tier. ``"memory"`` / ``"file"`` / ``"sqlite"`` /
+    ``"redis"`` / ``"s3"`` is a single backend of that type. Either
+    way the fields above and below configure it. Ignored when
+    ``tiers`` is non-empty."""
 
     # --- Redis connection details (simple mode) ---
     redis_host: str = "localhost"
@@ -378,11 +374,10 @@ class CashConfig:
 
     # --- Advanced: explicit tier list ---
     tiers: list[TierConfig] = field(default_factory=list)
-    """Explicit tier stack — a list of ``TierConfig`` entries that
-    build a custom backend pipeline (e.g. ``[memory, redis, s3]``).
-    When non-empty, takes precedence over ``backend`` + the
-    simple-mode connection fields. Use this for multi-region or
-    multi-team setups where one backend isn't enough."""
+    """Explicit tier stack, fastest first (e.g. ``[memory, redis,
+    s3]``), replacing the one ``backend`` names. A setting a tier
+    leaves unset comes from the top-level field of the same meaning
+    (``cache_dir``, ``max_cache_size``, ``redis_host``, ...)."""
 
     # --- Internal: source tracking for `cash --info` ---
     _source: str = "defaults"
@@ -579,9 +574,9 @@ def _may_hold_cash_settings(path: Path) -> bool:
 
     A ``[tool.cash]`` / ``[cash]`` table (or a ``tool.cash.`` dotted key)
     anywhere says yes. A ``pyproject.toml`` without one says no: it belongs to
-    the project, not to cash. Any other file is a cash config file, whose flat
-    top-level keys are read too, so anything but comments counts. Unreadable
-    says yes -- the notice errs toward being given.
+    the project, not to cash. Any other file was named as a cash config file,
+    so anything but comments counts. Unreadable says yes -- the notice errs
+    toward being given.
     """
     try:
         # -sig: a byte-order mark would hide a `[tool.cash]` on line 1.
@@ -595,12 +590,10 @@ def _may_hold_cash_settings(path: Path) -> bool:
     return any(line.strip() and not line.lstrip().startswith("#") for line in text.splitlines())
 
 
-#: What `_load_toml_layer` found. The first two are cash's settings, so a key
-#: that is not one is a mistake worth naming; a ``pyproject.toml`` with no
-#: ``[tool.cash]`` table belongs to the project and holds none.
+#: What `_load_toml_layer` found. A ``[tool.cash]`` or ``[cash]`` table holds
+#: cash's settings, so a key in it that is not one is a mistake worth naming.
 TOML_SECTION = "section"
-TOML_FLAT = "flat"
-TOML_NOT_CASH = "no [tool.cash] section"
+TOML_NOT_CASH = "no [tool.cash] or [cash] table"
 TOML_MISSING = "not found"
 TOML_UNREADABLE = "not read"
 
@@ -608,11 +601,8 @@ TOML_UNREADABLE = "not read"
 def _load_toml_config(path: Path) -> dict[str, Any]:
     """Load configuration from a TOML file.
 
-    Recognised sections (in order):
-      - ``[tool.cash]`` (pyproject.toml convention)
-      - ``[cash]`` (standalone config file)
-      - flat top-level (last-resort fallback; never for ``pyproject.toml``,
-        whose top level is the project's, not cash's)
+    Settings are read from ``[tool.cash]`` (the pyproject.toml convention)
+    or ``[cash]``, nowhere else.
 
     Returns the merged dict (empty if file missing or unparseable).
     """
@@ -650,14 +640,20 @@ def _load_toml_layer(path: Path) -> tuple[dict[str, Any], str]:
             _warn_toml_malformed(path, e)
         return {}, TOML_UNREADABLE
 
-    # Try [tool.cash] first (pyproject convention), then [cash], then flat.
     if isinstance(data.get("tool"), dict) and isinstance(data["tool"].get("cash"), dict):
         return dict(data["tool"]["cash"]), TOML_SECTION
     if isinstance(data.get("cash"), dict):
         return dict(data["cash"]), TOML_SECTION
-    if path.name == "pyproject.toml":
-        return {}, TOML_NOT_CASH
-    return data, TOML_FLAT
+    if data and path.name != "pyproject.toml":
+        # A file named as cash's config, with its keys where cash does not
+        # read them: say so, rather than run on defaults without a word.
+        _config_notice(
+            "CONFIG-INVALID",
+            f"{path} has no [cash] table, so cash reads none of its settings "
+            f"({', '.join(sorted(data)[:5])}{', ...' if len(data) > 5 else ''}).",
+            "put the settings under a [cash] table (or [tool.cash] in a pyproject.toml).",
+        )
+    return {}, TOML_NOT_CASH
 
 
 def _warn_toml_malformed(path: Path, exc: Exception) -> None:
@@ -1269,7 +1265,7 @@ def _resolve_config(
     def file_layer(layer: str, path: Any) -> dict[str, Any]:
         data, found = _load_toml_layer(Path(path))
         files.append((layer, str(path), found))
-        data = _validated_layer(data, str(path), strict=False, unknown_keys=found in (TOML_SECTION, TOML_FLAT))
+        data = _validated_layer(data, str(path), strict=False, unknown_keys=found == TOML_SECTION)
         for key in data:
             origins[key] = str(path)
         return data

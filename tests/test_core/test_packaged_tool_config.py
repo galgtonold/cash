@@ -40,6 +40,21 @@ def test_a_config_file_that_does_not_exist_is_named(tmp_path, monkeypatch):
 
 
 @needs_toml
+def test_settings_outside_a_cash_table_are_named_not_read(tmp_path, monkeypatch):
+    """A config file's settings live under [cash]; top-level keys are not read,
+    and cash says so rather than running on defaults without a word."""
+    monkeypatch.setattr(cash_config, "_CONFIG_NOTICES", set())
+    shipped = tmp_path / "cash.toml"
+    shipped.write_text("max_cache_size = 1234\n", encoding="utf-8")
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        cfg = get_config(config_path=str(shipped), user_config_path=None, project_config_path=None)
+    assert cfg.max_cache_size is None
+    said = [str(w.message) for w in rec if "[CONFIG-INVALID]" in str(w.message)]
+    assert said and "[cash]" in said[0] and "max_cache_size" in said[0], [str(w.message) for w in rec]
+
+
+@needs_toml
 def test_a_home_relative_cache_dir_in_a_config_file_is_expanded(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
@@ -47,7 +62,7 @@ def test_a_home_relative_cache_dir_in_a_config_file_is_expanded(tmp_path, monkey
     monkeypatch.setenv("USERPROFILE", str(home))
     shipped = tmp_path / "site-packages" / "tool" / "cash.toml"
     shipped.parent.mkdir(parents=True)
-    shipped.write_text('cache_dir = "~/crunch-cache"\n', encoding="utf-8")
+    shipped.write_text('[cash]\ncache_dir = "~/crunch-cache"\n', encoding="utf-8")
     cfg = get_config(config_path=str(shipped), user_config_path=None, project_config_path=None)
     assert os.path.normcase(cfg.cache_dir) == os.path.normcase(str(home / "crunch-cache")), cfg.cache_dir
 

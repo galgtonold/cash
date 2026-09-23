@@ -134,7 +134,7 @@ import cash
 cash.configure(min_cache_savings_pct=0.10)        # promote when a hit saves >10%
 ```
 
-<!-- claim: cash/__init__.py:configure @43a991e3, cash/backends/factory.py:apply_persistence_settings @e9dfe5ce -->
+<!-- claim: cash/__init__.py:configure @43a991e3, cash/backends/factory.py:apply_persistence_settings @59a8e45e -->
 `cash.configure` hands a change to it straight to the running
 backend (`apply_persistence_settings`), so it applies from the next write
 without rebuilding the backend or dropping what the RAM tier holds. The

@@ -20,7 +20,6 @@ from cash.backends.entry_format import ENTRY_SUFFIX, read_entry
 from cash.backends.persistence_policy import PersistencePolicy
 from cash.config import (
     SIZE_FIELDS,
-    TOML_FLAT,
     TOML_MISSING,
     TOML_NOT_CASH,
     TOML_SECTION,
@@ -202,9 +201,8 @@ def cmd_info(args: argparse.Namespace) -> None:
     # the layers, not which file, nor which setting came from where.
     outcome = {
         TOML_SECTION: "read",
-        TOML_FLAT: "read",
         TOML_MISSING: "not found",
-        TOML_NOT_CASH: "no [tool.cash] section",
+        TOML_NOT_CASH: TOML_NOT_CASH,
     }
     if files:
         print("  Config files:")

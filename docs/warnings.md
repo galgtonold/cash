@@ -581,9 +581,9 @@ effect and the file or variable it came from, so you can check the result.
 
 ## CONFIG-INVALID {#config-invalid}
 
-<!-- claim: cash/config.py:_validated_layer @ad9630b5, cash/config.py:_warn_toml_malformed @b070e115 -->
+<!-- claim: cash/config.py:_validated_layer @ad9630b5, cash/config.py:_warn_toml_malformed @b070e115, cash/config.py:_load_toml_layer @045509b5 -->
 **What happened.** Cash could not use something in its configuration. One of
-two things:
+these:
 
 * **A value of the wrong type**, in a config file or a `CASH_*` environment
   variable: `compress = "yes please"`, `max_cache_size = "lots"`. That one
@@ -595,6 +595,9 @@ two things:
   so. TOML does not allow one, no editor shows it, and the parser's own
   complaint is an invalid statement at line 1, column 1. Windows PowerShell 5.1
   writes a BOM for `-Encoding utf8`; PowerShell 7 does not.
+* **A config file with its settings outside a `[cash]` table.** A file named
+  with `Cash(config_path=...)`, or the user config file, keeps its settings
+  under `[cash]` (or `[tool.cash]`); top-level keys are not read.
 
 Each problem is reported once per process, however many times the
 configuration is resolved.
@@ -612,7 +615,7 @@ though then the line is better deleted.
 
 ## CONFIG-TOML-UNREADABLE {#config-toml-unreadable}
 
-<!-- claim: cash/config.py:_load_toml_config @b8d9cdd1, cash/config.py:_warn_toml_unreadable @b8ff032b -->
+<!-- claim: cash/config.py:_load_toml_config @9d135d5c, cash/config.py:_warn_toml_unreadable @b8ff032b -->
 **What happened.** Cash found a config file — `pyproject.toml` with a
 `[tool.cash]` section, or the XDG user config — and has nothing that can parse
 it. A TOML parser entered the standard library in **Python 3.11** (`tomllib`);
@@ -651,7 +654,7 @@ there.
 
 ## CONFIG-FILE-MISSING {#config-file-missing}
 
-<!-- claim: cash/config.py:_resolve_config @2a9beb1e -->
+<!-- claim: cash/config.py:_resolve_config @09078c9a -->
 **What happened.** Your code passed `Cash(config_path=...)` naming a file that
 does not exist. Cash resolved its configuration from the other layers —
 defaults, the user and project files, `CASH_*` variables — as if the argument

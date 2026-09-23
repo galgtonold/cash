@@ -1,10 +1,11 @@
 """Tests for the Cash class and decorator-based caching (core.py)."""
 
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from cash.backends import InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
+from cash.config import CashConfig
 from cash.core import Cash
 from cash.data_source import FileDataSource
 
@@ -15,7 +16,7 @@ class TestCashInit:
     def test_default_init(self, tmp_path):
         """Cash() creates a default TieredBackend with .cash directory."""
         with patch("cash.core.get_config") as mock_config:
-            mock_config.return_value = MagicMock(
+            mock_config.return_value = CashConfig(
                 cache_dir=str(tmp_path / ".cash"),
                 compress=False,
                 debug=False,
@@ -71,7 +72,7 @@ class TestCashInit:
     def test_init_builds_a_tiered_backend_with_a_policy(self, tmp_path):
         """The default config builds a TieredBackend carrying the policy."""
         with patch("cash.core.get_config") as mock_config:
-            mock_config.return_value = MagicMock(
+            mock_config.return_value = CashConfig(
                 cache_dir=str(tmp_path / ".cash"),
                 compress=False,
                 debug=False,
@@ -95,7 +96,7 @@ class TestCashInit:
         ``promote iff execution_time - est_restore > min_savings · execution_time``.
         """
         with patch("cash.core.get_config") as mock_config:
-            mock_config.return_value = MagicMock(
+            mock_config.return_value = CashConfig(
                 cache_dir=str(tmp_path / ".cash"),
                 compress=False,
                 debug=False,
