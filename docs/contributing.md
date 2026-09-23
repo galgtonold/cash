@@ -22,7 +22,7 @@ pip install -e ".[dev]"
 ### Verify Setup
 
 ```bash
-pytest tests/ -v --tb=short
+pytest tests/ --ignore=tests/test_notebook_integration --ignore=tests/test_wheel_gate --ignore=tests/docs
 ```
 
 ## Project Structure
@@ -88,8 +88,11 @@ What it covers and what it doesn't is documented under
 ### Test Structure
 
 - `tests/test_notebook/` — Unit tests (mock IPython)
-- `tests/test_notebook_integration/` — Integration tests (real notebooks)
+- `tests/test_notebook_integration/` — Integration tests (real notebooks and kernels)
+- `tests/docs/` — Executes the documentation's examples and checks its claims
 - `tests/` — Core library tests
+- `benchmarks/tests/` — Tests for the benchmark tooling, run separately with
+  `pytest benchmarks/tests`
 
 ### Running Tests
 
@@ -109,11 +112,13 @@ pytest tests/test_notebook/test_magics.py -v
 # Specific test
 pytest tests/test_notebook/test_magics.py::TestCashMagics::test_basic_caching -v
 
-# With coverage (pytest-cov is not a project dependency; use the
-# `coverage` tool the [tool.coverage.*] config in pyproject.toml targets)
-coverage run -m pytest tests/
-coverage report -m
+# Serially, for pdb or print debugging (the default is 16 xdist workers)
+pytest tests/test_notebook/test_magics.py -n 0 -s
 ```
+
+Tests marked `perf` assert wall-clock thresholds. CI's unit job leaves them
+out (`-m "not perf"`) and the Benchmarks workflow runs them without blocking;
+a plain local `pytest` still includes them.
 
 
 !!! warning "A bare `pytest tests/` needs more than `[dev]`"
@@ -129,14 +134,14 @@ coverage report -m
 
 #### Unit Tests
 
-Use the `magics_fixture` for testing notebook components:
+Use the `cash_magics` and `mock_shell` fixtures from `tests/conftest.py` for
+testing notebook components:
 
 ```python
-def test_feature(magics_fixture):
-    magics, shell, backend = magics_fixture
-    shell.user_ns['x'] = 10
-    magics.cash("", "y = x * 2")
-    assert shell.user_ns['y'] == 20
+def test_feature(cash_magics, mock_shell):
+    mock_shell.user_ns["x"] = 10
+    cash_magics.cash("", "y = x * 2")
+    assert mock_shell.user_ns["y"] == 20
 ```
 
 #### Integration Tests
@@ -157,9 +162,10 @@ def test_feature(nb_runner):
 
 ### Test Isolation
 
-!!! warning
-    Unit tests mock IPython in `sys.modules`. Never run integration tests
-    in the same pytest session after unit tests without the cleanup fixtures.
+`InteractiveShell.instance()` registers a process-wide IPython shell that
+outlives the test that created it. A test that calls it must call
+`InteractiveShell.clear_instance()` in teardown, or later tests in the same
+worker run as if inside IPython.
 
 ## Code Style
 
@@ -172,7 +178,7 @@ def test_feature(nb_runner):
 
 1. Create a feature branch from `main`
 2. Write tests for your changes
-3. Ensure all tests pass: `pytest tests/ -v --tb=short`
+3. Ensure the tests pass (see *Running Tests*; CI runs the unit, docs and lint jobs)
 4. Update documentation if needed
 5. Submit PR with clear description
 

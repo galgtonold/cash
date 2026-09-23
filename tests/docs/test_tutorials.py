@@ -621,14 +621,6 @@ _DOC_NAMESPACES: dict[str, dict] = {
         "pickle": __import__("pickle"),
     },
     # Root-level and examples/ docs --------------------------------------------
-    # CONTRIBUTING.md — fence 6 calls ``cash.register_file_handler(...)`` but
-    # ``register_file_handler`` is a method on Cash *instances*, not on the
-    # module.  Stub the module-level ``cash`` name so the fence succeeds.
-    "CONTRIBUTING": {
-        "cash": _types.SimpleNamespace(
-            register_file_handler=lambda *a, **kw: None,
-        ),
-    },
     # examples/large_scale_projects/FINDINGS.md — two runnable fences iterate
     # over ``_top5`` (a page-count dict from the Wikipedia project analysis).
     # Fence 1 (gzip parsing loop) is skipped via a test:skip annotation.
