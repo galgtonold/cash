@@ -216,10 +216,11 @@ arguments new. After a code edit, every call says `code or state changed`, not
 just the first — including after a changed parameter default, which moves the
 arguments as well because they are keyed with defaults applied.
 
-<!-- claim: cash/core.py:_describe_state_change @351dbc89, cash/core.py:Cash._flat_ledger @ed63a092 -->
+<!-- claim: cash/core.py:_describe_state_change @351dbc89, cash/core.py:Cash._flat_ledger @cd04a090 -->
 After `--` it says *what* changed: `its own source changed`, `global
 THRESHOLD changed`, `helper model._rank changed`, `cached function
-model.load changed`, `it now uses global DATA_DIR`, or `helper model._smooth
+model.load changed`, `environment variable TENANT changed`, `it now uses
+global DATA_DIR`, or `helper model._smooth
 moved to dsp._smooth` for a helper whose code arrived unchanged under another
 module. When none of those moved, it names the part of the key that did: `a
 variable it captures`, `a parameter default`, `the instance it is bound to`, `a

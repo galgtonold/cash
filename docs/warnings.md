@@ -953,7 +953,7 @@ call that asks the world what time it is or for a fresh UUID:
 an environment read whose variable name is only known at run time,
 `os.getenv(name)`. The named line ran, and the result was cached as normal.
 
-<!-- claim: cash/effects.py:environment_input @bed3e42a, cash/core.py:Cash._fold_environment @36b7c6d0 -->
+<!-- claim: cash/effects.py:environment_input @bed3e42a, cash/core.py:Cash._fold_environment @86f8ed6b -->
 An environment read with the name written out — `os.getenv("TENANT")`,
 `os.environ["TENANT"]`, `os.environ.get("TENANT", "x")` — and `os.getcwd()`
 are not reported: the variable's current value (a digest of it, never the
@@ -985,7 +985,7 @@ dict or list on the way (`logger.info(json.dumps({"ts": time.time()}))`).
 the value is returned, stored, tested in a condition or passed to any other
 call, it is reported.
 
-<!-- claim: cash/purity_analyzer.py:_clock_helper_read @109649ef -->
+<!-- claim: cash/purity_analyzer.py:_clock_helper_read @b5b5fbdf -->
 The same holds for a timing helper of your own whose body is log lines and a
 `return` of the clock — `def mark(name): print(..., file=sys.stderr); return
 time.perf_counter()`. Calling it counts as reading the clock where it is called,
