@@ -1,6 +1,6 @@
 """Reading a global by string, or a class held in one, is still a dependency.
 
-Found while attacking the decorator before round 26: `globals()["K"]` and
+Found while stress-testing the decorator: `globals()["K"]` and
 `vars(conf)["K"]` never reached the key, so editing the constant served the old
 answer (20 where an uncached run gives 500). A dict of CLASSES had the same
 hole, while the identical dict of functions was followed -- `TABLE = {"fast":

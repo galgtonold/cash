@@ -66,7 +66,7 @@ def test_numpy_layout_is_part_of_the_key(tmp_path):
     This test previously asserted the opposite — that a C-ordered array and an
     F-ordered array of the same values share a cache key — because the
     ``tobytes()`` fallback normalises to C-order. That is right for value
-    equality and wrong for a key: a round-15 tester showed a layout-sensitive
+    equality and wrong for a key: a layout-sensitive
     kernel being served the other layout's result, with
     ``np.ravel(x, order='A')`` returning ``[0, 1, 2, …]`` for an F-ordered input
     whose true answer is ``[0, 4, 8, 1, …]``, 5/5 across separate processes.
@@ -121,7 +121,7 @@ def test_large_pyarrow_different_data_does_not_collide(tmp_path):
     assert calls["n"] == 2, "tables with different data must not collide"
 
 
-# -- CAS-123: the layout that keys is memory ORDER, not stride size ----------
+# -- the layout that keys is memory ORDER, not stride size -------------------
 
 
 def _key(c, value):
@@ -146,7 +146,7 @@ def test_a_view_and_its_restored_copy_share_a_key(tmp_path, make_view):
     """A cached function returning a view hands its caller a view once and a
     contiguous copy on every restore. Keying on raw strides made the caller's
     key differ between the two: its expensive step ran twice after every
-    upstream edit (round 17, 1 then 1 then 0 executions)."""
+    upstream edit (1 then 1 then 0 executions)."""
     c = Cash(backend=FileBackend(cache_dir=str(tmp_path)))
     view = make_view(np.arange(20.0).reshape(4, 5))
     import pickle
@@ -208,7 +208,7 @@ def _forms():
 
 def test_arrays_share_a_key_only_when_every_order_reading_agrees():
     """The exact oracle for the layout part of the key, over every pair of forms
-    holding equal values (round 18, r18s2's probe_forms). A key that merges two
+    holding equal values. A key that merges two
     forms some callee reads differently serves one the other's result:
     `np.ravel(x, order='A')` reads in Fortran order only for an F-CONTIGUOUS
     array, so an F-like strided view and its F-contiguous copy -- which the
@@ -240,7 +240,7 @@ def test_arrays_share_a_key_only_when_every_order_reading_agrees():
     ids=lambda p: p[0],
 )
 def test_forms_no_callee_can_tell_apart_still_share_a_key(pair):
-    """The other direction, which the fix above must not undo (CAS-123): a view
+    """The other direction, which the fix above must not undo: a view
     and its copy that every order reading agrees on share one entry, or a
     function returning a view makes its caller run twice after every edit."""
     a, b = pair[-1](_forms())
@@ -249,7 +249,7 @@ def test_forms_no_callee_can_tell_apart_still_share_a_key(pair):
 
 
 def test_a_returned_view_does_not_rerun_its_caller(tmp_path):
-    """r17s4's shape, across three fresh processes: 1, 0, 0 executions."""
+    """Across three fresh processes: 1, 0, 0 executions."""
     import os
     import subprocess
     import sys

@@ -1,4 +1,4 @@
-"""Round-18 configuration papercuts: a config mistake is loud, and where a run
+"""Configuration papercuts: a config mistake is loud, and where a run
 looked for its config is visible.
 
 * A misspelled ``[tool.cash]`` key did nothing, silently, while
@@ -169,7 +169,7 @@ def test_pytest_from_above_the_project_uses_the_project_config(tmp_path, workers
 
 
 def test_a_config_file_named_in_code_outranks_the_launching_projects_pyproject(tmp_path, monkeypatch):
-    """Round 19: a package shipped its cash settings in a TOML file of its own
+    """A package shipped its cash settings in a TOML file of its own
     and named it with Cash(config_path=...); the pyproject.toml of whatever
     project launched it overrode them. Environment variables still win."""
     from cash.config import _resolve_config

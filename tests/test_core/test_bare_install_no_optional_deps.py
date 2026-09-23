@@ -1,4 +1,4 @@
-"""A bare ``pip install cash-lib`` must be importable and usable (CAS-129).
+"""A bare ``pip install cash-lib`` must be importable and usable.
 
 ``pyproject.toml`` declares ``dependencies = []`` on purpose: pure-decorator
 users get no notebook stack, and IPython lives behind the ``[notebook]`` extra.
@@ -75,7 +75,7 @@ _SCRIPT = textwrap.dedent(
             root = fullname.split(".")[0]
             if root in BLOCKED:
                 raise ModuleNotFoundError(
-                    "No module named {{!r}} (blocked by the CAS-129 "
+                    "No module named {{!r}} (blocked by the "
                     "bare-install guard)".format(root),
                     name=fullname,
                 )

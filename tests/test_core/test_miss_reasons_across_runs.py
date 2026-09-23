@@ -1,6 +1,6 @@
 """A fresh process says why its first call missed, from what earlier runs stored.
 
-Round 18, all five testers: in a script run every first miss read "no entry
+In a script run every first miss used to read "no entry
 yet: ... no earlier run left one on disk" -- after a code edit, after a TTL
 expiry, after new arguments -- while the earlier run's entry was on disk. The
 reasons only knew this process's history. Each persisted store now records its
@@ -81,7 +81,7 @@ def test_new_arguments_are_named_in_the_next_process(tmp_path):
 
 
 def test_a_ttl_expiry_is_named_in_the_next_process(tmp_path):
-    """r18s4's shape: the backend drops an expired entry on read, so the lookup
+    """The backend drops an expired entry on read, so the lookup
     alone sees "absent"."""
     _write(tmp_path, ttl=1)
     _run(tmp_path)

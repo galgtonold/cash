@@ -1,22 +1,22 @@
 """A file dependency is checked at the path THIS process would read.
 
-CAS-108, three round-17 testers, one mechanism: the dependency was checked at
+Three reports, one mechanism: the dependency was checked at
 the path the process that WROTE the entry had resolved.
 
 * **A switched junction.** The tracker recorded ``os.path.realpath`` of the
   path, which resolves the link at write time. Re-point ``current`` at another
   release and every later check stat'ed the OLD target -- still there, still
-  unchanged -- so the old answer came back. r17s5 got eleven wrong nightly
-  reports this way, including a rollback that returned the NEWER release's
-  report; r17s1 got yesterday's data through a re-pointed ``current``.
+  unchanged -- so the old answer came back: eleven wrong nightly reports,
+  including a rollback that returned the NEWER release's report, and
+  yesterday's data through a re-pointed ``current``.
 * **Two installs of one package.** Byte-identical code shares cache keys, and
   the entry recorded its package data at the writer's install path. Another
   install validated the writer's ``rates.json`` and was served the writer's
   figures; an install with no ``rates.json`` at all was served a value
-  instead of raising (r17s2).
+  instead of raising.
 
 Every step runs in a FRESH process against one shared cache, because that is
-the shape the testers hit and the one a cache exists for.
+the shape the bug was seen in and the one a cache exists for.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""CAS-105: c.cache(obj.method) — a bound method's instance state must be
+"""c.cache(obj.method) — a bound method's instance state must be
 part of the cache key.
 
 Before the fix, ``self`` never appeared in ``args`` for bound-method

@@ -2,7 +2,7 @@
 
 Every freshness check hashed its file's content, so an unchanged input was
 read in full again on every cell run and after every restart: before each
-cell of round 23's r23s2, 1,312 exports, about 5 s. Its metadata now answers
+cell of one real notebook, 1,312 exports, about 5 s. Its metadata now answers
 for it -- size, modification time, which file it is, and on Linux and macOS the
 inode change time -- provided it had been left alone for a while before it was
 hashed (a file written moments before can be written again within one

@@ -7,7 +7,7 @@ invalidated correctly, so the same dependency was tracked or not depending on
 which import spelling you happened to use -- and the failure was silent, with
 ``explain()`` reporting a confident ``[HIT]``.
 
-Found by an adversarial tester sweep against the 0.1.0 wheel and reproduced
+Found by an adversarial sweep against the 0.1.0 wheel and reproduced
 independently 3/3.
 
 The first two tests run real scripts in fresh processes on purpose. The bug is

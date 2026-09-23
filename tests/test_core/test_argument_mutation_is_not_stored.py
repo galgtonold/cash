@@ -1,6 +1,6 @@
 """A call that changes an argument in place is not stored.
 
-Round 19 (r19s2): ``a -= a.mean()``, ``a *= 2``, ``np.clip(..., out=a)``,
+``a -= a.mean()``, ``a *= 2``, ``np.clip(..., out=a)``,
 ``rng.shuffle(a)``, ``a[mask] = 0`` on an argument. The cold call changed the
 caller's array; every warm call returned the stored result and left it as it
 was, so everything downstream differed from an uncached run. The runtime

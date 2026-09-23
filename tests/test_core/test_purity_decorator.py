@@ -169,7 +169,7 @@ def test_helper_source_hash_invalidates_cache_across_instances(tmp_path):
 
     sys.path.insert(0, str(tmp_path))
     try:
-        # Round 1: helper returns x * 2
+        # First version: helper returns x * 2
         c1 = Cash(cache_dir=str(tmp_path / "cache"), register_magic=False)
         pkg = importlib.import_module("pkg.main")
         cached_compute_v1 = c1.cache(pkg.compute)
@@ -287,8 +287,8 @@ def warned_unhashable():
 
 class _OpaqueCallable:
     """A callable whose behaviour has no Python code (its ``__call__`` is a
-    builtin). It used to be a ``functools.partial``; since round 18 a partial is
-    keyed by the function it wraps and has nothing left to report."""
+    builtin). It used to be a ``functools.partial``; a partial is now keyed by
+    the function it wraps and has nothing left to report."""
 
     __call__ = staticmethod(abs)
 

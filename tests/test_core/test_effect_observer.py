@@ -404,7 +404,7 @@ def test_an_argument_over_budget_for_the_key_is_not_hashed_again(tmp_path, monke
     """The key's own hash already says what a re-hash would cost, so over the
     budget the check is retired before it pays. It read that cost from a slot
     the key build had already emptied, so a miss on two million rows hashed
-    them a second time after the body, every run (round 19)."""
+    them a second time after the body, every run."""
     c = _cash(tmp_path)
     c._MUTATION_CHECK_BUDGET_S = 0.0  # any key's cost is over it
     hashes = []

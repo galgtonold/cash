@@ -1,6 +1,6 @@
 """What a library-made callable was built with reaches the key when it is read as a global.
 
-Round 19 (r19s2): ``SMOOTHER = partial(ndimage.gaussian_filter, sigma=SIGMA)``
+``SMOOTHER = partial(ndimage.gaussian_filter, sigma=SIGMA)``
 in a config module, called by a cached function -- SIGMA 1.0 -> 2.0 was a HIT
 with the old histogram. So were ``np.poly1d(coeffs)`` and scipy's
 ``interp1d(table)``. The same partial passed as an argument was keyed, and so

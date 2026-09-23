@@ -3,7 +3,7 @@
 When a cached function resolves a dependency from a runtime value --
 ``getattr(obj, name)()`` dynamic dispatch, ``importlib.import_module(...)``,
 ``eval``/``exec``/``compile`` -- cash cannot see an edit to that dependency, so
-a cached result can go silently stale. Round 16 found these served stale with
+a cached result can go silently stale, and these used to be served stale with
 no warning. Caching correctness cannot be guaranteed, so cash now refuses by
 default and requires ``assume_safe=True`` to cache anyway.
 

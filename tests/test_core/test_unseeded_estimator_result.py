@@ -1,6 +1,6 @@
 """A cached function returning an unseeded fitted estimator must say so.
 
-Round-14 gate finding (WRONG). Using the docs' own ML recipe, three runs
+Using the docs' own ML recipe, three runs
 returned the identical model -- same internal `random_state`, same
 feature-importance fingerprint -- with no `CashRandomnessWarning` and no
 `unseeded` badge marker. The reporter's control showed the signal exists on the

@@ -1,9 +1,9 @@
 """``use_locking=True`` must not weaken what a cache hit means.
 
-Round-16 gate finding (WRONG ANSWER, 5/5 against 0/5 without the flag). With
+A wrong answer, 5/5 against 0/5 without the flag. With
 ``Cash(use_locking=True)``, a file the cached function reads could be edited and
 the next process would serve the answer computed from the old contents -- no
-recompute, no warning. The tester found it while wrapping a paid API, which is
+recompute, no warning. It turned up while wrapping a paid API, which is
 the pairing that makes it expensive: ``use_locking=True`` is the documented cure
 for a concurrent burst turning into a burst of billing, so the people who turn
 it on are the ones with money on the line, and it silently switched off the

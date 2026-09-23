@@ -1,10 +1,9 @@
 """``CASH_DISABLE=1`` runs everything uncached -- what a test suite needs.
 
-CAS-121, round-17 tester r17s4 (F13, F20). A test that calls a cached kernel
+A test that calls a cached kernel
 twice with the same seed and asserts equality passed even when the kernel
 ignored its seed: the second call was a hit, on a fresh cache too. There was
-no supported way to run a suite uncached; the tester wrote a pytest plugin to
-get one.
+no supported way to run a suite uncached short of writing a pytest plugin.
 """
 
 from __future__ import annotations
@@ -70,7 +69,7 @@ def test_unset_caches_as_usual(tmp_path):
 
 
 def test_the_vacuous_determinism_test_is_caught(tmp_path):
-    """The tester's case: a kernel that ignores its seed.
+    """The motivating case: a kernel that ignores its seed.
 
     Cached, "same seed gives the same answer" passes -- it compares one result
     with itself. Disabled, it fails, which is the point of running CI that way.

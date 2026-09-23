@@ -486,8 +486,8 @@ def test_explain_agrees_with_a_real_call_for_a_code_argument(c):
 class _OpaqueCallable:
     """User code whose behaviour has no Python code to hash: its ``__call__``
     is a builtin. The stand-in for "could not be hashed" since a
-    ``functools.partial`` stopped being one (round 18: it is keyed by the
-    function it wraps)."""
+    ``functools.partial`` stopped being one (it is keyed by the function it
+    wraps)."""
 
     __call__ = staticmethod(abs)
 

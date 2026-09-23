@@ -1,6 +1,6 @@
 """`cash clear` removes caches, and nothing else.
 
-CAS-107, reported BLOCKING by round-17 tester r17s2. An explicit path went
+An explicit path went
 straight to ``shutil.rmtree``:
 
     cd myproject && cash clear .

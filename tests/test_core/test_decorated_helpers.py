@@ -1,6 +1,6 @@
 """A decorated helper is every function it runs: the wrapper AND the wrapped.
 
-Round 18 (r18s1): with ``functools.wraps`` only the wrapped function was
+With ``functools.wraps`` only the wrapped function was
 followed, so an edit to the wrapper's body was served stale; without it, only
 the wrapper was, so an edit to the wrapped function was. The follow-up matrix
 found the same hole in every shape tried -- stacks, class-based decorators,

@@ -1,4 +1,4 @@
-"""CAS-202: the decorator arg-hash must key a content-bearing argument on its
+"""The decorator arg-hash must key a content-bearing argument on its
 CONTENT, not on the notebook's in-memory ``_cash_lineage_hash``.
 
 Under ``%cash_on`` a notebook variable (e.g. ``X_train``) carries a
@@ -33,7 +33,7 @@ def _set_lineage(obj, value: str) -> None:
     """Attach a notebook-style lineage hash without pandas' set-attr warning.
 
     As the notebook's statement layer does: the tag plus who wrote it. A tag
-    the decorator wrote is not trusted for the content (round 18)."""
+    the decorator wrote is not trusted for the content."""
     object.__setattr__(obj, "_cash_lineage_hash", value)
     object.__setattr__(obj, "_cash_lineage_src", "statement")
 

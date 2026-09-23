@@ -1,6 +1,6 @@
 """A file that changes while the call runs does not become a stale entry.
 
-CAS-109, round-17 tester r17s1 (#3, #4). The entry's file fingerprints were
+The entry's file fingerprints were
 taken when it was STORED -- after the body finished -- so a file rewritten
 after the body read it was fingerprinted in its new state. The entry matched
 the new file and held the old result, and every later call was a hit with the

@@ -1,6 +1,6 @@
 """A frame built over an array the caller keeps is hashed afresh each call.
 
-Found while attacking the decorator before round 26: the content-hash memo
+Found while stress-testing the decorator: the content-hash memo
 trusts copy-on-write -- a frame can only change by getting new block arrays, so
 the block identities are an exact change signal. A write straight through the
 numpy array a frame was built from with ``copy=False`` bypasses that: the

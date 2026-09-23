@@ -1,6 +1,6 @@
 """A hit advances the global RNG as the computed call did.
 
-Found while attacking the decorator before round 26: with ``np.random.seed(0)``
+Found while stress-testing the decorator: with ``np.random.seed(0)``
 before a cached draw, the caller's NEXT draw came back equal to the cached
 value -- the hit never consulted the stream, so the caller drew what the
 function had drawn. ``known-limitations.md`` sends users to seeding as the

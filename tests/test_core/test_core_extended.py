@@ -86,7 +86,7 @@ class TestCashInit:
 
     def test_smart_persistence_policy_persists_by_restore_vs_compute(self, tmp_path):
         """The promotion policy promotes when recomputing costs more than the
-        predicted restore — not on a size-scaled bandwidth guess (CAS-141).
+        predicted restore — not on a size-scaled bandwidth guess.
 
         The old policy modelled raw disk I/O (``execution_time > 2·size/100MB/s``)
         with zero serialization cost, so a *bigger* result was *less* likely to

@@ -1,6 +1,6 @@
 """A pandas argument's dtypes are part of its cache key.
 
-Found while attacking the decorator before round 26: the frame hash folded in
+Found while stress-testing the decorator: the frame hash folded in
 column and index LABELS plus ``hash_pandas_object``, which is value-only. So a
 tz-naive and a tz-aware series shared one entry -- the tz-aware call was served
 the naive one's ``TypeError: Cannot convert tz-naive timestamps`` -- and so did

@@ -1,4 +1,4 @@
-"""Round-18 warning noise: quiet about harmless code, loud about real problems.
+"""Warning noise: quiet about harmless code, loud about real problems.
 
 * A static finding about a log line suppressed IMPURE-OBSERVED-EFFECTS for
   the whole function, so a network read in it was never reported (30 starts),

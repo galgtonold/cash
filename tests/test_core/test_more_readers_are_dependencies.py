@@ -1,6 +1,6 @@
 """Three more readers record what they read.
 
-Found while attacking the decorator before round 26, each returning a stale
+Found while stress-testing the decorator, each returning a stale
 answer with no warning after the data changed:
 
 * ``pyarrow.dataset.dataset(dir)`` -- while ``pyarrow.parquet.read_table`` on

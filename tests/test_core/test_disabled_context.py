@@ -1,6 +1,6 @@
 """`cash.disabled()` switches caching off for a block and puts back what was there.
 
-Round 19 (r19s3): the testing guide's ``no_cache`` fixture ended with
+The testing guide's ``no_cache`` fixture ended with
 ``cash.configure(disable=False)``. Under ``CASH_DISABLE=1`` -- the job meant
 to run with no cache -- that switched caching ON from the first test that used
 the fixture, and every later test read and wrote the cache.

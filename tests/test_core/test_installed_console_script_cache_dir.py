@@ -1,6 +1,6 @@
 """An installed console script caches per user, not per directory.
 
-CAS-104, reported blocking by a round-16 tester. A ``[project.scripts]`` entry
+A ``[project.scripts]`` entry
 point lives in the interpreter's own ``bin``/``Scripts`` directory, so it has
 no project to anchor to and fell back to the cwd -- which meant a `pip
 install`ed tool dropped a fresh ``.cash`` in every directory it was run from
@@ -184,7 +184,7 @@ def test_a_project_that_claims_the_run_still_wins(installed_tool, tmp_path):
 def test_a_plain_script_is_unaffected(installed_tool, tmp_path):
     """The other control: this must not reach an ordinary `python script.py`.
 
-    That shape anchors to its project, which is CAS-84's fix and stays put.
+    That shape anchors to its project, and that stays put.
     """
     base, _ = installed_tool
     bindir = base / "venv" / ("Scripts" if os.name == "nt" else "bin")
@@ -217,7 +217,7 @@ def _private_user_cache(tmp_path):
 
 
 def _cash_cli(base, *argv, cwd, env):
-    """The INSTALLED `cash` console script -- the shape round 17 found broken."""
+    """The INSTALLED `cash` console script -- the shape that was broken."""
     bindir = base / "venv" / ("Scripts" if os.name == "nt" else "bin")
     exe = bindir / ("cash.exe" if os.name == "nt" else "cash")
     environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
@@ -226,7 +226,7 @@ def _cash_cli(base, *argv, cwd, env):
 
 
 def test_the_installed_cash_cli_agrees_with_python_m_cash(installed_tool, tmp_path):
-    """Round 17, all five testers: `cash info` said `…/cash/cash`."""
+    """`cash info` used to say `…/cash/cash`."""
     base, _ = installed_tool
     project = tmp_path / "project"
     (project / "sub").mkdir(parents=True)
@@ -276,7 +276,7 @@ def test_the_cli_reaches_a_tools_per_user_cache_by_name(installed_tool, tmp_path
 
 
 def test_python_dash_m_of_the_installed_tool_uses_the_same_per_user_cache(installed_tool, tmp_path):
-    """Round 19: cron's `python -m nightly` from whatever directory cron chose
+    """cron's `python -m nightly` from whatever directory cron chose
     cached in `<that directory>/.cash` -- a fresh cache per starting place --
     while the console script used the per-user cache. Outside a project, the
     `-m` form of an installed tool is the same tool."""

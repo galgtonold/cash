@@ -159,7 +159,7 @@ def _tiered(monkeypatch, cache_dir, default_ttl):
 
 
 def test_lowering_a_tier_default_ttl_shortens_entries_already_written(temp_cache_dir, monkeypatch, clock):
-    """Round 19: `default_ttl` 86400 -> 5 in the project config, and an entry
+    """`default_ttl` 86400 -> 5 in the project config, and an entry
     written under the day was still served 8 seconds later (3 of 3). A
     decorator's ttl= lowered the same way took effect at once."""
     runs = []

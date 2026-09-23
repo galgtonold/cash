@@ -1,6 +1,6 @@
 """A file a ProcessPoolExecutor task reads is an input of the cached call that submitted it.
 
-Round 20 (r20s3): a cached orchestrator fanned per-region work out to a
+A cached orchestrator fanned per-region work out to a
 ``ProcessPoolExecutor``, and the workers read the CSVs. After a data fix in one
 of them the orchestrator served the pre-fix report -- the reads happened in
 other processes, where no tracker of the parent's could see them -- while the

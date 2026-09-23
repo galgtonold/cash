@@ -1,6 +1,6 @@
 """Editing a base class's method invalidates a call that reaches it.
 
-Found while attacking the decorator before round 26: a cached body calling
+Found while stress-testing the decorator: a cached body calling
 ``Worker().run(x)`` -- ``Worker(Base)`` with ``run`` inherited -- kept serving
 the old answer after ``Base.run`` was rewritten. Measured: 20 where an uncached
 run gives 500, in one file with no imports, no warning. The class's MRO-aware

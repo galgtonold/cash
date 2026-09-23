@@ -1,4 +1,4 @@
-"""Regression for finding #11: file-dependency invalidation must propagate
+"""File-dependency invalidation must propagate
 through a ``depends_on`` chain.
 
 A cached function that reads a file only via a nested cached call used to keep

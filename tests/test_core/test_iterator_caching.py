@@ -385,7 +385,7 @@ def test_chunked_iterator_missing_chunk_finishes_from_the_function():
 
     It used to end the iteration instead, which handed the caller a silent
     PREFIX -- 100 of 1000 items, and a sum over it simply wrong (found
-    attacking the decorator before round 26). With nothing to recompute from,
+    stress-testing the decorator). With nothing to recompute from,
     the loss raises; it is never passed off as the whole answer.
     """
     from cash.core import _ChunkedCachedIterator

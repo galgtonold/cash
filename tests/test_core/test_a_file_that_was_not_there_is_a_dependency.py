@@ -1,6 +1,6 @@
 """A read that failed because the file was missing is an input like any other.
 
-Found while attacking the decorator before round 26: ``docs/decorator.md``
+Found while stress-testing the decorator: ``docs/decorator.md``
 promises "A file that was **not** there counts as well", and the
 ``os.path.exists`` spelling does record it -- but the equally common
 

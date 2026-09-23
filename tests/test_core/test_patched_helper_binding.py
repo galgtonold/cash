@@ -1,6 +1,6 @@
 """A helper is keyed by what the CALLER's name is bound to, not by where it came from.
 
-Round 18 (r18s3): a test passed on another test's cached answer with the most
+A test passed on another test's cached answer with the most
 common mocking pattern. Helpers were re-resolved per call through the helper
 OBJECT's home (``sievelib.sieve``), so rebinding the caller's name
 (``primes._sieve = fake``, ``monkeypatch.setattr``, ``mock.patch``) changed
@@ -89,7 +89,7 @@ def _primes(c, mods, body_import):
 
 
 def test_imported_alias_patched_after_a_real_call(c, mods):
-    """r18s3 F12: `from sievelib import sieve as _sieve`, patch `app._sieve`."""
+    """`from sievelib import sieve as _sieve`, patch `app._sieve`."""
     _, app = _primes(c, mods, "from PFX_sievelib import sieve as _sieve")
     assert _check(app.count, 1) == 20
     with mock.patch.object(app, "_sieve", lambda n: -1):
@@ -98,7 +98,7 @@ def test_imported_alias_patched_after_a_real_call(c, mods):
 
 
 def test_same_module_helper_mocked_first_then_restored(c, mods):
-    """r18s3 F5: the first call's binding decided for the rest of the process."""
+    """The first call's binding used to decide for the rest of the process."""
     (app,) = mods(
         {
             "app": """
@@ -311,7 +311,7 @@ def test_the_helper_home_rebound_is_not_what_runs(c, mods):
         assert _check(app.count, 1) == 20
 
 
-# -- a LIBRARY function patched where it lives (round 19, r19s3 F5) ----------
+# -- a LIBRARY function patched where it lives -------------------------------
 
 
 def _json_app(c, mods):
@@ -345,7 +345,7 @@ def test_a_patched_library_function_is_not_cached_as_the_real_answer(c, mods, re
 
 @pytest.mark.parametrize("real_first", [False, True], ids=["patched-first", "real-first"])
 def test_a_known_io_call_patched_is_not_cached_as_the_real_answer(c, mods, real_first):
-    """The exact round-19 shape: `requests.get` is on cash's known-I/O list, and
+    """The exact reported shape: `requests.get` is on cash's known-I/O list, and
     those call sites were never even looked at. `os.system` is on the same list
     (`exit 0` is harmless everywhere)."""
     (app,) = mods(
@@ -381,7 +381,7 @@ def test_a_module_global_replaced_by_a_mock_is_not_cached(c, mods, real_first):
 
 @pytest.mark.parametrize("real_first", [False, True], ids=["patched-first", "real-first"])
 def test_a_mock_below_the_library_function_is_not_cached(c, mods, real_first):
-    """Round 20 (r20s1): `mock.patch("requests.Session.request")` and
+    """`mock.patch("requests.Session.request")` and
     `HTTPAdapter.send` sit one level below the `requests.get` the body calls,
     where no binding the key reads can show them. `json.loads` calls the
     default decoder's `decode`, which stands in.
@@ -400,7 +400,7 @@ def test_a_mock_below_the_library_function_is_not_cached(c, mods, real_first):
 
 
 def test_an_instance_global_mocked_after_a_real_call_is_not_cached(c, mods):
-    """Round 20 (r20s1): a module-level `SESSION = requests.Session()` swapped
+    """A module-level `SESSION = requests.Session()` swapped
     for a MagicMock after one ordinary call -- the state of every pytest
     session -- had its answer stored under the real key."""
     (app,) = mods(
@@ -435,7 +435,7 @@ def test_a_call_that_ran_a_mock_says_so(c, mods):
     assert "mock" in (outcome.get("not_stored") or ""), outcome
 
 
-# -- a patched helper built by a factory (round 19, r19s3 F4) ----------------
+# -- a patched helper built by a factory -------------------------------------
 
 import datetime as _dt  # noqa: E402
 import decimal as _decimal  # noqa: E402

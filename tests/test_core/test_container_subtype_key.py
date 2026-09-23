@@ -6,7 +6,7 @@ different inputs shared one cache entry and the second call was served the
 first's result -- a silent wrong-HIT. `f(P(1,2))` returned `f(Q(1,2))`'s value
 for two distinct namedtuple types with equal values.
 
-Found by an adversarial round-16 tester against the 0.1.1 build and reproduced
+Found by adversarial testing against the 0.1.1 build and reproduced
 independently. The counterpart guarantee matters too: an EXACT plain tuple/dict
 must keep its old key (no cache invalidation) and still HIT on a repeat call.
 """
@@ -91,7 +91,7 @@ def test_plain_containers_still_hit_and_key_is_unchanged():
     assert total((1, 2, 3)) == 6  # HIT
     assert len(calls) == 1, "plain tuple stopped hitting -- key changed for the common case"
 
-    # A plain dict equal but for insertion order must still share a key (CAS-108).
+    # A plain dict equal but for insertion order must still share a key.
     @inst.cache
     def keys(d):
         calls.append(1)

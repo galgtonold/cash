@@ -1,4 +1,4 @@
-"""CAS-104: closures from one factory with different MUTABLE captures must not
+"""Closures from one factory with different MUTABLE captures must not
 share a cache key — but accumulator captures must not make keys drift.
 
 Read-only mutable captures (a weights list, a config dict, an array) are

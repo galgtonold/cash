@@ -21,7 +21,7 @@ def _cash() -> Cash:
 
 def _df(vals, lineage=None):
     """A frame tagged the way the notebook's statement layer tags one: the tag
-    plus who wrote it. A decorator-written tag is not trusted (round 18)."""
+    plus who wrote it. A decorator-written tag is not trusted."""
     d = pd.DataFrame({"a": vals})
     if lineage is not None:
         d._cash_lineage_hash = lineage

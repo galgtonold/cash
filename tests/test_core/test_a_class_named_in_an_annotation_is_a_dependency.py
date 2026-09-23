@@ -1,6 +1,6 @@
 """A class reached only through a type annotation is a code dependency.
 
-Asked after round 25: annotations name classes, so shouldn't they count? Cash
+Annotations name classes, so shouldn't they count? Cash
 ignored them on the reasoning that ``value: B`` never runs. For a whole family
 of libraries it does: pydantic validates ``A``'s field ``b: B`` by running
 ``B``'s validators, and anything built on ``typing.get_type_hints`` (cattrs,

@@ -1,4 +1,4 @@
-"""Finding #8: explain() should make a dynamic-dependency miss self-explanatory.
+"""explain() should make a dynamic-dependency miss self-explanatory.
 
 A file tracked via ``dynamic_depends_on`` that changes produces a NEW cache key,
 so the miss surfaces as ``no_entry`` rather than ``file_changed``. The

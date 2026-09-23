@@ -2,8 +2,8 @@
 
 `@cash.cache` walked helper source only from CALL positions, so a helper
 reached through a value -- assigned to a local then called, or passed as an
-argument -- was never hashed and an edit to it silently served a stale result
-(CAS-236). The helper name is still statically visible (it is a read name), so
+argument -- was never hashed and an edit to it silently served a stale result.
+The helper name is still statically visible (it is a read name), so
 this is trackable; only genuinely dynamic dispatch (`getattr(m, s)()`) is not.
 
 Cross-process, because the stale-serve only shows up when a second process

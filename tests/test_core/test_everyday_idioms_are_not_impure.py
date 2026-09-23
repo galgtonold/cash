@@ -1,6 +1,6 @@
 """Building a value with ordinary pandas/numpy/builtins is not a side effect.
 
-Found while attacking the decorator before round 26, on the first realistic
+Found while stress-testing the decorator, on the first realistic
 pipeline written: a groupby aggregation assigned to a local and then given a
 column warned ``IMPURE-SIDE-EFFECTS``. The escape analysis knows a local bound
 to a fresh allocation cannot reach caller state, but its list of "returns a new

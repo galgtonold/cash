@@ -1,6 +1,6 @@
 """A returned file handle is a handle, not a stream to replay.
 
-Found while attacking the decorator before round 26: a file object is its own
+Found while stress-testing the decorator: a file object is its own
 iterator, so the streaming path claimed it -- ``open_reader(path)`` returned a
 ``_StreamingCachedIterator`` with no ``read``/``write``/``name``/``fileno``,
 and the handle was drained to build the chunks. A write handle was worse:

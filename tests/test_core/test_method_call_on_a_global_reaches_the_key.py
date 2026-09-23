@@ -1,9 +1,9 @@
 """Reading a global through a method call still reads it.
 
-Round-16 gate finding (WRONG ANSWER, 5/5 minimal, 3/3 on the full pipeline). A
+A wrong answer, 5/5 minimal, 3/3 on the full pipeline. A
 module-level lookup table read as ``ALIASES.get(v, v)`` -- the ordinary way to
 use a mapping -- never reached the cache key, so editing the table published
-stale labels with nothing to see. The tester's matrix is what made it
+stale labels with nothing to see. This matrix is what made it
 undeniable, because every neighbouring spelling was correct::
 
     ALIASES                     bare read          tracked
@@ -14,7 +14,7 @@ undeniable, because every neighbouring spelling was correct::
 
 The rule was "a method call on a name may mutate it, and we cannot prove
 otherwise", so the name was excluded from folding entirely. That is the same
-over-broad refusal CAS-270 already fixed one level up for bare arguments --
+over-broad refusal already fixed one level up for bare arguments --
 `sum(G)`, `len(G)`, `helper(G)` -- where the answer was to fold the name and
 confirm at runtime instead of refusing it.
 
@@ -209,11 +209,11 @@ __version__ = "0.1.0"
 
 
 def test_a_version_dunder_reaches_the_key(cash_instance):
-    """A second round-16 finding, same file because it is the same channel.
+    """A second finding, same file because it is the same channel.
 
-    Every dunder global used to be skipped. The tester bumped ``__version__``,
-    watched it invalidate nothing, and kept publishing a report stamped with
-    the old version through three further edits that each correctly invalidated
+    Every dunder global used to be skipped. Bumping ``__version__``
+    invalidated nothing, and a report stamped with
+    the old version kept being published through three further edits that each correctly invalidated
     other stages. ``RELEASE`` in the same module was tracked; only the dunder
     spelling was not, and no documented knob fixed it -- ``depends_on=[getter]``
     snapshots the getter's source, and a local rebind does not help either.

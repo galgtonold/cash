@@ -1,6 +1,6 @@
 """`@cash.cache(frozen=True)`: "this function's result is not modified afterwards".
 
-Since round 18 a cached result passed on is keyed by its CONTENT, because
+A cached result passed on is keyed by its CONTENT, because
 nothing keeps the producer's tag current when the object is mutated in place.
 That is correct and cheap for small objects and pandas 3 frames, and costs a
 full hash per call for everything else -- a model, a large custom object, a
@@ -129,7 +129,8 @@ def test_a_frozen_result_hits_across_processes(tmp_path):
 
 def test_an_unpicklable_frozen_result_can_still_be_passed_on(c):
     """Content hashing cannot key an object holding a lock; its producer's
-    identity can, which is what made this work before round 18."""
+    identity can, which is what made this work before results were keyed by
+    content."""
 
     class Holder:
         def __init__(self):

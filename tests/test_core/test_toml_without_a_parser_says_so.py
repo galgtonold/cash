@@ -102,7 +102,7 @@ def _notices(path):
 
 
 def test_a_pyproject_without_a_cash_section_says_nothing(no_toml_parser, tmp_path):
-    """CAS-118: nearly every project has a pyproject.toml, and this one holds
+    """Nearly every project has a pyproject.toml, and this one holds
     nothing of cash's -- "every setting in that file is being ignored" was
     wrong, in nearly every project on a bare 3.10."""
     path = tmp_path / "pyproject.toml"

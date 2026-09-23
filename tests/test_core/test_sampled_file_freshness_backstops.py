@@ -1,6 +1,6 @@
 """What a SAMPLED dependency's freshness check can and cannot see.
 
-Two round-16 testers, independently, reproduced the same wrong answer (5/5 and
+Two people, independently, reproduced the same wrong answer (5/5 and
 3/3): a CSV above the full-hash threshold, one field rewritten IN PLACE so the
 size is unchanged, and the mtime restored afterwards -- `cp -p`, `rsync -a`,
 `tar -x` and any script that saves and restores timestamps all do that -- was
@@ -14,7 +14,7 @@ Three things came out of it:
   the edit is caught. On Windows it is the CREATION time and does not move --
   measured on this machine, which is why the next two items exist.
 * ``file_hash_full_max_bytes`` makes the threshold configurable.
-* **the default is 256 MiB** (64 MiB until round 19), not the 8 MiB this
+* **the default is 256 MiB** (it was 64 MiB for a while), not the 8 MiB this
   shipped with, so the ordinary CSV, parquet or .npy is hashed in full and the hole does not reach it on any
   platform. A full hash costs about 0.72 ms per MiB, but the digest is
   memoized per process, so only the first check of a file pays it.
@@ -170,8 +170,8 @@ def _reader(cache_dir):
 def test_the_default_catches_the_stealth_edit(tmp_path):
     """End to end, on every platform, with nothing configured.
 
-    This is what raising the default bought: the edit both round-16 testers
-    reported now invalidates, because a 9 MiB CSV is hashed in full.
+    This is what raising the default bought: the edit in both reports now
+    invalidates, because a 9 MiB CSV is hashed in full.
     """
     path = _big_csv(str(tmp_path / "big.csv"))
     read_total, runs = _reader(str(tmp_path / "cache"))
@@ -249,7 +249,7 @@ def test_an_unedited_big_file_still_hits(tmp_path):
 
 
 def test_the_default_full_hash_threshold_covers_a_memmapped_npy():
-    """Round 19: an 80 MiB .npy written through ``np.memmap(mode="r+")`` on
+    """An 80 MiB .npy written through ``np.memmap(mode="r+")`` on
     Windows kept its size, mtime and NTFS change time -- only its content
     moved, and above the 64 MiB threshold content was sampled, so the reader
     was served stale 3 of 3. Decided: raise the default to 256 MiB. The config

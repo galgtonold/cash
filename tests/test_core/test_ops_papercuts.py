@@ -1,4 +1,4 @@
-"""Round-18 operations papercuts: the things someone running workers trips over.
+"""Operations papercuts: the things someone running workers trips over.
 
 * `python -m pkg.mod` named its functions `mod.f` and `import pkg.mod` named
   them `pkg.mod.f`: two caches for one function.
@@ -95,7 +95,7 @@ def test_a_clear_under_a_running_process_empties_its_ram_tier(tmp_path, monkeypa
 
 @pytest.mark.parametrize("how", ["all", "function"])
 def test_a_clear_reaches_a_process_that_started_with_no_cache(tmp_path, monkeypatch, how):
-    """Round 19: the test above checks on every read, so it always saw the
+    """The test above checks on every read, so it always saw the
     stamp the first write created. A real process checks once a second: one
     that started with no cache directory saw no stamp, wrote one, and read the
     clear that followed -- the stamp gone again, or rewritten -- as "still
@@ -130,7 +130,7 @@ def test_a_clear_reaches_a_process_that_started_with_no_cache(tmp_path, monkeypa
 
 
 def test_a_clear_during_a_call_begun_inside_the_check_window_is_seen(tmp_path, monkeypatch):
-    """Round 20 (r20s4): a job that started cold wrote its first stamp, began
+    """A job that started cold wrote its first stamp, began
     a long call less than a second later (so no check ran), and `cash clear
     --all` landed during it. The long call's own store re-created the
     directory with a NEW stamp, which the next check took for the one this
@@ -170,7 +170,7 @@ def test_a_clear_during_a_call_begun_inside_the_check_window_is_seen(tmp_path, m
 
 
 def test_a_directory_recreated_by_a_sidecar_write_gets_its_gitignore_and_stamp(tmp_path):
-    """Round 19: after a clear, the stored-key record re-created the cache
+    """After a clear, the stored-key record re-created the cache
     directory with a bare makedirs, and the entry written next found it there:
     no .gitignore and no format stamp (1 run in 3-6)."""
     cache_dir = tmp_path / ".cash"

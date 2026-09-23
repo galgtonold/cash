@@ -1,6 +1,6 @@
 """cash's scan of its own cache directory is nobody's dependency.
 
-Round 19 (r19s2): in each worker of a process pool, the first cached call whose
+In each worker of a process pool, the first cached call whose
 nested cached call stored a result recomputed on the next run -- "file
 changed: <cache dir> (size changed)". The nested store scanned the cache
 directory (its size, what to evict) while the outer call's tracker was live,

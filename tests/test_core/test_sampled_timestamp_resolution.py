@@ -132,7 +132,7 @@ def test_a_snapshot_without_nanoseconds_is_not_trusted(tmp_path):
 def test_a_full_hashed_file_ignores_timestamps_entirely(tmp_path):
     """Below the threshold none of this applies -- content decides, as before.
 
-    The touch-tolerance (CAS-98) is the reason the exact comparison is scoped
+    The touch-tolerance is the reason the exact comparison is scoped
     to the sampled regime rather than applied everywhere.
     """
     small = tmp_path / "small.csv"

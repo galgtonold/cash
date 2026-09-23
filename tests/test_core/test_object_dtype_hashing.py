@@ -1,4 +1,4 @@
-"""CAS-111: object-dtype ndarray args must hash over content, not pointer bytes.
+"""Object-dtype ndarray args must hash over content, not pointer bytes.
 
 For ``dtype=object`` arrays the buffer holds raw PyObject pointers, so the old
 ``tobytes()`` path hashed memory addresses: identical content in fresh objects

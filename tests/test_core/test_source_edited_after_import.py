@@ -1,6 +1,6 @@
 """A helper edited on disk after import is keyed by the code that runs.
 
-CAS-110, round-17 tester r17s3. The ordinary deploy sequence:
+The ordinary deploy sequence:
 
     process A: import app              (helper.bump is `x + 1`)
                -- new files land: helper.py now says `x + 100` --
@@ -19,7 +19,7 @@ code by its source, a different key, and computes.
 
 Process A is held between import and its first call with a handshake file,
 not a sleep, and bytecode caching is off so a stale `.pyc` cannot fake either
-outcome (r17s3 hit that trap once).
+outcome (the original repro hit that trap once).
 """
 
 from __future__ import annotations
@@ -144,14 +144,14 @@ def test_an_unedited_helper_is_silent(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# The decorated function's OWN body (round 18: r18s4's deploy race, r18s1's
-# "start the run, keep editing"). The helper fix above did not reach it: the
+# The decorated function's OWN body (a deploy race, and "start the run, keep
+# editing"). The helper fix above did not reach it: the
 # root's identity was pinned at its FIRST CALL, from the text on disk, so an
 # edit between import and that call keyed the old code's result by the new
 # text. Now the pin is taken when the decorator runs, from the text the import
 # compiled. The body sleeps past the 0.1 s persistence floor: a call that
 # never reaches disk cannot show a cross-process stale entry, which is how the
-# tester's "no network" control passed while the bug was still there.
+# original "no network" control passed while the bug was still there.
 # ---------------------------------------------------------------------------
 
 OWN_OLD = textwrap.dedent("""
@@ -230,7 +230,7 @@ def _edit_under_a(proj, env, edited, new_text):
 
 @pytest.mark.parametrize("layout", ["module", "script"])
 def test_an_edit_to_the_cached_function_itself_is_not_served_to_the_restart(tmp_path, layout):
-    """THE BUG (round 18): the restart got 42, the OLD body's answer; 9 is right."""
+    """THE BUG: the restart got 42, the OLD body's answer; 9 is right."""
     proj, edited = _own_project(tmp_path, layout)
     env = _env(tmp_path)
     new_text = edited.read_text(encoding="utf-8").replace("x * 14", "x * 3")
@@ -265,7 +265,7 @@ IMPORT_WINDOW = textwrap.dedent("""
 
 
 def test_an_edit_while_the_module_is_still_importing_is_not_served_to_the_restart(tmp_path):
-    """Round 20 (r20s1): the edit landed after Python compiled the module but
+    """The edit landed after Python compiled the module but
     before its ``@cash.cache`` line ran, so the pin taken at decoration read the
     NEW text for the OLD code. KEY-SOURCE-CHANGED fired, and the old body's
     answer was stored under the new text's key anyway."""

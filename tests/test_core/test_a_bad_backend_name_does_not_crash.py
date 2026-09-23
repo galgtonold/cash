@@ -1,6 +1,6 @@
 """A misspelled backend or tier type is reported and skipped, not raised.
 
-Found while attacking the decorator before round 26: ``[[tool.cash.tiers]]
+Found while stress-testing the decorator: ``[[tool.cash.tiers]]
 type = "memry"`` raised ``ValueError: Unknown tier type`` out of ``import
 cash`` -- and out of ``python -m cash info``, the command the docs send you to
 when the configuration is wrong. Configuration's own contract

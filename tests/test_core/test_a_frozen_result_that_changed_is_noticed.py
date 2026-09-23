@@ -1,6 +1,6 @@
 """A ``frozen=True`` result the caller changes stops being trusted.
 
-Found while attacking the decorator before round 26: the audit recorded its
+Found while stress-testing the decorator: the audit recorded its
 baseline at the object's 8th use as an argument and first COMPARED at the 72nd,
 so the ordinary shape -- produce it, change it, pass it again -- served the
 pre-change answer indefinitely. Measured: a consumer returned 6 where an

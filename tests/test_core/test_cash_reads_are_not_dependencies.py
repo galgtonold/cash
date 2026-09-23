@@ -1,6 +1,6 @@
 """cash's own configuration reads never become a cached function's dependency.
 
-Found while fixing CASH_DISABLE (round-17 backlog). A cached function that
+Found while fixing CASH_DISABLE. A cached function that
 calls another cached function recorded, as its OWN file dependencies, the
 project's pyproject.toml, the user config file (as absent) and every
 `.git` / `setup.py` / `setup.cfg` looked for on the way up the tree. The nested

@@ -1,4 +1,4 @@
-"""Round-18 logging and observability papercuts, one test each.
+"""Logging and observability papercuts, one test each.
 
 The "why did that recompute?" tools failed in exactly the environments people
 run: pytest (CASH_DEBUG printed nothing, even with -s), a service with its own
@@ -136,7 +136,7 @@ def test_the_summary_reaches_an_application_log_in_one_write(tmp_path, monkeypat
     err = capsys.readouterr().err
     # Into the application's log, pid-labelled, and ONLY there: written to
     # stderr as well, with cash's own handler passing it on too, it printed
-    # three times (round 19).
+    # three times.
     assert records and records[0].startswith(f"cash (pid {os.getpid()}):"), records
     assert "calls restored" not in err, err
 

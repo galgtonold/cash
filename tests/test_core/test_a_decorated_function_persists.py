@@ -1,8 +1,8 @@
 """Decorating a function means caching it, floor or no floor.
 
-Found while attacking the decorator before round 26: a function under the 0.1 s
+Found while stress-testing the decorator: a function under the 0.1 s
 persistence floor is cached in RAM only, so running a script twice recomputes
-every time and a tester sees no caching at all. Two of six agents' first sweeps
+every time and a user sees no caching at all. Two of six agents' first sweeps
 reported "no bugs found" for that reason alone -- nothing was ever stored, so
 no staleness could appear. The floor belongs to the notebook, where cash caches
 every statement by itself; ``@cash.cache`` is the user saying to cache this one.

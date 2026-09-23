@@ -1,8 +1,8 @@
 """A global read by a cached CALLEE must reach its caller's key.
 
-Round-15 gate finding, reported against a library shaped the ordinary way --
-`config.py` holds a constant, `io.py` reads a file, `build.py` calls both. The
-tester changed the constant and `build` returned the answer computed under the
+Reported against a library shaped the ordinary way --
+`config.py` holds a constant, `io.py` reads a file, `build.py` calls both.
+Changing the constant made `build` return the answer computed under the
 old value: **zero executions, no warning, and one process disagreeing with
 itself**, since calling the callee directly in the same run gave the new answer.
 
@@ -16,7 +16,7 @@ own key and nowhere else, so the caller never saw it move.
 
 Two things measurement corrected in the ticket, both worth keeping:
 
-* **The file read was a red herring.** The tester's control table isolated "the
+* **The file read was a red herring.** The original control table isolated "the
   callee reads a file" as the trigger, but the file only made the work
   expensive enough to be persisted past RAM. The no-file arm looked correct
   because its result was too cheap to store, so every run recomputed anyway.

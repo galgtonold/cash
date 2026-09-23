@@ -1,6 +1,6 @@
 """A script user can find out why a call recomputed.
 
-CAS-120, round 17: four of five testers could not.
+Four of five people trying could not.
 
 - ``CASH_SUMMARY=1`` printed into stdout -- a CLI's report, a pipe, a JSON
   response -- and said "1 miss" and nothing else. The miss was the 0.1 s
@@ -298,7 +298,7 @@ def test_explain_gives_the_entry_id_cash_clear_takes(c, tmp_path):
     assert "reads:" in listing.stdout and data.name in listing.stdout
 
 
-# -- round 19: reasons that crossed a process boundary -------------------------
+# -- reasons that crossed a process boundary -----------------------------------
 
 _MODE_JOB = textwrap.dedent("""
     import sys, time
@@ -400,7 +400,7 @@ _LOG_AFTER_IMPORT = textwrap.dedent("""
 
 
 def test_logging_configured_after_import_gets_each_line_once(tmp_path):
-    """Round 19: a CLI configures logging in main(), after `import cash`: every
+    """A CLI configures logging in main(), after `import cash`: every
     per-call line printed twice (cash's handler and the app's) and the summary
     three times."""
     out = _run(tmp_path, _LOG_AFTER_IMPORT, CASH_VERBOSE="1", CASH_SUMMARY="1")

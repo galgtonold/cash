@@ -1,6 +1,6 @@
 """A cached function reading a SQLite database depends on that file.
 
-Found while attacking the decorator before round 26: ``sqlite3.connect`` opens
+Found while stress-testing the decorator: ``sqlite3.connect`` opens
 the file in C, so nothing passed through a patched reader and a cached query
 returned 1 where an uncached run returned 101 after an INSERT -- with no
 warning. ``pd.read_sql_query`` over a ``sqlite3`` connection has the same

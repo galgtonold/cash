@@ -1,6 +1,6 @@
 """A file read in a thread pool the cached function starts is one of its inputs.
 
-Round 19 (r19s2): ``ThreadPoolExecutor(4).map(np.load, shards)`` inside a
+``ThreadPoolExecutor(4).map(np.load, shards)`` inside a
 cached function -- editing a shard HIT the pre-edit value (3 of 3), while the
 serial loop beside it invalidated. The tracker is found through a ContextVar,
 and a pool's worker threads start with an empty context.

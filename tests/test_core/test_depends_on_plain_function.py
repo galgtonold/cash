@@ -1,4 +1,4 @@
-"""CAS-110: ``depends_on=[plain_function]`` must contribute to the cache key.
+"""``depends_on=[plain_function]`` must contribute to the cache key.
 
 The docstring promises declared function/DataSource deps fold into the key. For
 a non-decorated function dependency, only a graph edge was added and the state
@@ -26,8 +26,8 @@ class TestDependsOnPlainFunction:
     def test_plain_function_dep_edit_invalidates(self, tmp_path):
         sys.path.insert(0, str(tmp_path))
         try:
-            _write_mod(str(tmp_path), "cas110mod", "def g_proxy(x):\n    return x + 10\n")
-            mod = importlib.import_module("cas110mod")
+            _write_mod(str(tmp_path), "proxy_dep_mod", "def g_proxy(x):\n    return x + 10\n")
+            mod = importlib.import_module("proxy_dep_mod")
 
             c = Cash()
 
@@ -39,20 +39,20 @@ class TestDependsOnPlainFunction:
             assert f.explain(2).reason == "hit"  # warm
 
             time.sleep(0.02)
-            _write_mod(str(tmp_path), "cas110mod", "def g_proxy(x):\n    return x + 999\n")
+            _write_mod(str(tmp_path), "proxy_dep_mod", "def g_proxy(x):\n    return x + 999\n")
             importlib.reload(mod)
 
             # The declared proxy dep changed on disk → key must change → not a hit.
             assert f.explain(2).reason != "hit"
         finally:
             sys.path.remove(str(tmp_path))
-            sys.modules.pop("cas110mod", None)
+            sys.modules.pop("proxy_dep_mod", None)
 
     def test_unchanged_dep_still_hits(self, tmp_path):
         sys.path.insert(0, str(tmp_path))
         try:
-            _write_mod(str(tmp_path), "cas110mod2", "def g_proxy(x):\n    return x + 1\n")
-            mod = importlib.import_module("cas110mod2")
+            _write_mod(str(tmp_path), "proxy_dep_mod2", "def g_proxy(x):\n    return x + 1\n")
+            mod = importlib.import_module("proxy_dep_mod2")
             c = Cash()
 
             def standalone(x):
@@ -63,7 +63,7 @@ class TestDependsOnPlainFunction:
             assert f.explain(5).reason == "hit"  # no edit → still hit
         finally:
             sys.path.remove(str(tmp_path))
-            sys.modules.pop("cas110mod2", None)
+            sys.modules.pop("proxy_dep_mod2", None)
 
     def test_builtin_dep_does_not_crash(self):
         # A builtin has no readable source; it must not raise and must still

@@ -2,7 +2,7 @@
 
 Cash sized every stored frame twice -- the RAM tier's cap and the restore-cost
 estimate -- through ``memory_usage``, which spends nearly all its time building
-a result Series: 18% of a loop over a thousand small files (round 23).
+a result Series: 18% of a loop over a thousand small files.
 """
 
 from __future__ import annotations

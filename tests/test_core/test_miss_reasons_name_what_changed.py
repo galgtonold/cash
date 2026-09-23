@@ -1,10 +1,10 @@
-"""Round 20: miss reasons and debug output that told the user the wrong thing.
+"""Miss reasons and debug output that told the user the wrong thing.
 
 * Pool calls after `cash clear --function` read "new arguments" (serial calls
   said "entry gone"): the threads read the stored-key record while another
   thread was replacing it, got nothing, and fell back to call-to-call.
 * A changed parameter DEFAULT read "new arguments" for all but the first call.
-* "code or state changed" never said WHAT changed -- all five testers.
+* "code or state changed" never said WHAT changed.
 * Changing `file_hash_full_max_bytes` read "content changed" for files whose
   bytes had not moved.
 * `explain()` and HIT lines printed a sampled fingerprint like a full hash.

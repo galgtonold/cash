@@ -1,4 +1,4 @@
-"""CAS-128: globals read inside a nested scope must fold into the cache key.
+"""Globals read inside a nested scope must fold into the cache key.
 
 A generator expression, comprehension, or ``lambda`` compiles to its OWN code
 object, so a global referenced only in there never appeared in the outer
@@ -88,7 +88,7 @@ class TestGlobalReadInNestedScope:
         ],
     )
     def test_global_read_in_nested_scope_invalidates(self, make_module, name, body, arg):
-        mod = make_module(f"cas128_{name}", f"THRESHOLD = 10\n{body}")
+        mod = make_module(f"compglobals_{name}", f"THRESHOLD = 10\n{body}")
         c = Cash()
         f = c.cache(mod.f)
 
@@ -104,7 +104,7 @@ class TestGlobalReadInNestedScope:
         # Two levels of nesting: the global lives in the INNER genexp's code
         # object, reachable only by recursing through the outer one.
         mod = make_module(
-            "cas128_nested",
+            "compglobals_nested",
             "THRESHOLD = 10\ndef f(rows):\n    return sum(sum(y > THRESHOLD for y in row) for row in rows)\n",
         )
         c = Cash()
@@ -121,7 +121,7 @@ class TestGlobalReadInNestedScope:
         # Mixed nesting: an inlined (3.12+) comprehension wrapping a genexp
         # that owns its own scope.
         mod = make_module(
-            "cas128_mixed",
+            "compglobals_mixed",
             "THRESHOLD = 10\ndef f(rows):\n    return [sum(y > THRESHOLD for y in row) for row in rows]\n",
         )
         c = Cash()
@@ -136,14 +136,15 @@ class TestGlobalReadInNestedScope:
 
 
 class TestNoOverInvalidation:
-    """The write/mutate exclusions must survive the recursion (CAS-104 lesson)."""
+    """The write/mutate exclusions must survive the recursion, or accumulator
+    captures would make keys drift."""
 
     def test_global_mutated_in_comprehension_still_hits(self, make_module):
         # ACC.append(...) inside a genexp: an in-place accumulator. Folding it
         # would drift the key every call -> permanent miss. The AST-based
         # exclusion already sees comprehension bodies; assert it still does.
         mod = make_module(
-            "cas128_mutacc",
+            "compglobals_mutacc",
             "ACC = []\ndef f(v):\n    return len(list(ACC.append(x) for x in v))\n",
         )
         c = Cash()
@@ -160,7 +161,7 @@ class TestNoOverInvalidation:
         # drifting counter and miss forever. This is the regression that pins
         # the two channels together.
         mod = make_module(
-            "cas128_walrus",
+            "compglobals_walrus",
             "COUNTER = 0\ndef f(v):\n    global COUNTER\n    return len(list((COUNTER := COUNTER + x) for x in v))\n",
         )
         c = Cash()
@@ -175,7 +176,7 @@ class TestNoOverInvalidation:
         # No key churn: a genexp that touches no global must produce a
         # byte-identical cache key before and after the fix's extra walk.
         mod = make_module(
-            "cas128_noglobals",
+            "compglobals_noglobals",
             "def f(v):\n    return sum(x * 2 for x in v)\n",
         )
         c = Cash()
@@ -194,7 +195,7 @@ class TestReadGlobalNamesDetection:
 
     def test_nested_scope_names_are_collected(self, make_module):
         mod = make_module(
-            "cas128_detect",
+            "compglobals_detect",
             "THRESHOLD = 10\nOTHER = 3\ndef f(v):\n    return sum(x > THRESHOLD for x in v) + OTHER\n",
         )
         c = Cash()
@@ -202,7 +203,7 @@ class TestReadGlobalNamesDetection:
 
     def test_detection_is_memoized_per_code_object(self, make_module):
         mod = make_module(
-            "cas128_memo",
+            "compglobals_memo",
             "THRESHOLD = 10\ndef f(v):\n    return sum(x > THRESHOLD for x in v)\n",
         )
         c = Cash()

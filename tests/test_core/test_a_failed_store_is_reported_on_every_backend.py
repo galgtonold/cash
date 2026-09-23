@@ -1,6 +1,6 @@
 """A backend that cannot store a result says so, tiered or not.
 
-Found while attacking the decorator before round 26: with the default (tiered)
+Found while stress-testing the decorator: with the default (tiered)
 backend an unpicklable result produced only a ``logger.warning`` line --
 no ``STORE-FAILED`` warning and an empty ``cache_info()['warnings']``, while
 the same code on a ``FileBackend`` reported both. The STORE-FAILED page says

@@ -1,4 +1,4 @@
-"""Warnings that were wrong, so people learned to skip the right ones (round 19).
+"""Warnings that were wrong, so people learned to skip the right ones.
 
 * ``np.sort(x)`` reported as a "write method": a module matched ``sort``.
 * ``time.sleep(...)`` and a call to the module's own log helper reported as
@@ -175,7 +175,7 @@ def test_a_class_with_cached_methods_does_not_report_cash_s_own_globals(tmp_path
 
 
 def test_a_cached_function_called_through_its_module_does_not_report_cash_s_globals(tmp_path, monkeypatch):
-    """Round 22: ``rates.fetch(day)`` inside a cached ``process`` warned about
+    """``rates.fetch(day)`` inside a cached ``process`` warned about
     'rates.fetch.ACTIVE_CONFIG' on every run -- the module walk's twin of the
     class walk above. The user's constants inside ``fetch`` still count."""
     cache = repr(str(tmp_path / "rcache"))

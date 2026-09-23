@@ -1,6 +1,6 @@
 """Reading the clock/environment/cwd inside a cached function is announced.
 
-Round-15 gate finding. A decorated function whose body called
+A decorated function whose body called
 ``datetime.now()`` cached the first call's timestamp and handed it back for
 ever -- across processes, because the cache is on disk -- and said nothing.
 ``os.environ["TENANT"]`` did the same, which is the version that returns one

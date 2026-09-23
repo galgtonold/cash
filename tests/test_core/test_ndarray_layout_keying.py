@@ -1,6 +1,6 @@
 """An ndarray's memory LAYOUT is part of what it is, for the key's purposes.
 
-Round-15 gate finding (WRONG). Two arrays that are `np.array_equal` but differ
+Two arrays that are `np.array_equal` but differ
 in layout shared one cache entry, so a layout-sensitive kernel returned the
 other layout's result::
 
@@ -19,7 +19,7 @@ compiled callee that expects a layout all read it.
 The fix folds in the MEMORY ORDER (C, F, or a permutation of axes). It first
 folded in raw strides, which also split a strided view from its contiguous
 copy -- same values, same memory order, only `.flags` differs -- and made a
-function returning a view re-run its caller after every restore (CAS-123).
+function returning a view re-run its caller after every restore.
 """
 
 from __future__ import annotations
@@ -90,8 +90,8 @@ def test_a_c_like_view_and_its_copy_share_an_entry_correctly(cash_instance):
     This used to assert they key APART, with a kernel whose answer is the same
     for both -- so it pinned a distinction with no wrong answer behind it, and
     that distinction is what made a function returning ``arr[:, 0]`` re-run its
-    caller after every restore (CAS-123: a cached array comes back as a
-    contiguous copy). The oracle below is exact for BOTH inputs.
+    caller after every restore (a cached array comes back as a contiguous
+    copy). The oracle below is exact for BOTH inputs.
     """
     ran: list[str] = []
 

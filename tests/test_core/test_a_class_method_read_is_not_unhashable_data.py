@@ -1,6 +1,6 @@
 """Calling a method through its class does not warn KEY-UNHASHABLE-GLOBAL.
 
-Found while checking annotations (round 25): ``@cash.cache def parse(v):
+Found while checking annotations: ``@cash.cache def parse(v):
 return A.make(v)`` with ``make`` a classmethod warned that it "reads 'A.make'
 whose value could not be hashed, so changes to it will NOT invalidate the
 cache". Editing ``make`` did invalidate -- the method is followed as code. The

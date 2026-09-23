@@ -6,7 +6,7 @@ dropped - so the function hit forever even after the object changed. The read is
 now recorded on the tracker's remote channel and revalidated against the store's
 own validator, exactly as a local file is revalidated against its content hash.
 
-Auto-tracking is ON by default. The reasoning, from CAS-236: validation only
+Auto-tracking is ON by default. The reasoning: validation only
 fires for a function that *already* reads from the network, so no purely local
 call pays for it; a metadata request is tens of milliseconds against a download
 that may be hundreds of megabytes; and on a hit you skip the download entirely.

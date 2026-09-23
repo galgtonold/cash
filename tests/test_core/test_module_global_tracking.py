@@ -1,4 +1,4 @@
-"""CAS-107: mutable module-level state read by a cached function must track.
+"""Mutable module-level state read by a cached function must track.
 
 A cached function reading a module data global (a config constant) or dispatching
 through a dict of callables returned stale results with no warning when that
@@ -24,10 +24,10 @@ class TestModuleGlobalTracking:
     def test_data_global_change_invalidates(self, tmp_path):
         sys.path.insert(0, str(tmp_path))
         try:
-            _write(str(tmp_path), "cas107t1", "CONST = 5\ndef times_const(x):\n    return x * CONST\n")
+            _write(str(tmp_path), "modglobals_t1", "CONST = 5\ndef times_const(x):\n    return x * CONST\n")
             import importlib
 
-            mod = importlib.import_module("cas107t1")
+            mod = importlib.import_module("modglobals_t1")
             c = Cash()
             f = c.cache(mod.times_const)
             assert f(2) == 10
@@ -36,19 +36,19 @@ class TestModuleGlobalTracking:
             assert f.explain(2).reason != "hit"  # config change seen
         finally:
             sys.path.remove(str(tmp_path))
-            sys.modules.pop("cas107t1", None)
+            sys.modules.pop("modglobals_t1", None)
 
     def test_dict_dispatch_swap_invalidates(self, tmp_path):
         sys.path.insert(0, str(tmp_path))
         try:
             _write(
                 str(tmp_path),
-                "cas107t2",
+                "modglobals_t2",
                 "OPS = {'double': (lambda x: x * 2)}\ndef apply_op(x):\n    return OPS['double'](x)\n",
             )
             import importlib
 
-            mod = importlib.import_module("cas107t2")
+            mod = importlib.import_module("modglobals_t2")
             c = Cash()
             f = c.cache(mod.apply_op)
             assert f(3) == 6
@@ -57,11 +57,11 @@ class TestModuleGlobalTracking:
             assert f.explain(3).reason != "hit"  # dispatch swap seen
         finally:
             sys.path.remove(str(tmp_path))
-            sys.modules.pop("cas107t2", None)
+            sys.modules.pop("modglobals_t2", None)
 
     def test_rebound_global_accumulator_still_caches(self):
         # A function that REBINDS a module global (STORE_GLOBAL counter) must NOT
-        # fold it, or every call would miss. The CAS-104 lesson for globals.
+        # fold it, or every call would miss (as with accumulator captures).
         assert _rebind_counter(1) == 1
         assert _rebind_counter.explain(1).reason == "hit"  # same arg -> hit
 

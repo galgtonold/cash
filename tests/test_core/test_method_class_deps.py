@@ -3,7 +3,7 @@
 `@cash.cache` on a method keyed on the method's own source + self's instance
 state, but nothing it reached through ``self``/``cls``/``super()`` -- helper
 methods, class constants, base-class bodies -- so editing those silently served
-a stale result (CAS-237). At decoration time the class does not exist yet; the
+a stale result. At decoration time the class does not exist yet; the
 fix resolves these against the real class at CALL time, where ``self`` is known.
 
 Cross-process, because the stale serve only appears when a second process

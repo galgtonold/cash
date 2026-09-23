@@ -1,8 +1,8 @@
 """Impurity advisories that were wrong on ordinary code, and the ones that are not.
 
-CAS-122, round 17, four of five testers. The warnings fired on local, harmless
-code on every run -- and in one report an unrelated false positive
-(`perf_counter` in a log line) buried the network warning the tester needed.
+The warnings fired on local, harmless code on every run -- and in one report
+an unrelated false positive (`perf_counter` in a log line) buried the network
+warning that mattered.
 Each silenced pattern below has a control next to it that must still warn: the
 point is to stop the noise, not to go quiet on the code the warning is for.
 """
@@ -72,7 +72,7 @@ def pipeline(path, products):
 
 
 @pytest.mark.parametrize(
-    "fn", [tuple_unpacked, view_of_a_local, pipeline], ids=["r17s2-tuple-unpack", "r17s4-local-view", "r17s1-pipeline"]
+    "fn", [tuple_unpacked, view_of_a_local, pipeline], ids=["tuple-unpack", "local-view", "pipeline"]
 )
 def test_mutating_what_the_function_made_is_not_flagged(fn):
     assert not _mutations(fn), _mutations(fn)
@@ -178,7 +178,7 @@ def test_a_clock_that_reaches_the_result_still_warns(fn):
 
 
 def test_lines_are_file_lines_and_the_file_is_named():
-    """Lines counted from the decorator sent three testers to the wrong line."""
+    """Lines counted from the decorator sent readers to the wrong line."""
     issue = _mutations(mutates_a_parameter)[0]
     lines, first = inspect.getsourcelines(mutates_a_parameter)
     expected = first + next(i for i, ln in enumerate(lines) if 'df["x"] = 1' in ln)

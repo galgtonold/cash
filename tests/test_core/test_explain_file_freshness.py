@@ -1,7 +1,7 @@
-"""CAS-127: explain() must report file freshness the way a real lookup decides it.
+"""explain() must report file freshness the way a real lookup decides it.
 
-CAS-98/CAS-10 (and CAS-119 for the decorator path) made file-dependency
-freshness content-authoritative via the shared ``file_dep_is_fresh`` helper: a
+File-dependency freshness is content-authoritative, in the notebook and the
+decorator path alike, via the shared ``file_dep_is_fresh`` helper: a
 touch (new mtime, identical bytes) is a HIT. ``_explain_call`` was never
 migrated and still compared raw mtime/size, so after a touch it reported
 ``file_changed`` / ``'mtime changed'`` while the call itself hit the cache.
@@ -64,7 +64,7 @@ class TestExplainFileFreshness:
 
     def test_same_size_content_edit_explains_as_file_changed(self, reader, data_file):
         read_it, calls = reader
-        # Same byte length, different content -- the CAS-10 direction.
+        # Same byte length, different content -- the under-invalidation direction.
         data_file.write_text("HELLO WORLD", encoding="utf-8")
         assert os.path.getsize(data_file) == 11
 

@@ -1,6 +1,6 @@
 """Your own package's `module.ATTR` reaches the key once it is installed.
 
-CAS-111, round-17 tester r17s2 (F13). A tool installed with `pip install .`
+A tool installed with `pip install .`
 lives in site-packages, and cash's "is this user code?" test was purely
 path-based, so it put the user's own tool in the same bucket as numpy. Of four
 ways to read a sibling module's constant, exactly one stopped invalidating:
@@ -112,7 +112,7 @@ def test_settings_attr_in_an_installed_package_invalidates(tmp_path, site):
 
 
 def test_the_shapes_that_already_worked_still_do(tmp_path, site):
-    """The controls from the tester's own table: all four must now agree."""
+    """The controls from the original report's table: all four must now agree."""
     _install(site, 2)
     _run(tmp_path, site)
     _install(site, 3)

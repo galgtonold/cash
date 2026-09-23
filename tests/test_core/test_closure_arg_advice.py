@@ -1,6 +1,6 @@
 """KEY-UNHASHABLE-ARG must not tell you to register a hasher for every function.
 
-CAS-117, round-17 tester r17s4 (F8). Following cash's own warning produced a
+Following cash's own warning produced a
 wrong answer:
 
     fit(make_model(3.0), d)
@@ -119,7 +119,7 @@ def test_registering_a_hasher_for_an_ordinary_type_is_silent(c):
 
 
 # ---------------------------------------------------------------------------
-# Round 18 (r18s5, F4): the argument NAMED was the first one of a non-built-in
+# The argument NAMED used to be the first one of a non-built-in
 # type, not the one that failed. `score(df, lambda d: ...)` blamed the
 # DataFrame and advised a DataFrame hasher -- rejected by cash, and with
 # override=True a re-key of every DataFrame function -- while the lambda was

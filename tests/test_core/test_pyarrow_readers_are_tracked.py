@@ -1,6 +1,6 @@
 """pyarrow's readers are tracked, and a reader called by keyword still works.
 
-CAS-115, round-17 tester r17s1 (#6). pyarrow reads files in C++, so nothing
+pyarrow reads files in C++, so nothing
 passes through a patched ``open()``, and none of its readers were registered.
 A cached function that switched from pandas to ``pyarrow.csv.read_csv`` for
 speed recorded no file dependency at all; a whole new export returned

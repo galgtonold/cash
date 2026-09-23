@@ -1,6 +1,6 @@
 """A file that was looked for and was not there is an input like any other.
 
-Round-16 gate finding (WRONG ANSWER, silent, 4/4). A cached function reading a
+A wrong answer, silent, 4/4: a cached function reading a
 per-directory config by RELATIVE name -- the ordinary "does this directory have
 a config?" shape -- run in directory A, then B (which has no such file), then A
 again, was served **B's answer in A**, as a cache hit, with no warning::
@@ -159,8 +159,8 @@ def test_a_present_file_is_recorded_as_read_not_as_absent(cash_instance, tmp_pat
 # The sleep is load-bearing across processes: cash promotes a result past RAM
 # only when computing it cost more than restoring it will, so a multiplication
 # is never written to disk and every arm below would "recompute" for a reason
-# that has nothing to do with the dependency under test. The tester's own first
-# probe was wrong this way; the control run asserts the HIT that proves it.
+# that has nothing to do with the dependency under test. The first probe of
+# this bug was wrong this way; the control run asserts the HIT that proves it.
 _CHILD = """
 import os, sys, time
 import cash

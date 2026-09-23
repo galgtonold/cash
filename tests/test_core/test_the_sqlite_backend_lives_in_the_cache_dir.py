@@ -1,6 +1,6 @@
 """The sqlite backend's database is a file INSIDE the cache directory.
 
-Found while attacking the decorator before round 26: the factory passed
+Found while stress-testing the decorator: the factory passed
 ``db_path=config.cache_dir``, so the cache DIRECTORY was the database FILE.
 A fresh project got a SQLite database literally named ``.cash``; a project that
 had used the default backend first (so ``.cash/`` exists) died with

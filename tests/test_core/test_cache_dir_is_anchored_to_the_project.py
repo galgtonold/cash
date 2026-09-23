@@ -1,13 +1,12 @@
 """Where the cache lives is a property of the CODE, not of your cwd.
 
-Round-14 and round-15 gate findings (CAS-84, CAS-99), one problem in two
-halves.
+One problem in two halves.
 
 The default cache directory used to be resolved from ``os.getcwd()``, so
 running the same script from somewhere else quietly started a second cache:
 ``6 of 6 restored`` became ``0 of 6``, a fresh 232MB ``.cash`` appeared where
 the job happened to be standing, nothing warned, and it was indistinguishable
-from an ordinary cold run. Three separate round-15 projects hit it; one wrote a
+from an ordinary cold run. Three separate projects hit it; one wrote a
 ``.cash`` at the drive root. A cron job, a CI step and a colleague's terminal
 are all "somewhere else".
 
@@ -118,7 +117,7 @@ def test_no_stray_cache_appears_where_the_job_was_launched(project):
 
 
 def test_a_relative_cache_dir_in_pyproject_is_relative_to_pyproject(project):
-    """CAS-99: the documented fix, working from outside the project."""
+    """The documented fix, working from outside the project."""
     root, script, elsewhere = project
     (root / "pyproject.toml").write_text(
         '[project]\nname = "demo"\nversion = "0"\n[tool.cash]\ncache_dir = "var/cache"\n',
@@ -303,9 +302,8 @@ def test_a_spawned_worker_anchors_where_its_parent_did(tmp_path):
     Run as ``python -m pkg``, a spawned worker has no ``__main__.__file__`` and
     no ``__spec__``, so the anchor fell back to the cwd while the parent had
     anchored to its project: one fan-out wrote into two cache directories and
-    neither side could see the other's entries. A round-16 tester measured that
-    3/3 and named the cost -- the whole point of a shared cache across workers,
-    defeated silently.
+    neither side could see the other's entries. That reproduced 3/3, and it silently
+    defeats the whole point of a shared cache across workers.
 
     The ``-m`` form is load-bearing here. With a plain ``python run.py`` parent
     the child DOES inherit ``__main__.__file__`` and the two already agreed, so
@@ -340,7 +338,7 @@ def test_a_spawned_worker_anchors_where_its_parent_did(tmp_path):
 
 
 def test_a_lint_only_pyproject_below_the_project_is_not_a_project(tmp_path):
-    """Round 19: `tests/pyproject.toml` holding only `[tool.ruff]` made
+    """`tests/pyproject.toml` holding only `[tool.ruff]` made
     `tests/` the project whenever a script there ran -- a second, cold cache,
     and the repository's `[tool.cash]` ignored. A pyproject.toml marks a
     project when it has `[project]`, `[build-system]`, `[tool.poetry]` or

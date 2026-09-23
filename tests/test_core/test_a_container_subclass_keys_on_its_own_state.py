@@ -1,6 +1,6 @@
 """A dict/list subclass's own state is part of the key, not just its items.
 
-Found while attacking the decorator before round 26: canonicalising a container
+Found while stress-testing the decorator: canonicalising a container
 rebuilds it from its items and tags the type name, so state that is not an item
 never reached the key -- ``defaultdict(list)`` and ``defaultdict(set)`` shared
 one entry, and a ``dict`` subclass carrying ``self.source`` served the first

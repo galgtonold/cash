@@ -1,6 +1,6 @@
 """A cached iterator yields everything, or raises -- never a silent prefix.
 
-Found while attacking the decorator before round 26: ``_chunks_are_intact``
+Found while stress-testing the decorator: ``_chunks_are_intact``
 checks every chunk exists at lookup time, then the iterator reads them lazily
 and turned a chunk that had since gone into a plain ``StopIteration``. Clearing
 or rewriting the entry while a caller iterated served 100 of 1000 items, with

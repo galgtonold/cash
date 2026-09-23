@@ -1,8 +1,7 @@
 """The per-user cache is for an installed TOOL run from nowhere in particular.
 
-#104 sent every installed console script run from anywhere to a per-user,
-per-tool cache. Round 17 found what else that rule catches, and all five
-testers hit the first one:
+Every installed console script run from anywhere goes to a per-user,
+per-tool cache. That rule catches more than it should, starting with:
 
 * **cash's own CLI.** ``cash.exe`` is a console script too, so it resolved a
   per-user ``…/cash/cash`` that nothing writes to. ``cash inspect`` found no

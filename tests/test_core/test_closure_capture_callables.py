@@ -1,6 +1,6 @@
 """A captured FUNCTION has to reach the cache key.
 
-Round-14 gate finding (WRONG). The strategy-factory shape --
+A wrong answer. The strategy-factory shape --
 
     def make_scorer(weight_fn):
         @cash.cache

@@ -1,4 +1,4 @@
-"""Regression for finding #10: ``cache_info()['total_time_saved']`` must credit
+"""``cache_info()['total_time_saved']`` must credit
 the *avoided compute time*, not the cache-lookup time.
 
 Before the fix it summed the hit's own (microsecond) lookup duration, so it

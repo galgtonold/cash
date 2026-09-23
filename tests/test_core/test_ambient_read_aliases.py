@@ -1,6 +1,6 @@
 """KEY-AMBIENT-READ recognises a clock read however the module was imported.
 
-Round 19 (r19s3, r19s4): ``import datetime as _dt; _dt.datetime.now()``,
+``import datetime as _dt; _dt.datetime.now()``,
 ``from datetime import datetime as DateTime``, ``import time as _time``,
 ``import os as _os``, ``pd.Timestamp.now()`` and ``pd.to_datetime("today")``
 froze a timestamp into every later result with no warning, while the
@@ -41,7 +41,7 @@ SPELLINGS = {
     "os-alias-getcwd": "_os.getcwd()",
     "os-alias-environ": '_os.environ.get("HOME")',
     "canonical": "datetime.datetime.now()",
-    # Round 20 (r20s3): these read the clock when the time argument is left out.
+    # These read the clock when the time argument is left out.
     "strftime": '_time.strftime("%Y-%m")',
     "asctime": "_time.asctime()",
     "ctime": "_time.ctime()",

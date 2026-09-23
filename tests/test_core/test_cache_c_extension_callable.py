@@ -1,4 +1,4 @@
-"""CAS-113: caching a C-extension / dispatcher / builtin callable must not crash.
+"""Caching a C-extension / dispatcher / builtin callable must not crash.
 
 Before the fix, decorating an opaque callable crashed on decoration or first
 call:

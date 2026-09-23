@@ -8,7 +8,7 @@ fingerprint the state hash falls back on when source is unavailable (functions
 defined in an IPython cell) and to the read-globals fold.
 
 Editing `n_estimators=300` to `400` therefore returned the 300-tree model on an
-instant HIT while `inspect.signature` reported 400 (CAS-183). That is worse than
+instant HIT while `inspect.signature` reported 400. That is worse than
 a plain stale read: sweeping a hyperparameter by editing its default returns
 identical scores every time, which reads as "accuracy has plateaued" -- a false
 finding rather than a visible bug.

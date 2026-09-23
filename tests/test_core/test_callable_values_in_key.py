@@ -1,6 +1,6 @@
 """A callable built at import time is keyed by everything it runs WITH, not just its code.
 
-Round 18 (r18s5): a module-level callable read inside a cached function, or
+A module-level callable read inside a cached function, or
 used as a parameter default, was keyed by its code alone. What it was built
 with never reached the key:
 

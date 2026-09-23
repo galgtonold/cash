@@ -1,16 +1,15 @@
 """The code that ran is the code the entry is keyed by.
 
-Round 19, two ways the two came apart, both persisting a wrong answer:
+Two ways the two came apart, both persisting a wrong answer:
 
 * A helper replaced under a running job by a copy that KEEPS an older mtime
   (``shutil.copy2``, ``cp -p``, rsync, robocopy, Explorer). The loaded-vs-disk
   check trusted "mtime older than the process" to mean "not edited", so the
   new text keyed the old code's result, and the next process -- running the
-  new code -- was served it (r19s4).
+  new code -- was served it.
 * A helper edited while a cached call ran: a pool worker started during the
   call imported the new code, and the result was stored under the key read
-  from the old text. Reverting the edit then served the edited code's numbers
-  (r19s5).
+  from the old text. Reverting the edit then served the edited code's numbers.
 """
 
 from __future__ import annotations

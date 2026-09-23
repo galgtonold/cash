@@ -2,7 +2,7 @@
 
 They assumed ``./.cash`` while ``cash info`` read the merged config, so the two
 commands whose whole job is to act on the cache acted on a different one from
-the library. A round-16 tester reproduced both halves (CAS-83):
+the library. Both halves reproduced:
 
 * ``CASH_CACHE_DIR=/tmp/mycache`` then ``cash inspect`` -> "no cache found",
   while ``cash info`` printed ``/tmp/mycache`` correctly. ``cash clear --all``
@@ -151,7 +151,7 @@ def test_python_m_cash_targets_the_project_you_stand_in(tmp_path):
     From an editable checkout `python -m cash` looked like a local script, so
     it anchored to cash's repository: `python -m cash clear --all` run inside
     another project cleared the cash checkout's cache (found while reproducing
-    CAS-125). An installed wheel was unaffected, which is why only a developer
+    a cache cleared under a live process). An installed wheel was unaffected, which is why only a developer
     could see it -- and why this is checked through the real CLI.
     """
     project = tmp_path / "proj"

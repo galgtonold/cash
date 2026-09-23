@@ -1,8 +1,8 @@
 """Regression: ``@cash.cache`` file-dep freshness must be content-authoritative.
 
-The notebook path got a content-hash freshness fallback in CAS-98/CAS-10; the
+The notebook path got a content-hash freshness fallback first; the
 decorator path (``Cash._auto_file_deps_fresh``) still compared ``(mtime, size)``
-only, so it failed in both opposite directions (CAS-119):
+only, so it failed in both opposite directions:
 
 - **touch** (identical content + size, only the mtime bumped) spuriously
   invalidated and recomputed, and
@@ -34,7 +34,7 @@ def _make_loader(cache_dir, calls):
 
 
 def test_touch_only_change_still_hits(tmp_path):
-    """CAS-98 direction: a touch must NOT invalidate.
+    """Over-invalidation direction: a touch must NOT invalidate.
 
     Identical bytes and size, only the mtime moved -> the entry is still fresh.
     The mtime-only baseline recomputed here (over-invalidation).
@@ -58,7 +58,7 @@ def test_touch_only_change_still_hits(tmp_path):
 
 
 def test_same_size_edit_under_identical_mtime_invalidates(tmp_path):
-    """CAS-10 direction: a same-size content change must invalidate.
+    """Under-invalidation direction: a same-size content change must invalidate.
 
     The mtime is forced back to the original so (mtime, size) is completely
     indistinguishable and only the content differs -- the mtime-only baseline

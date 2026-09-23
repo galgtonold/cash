@@ -52,7 +52,7 @@ def test_a_global_the_key_folds_is_not_reported_and_invalidates():
     """The analyzer still finds the read (above); the decorator does not
     report it, because CONFIG is folded into the key by value on every call
     and "cached results won't reflect changes to it" is false. This test
-    pinned that warning until round 18 measured the opposite. The second
+    pinned that warning until measurement showed the opposite. The second
     half is the reason: a setter's change is a new entry, not a stale hit."""
     gf.price.cache_clear()  # reset warn-once dedup
     with warnings.catch_warnings(record=True) as w:

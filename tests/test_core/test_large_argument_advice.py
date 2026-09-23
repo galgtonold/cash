@@ -1,12 +1,10 @@
 """The two warnings a large or mutated argument produces point at the right fix.
 
-Round 18:
-
 * IMPURE-SIDE-EFFECTS for a cached step that changed its ARGUMENT in place
   called it a "subscript mutation" and offered `assume_safe` -- which hides the
   real consequence: a hit returns the stored result and does not repeat the
-  change, so the caller's object differs between a hit and a miss (r18s5, 31
-  of 64 values wrong downstream). It now says so, and leads with "return a
+  change, so the caller's object differs between a hit and a miss (in one
+  case 31 of 64 values wrong downstream). It now says so, and leads with "return a
   copy".
 * CACHE-NET-LOSS said "a large argument is being hashed in full" without saying
   which. It now names the costliest parameter, and when a cached function

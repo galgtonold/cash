@@ -1,5 +1,5 @@
 """Sync single-flight: ``use_locking=True`` must collapse concurrent same-key
-computes to one on the DEFAULT (non-Redis) backends (CAS-112).
+computes to one on the DEFAULT (non-Redis) backends.
 
 ``use_locking=True`` promises single-flight — one concurrent computation per
 key — but the base backend ``lock()`` used to be a ``nullcontext`` that only

@@ -1,6 +1,6 @@
 """A file read once and memoised is still an input of every call that uses it.
 
-Round 19 (r19s1): a parse memoised with ``functools.lru_cache`` (or a module
+A parse memoised with ``functools.lru_cache`` (or a module
 dict), aggregated by two cached functions. The first recorded the file; the
 second got the memoised rows, read nothing, and stored no file dependency --
 after the data changed it kept serving the old total, 2 of 2, while the same
@@ -85,7 +85,7 @@ def test_the_second_consumer_of_a_memoised_parse_invalidates_when_the_file_chang
 
 
 def test_a_memo_filled_from_an_older_file_is_not_stored_as_the_new_answer(tmp_path, parse):
-    """Round 20 (r20s5): in a long-lived process the memo still holds the old
+    """In a long-lived process the memo still holds the old
     parse after the file changed. Without cash only this process is wrong; cash
     stored that answer against the NEW file, so a restart served it too."""
     data = tmp_path / "data.txt"
@@ -142,7 +142,7 @@ if __name__ == "__main__":
 
 
 def test_settings_a_memo_read_before_the_first_cached_call_are_an_input(tmp_path):
-    """Round 20 (r20s1): `main()` logs its settings -- through the memo --
+    """`main()` logs its settings -- through the memo --
     before the first cached call, the way a CLI prints its config. No cached
     call ever read the file, so every later edit of it was ignored. Fresh
     processes, because that is where the memo starts empty."""

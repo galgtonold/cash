@@ -1,6 +1,6 @@
 """A ``**kwargs`` entry never displaces the parameter of the same name.
 
-Found while attacking the decorator before round 26: canonicalising a call put
+Found while stress-testing the decorator: canonicalising a call put
 named parameters and ``**kwargs`` items into one dict, so ``def request(url, /,
 **params)`` called as ``request("/a", url="x")`` lost ``url``'s positional
 value -- every such call shared one entry, and ``request("/b", url="x")``

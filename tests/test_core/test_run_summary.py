@@ -150,7 +150,7 @@ def test_the_env_var_switches_it_on_with_no_code_change(tmp_path):
 
     assert "calls restored" not in run(None).stderr, "printed without being asked"
     shown = run("1")
-    # stderr since CAS-120: stdout is the program's own output.
+    # stderr: stdout is the program's own output.
     assert "calls restored" in shown.stderr
     assert "calls restored" not in shown.stdout
 
@@ -198,8 +198,8 @@ def test_the_summary_names_the_cache_directory(tmp_path):
     Every version of that question -- a scheduled job whose cwd-relative cache
     is somewhere else, a path typed with one backslash too few, a container
     volume that is not the one you meant -- is answered or excluded by seeing
-    the directory. A round-15 tester spent an arm of their round on a cache
-    directory that was not the one they thought they had set, with
+    the directory. One user spent hours on a cache directory that was not the
+    one they thought they had set, with
     `CASH_SUMMARY=1` on the whole time and nothing in its output to say so.
     """
     c = _cash(tmp_path)

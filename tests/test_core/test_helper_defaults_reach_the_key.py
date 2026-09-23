@@ -1,6 +1,6 @@
 """A helper's parameter defaults reach its caller's key.
 
-CAS-112, round-17 tester r17s3: 8 wrong answers in 8 from a service whose
+8 wrong answers in 8 from a service whose
 ridge penalty was a helper's DEFAULT:
 
     # helpers.py

@@ -1,6 +1,6 @@
 """An import written inside a cached function's body is followed like one at the top.
 
-Round 18 (r18s5): `from analytix.models import auc` inside the function --
+`from analytix.models import auc` inside the function --
 the usual way to break an import cycle -- binds a LOCAL, which the helper walk
 never looked at, so editing `auc` served stale bootstrap numbers, silently.
 The body's imports are now bindings: the helper is walked, and it is
@@ -112,7 +112,7 @@ def test_a_library_imported_in_a_branch_that_does_not_run_is_not_imported(tmp_pa
     assert _run(tmp_path)[0] == "6 False"
 
 
-# -- a CONSTANT reached that way, or through a module in a closure (r19s1 F7) --
+# -- a CONSTANT reached that way, or through a module in a closure -----------
 
 SETTINGS = "ROUNDING = {K}\n"
 

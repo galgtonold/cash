@@ -1,4 +1,4 @@
-"""A global OR closure capture passed to a call must still invalidate (CAS-270).
+"""A global OR closure capture passed to a call must still invalidate.
 
 `_read_global_data_names` folds module globals a function reads, so reassigning
 one invalidates. But it subtracted `_unsafe_uses_of`, which disqualified any
@@ -56,7 +56,7 @@ def c(tmp_path):
 
 
 def test_a_global_passed_to_a_builtin_invalidates(c):
-    """The CAS-270 repro: `sum(G)` put G beyond the argument rule."""
+    """`sum(G)` used to put G beyond the argument rule."""
     ns = _make_module_ns()
     ns["G"] = [1, 2, 3]
 

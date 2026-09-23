@@ -181,7 +181,7 @@ def test_cache_if_does_not_write_the_epoch_free_entry(_isolated_epochs, inst):
     so an approving predicate wrote the epoch-free entry anyway. It is kept
     from serving only by the separate persisted "this function draws" marker;
     lose that marker and the entry answers for any seed. Found while
-    consolidating the three copies of the store decision into one (CAS-120).
+    consolidating the three copies of the store decision into one.
     """
     calls = []
 

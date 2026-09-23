@@ -1,6 +1,6 @@
 """explain() looks; it does not count as a use or rewrite anything.
 
-Round 18 (r18s1 F2, r18s2): calling `f.explain(...)` moved USES and LAST USED
+Calling `f.explain(...)` used to move USES and LAST USED
 in `cash inspect`, and on a large entry the file backend rewrote the whole
 entry file ~5 s later to persist the access stamp -- while the docs say
 explain() writes nothing. It read through `backend.get`, the access path. It

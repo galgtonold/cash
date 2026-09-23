@@ -1,6 +1,6 @@
 """A cached ``functools.partial`` keys on what it wraps, not on an address.
 
-Found while attacking the decorator before round 26: `cash.cache(partial(slow,
+Found while stress-testing the decorator: `cash.cache(partial(slow,
 1))` took its cache namespace from `repr(partial)`, which holds the wrapped
 function's memory address -- so every process wrote a fresh namespace and none
 of them ever hit. (`docs/decorator.md` promises these "degrade to a stable

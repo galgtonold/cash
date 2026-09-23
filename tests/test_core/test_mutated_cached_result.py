@@ -45,7 +45,7 @@ class Params:
 
 
 def test_a_mutated_params_object_from_a_cached_call(c):
-    """r18s2's sweep idiom: one returned params object, mutated per iteration."""
+    """A sweep idiom: one returned params object, mutated per iteration."""
 
     @c.cache
     def make_params():

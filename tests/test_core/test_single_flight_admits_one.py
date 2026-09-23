@@ -1,6 +1,6 @@
 """``use_locking=True`` must admit exactly ONE thread into the compute.
 
-Round-15 gate finding. It admitted exactly two, deterministically, at 2, 4, 8
+It admitted exactly two, deterministically, at 2, 4, 8
 and 16 threads -- the other N-2 blocked correctly, so the lock plainly worked;
 it just always leaked a second computer. `thread-safety.md` recommends the flag
 for paid API calls and metered GPU jobs, which double-fire under that: twice the

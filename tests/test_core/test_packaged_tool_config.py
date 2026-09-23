@@ -1,4 +1,4 @@
-"""Round 20 (r20s4): configuring a packaged tool failed silently.
+"""Configuring a packaged tool failed silently.
 
 * ``Cash(config_path=...)`` naming a file the wheel did not ship: ignored, and
   the tool's cache lifetime with it.

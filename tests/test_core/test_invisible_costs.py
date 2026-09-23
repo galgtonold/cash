@@ -1,4 +1,4 @@
-"""What caching costs is shown next to what it saves (round 19).
+"""What caching costs is shown next to what it saves.
 
 A cached parser returned two million tuples to two cached consumers: warm runs
 were 8.5-9x SLOWER than uncached while the summary reported time saved.
@@ -204,7 +204,7 @@ def test_the_hit_line_and_the_summary_show_what_the_lookup_cost(tmp_path):
     assert "spent by cash on keys, lookups and stores, a net loss of 2.1s" in summary, summary
     assert "2.1s spent by cash" in summary, summary
 
-    # Round 20 (r20s2): a function that never hit cost its keys and stores on
+    # A function that never hit cost its keys and stores on
     # every miss, and the summary said nothing about it.
     c._function_stats["app.parse"] = {
         "hits": 0,
@@ -222,11 +222,11 @@ def test_the_hit_line_and_the_summary_show_what_the_lookup_cost(tmp_path):
     assert "3.0s spent by cash" in summary, summary
 
 
-# -- round 20: what the numbers were wrong about ------------------------------
+# -- what the numbers were wrong about ----------------------------------------
 
 
 def test_hits_on_several_threads_are_not_counted_as_serial_savings(tmp_path):
-    """r20s1: sixteen 0.5 s calls on eight threads claimed 8.0 s saved; the
+    """Sixteen 0.5 s calls on eight threads claimed 8.0 s saved; the
     warm run saved 1.0 s. A hit's saving is divided by the threads running
     cached calls with it."""
     from concurrent.futures import ThreadPoolExecutor
@@ -248,7 +248,7 @@ def test_hits_on_several_threads_are_not_counted_as_serial_savings(tmp_path):
 
 
 def test_a_nested_cached_calls_overhead_is_not_the_outer_functions_saving(tmp_path):
-    """r20s3: an inner cached call over 200k rows cost 12x its body to key, and
+    """An inner cached call over 200k rows cost 12x its body to key, and
     that time was booked as the OUTER function's run -- its hits then claimed
     to save it, 4-9x what running it uncached costs."""
     c = Cash(cache_dir=str(tmp_path / "cache"))
@@ -271,7 +271,7 @@ def test_a_nested_cached_calls_overhead_is_not_the_outer_functions_saving(tmp_pa
 
 
 def test_small_losses_across_functions_are_reported_together():
-    """r20s2: ten functions each losing 0.4-0.9 s never crossed the 2 s a single
+    """Ten functions each losing 0.4-0.9 s never crossed the 2 s a single
     warning waits for, and the run was 1.3x slower than no cache at all."""
     ledger = EffectivenessLedger(waste_threshold_seconds=2.0)
     for name in ("app.max_latency", "app.coupons", "app.parse_users"):
@@ -284,7 +284,7 @@ def test_small_losses_across_functions_are_reported_together():
 
 
 def test_a_function_that_never_hit_is_not_said_to_be_slow_to_load():
-    """r20s2 F8: 'it is loading the stored result' about a function whose
+    """'it is loading the stored result' about a function whose
     calls were all misses -- nothing was loaded; keeping the result was the
     cost."""
     ledger = EffectivenessLedger(waste_threshold_seconds=2.0)

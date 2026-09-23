@@ -1,7 +1,6 @@
 """Globals read by code passed as an argument reach the key.
 
-CAS-113, round-17 tester r17s4 -- their most important finding, because it
-turned a physics-breaking commit into a green CI run:
+This turned a physics-breaking commit into a green CI run:
 
     # potentials.py
     TILT = 0.0
@@ -17,7 +16,7 @@ only over the cached function's own body and its followed helpers, and an
 argument is neither. A helper one level below the callback WAS folded, which
 is what made the gap easy to trust.
 
-Each shape the tester found: a plain function, a bound method, and a
+Each shape it takes: a plain function, a bound method, and a
 callable instance (whose code lives on its class). Fresh process per run.
 """
 

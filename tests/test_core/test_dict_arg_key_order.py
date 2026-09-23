@@ -1,4 +1,4 @@
-"""CAS-108: dict arguments equal but for insertion order must share a cache key.
+"""Dict arguments equal but for insertion order must share a cache key.
 
 Before the fix, ``f({'a': 1, 'b': 2})`` and ``f({'b': 2, 'a': 1})`` produced two
 different cache keys (the stable-key canonicalisation of dict order only ran when

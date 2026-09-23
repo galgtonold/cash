@@ -1,6 +1,6 @@
 """A seed PARAMETER that is None in this call is unseeded, and says so.
 
-CAS-116, round-17 tester r17s4 (F4):
+The shape:
 
     @cash.cache
     def simulate(params, seed=None):
@@ -84,7 +84,7 @@ def test_allow_random_silences_it(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Round 18 (r18s5): the seed read from a settings object or a dict -- the usual
+# The seed read from a settings object or a dict -- the usual
 # shape in a real codebase -- froze one draw across processes with no warning,
 # while the bare `seed=None` parameter above did warn.
 # ---------------------------------------------------------------------------

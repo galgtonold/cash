@@ -1,6 +1,6 @@
 """A cached function handed around as a value is a dependency like one that is called.
 
-Round 19 (r19s5): ``def outer(n): return sum(map(inner, [n]))`` with ``inner``
+``def outer(n): return sum(map(inner, [n]))`` with ``inner``
 cached -- editing ``inner``'s helper recomputed ``inner`` but ``outer`` HIT its
 old sum. The same held for ``pool.map(inner, ...)``, ``delayed(inner)``, a
 ``for fn in [inner]`` loop, ``fn=inner`` as a default, and a module-level
@@ -119,7 +119,7 @@ def test_editing_a_cached_function_passed_as_a_value_invalidates_its_user(tmp_pa
 
 
 def test_editing_the_body_of_a_cached_function_in_a_registry_invalidates_its_user(tmp_path):
-    """Round 20 (r20s3): a dict of cached step functions was keyed by cash's
+    """A dict of cached step functions was keyed by cash's
     own wrapper, so not even an edit to a step's BODY moved its user's key."""
     (tmp_path / "job.py").write_text(JOB, encoding="utf-8")
     (tmp_path / "inner.py").write_text(INNER, encoding="utf-8")

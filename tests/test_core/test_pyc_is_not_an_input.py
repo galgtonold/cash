@@ -1,11 +1,11 @@
 """A module's own ``__pycache__/*.pyc`` is not a file input of a cached function.
 
-Round 20 (r20s4): ``f`` calls the cached ``load``; ``load``'s key is built
+``f`` calls the cached ``load``; ``load``'s key is built
 inside ``f``'s body, and building it checks that the code this process loaded
 still matches the file -- which reads the module's ``.pyc`` header through
 ``open``, where ``f``'s tracker recorded it. Editing ANOTHER function in the
 module rewrites the ``.pyc``, so ``f`` recomputed: a 25 s step on every deploy
-of the tester's tool, and reinstalling identical code did the same.
+of the tool, and reinstalling identical code did the same.
 
 Fresh processes, with bytecode written, and the cache filled in a run where the
 ``.pyc`` already existed -- the only arrangement in which it is read.

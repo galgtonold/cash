@@ -1,6 +1,6 @@
 """A cached step that changes a big or frozen list in place is not stored.
 
-Round 20 (r20s2): ``rows.sort()`` inside a cached step, on a million parsed
+``rows.sort()`` inside a cached step, on a million parsed
 rows, was stored -- the mutation check re-hashes the arguments and skips any
 that took over 50 ms to hash for the key -- so the warm run skipped the sort
 and a later order-reading step differed from the program without cash. With a
@@ -102,7 +102,7 @@ def _rewrites(rows):
     ],
 )
 def test_the_static_finding_says_the_argument_is_changed(c, fn, says):
-    """Round 20 (r20s2 F14): both read as the label a local list's `.sort()`
+    """Both read as the label a local list's `.sort()`
     gets ("write method", "subscript mutation"), the same as the false alarms
     beside them, so the one that mattered was not read."""
     import warnings

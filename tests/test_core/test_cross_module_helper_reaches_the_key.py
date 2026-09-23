@@ -2,8 +2,8 @@
 
 `decorator.md` said "Helpers are resolved within the module; name cross-module
 dependencies with `depends_on=`" — false in both halves, and the worst kind of
-doc bug, because it tells a reader to add a declaration they do not need. A
-round-16 tester read it and worked around a problem that was not there.
+doc bug, because it tells a reader to add a declaration they do not need, and
+to work around a problem that is not there.
 
 What the analyzer actually stops at is *installed* code (`site-packages`,
 `dist-packages`, the stdlib), which `Cash._is_user_module` decides. Your own

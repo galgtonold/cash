@@ -1,4 +1,4 @@
-"""CAS-106: pandas argument hashing must cover schema labels, not just values.
+"""Pandas argument hashing must cover schema labels, not just values.
 
 ``hash_pandas_object`` hashes row values + index values but not column names,
 ``Series.name``, or index names — so renamed frames/series and empty frames of

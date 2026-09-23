@@ -1,15 +1,14 @@
-"""Round 20: advisories that fired on ordinary code, every run.
+"""Advisories that fired on ordinary code, every run.
 
 * A per-key accumulator in a LOCAL dict -- ``by_user[k].append(x)``,
   ``acc = out.get(k); acc[0] += 1``, ``for u, stamps in by_user.items():
-  stamps.sort()`` -- was a "side effect" (r20s2, r20s5).
-* ``row[3] = float(row[3])`` on a row ``csv.reader`` just produced (r20s2).
+  stamps.sort()`` -- was a "side effect".
+* ``row[3] = float(row[3])`` on a row ``csv.reader`` just produced.
 * A progress ``print(..., file=sys.stderr)`` or a ``logger.info`` was an
-  IMPURE-SIDE-EFFECTS on every function that called the log helper (r20s1,
-  r20s2, r20s5). A hit skipping a log line is what caching means.
+  IMPURE-SIDE-EFFECTS on every function that called the log helper. A hit skipping a log line is what caching means.
 * ``perf_counter()`` returned by a ``mark()`` helper and handed only to a
-  ``done()`` that prints it was a KEY-AMBIENT-READ (r20s5).
-* ``con.execute("SELECT ...")`` was a "write method" (r20s4).
+  ``done()`` that prints it was a KEY-AMBIENT-READ.
+* ``con.execute("SELECT ...")`` was a "write method".
 
 Each has a control that must still warn.
 """
@@ -81,7 +80,7 @@ def latency_percentiles(rows):
 
 
 def latency_by_path_sorted(log_rows):
-    """r20s2's own shape: the items iterated through sorted()."""
+    """The reported shape: the items iterated through sorted()."""
     by_path = defaultdict(list)
     for r in log_rows:
         by_path[r[3]].append(r[5])
@@ -233,7 +232,7 @@ def uses_lookup(x):
 
 
 def test_an_autospec_fakes_side_effect_is_not_analysed_as_production_code(tmp_path):
-    """r20s1: `patch(..., autospec=True, side_effect=fake)` walked into the fake,
+    """`patch(..., autospec=True, side_effect=fake)` walked into the fake,
     and an `__import__` in it raised CashImpureFunctionError out of the test."""
     from unittest import mock
 
@@ -258,7 +257,7 @@ def announces(x):
 
 
 def test_a_warning_from_a_pool_thread_names_the_users_file(tmp_path):
-    """r20s1: first called in a ThreadPoolExecutor, the warning blamed
+    """First called in a ThreadPoolExecutor, the warning blamed
     concurrent/futures/thread.py."""
     import warnings
     from concurrent.futures import ThreadPoolExecutor
@@ -300,7 +299,7 @@ def _impure_shown(c, fn, arg):
 
 
 def test_a_static_finding_is_shown_once_per_cache_not_every_run(tmp_path):
-    """r20s1: 32 warning lines in a nightly job's log, every night."""
+    """32 warning lines in a nightly job's log, every night."""
     from cash import Cash
 
     first = Cash(cache_dir=str(tmp_path / "c"))
@@ -334,7 +333,7 @@ def slow_report(when):
 
 
 def test_a_frozen_perf_counter_does_not_freeze_cashs_own_timer(tmp_path, monkeypatch):
-    """r20s3: under freeze_time every body "ran 0.00s" and nothing was stored."""
+    """Under freeze_time every body "ran 0.00s" and nothing was stored."""
     from cash import Cash
 
     c = Cash(cache_dir=str(tmp_path / "c"))
@@ -350,7 +349,7 @@ def test_a_frozen_perf_counter_does_not_freeze_cashs_own_timer(tmp_path, monkeyp
 
 
 def test_a_fake_date_is_keyed_as_the_date(tmp_path, monkeypatch):
-    """r20s3: a `date` global made under freezegun re-keyed every function
+    """A `date` global made under freezegun re-keyed every function
     reading it, although the value was equal."""
     import datetime
     import types

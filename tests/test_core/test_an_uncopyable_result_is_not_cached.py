@@ -1,6 +1,6 @@
 """A result cash cannot copy is not cached at all.
 
-Found while attacking the decorator before round 26: the RAM tier deep-copies
+Found while stress-testing the decorator: the RAM tier deep-copies
 what it stores so a caller mutating a hit cannot poison later hits. When the
 copy fails -- a result holding a lock, a socket, a connection -- it fell back to
 storing and returning the object ITSELF. Measured: the caller appended to the

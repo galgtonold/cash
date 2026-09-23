@@ -1,4 +1,4 @@
-"""``@cash.cache`` must not store an identity-coupled result (CAS-245).
+"""``@cash.cache`` must not store an identity-coupled result.
 
 A ``Figure`` is only correct while it IS the object pyplot's process-wide
 registry points at.  The RAM tier deep-copies on store, and

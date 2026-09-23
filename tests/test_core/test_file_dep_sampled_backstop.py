@@ -4,19 +4,18 @@ regions must invalidate the dependency.
 ``file_content_hash`` hashes files up to ``file_hash_full_max_bytes`` in full but
 SAMPLES larger files at three fixed head/middle/tail regions. ``file_dep_is_fresh``
 used to treat that hash as authoritative whenever the size matched (mtime
-ignored, CAS-98) — so a same-size in-place edit outside every sampled region
+ignored) — so a same-size in-place edit outside every sampled region
 produced an identical hash and was silently served STALE.
 
 The fix re-instates mtime as a backstop for the SAMPLED regime only: a matching
 sampled hash is trusted only when the mtime also matches. A real edit bumps
 mtime, so the stale read is caught; full-hashed (<= cap) files keep the
-touch-tolerant CAS-98 behavior unchanged.
+touch-tolerant behavior unchanged.
 
 Run through ``scripts/fails_first.py`` to confirm the outside-sample case fails
 without the fix.
 
-The backstop has a hole of its own, found by two round-16 testers
-independently: an edit that RESTORES the mtime afterwards satisfies it. See
+The backstop has a hole of its own, found twice independently: an edit that RESTORES the mtime afterwards satisfies it. See
 ``test_sampled_file_freshness_backstops.py`` for that case, the second
 timestamp that closes it on POSIX, and the threshold knob that closes it
 anywhere.
@@ -118,11 +117,11 @@ def test_big_file_unchanged_is_fresh(tmp_path):
 
 
 def test_small_file_touch_still_hits(tmp_path):
-    """CAS-98 preserved for full-hashed files: a touch must NOT invalidate."""
+    """Full-hashed files stay touch-tolerant: a touch must NOT invalidate."""
     f = tmp_path / "small.txt"
     f.write_text("alpha-payload")  # well under the cap -> full hash
     snap = snapshot_file_deps({str(f)})[str(f)]
     st = os.stat(f)
     os.utime(f, (st.st_atime + 100, st.st_mtime + 100))  # touch: mtime moves
     assert os.stat(f).st_size == st.st_size
-    assert file_dep_is_fresh(str(f), snap) == (True, None), "full-hashed touch must remain fresh (CAS-98)"
+    assert file_dep_is_fresh(str(f), snap) == (True, None), "full-hashed touch must remain fresh"

@@ -1,6 +1,6 @@
 """A result that shares state with something the caller holds says so.
 
-Found while attacking the decorator before round 26: on the computing run these
+Found while stress-testing the decorator: on the computing run these
 behave like plain Python, and on a HIT they quietly stop:
 
 * ``return base[lo:hi]`` -- the numpy view stops sharing memory with ``base``,

@@ -1,4 +1,4 @@
-"""CAS-109: wrappers must key on the function they execute, not on the live
+"""Wrappers must key on the function they execute, not on the live
 ``module.qualname`` registry slot.
 
 Redefining a function (notebook cell re-run) or decorating two lambdas (which

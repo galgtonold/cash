@@ -1,6 +1,6 @@
 """``use_locking`` coalesces concurrent awaits, in one event loop or several.
 
-Found while attacking the decorator before round 26: the in-flight registry
+Found while stress-testing the decorator: the in-flight registry
 held one ``(loop, asyncio.Event)`` per key. A leader in a second loop
 overwrote the first loop's slot, and the first loop's followers -- finding
 another loop's event, which they cannot await -- each computed for themselves.

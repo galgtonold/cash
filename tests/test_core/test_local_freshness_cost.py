@@ -1,13 +1,13 @@
 """Checking your own files for freshness is work, and it is now measured.
 
-Two things ship here, both from one question a round-16 session raised: a
+Two things ship here, both from one question: a
 pipeline over fifty inputs pays for fifty freshness checks on **every** cache
 hit, and file dependencies propagate -- an aggregate that calls ten cached
 functions inherits their inputs -- so ten hits pay it ten times.
 
 * the digest is memoized per process, so the second and later checks of an
   unchanged file are a ``stat``. Measured on this box, warm page cache, median
-  of five warm hits, against the round-16 wheel:
+  of five warm hits, against the wheel of that time:
 
       50 files x  2 MiB    79.6 ms  ->  2.7 ms
       50 files x  8 MiB   313.3 ms  ->  2.8 ms
@@ -67,7 +67,7 @@ def _reader(c, runs, path):
 def test_a_burst_of_checks_shares_a_digest(cash_instance, tmp_path, monkeypatch):
     """The memo, asserted where it is decided rather than by a stopwatch: an
     aggregate whose cached helpers all depend on one input hashes it at most
-    once, not once per helper (the round-16 pipeline: fifty inputs, ten
+    once, not once per helper (the motivating pipeline: fifty inputs, ten
     helpers)."""
     import hashlib
     import types
@@ -97,7 +97,7 @@ def test_a_burst_of_checks_shares_a_digest(cash_instance, tmp_path, monkeypatch)
     reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time",
 )
 def test_an_edit_that_keeps_size_and_mtime_is_seen_once_the_window_passes(cash_instance, tmp_path, monkeypatch):
-    """Round 20 (r20s5), and a documented limitation: in a running process, an
+    """A documented limitation: in a running process, an
     edit that leaves the size and every timestamp alone (an np.memmap write on
     Windows; a write + os.utime back) is not seen while the digest is being
     reused -- five seconds. Re-hashing on every call instead cost a loop over a
@@ -132,7 +132,7 @@ def test_an_edit_that_keeps_size_and_mtime_is_seen_once_the_window_passes(cash_i
     reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time",
 )
 def test_a_file_changed_during_the_call_is_recorded_as_the_body_read_it(cash_instance, tmp_path):
-    """Round 20 (r20s5): an np.memmap write landed while a cached step was
+    """An np.memmap write landed while a cached step was
     computing. The result, computed from the old bytes, was stored with the
     fingerprint of the NEW file -- taken at store time, and the stat that
     would have refused the store moved not at all -- so every later process
