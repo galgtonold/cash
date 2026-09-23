@@ -125,7 +125,8 @@ def main() -> int:
 
     if not args.no_select:
         subprocess.run([sys.executable, str(HERE / "select_core.py"), "--out", str(out)], cwd=ROOT)
-    return 0
+    # pytest's own exit code, so a caller that checks only ours still sees a failed run.
+    return code
 
 
 if __name__ == "__main__":
