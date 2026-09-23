@@ -430,11 +430,6 @@ def _loaded(name: str) -> Any:
     return module
 
 
-#: Clock reads the notebook refused whatever their arguments, before it shared
-#: the decorator's rule that ``time.localtime(ts)`` only converts ``ts``.
-_REFUSED_WITH_ANY_ARGS: frozenset[str] = frozenset({"time.localtime", "time.gmtime"})
-
-
 def _forbidden_call(node: ast.Call, namespace: Mapping[str, Any]) -> str | None:
     """The reason *node* makes a statement uncacheable, or None.
 
@@ -448,11 +443,7 @@ def _forbidden_call(node: ast.Call, namespace: Mapping[str, Any]) -> str | None:
     if not isinstance(root, ast.Name) or not (root.id in namespace or hasattr(builtins, root.id)):
         return None
     effect = notebook_effect(node, namespace)
-    if effect is None:
-        effect = notebook_effect(ast.Call(func=node.func, args=[], keywords=[]), namespace)
-        if effect is None or effect.name not in _REFUSED_WITH_ANY_ARGS:
-            return None
-    if effect.kind not in SCANNED_KINDS or NOTEBOOK_POLICY[effect.kind] is not Action.REFUSE:
+    if effect is None or effect.kind not in SCANNED_KINDS or NOTEBOOK_POLICY[effect.kind] is not Action.REFUSE:
         return None
     return ".".join(effect.name.split(".")[-2:])
 

@@ -212,6 +212,17 @@ Writing to the console is output, not a file: `os.write(2, ...)`, `sys.stderr.wr
 and `sys.stdout.write(...)` count as a `print` does, so a step marker in a helper does
 not make every statement that calls it a file writer.
 
+<!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @c6776836, cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511 -->
+A statement that reads the clock or makes a fresh id runs every time too:
+`time.time()`, `time.perf_counter()`, `datetime.now()`, `date.today()`,
+`uuid.uuid4()`, `pd.Timestamp.now()`, `pd.to_datetime("today")`, and
+`time.strftime("%Y")`, `time.localtime()` and their kin when the time argument is
+left out. These are recognised by what the names are bound to, so `from time
+import time as now; now()` counts. `time.localtime(ts)` and
+`time.strftime("%Y", t)` only convert the time you give them and are cached. It
+is the same list a `@cash.cache` function is checked against
+([KEY-AMBIENT-READ](../warnings.md#key-ambient-read)).
+
 <!-- claim: cash/effects.py:METHOD_VERBS @49934ce1, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @c6f9471b -->
 Detection is by call shape, so it works without importing anything, with two
 consequences worth knowing. A bare `open(...)` counts only when its mode

@@ -506,18 +506,6 @@ _NOT_YET_REFUSED: frozenset[str] = frozenset(
         "upload_file",
         "upload_fileobj",
         "put_object",
-        # the clock: forms the decorator knew and the notebook did not
-        "datetime.today",
-        "datetime.datetime.today",
-        "pandas.Timestamp.now",
-        "pandas.Timestamp.today",
-        "pandas.Timestamp.utcnow",
-        "pandas.to_datetime",
-        "pandas.Timestamp",
-        "numpy.datetime64",
-        "time.strftime",
-        "time.asctime",
-        "time.ctime",
         # the person at the keyboard
         "input",
         "breakpoint",

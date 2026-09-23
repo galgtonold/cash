@@ -72,6 +72,15 @@ ROWS = [
     ("conn.commit()", "refuse", "impure_call"),
     ("df.to_sql('t', conn)", "refuse", "impure_call"),
     ("cur.execute('SELECT 1')", "cache", "silent"),
+    # The clock: each path kept its own list. The notebook missed
+    # `time.strftime("%Y")` and `datetime.today()` and refused
+    # `time.localtime(ts)`, which only converts `ts`; the decorator missed
+    # `time.process_time()`.
+    ("time.strftime('%Y')", "refuse", "ambient_read"),
+    ("datetime.datetime.today()", "refuse", "ambient_read"),
+    ("time.process_time()", "refuse", "ambient_read"),
+    ("time.localtime(1.0)", "cache", "silent"),
+    ("time.strftime('%Y', time.localtime(1.0))", "cache", "silent"),
 ]
 
 
@@ -140,3 +149,17 @@ def test_a_database_write_is_named_as_one(probe_module):
     """`df.to_sql` used to be reported as a file write."""
     _, reasons = notebook_verdict("r = df.to_sql('t', conn)", dict(vars(probe_module)))
     assert reasons == ["Side effect: df.to_sql() (database_write)"]
+
+
+def test_a_pandas_clock_read_is_refused_and_reported(tmp_path):
+    """`pd.Timestamp.now()` warned in a decorated function and was cached in a
+    notebook statement."""
+    pd = pytest.importorskip("pandas")
+    path = tmp_path / "_effect_verdicts_pandas.py"
+    path.write_text("import pandas as pd\n\n\ndef f():\n    r = pd.Timestamp.now()\n    return r\n")
+    spec = importlib.util.spec_from_file_location("_effect_verdicts_pandas", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert decorator_verdict(module.f)[0] == "ambient_read"
+    verdict, reasons = notebook_verdict("r = pd.Timestamp.now()", {"pd": pd})
+    assert verdict == "refuse" and reasons == ["Timestamp.now"]

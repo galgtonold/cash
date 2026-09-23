@@ -171,8 +171,6 @@ _AMBIENT_KINDS = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT})
 #: on both paths.
 _NOT_YET_REPORTED: frozenset[str] = frozenset(
     {
-        # the clock
-        "time.process_time",
         # the person at the keyboard
         "getpass.getpass",
     }
