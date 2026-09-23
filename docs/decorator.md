@@ -680,7 +680,7 @@ see [known limitations](known-limitations.md#code-passed-as-an-argument).
 
 #### `@cash.opaque` / `cash.opaque(T)` — opt a type out
 
-<!-- claim: cash/core.py:Cash._is_opaque @94932d6e, cash/__init__.py:opaque @3e1ca111 -->
+<!-- claim: cash/core.py:Cash._is_opaque @94932d6e, cash/__init__.py:opaque @679c15ff -->
 For a marker class you pass but do not depend on, or one whose code churns for
 reasons that never change the result:
 

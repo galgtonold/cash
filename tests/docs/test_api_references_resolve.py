@@ -26,9 +26,7 @@ _METHOD = re.compile(r"\bCash(?:\(\))?\.([A-Za-z_]\w*)")
 
 #: Stale references still to fix. Drop each one from here once it is fixed;
 #: none of them is an exception to keep.
-_KNOWN_STALE = {
-    ("src/cash/core.py", "Cash.notebook"),
-}
+_KNOWN_STALE: set[tuple[str, str]] = set()
 
 #: A magic named in prose as an example of a *different* name.
 _NOT_A_REFERENCE = {("src/cash/notebook/staleness.py", "%%cash_variant")}
