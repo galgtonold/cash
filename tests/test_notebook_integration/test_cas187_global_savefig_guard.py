@@ -18,6 +18,8 @@ inside the kernel.
 """
 
 import os
+import sys
+import tempfile
 
 import pytest
 
@@ -45,9 +47,15 @@ def _png_geometry(path):
     return (w, h)
 
 
+# A short directory: on Windows, C:/Temp rather than the profile's deep
+# AppData temp folder (MAX_PATH hygiene); elsewhere the system temp dir.
+_CHART_DIR = "C:/Temp" if sys.platform == "win32" else tempfile.gettempdir().replace("\\", "/")
+
+
 def _chart_path(tmp_path):
-    # Short path (Windows MAX_PATH hygiene) with a unique name per test.
-    p = f"C:/Temp/cas187_{os.getpid()}_{id(tmp_path) & 0xFFFF}.png"
+    # Unique name per test.
+    os.makedirs(_CHART_DIR, exist_ok=True)
+    p = f"{_CHART_DIR}/cas187_{os.getpid()}_{id(tmp_path) & 0xFFFF}.png"
     if os.path.exists(p):
         os.remove(p)
     return p
@@ -56,7 +64,6 @@ def _chart_path(tmp_path):
 def test_healthy_plt_savefig_writes_the_real_chart_and_does_not_refuse(nb_runner, tmp_path):
     """The healthy path: a normal run draws + saves the real chart; the guard,
     which only fires when the producer is missing from the plan, is a no-op."""
-    os.makedirs("C:/Temp", exist_ok=True)
     chart = _chart_path(tmp_path)
 
     nb_runner.create_notebook(
@@ -89,14 +96,13 @@ def test_orphaned_plt_savefig_is_refused_not_blanked(nb_runner, tmp_path):
     with a 640x480 blank (``plt.gcf()`` invents a default figure). The guard must
     refuse the orphaned write, leaving the real chart untouched on disk.
     """
-    os.makedirs("C:/Temp", exist_ok=True)
     chart = _chart_path(tmp_path)
 
     nb_runner.create_notebook(
         [
             "import os\nimport matplotlib\nmatplotlib.use('Agg')\n"
             "import matplotlib.pyplot as plt\nimport cash\n%cash_on\n%cash_badge print",  # 1
-            "d = r'C:/Temp'\nnames = ['a', 'b', 'c']\ntotals = [3, 5, 2]",  # 2
+            f"d = r'{_CHART_DIR}'\nnames = ['a', 'b', 'c']\ntotals = [3, 5, 2]",  # 2
             "fig, ax = plt.subplots(figsize=(8, 4.5), dpi=120)\n"  # 3
             "ax.bar(names, totals)\nax.set_title('Totals')\n"
             f"plt.savefig(os.path.join(d, {os.path.basename(chart)!r}))\nplt.close('all')",
