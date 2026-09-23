@@ -212,49 +212,51 @@ class TryHandler:
         """
         cached = computed = 0
         for body_node in body_nodes:
-            if is_control_structure(body_node):
-                result = self.dispatcher.process(
-                    body_node,
-                    ttl,
-                    silent,
-                    None,
-                    raw_cell,
-                    branch_annotation,
-                )
-                _helpers.tag_control_metrics(result, ctx_hash, ctx_label, all_metrics)
-                if not result.success:
-                    raise result.error or RuntimeError("Error in nested control structure")
-                if result.computed_iterations > 0:
-                    computed += 1
-                else:
-                    cached += 1
-            else:
-                stmt_code = ast.unparse(body_node)
-                modified_code = mark_control(stmt_code, ctx_hash)
-                annotation = _helpers.resolve_statement_annotation(
-                    raw_cell,
-                    body_node,
-                    branch_annotation,
-                )
-                # Never the cell's last expression -- see ForLoopHandler.
-                metrics = self.statement_processor.process_statement(
-                    modified_code,
-                    ttl,
-                    silent,
-                    annotation=annotation,
-                    is_last=False,
-                )
-                metrics["control_context"] = ctx_hash
-                metrics["branch_label"] = ctx_label
-                _helpers.flush_metrics_output(metrics)
-                all_metrics.append(metrics)
-                if metrics.get("status") == CacheStatus.ERROR:
-                    raise metrics.get("error", RuntimeError(f"Error executing: {stmt_code}"))
-                if metrics.get("status") == CacheStatus.COMPUTED:
-                    computed += 1
-                elif metrics.get("status") in (CacheStatus.RESTORED, CacheStatus.SKIPPED):
-                    cached += 1
+            if self._run_body_node(
+                body_node, ctx_hash, ctx_label, ttl, silent, all_metrics, raw_cell, branch_annotation
+            ):
+                computed += 1
+            elif is_control_structure(body_node) or _helpers.counts_as_cached(all_metrics[-1]):
+                cached += 1
         return cached, computed
+
+    def _run_body_node(
+        self,
+        body_node: ast.AST,
+        ctx_hash: str,
+        ctx_label: str,
+        ttl: int | None,
+        silent: bool,
+        all_metrics: list,
+        raw_cell: str | None,
+        branch_annotation,
+    ) -> bool:
+        """Run one statement of a branch; True if it (or a nested structure) computed."""
+        if is_control_structure(body_node):
+            result = _helpers.run_nested_structure(
+                self.dispatcher,
+                body_node,
+                ttl,
+                silent,
+                None,
+                raw_cell,
+                branch_annotation,
+                all_metrics,
+                _helpers.branch_tag(ctx_hash, ctx_label),
+            )
+            return result.computed_iterations > 0
+        metrics = _helpers.run_marked_statement(
+            self.statement_processor,
+            body_node,
+            lambda code: mark_control(code, ctx_hash),
+            ttl,
+            silent,
+            raw_cell,
+            branch_annotation,
+            all_metrics,
+            {"control_context": ctx_hash, "branch_label": ctx_label},
+        )
+        return metrics.get("status") == CacheStatus.COMPUTED
 
     def _execute_try_body_stmts(
         self,
@@ -269,65 +271,18 @@ class TryHandler:
     ) -> tuple[bool, Exception | None, int, int]:
         """Execute the try-body statements; return (succeeded, caught_exc, cached, computed)."""
         cached = computed = 0
-        try_body_succeeded = True
-        caught_exception: Exception | None = None
         for body_node in node.body:
-            if is_control_structure(body_node):
-                try:
-                    result = self.dispatcher.process(
-                        body_node,
-                        ttl,
-                        silent,
-                        None,
-                        raw_cell,
-                        branch_annotation,
-                    )
-                    _helpers.tag_control_metrics(result, branch_hash, branch_label, all_metrics)
-                    if not result.success:
-                        caught_exception = result.error or RuntimeError("Error in nested control structure")
-                        try_body_succeeded = False
-                        break
-                    if result.computed_iterations > 0:
-                        computed += 1
-                    else:
-                        cached += 1
-                except Exception as e:  # noqa: BLE001 - catching user-raised exceptions from nested control structures
-                    caught_exception = e
-                    try_body_succeeded = False
-                    break
-            else:
-                stmt_code = ast.unparse(body_node)
-                modified_code = mark_control(stmt_code, branch_hash)
-                annotation = _helpers.resolve_statement_annotation(
-                    raw_cell,
-                    body_node,
-                    branch_annotation,
+            try:
+                ran = self._run_body_node(
+                    body_node, branch_hash, branch_label, ttl, silent, all_metrics, raw_cell, branch_annotation
                 )
-                try:
-                    metrics = self.statement_processor.process_statement(
-                        modified_code,
-                        ttl,
-                        silent,
-                        annotation=annotation,
-                        is_last=False,
-                    )
-                except Exception as e:  # noqa: BLE001 - catching user-raised exceptions from statement execution
-                    caught_exception = e
-                    try_body_succeeded = False
-                    break
-                metrics["control_context"] = branch_hash
-                metrics["branch_label"] = branch_label
-                _helpers.flush_metrics_output(metrics)
-                all_metrics.append(metrics)
-                if metrics.get("status") == CacheStatus.ERROR:
-                    caught_exception = metrics.get("error", RuntimeError(f"Error executing: {stmt_code}"))
-                    try_body_succeeded = False
-                    break
-                if metrics.get("status") == CacheStatus.COMPUTED:
-                    computed += 1
-                elif metrics.get("status") in (CacheStatus.RESTORED, CacheStatus.SKIPPED):
-                    cached += 1
-        return try_body_succeeded, caught_exception, cached, computed
+            except Exception as e:  # noqa: BLE001 - the try's own except clauses decide what the user's error means
+                return False, e, cached, computed
+            if ran:
+                computed += 1
+            elif is_control_structure(body_node) or _helpers.counts_as_cached(all_metrics[-1]):
+                cached += 1
+        return True, None, cached, computed
 
     # ------------------------------------------------------------------
     # Handler matching

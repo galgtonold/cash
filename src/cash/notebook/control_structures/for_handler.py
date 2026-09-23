@@ -670,50 +670,6 @@ class ForLoopHandler:
                     iteration_cached = False
         return iteration_cached
 
-    def _process_body_statement(
-        self,
-        code: str,
-        iteration_context: dict[str, Any],
-        ttl: int | None,
-        silent: bool,
-        annotation=None,
-    ) -> dict[str, Any]:
-        """
-        Process a single body statement with iteration context in the cache key.
-
-        The iteration context (loop variable values + iterable lineage) is
-        injected as a comment, making the cache key unique per-iteration.
-
-        The statement processor's mutation detection will automatically detect
-        statements like ``a.append(x)`` or ``d[k] = v`` and set
-        ``skip_cache=True``, ensuring they always re-execute.
-
-        *annotation* is the body statement's own ``@cash:`` directives, resolved
-        by the caller against the original cell source. It cannot be recovered
-        from *code*: ``ast.unparse`` drops comments, so by the time a body
-        statement gets here its directive is already gone from the text.
-        """
-
-        context_hash = compute_context_hash(iteration_context)
-        modified_code = mark_iteration(code, context_hash)
-
-        # A body statement is never the cell's last expression: Jupyter shows
-        # nothing for ``ax.text(...)`` inside a loop (round 22: 151 Text reprs).
-        result = self.statement_processor.process_statement(
-            modified_code,
-            ttl,
-            silent,
-            annotation=annotation,
-            is_last=False,
-        )
-
-        # Attach human-readable loop variable values to the metrics
-        loop_vars = {k: v for k, v in iteration_context.items() if not k.startswith("__")}
-        if loop_vars:
-            result["loop_vars"] = loop_vars
-
-        return result
-
     def _execute_loop_body_nested_control(
         self,
         body_node: ast.AST,
@@ -726,45 +682,31 @@ class ForLoopHandler:
         raw_cell: str | None = None,
         loop_annotation=None,
     ) -> bool:
-        """Process a nested control structure inside a for loop body.
+        """Run a control structure nested in the loop body; True if any of it computed.
 
-        Recurses into the orchestrator's ``process``, injects the iteration
-        context comment into nested metrics for correct badge grouping, and
-        flushes output immediately for real-time streaming.
-
-        The enclosing loop's annotation is passed down as *inherited*, so a
-        directive on the outer loop reaches statements in the inner one.
-
-        Returns True if any nested iterations were computed (not cached).
-        Raises on error, annotating the exception with the body node's line number.
+        Its metrics get this iteration's marker and loop variables so the
+        badge keeps them inside the loop, and the loop's annotation flows
+        down into it.
         """
-        result = self.dispatcher.process(
+
+        def tag(m: dict[str, Any]) -> None:
+            code = m.get("code", "")
+            if iteration_digest(code) is None:
+                m["code"] = mark_iteration(code, context_hash)
+            if loop_vars and "loop_vars" not in m:
+                m["loop_vars"] = loop_vars
+
+        result = _helpers.run_nested_structure(
+            self.dispatcher,
             body_node,
             ttl,
             silent,
             iteration_context,
             raw_cell,
             loop_annotation,
+            all_metrics,
+            tag,
         )
-        # Inject __iteration_context__ into nested metrics so the badge
-        # renderer keeps them inside the loop group.
-        for m in result.metrics:
-            code = m.get("code", "")
-            if iteration_digest(code) is None:
-                m["code"] = mark_iteration(code, context_hash)
-            if loop_vars and "loop_vars" not in m:
-                m["loop_vars"] = loop_vars
-            if not m.get("_output_flushed"):
-                _helpers.flush_metrics_output(m)
-        all_metrics.extend(result.metrics)
-        if not result.success:
-            err = result.error or RuntimeError("Error in nested control structure")
-            # Preserve _cash_error_lineno from nested error, or fall back to
-            # this node's line number.
-            if not hasattr(err, "_cash_error_lineno"):
-                with contextlib.suppress(AttributeError, TypeError):
-                    err._cash_error_lineno = getattr(body_node, "lineno", None)
-            raise err
         return result.computed_iterations > 0
 
     def _execute_loop_body_statement(
@@ -777,42 +719,25 @@ class ForLoopHandler:
         raw_cell: str | None = None,
         loop_annotation=None,
     ) -> bool:
-        """Process a plain (non-control-structure) statement inside a for loop body.
+        """Run one plain statement of the loop body; True if it computed.
 
-        Unparsed the node, delegates to ``_process_body_statement``, flushes
-        output immediately, and raises on error — annotating the exception with
-        the body node's source line number.
-
-        The statement's OWN annotation is resolved here, under the loop's. Body
-        statements are separate cache entries, so a ``# @cash:no-cache`` on one
-        must not leak onto its siblings — resolving per statement rather than
-        applying the loop's whole-range scan is what keeps the sibling cached.
-
-        Returns True if the statement was freshly computed (status == 'COMPUTED').
+        The iteration context (loop variable values and the iterable's
+        lineage) goes into the cache key as a marker, so each iteration is
+        its own entry.
         """
-        stmt_code = ast.unparse(body_node)
-        annotation = _helpers.resolve_statement_annotation(
-            raw_cell,
+        context_hash = compute_context_hash(iteration_context)
+        loop_vars = {k: v for k, v in iteration_context.items() if not k.startswith("__")}
+        metrics = _helpers.run_marked_statement(
+            self.statement_processor,
             body_node,
-            loop_annotation,
-        )
-        metrics = self._process_body_statement(
-            stmt_code,
-            iteration_context,
+            lambda code: mark_iteration(code, context_hash),
             ttl,
             silent,
-            annotation,
+            raw_cell,
+            loop_annotation,
+            all_metrics,
+            {"loop_vars": loop_vars} if loop_vars else {},
         )
-        _helpers.flush_metrics_output(metrics)
-        all_metrics.append(metrics)
-        if metrics.get("status") == CacheStatus.ERROR:
-            err = metrics.get("error", RuntimeError(f"Error executing: {stmt_code}"))
-            # Annotate with the body statement's original line number from the
-            # cell AST so show_clean_error can point to the exact line, not
-            # the for-loop header.
-            with contextlib.suppress(AttributeError, TypeError):
-                err._cash_error_lineno = getattr(body_node, "lineno", None)
-            raise err
         return metrics.get("status") == CacheStatus.COMPUTED
 
     # ------------------------------------------------------------------

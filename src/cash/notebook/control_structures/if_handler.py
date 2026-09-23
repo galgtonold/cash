@@ -16,7 +16,6 @@ It does NOT own:
 from __future__ import annotations
 
 import ast
-import contextlib
 import hashlib
 import logging
 from typing import TYPE_CHECKING
@@ -167,46 +166,29 @@ class IfHandler:
         """
 
         if is_control_structure(body_node):
-            result = self.dispatcher.process(
+            result = _helpers.run_nested_structure(
+                self.dispatcher,
                 body_node,
                 ttl,
                 silent,
                 None,
                 raw_cell,
                 branch_annotation,
+                all_metrics,
+                _helpers.branch_tag(branch_hash, branch_label),
             )
-            _helpers.tag_control_metrics(result, branch_hash, branch_label, all_metrics)
-            if not result.success:
-                err = result.error or RuntimeError("Error in nested control structure")
-                if not hasattr(err, "_cash_error_lineno"):
-                    with contextlib.suppress(AttributeError, TypeError):
-                        err._cash_error_lineno = getattr(body_node, "lineno", None)
-                raise err
             return result.computed_iterations > 0
-        stmt_code = ast.unparse(body_node)
-        modified_code = mark_control(stmt_code, branch_hash)
-        annotation = _helpers.resolve_statement_annotation(
-            raw_cell,
+        metrics = _helpers.run_marked_statement(
+            self.statement_processor,
             body_node,
-            branch_annotation,
-        )
-        # Never the cell's last expression -- see ForLoopHandler.
-        metrics = self.statement_processor.process_statement(
-            modified_code,
+            lambda code: mark_control(code, branch_hash),
             ttl,
             silent,
-            annotation=annotation,
-            is_last=False,
+            raw_cell,
+            branch_annotation,
+            all_metrics,
+            {"control_context": branch_hash, "branch_label": branch_label},
         )
-        metrics["control_context"] = branch_hash
-        metrics["branch_label"] = branch_label
-        _helpers.flush_metrics_output(metrics)
-        all_metrics.append(metrics)
-        if metrics.get("status") == CacheStatus.ERROR:
-            err = metrics.get("error", RuntimeError(f"Error executing: {stmt_code}"))
-            with contextlib.suppress(AttributeError, TypeError):
-                err._cash_error_lineno = getattr(body_node, "lineno", None)
-            raise err
         return metrics.get("status") == CacheStatus.COMPUTED
 
     def _find_taken_branch(self, node: ast.If) -> tuple[list[ast.AST], str]:

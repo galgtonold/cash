@@ -13,9 +13,11 @@ logic without each carrying a copy of the lineage-update plumbing.
 from __future__ import annotations
 
 import ast
+import contextlib
 import hashlib
 import logging
 import sys
+from collections.abc import Callable
 from typing import Any
 
 from ...analysis.annotations import (
@@ -25,6 +27,7 @@ from ...analysis.annotations import (
 )
 from ...analysis.cacheability import analyze_statement, selfref_reassignment_targets
 from ...analysis.code_analyzer import CodeAnalyzer
+from ..cache_status import CacheStatus
 from ..compiled_source import is_cash_filename
 from .common import extract_target_names, is_control_structure
 
@@ -134,15 +137,94 @@ def flush_metrics_output(metrics: dict[str, Any]) -> None:
     metrics["_output_flushed"] = True
 
 
-def tag_control_metrics(result: Any, ctx_hash: str, ctx_label: str, all_metrics: list) -> None:
-    """Tag and flush metrics from a nested control-structure result."""
+# ---------------------------------------------------------------------------
+# Running a body statement
+# ---------------------------------------------------------------------------
+
+
+def run_marked_statement(
+    statement_processor: Any,
+    body_node: ast.AST,
+    mark: Callable[[str], str],
+    ttl: int | None,
+    silent: bool,
+    raw_cell: str | None,
+    inherited_annotation: CacheAnnotation | None,
+    all_metrics: list,
+    tags: dict[str, Any],
+) -> dict[str, Any]:
+    """Run one body statement of a control structure as its own cache entry.
+
+    *mark* adds the statement's cache-key discriminator (its iteration or
+    branch) to the code; *tags* go on its metrics for the badge. Its own
+    ``@cash:`` directive is resolved under *inherited_annotation*: body
+    statements are separate entries, so one statement's directive must not
+    leak onto its siblings. Output is flushed as the statement finishes. A
+    statement that failed raises its error, carrying the body line.
+    """
+    code = ast.unparse(body_node)
+    annotation = resolve_statement_annotation(raw_cell, body_node, inherited_annotation)
+    # A body statement is never the cell's last expression: Jupyter shows
+    # nothing for ``ax.text(...)`` inside a loop.
+    metrics = statement_processor.process_statement(mark(code), ttl, silent, annotation=annotation, is_last=False)
+    metrics.update(tags)
+    flush_metrics_output(metrics)
+    all_metrics.append(metrics)
+    if metrics.get("status") == CacheStatus.ERROR:
+        raise at_line(metrics.get("error", RuntimeError(f"Error executing: {code}")), body_node, overwrite=True)
+    return metrics
+
+
+def run_nested_structure(
+    dispatcher: Any,
+    body_node: ast.AST,
+    ttl: int | None,
+    silent: bool,
+    parent_context: dict[str, Any] | None,
+    raw_cell: str | None,
+    inherited_annotation: CacheAnnotation | None,
+    all_metrics: list,
+    tag: Callable[[dict[str, Any]], None],
+) -> Any:
+    """Run a control structure nested in a body through the orchestrator.
+
+    *tag* stamps each of its metrics for the enclosing structure's badge
+    group; output not yet flushed is flushed. A failure raises the nested
+    error, keeping the line it was raised at if it has one.
+    """
+    result = dispatcher.process(body_node, ttl, silent, parent_context, raw_cell, inherited_annotation)
     for m in result.metrics:
-        if "control_context" not in m:
-            m["control_context"] = ctx_hash
-            m["branch_label"] = ctx_label
+        tag(m)
         if not m.get("_output_flushed"):
             flush_metrics_output(m)
     all_metrics.extend(result.metrics)
+    if not result.success:
+        raise at_line(result.error or RuntimeError("Error in nested control structure"), body_node, overwrite=False)
+    return result
+
+
+def branch_tag(ctx_hash: str, ctx_label: str) -> Callable[[dict[str, Any]], None]:
+    """A *tag* for :func:`run_nested_structure`: the enclosing branch, unless
+    a branch nested deeper already claimed the metric."""
+
+    def tag(m: dict[str, Any]) -> None:
+        if "control_context" not in m:
+            m["control_context"] = ctx_hash
+            m["branch_label"] = ctx_label
+
+    return tag
+
+
+def counts_as_cached(metrics: dict[str, Any]) -> bool:
+    return metrics.get("status") in (CacheStatus.RESTORED, CacheStatus.SKIPPED)
+
+
+def at_line(err: BaseException, node: ast.AST, *, overwrite: bool) -> BaseException:
+    """*err* marked with *node*'s cell line, for the clean traceback."""
+    if overwrite or not hasattr(err, "_cash_error_lineno"):
+        with contextlib.suppress(AttributeError, TypeError):
+            err._cash_error_lineno = getattr(node, "lineno", None)  # type: ignore[attr-defined]
+    return err
 
 
 # ---------------------------------------------------------------------------
