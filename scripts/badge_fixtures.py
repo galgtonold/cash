@@ -211,11 +211,11 @@ FIXTURES: dict[str, MetricsList] = {
             "is_upstream": False,
         },
     ],
-    # §5.b — REMOVED (CAS-114). This fixture hand-wrote an
+    # §5.b — REMOVED. This fixture hand-wrote an
     # ``uncacheable_reasons`` entry ("unseeded random call: numpy.random.rand")
     # that the runtime never emits, so it rendered a badge state that cannot
     # occur.  Unseeded randomness is *cacheable by design*: ``decide_cacheability``
-    # has no randomness reason-source. What CAS-114 shipped is a
+    # has no randomness reason-source. What the runtime emits instead is a
     # ``CashRandomnessWarning``, which is a Python warning — not a badge row and
     # not an uncacheable reason.  Making the fixture "real" would have required
     # inventing the very cacheability rule the design rejects.
@@ -325,7 +325,7 @@ FIXTURES: dict[str, MetricsList] = {
         },
         # Current cell — computed because miss_reason. ``execution_time`` is the
         # raw user compute the runtime always records for a COMPUTED statement;
-        # the honest header-saving (CAS-143) subtracts cash's overhead
+        # the honest header-saving subtracts cash's overhead
         # (cell wall time minus this compute) from the gross restore savings, so
         # the fixture must carry it to mirror a real cell.
         {

@@ -1,4 +1,4 @@
-# Wheel-gate harness (CAS-190)
+# Wheel-gate harness
 
 An automated, assertion-driven reproduction of the manual "gate rounds" — a
 fresh **wheel venv** + a **real Jupyter server** + real **kernel restarts** —
@@ -7,20 +7,20 @@ that a developer or CI can run with one command.
 ## Why this exists
 
 The fast suite (`tests/test_notebook_integration/`) is structurally **blind** to
-two whole classes of bug, proven four times this release (CAS-185, CAS-196,
-CAS-202, the packaging P0):
+two whole classes of bug, proven four times in one release (three notebook
+re-run bugs and a packaging bug):
 
 1. **Kernel-restart behaviour.** `nb_runner` boots a fresh kernel per test and
    has **no restart method** (`grep 'def restart' conftest.py` → nothing). Every
-   restart-path bug is invisible: CAS-196's restart re-fire and CAS-202's
-   restart-retrain both shipped green.
+   restart-path bug is invisible: a restart re-fire of an upstream `to_csv`
+   and a restart retrain of a `@cash.cache` model both shipped green.
 2. **Wheel-venv install layout.** The suite runs the **editable dev install**
-   against the developer's own Python; testers run a **fresh wheel venv**. `importlib.metadata`
+   against the developer's own Python; users run a **fresh wheel venv**. `importlib.metadata`
    phantom file-dep probes (81 in a venv vs 0 in dev) only exist in the venv.
    Every install-layout bug is invisible. The dev env doesn't even have
-   `jupyter_server` installed — so whatever the CAS-171 36-config sweep drove, it
+   `jupyter_server` installed — so whatever an earlier 36-config sweep drove, it
    was **not a real Jupyter server**. A harness that reports green on a bug that
-   reproduces on the first real kernel is itself the defect (that is CAS-190).
+   reproduces on the first real kernel is itself the defect.
 
 The manual gate catches these but needs five human-like agents ~30 min. This
 harness encodes that methodology as seven assertion-driven scenarios, each proven
@@ -44,31 +44,31 @@ restored on a cache hit and so cannot witness a silent re-run.
 4. Drives a **real `jupyter server` + `BlockingKernelClient`** via
    `wheel_gate_driver.py`, with a real kernel `restart` between
    run phases. `PYTHONUTF8=1` in the server env so cash's emoji badges can't
-   crash the harness on cp1252 (CAS-192).
+   crash the harness on cp1252.
 5. Cleans up: `quit` + tree-kill the server (idempotent, rerun-safe; leftover
    sockets are only TIME_WAIT, never a live process).
 
 ## The scenarios
 
-| id | invariant (external signal) | issue | baseline |
-|----|-----------------------------|-------|----------|
-| **S1** | multi-cell `make_classification → DataFrame → train_test_split → @cash.cache train()` restores after a **kernel restart** (fit counter unchanged) | CAS-202 | **GREEN** (was RED until CAS-202 fixed) |
-| **S2** | a downstream reader does **not** re-fire an upstream `df.to_csv('audit.log', mode='a')` — `audit.log` byte-stable vs a `%cash_off` baseline | CAS-196 | **GREEN** (was RED until CAS-196 fixed) |
-| **S3** | the **single-cell** version of the same sklearn `@cash.cache` work survives a restart (fit counter unchanged) | CAS-202 control | **GREEN** |
+| id | invariant (external signal) | guards | baseline |
+|----|-----------------------------|--------|----------|
+| **S1** | multi-cell `make_classification → DataFrame → train_test_split → @cash.cache train()` restores after a **kernel restart** (fit counter unchanged) | multi-cell restart retrain | **GREEN** (was RED until fixed) |
+| **S2** | a downstream reader does **not** re-fire an upstream `df.to_csv('audit.log', mode='a')` — `audit.log` byte-stable vs a `%cash_off` baseline | writer re-fired during reconstruction | **GREEN** (was RED until fixed) |
+| **S3** | the **single-cell** version of the same sklearn `@cash.cache` work survives a restart (fit counter unchanged) | control for S1 | **GREEN** |
 | **S4** | a plain `@cash.cache` int fn survives a restart (call counter unchanged) | control | **GREEN** |
-| **S5** | after a restart, a cell **below** a plot cell (sharing no variable with it) does **not** re-fire the plot's `fig.savefig(...)` — a deleted `chart.png` is not re-created — nor `UpstreamStateError` on the plot's evicted RAM-only intermediate | CAS-200/193 | **GREEN** (was RED until CAS-200 fixed) |
-| **S6** | `await` inside a **`for`-loop body** caches under `%cash_on` without `SyntaxError`, and the async body runs exactly 5× (fetch counter) | CAS-198 | **GREEN** (was RED until CAS-198 fixed) |
-| **S7** | a figure drawn **inside a `for` loop** is rebuilt before `fig.savefig(...)` is re-fired: a downstream cell reading the written `audit.log` cannot leave a **blank** chart — coloured (non-greyscale) pixel count, decoded outside the kernel, is unchanged | CAS-213 | **GREEN** (was RED until CAS-213 fixed) |
+| **S5** | after a restart, a cell **below** a plot cell (sharing no variable with it) does **not** re-fire the plot's `fig.savefig(...)` — a deleted `chart.png` is not re-created — nor `UpstreamStateError` on the plot's evicted RAM-only intermediate | plot writer re-fired after restart | **GREEN** (was RED until fixed) |
+| **S6** | `await` inside a **`for`-loop body** caches under `%cash_on` without `SyntaxError`, and the async body runs exactly 5× (fetch counter) | `await` in a loop body | **GREEN** (was RED until fixed) |
+| **S7** | a figure drawn **inside a `for` loop** is rebuilt before `fig.savefig(...)` is re-fired: a downstream cell reading the written `audit.log` cannot leave a **blank** chart — coloured (non-greyscale) pixel count, decoded outside the kernel, is unchanged | loop-drawn figure blanked | **GREEN** (was RED until fixed) |
 
 `RED` = the invariant is violated = the bug is present. S1 was **RED** until
-CAS-202 was fixed (the decorator arg-hash keyed a DataFrame argument on its
-per-session `_cash_lineage_hash` instead of its stable content). **S2** was RED
-until CAS-196's reconstruction-scope gate landed: an upstream file-writer whose
-output no consumer relevant to the current cell reads is never re-fired during
-another cell's reconstruction. **S5** was added for CAS-200/193 and the *same*
-scope gate flips it RED→GREEN. **S4 (GREEN)** shows restart-survival works when
+the decorator arg-hash stopped keying a DataFrame argument on its per-session
+`_cash_lineage_hash` instead of its stable content. **S2** was RED until the
+reconstruction-scope gate landed: an upstream file-writer whose output no
+consumer relevant to the current cell reads is never re-fired during another
+cell's reconstruction. **S5** was added for a plot writer re-fired after a
+restart, and the *same* scope gate flips it RED→GREEN. **S4 (GREEN)** shows restart-survival works when
 no sklearn import poisons the file-dep set. When these bugs were open,
-**S1/S2/S5 going RED was the proof of non-vacuity** — the exact CAS-190
+**S1/S2/S5 going RED was the proof of non-vacuity** — the exact
 blindness the harness cures; the fast suite reported all of them green.
 
 **S7 exists because S5 was not enough.** S5 draws its figure with a *flat*
@@ -133,9 +133,9 @@ The default fast suite collects the shim and **skips it in ~0.02 s**.
 ```
 id  status  expected  match  title
 ------------------------------------------------------------------------------
-S1  RED     RED       yes    restart survival of @cash.cache sklearn pipeline (CAS-202)
-S2  RED     RED       yes    to_csv audit-log not re-fired during reconstruction (CAS-196)
-S3  GREEN   GREEN     yes    single-cell sklearn @cash.cache survives a restart (CAS-202 control)
+S1  RED     RED       yes    restart survival of @cash.cache sklearn pipeline
+S2  RED     RED       yes    to_csv audit-log not re-fired during reconstruction
+S3  GREEN   GREEN     yes    single-cell sklearn @cash.cache survives a restart (control)
 S4  GREEN   GREEN     yes    plain @cash.cache int fn survives a restart (control)
 
 [S1] @cash.cache re-trained after restart: fit body ran 2x (cold 1 + retrain 1)
@@ -149,11 +149,12 @@ RED (bug reproduced): ['S1', 'S2']
 GREEN (invariant held): ['S3', 'S4']
 ```
 
-S2's `no-cash=1 vs cash=2` exactly reproduces CAS-196's measured signature (and
-goes to 3 after the downstream reader). S1's fit counter going 1→2 across the
-restart is CAS-202. Both are invisible to the fast suite.
+S2's `no-cash=1 vs cash=2` exactly reproduces the measured signature of the
+re-fired append (and goes to 3 after the downstream reader). S1's fit counter
+going 1→2 across the restart is the restart retrain. Both are invisible to the
+fast suite.
 
-### S7's two arms (CAS-213, wheel built from `fd76763`)
+### S7's two arms (wheel built from `fd76763`)
 
 Both arms share the same venv, the same wheel and the same cells; the *only*
 difference is which `reexecution_planner.py` sits in the venv's site-packages.
@@ -179,6 +180,6 @@ catches it.
   server + `BlockingKernelClient`).
 - `tests/test_wheel_gate/` — opt-in pytest shim + local `wheel_gate` marker.
 
-Only `src/` is off-limits — this is the harness, not the fix. The CAS-202 /
-CAS-196 fixes land in later tasks; this harness is what will prove them.
+Only `src/` is off-limits — this is the harness, not the fix; the harness is
+what proves a fix.
 ```

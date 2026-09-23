@@ -1,6 +1,6 @@
 """Persistent-kernel notebook driver, backed by a REAL Jupyter server.
 
-This is the CAS-190 wheel-gate driver.
+This is the wheel-gate driver.
 cash's notebook mode needs a live Jupyter server (it maps kernel_id -> notebook
 path via the server's /api/sessions), so plain nbclient can't drive it. This
 spins up `jupyter server`, opens a session bound to work.ipynb, and talks ZMQ to
@@ -15,7 +15,7 @@ Configuration (all optional environment variables):
                        and drives with that name, so a stray system/user
                        `python3` kernelspec can never shadow the venv interpreter
                        (that shadow would silently defeat the whole
-                       install-layout test -- the CAS-190 point).
+                       install-layout test, which is the point of the gate).
   * CASH_DRIVER_PORT / CASH_DRIVER_TOKEN -- server port + token.
 
 Run this WITH THE VENV PYTHON so `sys.executable` (used to spawn the server) is
@@ -39,11 +39,11 @@ import traceback
 import urllib.request
 
 # The kernel emits UTF-8 (cash badges contain checkmark/lightning emoji). This
-# driver, and any tester that prints captured cell output, run on Windows where
+# driver, and any harness that prints captured cell output, run on Windows where
 # the default stdout is cp1252 and re-printing those bytes raises
-# UnicodeEncodeError -- it silently corrupted testers' %cash_on measurements (a
+# UnicodeEncodeError -- it silently corrupted %cash_on measurements (a
 # phantom "no cache" reading). Force UTF-8 so captured emoji never crash the
-# harness (CAS-192).
+# harness.
 for _s in (sys.stdout, sys.stderr):
     try:
         _s.reconfigure(encoding="utf-8", errors="replace")

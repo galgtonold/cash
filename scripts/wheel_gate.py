@@ -1,24 +1,24 @@
-r"""CAS-190 wheel-gate harness: an automated, assertion-driven reproduction of
+r"""Wheel-gate harness: an automated, assertion-driven reproduction of
 the manual gate rounds.
 
 WHY THIS EXISTS
 ---------------
 The fast test suite (`tests/test_notebook_integration/`) is structurally BLIND
-to two whole classes of bug, proven four times this release (CAS-185, CAS-196,
-CAS-202, the packaging P0):
+to two whole classes of bug, proven four times in one release (three notebook
+re-run bugs and a packaging bug):
 
-  1. KERNEL-RESTART behaviour. CAS-196's restart re-fire and CAS-202's
-     restart-retrain both shipped green past the fast suite. `nb_runner` has
-     since gained a `restart()` (added for CAS-190), so the suite is no longer
+  1. KERNEL-RESTART behaviour. A restart re-fire of an upstream `to_csv` and a
+     restart retrain of a `@cash.cache` model both shipped green past the fast
+     suite. `nb_runner` has since gained a `restart()`, so the suite is no longer
      blind to restarts by construction -- but it drives cells through
-     `NotebookClient`, not a real Jupyter server, and CAS-213 proved that gap is
-     still real: a faithful in-suite reproduction passed even against the
+     `NotebookClient`, not a real Jupyter server, and the loop-drawn blank chart
+     (S7) proved that gap is still real: a faithful in-suite reproduction passed even against the
      UNFIXED source, while this harness reproduced it deterministically.
   2. WHEEL-VENV install layout. The suite runs the EDITABLE dev install against
-     the developer's own Python; testers run a FRESH WHEEL VENV. `importlib.metadata` phantom
+     the developer's own Python; users run a FRESH WHEEL VENV. `importlib.metadata` phantom
      file-dep probes (81 in a venv vs 0 in dev) only exist in the venv. Every
      install-layout bug is invisible. (The dev env has no `jupyter_server`
-     installed at all -- so whatever the CAS-171 sweep drove, it was not a real
+     installed at all -- so whatever an earlier config sweep drove, it was not a real
      Jupyter server.)
 
 The manual gate rounds catch these (fresh wheel venv + real `jupyter server` +
@@ -45,17 +45,16 @@ WHAT IT DOES
   6. Cleans up: quit + tree-kill the server (idempotent, rerun-safe).
 
 THE SCENARIOS (each a separate assertion; RED = invariant violated = bug present)
-  S1  restart survival of @cash.cache on the sklearn pipeline (CAS-202) -> GREEN
-  S2  to_csv audit-log not re-fired by a downstream reader     (CAS-196) -> GREEN
-  S3  same sklearn pipeline warm-re-runs WITHIN a session       (CAS-185) -> GREEN
+  S1  restart survival of @cash.cache on the sklearn pipeline -> GREEN
+  S2  to_csv audit-log not re-fired by a downstream reader     -> GREEN
+  S3  same sklearn pipeline warm-re-runs WITHIN a session       -> GREEN
   S4  a plain @cash.cache int fn survives a restart (control)             -> GREEN
-  S5  plot writer not re-fired by an unrelated cell post-restart (CAS-200/193) -> GREEN
-  S6  top-level await inside a for-loop body caches, no SyntaxError (CAS-198) -> GREEN
-  S7  a LOOP-drawn figure is rebuilt before it is re-saved      (CAS-213) -> GREEN
+  S5  plot writer not re-fired by an unrelated cell post-restart -> GREEN
+  S6  top-level await inside a for-loop body caches, no SyntaxError -> GREEN
+  S7  a LOOP-drawn figure is rebuilt before it is re-saved      -> GREEN
 
-Every scenario here was RED when the bug it names was open: S1/S3 until CAS-202,
-S2 until CAS-196, S5 until CAS-200/193, S7 until CAS-213. All are GREEN as of
-2026-07-20.
+Every scenario here was RED while the bug it guards was open. All are GREEN as
+of 2026-07-20.
 
 An all-green matrix raises the obvious question -- is this harness still
 testing anything? Non-vacuity is NOT established by leaving a bug open. It is
@@ -64,7 +63,7 @@ RED. S7 was added that way (fixed: 6806 coloured px; fix reverted: 0), and that
 check is what any new scenario owes the matrix.
 
 The counter-example is already in this file: S5 asserts "plot writer not
-re-fired by an unrelated cell" and was GREEN throughout CAS-213 -- because it
+re-fired by an unrelated cell" and was GREEN throughout the S7 bug -- because it
 draws with FLAT pyplot calls, and the flat form was never broken. Its assertion
 was true and useless at the same time. S7 exists because of that gap, and it
 draws inside a `for` loop deliberately.
@@ -465,16 +464,16 @@ def _pipeline_cells(counter_file: str):
 
 
 # ---------------------------------------------------------------------------
-# S1 -- restart survival of @cash.cache on the sklearn pipeline (CAS-202)
+# S1 -- restart survival of @cash.cache on the sklearn pipeline
 # ---------------------------------------------------------------------------
 
 
 def scenario_s1(py: Path, port: int) -> Result:
-    # Baseline flipped RED -> GREEN when CAS-202 was fixed (core.py
+    # Baseline flipped RED -> GREEN when the restart retrain was fixed (core.py
     # _hash_arg_payload now keys a content-bearing argument on its stable
     # content hash, not the per-session _cash_lineage_hash). S2 stays RED, so
     # the harness is still non-vacuous.
-    r = Result("S1", "restart survival of @cash.cache sklearn pipeline (CAS-202)", "GREEN")
+    r = Result("S1", "restart survival of @cash.cache sklearn pipeline", "GREEN")
     work = _fresh_work("s1")
     counter = work / "calls.log"
     cells = _pipeline_cells("calls.log")
@@ -520,7 +519,7 @@ def scenario_s1(py: Path, port: int) -> Result:
 # ---------------------------------------------------------------------------
 # S3 -- SINGLE-CELL self-contained sklearn @cash.cache survives a restart.
 #
-# CAS-202's own diagnostic clue: "A self-contained SINGLE-CELL version survives
+# The bug report's own diagnostic clue: "A self-contained SINGLE-CELL version survives
 # restart fine -- only the documented multi-cell load/split/train layout
 # triggers it." So the SAME sklearn work, packed into one cell, is the control
 # that isolates S1's failure to multi-cell provenance. This is the GREEN that
@@ -554,7 +553,7 @@ _S3_CELL = (
 
 
 def scenario_s3(py: Path, port: int) -> Result:
-    r = Result("S3", "single-cell sklearn @cash.cache survives a restart (CAS-202 control)", "GREEN")
+    r = Result("S3", "single-cell sklearn @cash.cache survives a restart (control)", "GREEN")
     work = _fresh_work("s3")
     counter = work / "calls.log"
     cells = [_CELL_ON, _S3_CELL]
@@ -644,7 +643,7 @@ def scenario_s4(py: Path, port: int) -> Result:
 
 
 # ---------------------------------------------------------------------------
-# S2 -- to_csv audit-log not re-fired by a downstream reader (CAS-196) -> RED
+# S2 -- to_csv audit-log not re-fired by a downstream reader -> RED
 # ---------------------------------------------------------------------------
 
 
@@ -693,7 +692,7 @@ def _write_etl_data(work: Path, n: int = 400_000) -> None:
     ).to_csv(work / "sales.csv", index=False)
 
 
-# Cells mirror the round-7 P1 CAS-196 repro (nb.py). The DOWNSTREAM READER (cell
+# Cells mirror the original bug report's notebook. The DOWNSTREAM READER (cell
 # 10) depends on `receipt`, which the AUDIT WRITER (cell 8) produces alongside
 # its non-idempotent `to_csv(..., mode='a')` append -- so reconstructing the
 # reader re-fires the append.
@@ -768,10 +767,10 @@ def _s2_baseline_lines(py: Path, port: int) -> int:
 
 
 def scenario_s2(py: Path, port: int) -> Result:
-    # CAS-196 fixed by the reconstruction-scope gate: an upstream file-writer
+    # Fixed by the reconstruction-scope gate: an upstream file-writer
     # whose output no relevant consumer reads is never re-fired during another
     # cell's reconstruction. Baseline flipped RED -> GREEN with that fix.
-    r = Result("S2", "to_csv audit-log not re-fired during reconstruction (CAS-196)", "GREEN")
+    r = Result("S2", "to_csv audit-log not re-fired during reconstruction", "GREEN")
     try:
         baseline = _s2_baseline_lines(py, port)  # %cash_off ground truth
     except SystemExit as e:
@@ -829,7 +828,7 @@ def scenario_s2(py: Path, port: int) -> Result:
 
 # ---------------------------------------------------------------------------
 # S5 -- post-restart, a cell BELOW a plot cell must not re-fire the plot writer
-#       nor UpstreamStateError on the plot's evicted RAM-only input (CAS-200/193)
+#       nor UpstreamStateError on the plot's evicted RAM-only input
 # ---------------------------------------------------------------------------
 
 # The PLOT cell (cell 3) draws a pie from a RAM-only intermediate ``itm`` and
@@ -870,7 +869,7 @@ _S5_TAIL = 4  # 0-based index of the independent downstream cell (grand_total)
 def scenario_s5(py: Path, port: int) -> Result:
     r = Result(
         "S5",
-        "plot writer not re-fired by an unrelated cell post-restart (CAS-200/193)",
+        "plot writer not re-fired by an unrelated cell post-restart",
         "GREEN",
     )
     work = _fresh_work("s5")
@@ -933,11 +932,11 @@ def scenario_s5(py: Path, port: int) -> Result:
 
 # ---------------------------------------------------------------------------
 # S6 -- top-level await INSIDE a for-loop body caches and does not SyntaxError
-#       (CAS-198) -> GREEN
+#       -> GREEN
 #
 # ``for x in xs: r = await fetch(x)`` -- THE canonical async-batch pattern --
 # reached the sync ControlStructureProcessor, whose unflagged compile() raised
-# ``SyntaxError: 'await' outside function``. The CAS-164 top-level-await support
+# ``SyntaxError: 'await' outside function``. The top-level-await support
 # had landed on the regular-statement path but not the control-body path. The fix
 # routes an await-bearing control structure through the
 # PyCF_ALLOW_TOP_LEVEL_AWAIT-capable async statement path as one awaited unit.
@@ -963,7 +962,7 @@ _S6_LOOP_CELL = (
 
 
 def scenario_s6(py: Path, port: int) -> Result:
-    r = Result("S6", "top-level await inside a for-loop body caches, no SyntaxError (CAS-198)", "GREEN")
+    r = Result("S6", "top-level await inside a for-loop body caches, no SyntaxError", "GREEN")
     work = _fresh_work("s6")
     counter = work / "s6calls.log"
     cells = [_CELL_ON, _S6_LOOP_CELL]
@@ -1005,7 +1004,7 @@ def scenario_s6(py: Path, port: int) -> Result:
 
 
 # ---------------------------------------------------------------------------
-# S7 -- a LOOP-drawn figure must be rebuilt before it is re-saved (CAS-213)
+# S7 -- a LOOP-drawn figure must be rebuilt before it is re-saved
 #
 # S5 already covers "an unrelated cell must not re-fire the plot writer", but it
 # draws FLAT (``ax.pie(itm, ...)``) -- and the flat form was never broken, so its
@@ -1151,7 +1150,7 @@ _S7_READER = 9
 def scenario_s7(py: Path, port: int) -> Result:
     r = Result(
         "S7",
-        "loop-drawn figure rebuilt before it is re-saved; reader cannot blank the chart (CAS-213)",
+        "loop-drawn figure rebuilt before it is re-saved; reader cannot blank the chart",
         "GREEN",
     )
     work = _fresh_work("s7")
@@ -1174,8 +1173,8 @@ def scenario_s7(py: Path, port: int) -> Result:
         sha_runall = _sha(chart)
         audit_runall = _lines(audit)
         # Now the downstream READER of the written audit file. It reconstructs
-        # upstream and re-fires fig.savefig -- which is allowed (CAS-193/196/200
-        # is the separate question of whether an in-scope writer re-fires at
+        # upstream and re-fires fig.savefig -- which is allowed (S2 and S5
+        # cover the separate question of whether an in-scope writer re-fires at
         # all). What is NOT allowed is re-saving a figure rebuilt from a SUBSET
         # of its history.
         reader_out = drv.run(_S7_READER).get("out", "")
@@ -1246,7 +1245,7 @@ SCENARIOS = {
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="CAS-190 wheel-gate harness")
+    ap = argparse.ArgumentParser(description="wheel-gate harness")
     ap.add_argument("--wheel", help="use a prebuilt wheel instead of building")
     ap.add_argument(
         "--reuse-venv", action="store_true", help="reuse an already-provisioned venv (skip rebuild/install)"
@@ -1262,7 +1261,7 @@ def main() -> int:
 
     t_start = time.time()
     print("=" * 78)
-    print("CAS-190 WHEEL-GATE HARNESS")
+    print("WHEEL-GATE HARNESS")
     print("=" * 78)
 
     wheel = Path(args.wheel).resolve() if args.wheel else build_wheel()
