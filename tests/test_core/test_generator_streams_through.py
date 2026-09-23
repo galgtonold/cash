@@ -348,23 +348,24 @@ def test_argument_mutation_is_still_reported_for_a_generator(c):
 def test_a_write_inside_a_LIBRARY_is_still_observed(c, tmp_path):
     """Same move for the runtime effect observer: it reports at exhaustion now.
 
-    Two things are load-bearing in the shape below. `shutil.copyfile` rather
-    than `path.write_text`, because the analyzer catches the latter by name
-    and then suppresses the observer as a duplicate. And its return value is
+    Two things are load-bearing in the shape below. A writer the analyzer
+    has no name for (`zipfile.ZipFile(p, "w")`; `shutil.copyfile` played this
+    part until it got one), because a named write is caught statically and
+    the observer is then suppressed as a duplicate. And what it returns is
     USED, because a bare call is caught by the discarded-return heuristic and
     suppressed the same way. Both earlier versions of this test passed while
     proving only that the STATIC pass runs.
     """
-    import shutil
+    import zipfile
 
-    source = tmp_path / "src.txt"
-    source.write_text("payload", encoding="utf-8")
-    target = tmp_path / "copied.txt"
+    target = tmp_path / "copied.zip"
 
     @c.cache
     def stream():
         yield 1
-        yield str(shutil.copyfile(source, target))
+        with zipfile.ZipFile(target, "w") as archive:
+            members = archive.namelist()
+        yield str(members)
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
