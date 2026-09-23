@@ -1,7 +1,7 @@
 /* Sort + filter for the cash comparison matrix.
  *
- * Looks for table.cash-matrix-table on the page, and an input with id
- * "cash-matrix-filter". Progressively enhances:
+ * Looks for table.cash-matrix-table on the page, and an optional input with
+ * id "cash-matrix-filter". Progressively enhances:
  *  - Click a column header → cycle ascending / descending / unsorted.
  *  - Type in the filter input → rows whose first cell does not contain
  *    the input text are hidden.
@@ -13,12 +13,14 @@
   "use strict";
 
   function rankCell(text) {
-    // Sort order: ✅ best, ⚠️ middle, ❌ worst, anything else (e.g. capability name) → lex.
-    var t = text.trim();
-    if (t === "✅") return 0;
-    if (t === "⚠️") return 1;
-    if (t === "❌") return 2;
-    return t.toLowerCase();
+    // Sort order: Yes best, Partly middle, No worst, n/a last; anything else
+    // (e.g. a capability name) sorts alphabetically.
+    var t = text.trim().toLowerCase();
+    if (t === "yes") return 0;
+    if (t === "partly") return 1;
+    if (t === "no") return 2;
+    if (t === "n/a") return 3;
+    return t;
   }
 
   function compareCells(a, b) {

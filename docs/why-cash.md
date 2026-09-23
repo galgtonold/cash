@@ -1,355 +1,85 @@
-# Why Cash?
+# Why cash?
 
-You probably aren't shopping for a notebook-caching library — there isn't one
-to shop for. But there's a good chance you've already built one in pieces,
-without calling it that. **Cash is the library you'd write yourself if you
-had a spare month.**
+!!! info "Applies to: both paths"
+    Anyone deciding whether cash fits their scripts or their notebooks.
 
-## Does this sound familiar?
+cash saves the time you spend re-running work whose code and inputs have not
+changed. It does not make a first run faster: the first run stores results,
+and later runs get them back instead of recomputing them.
 
-<div class="cash-pain-grid" markdown="0">
+## What each path does
 
-  <div class="cash-pain-card">
-    <span class="cash-pain-icon">🕐</span>
-    <span class="cash-pain-title">"Restart and Run All takes 20 minutes."</span>
-    <span class="cash-pain-sub">Every small edit pays the full pipeline cost. You stop iterating and start avoiding restarts.</span>
-  </div>
+| | `@cash.cache` (decorator) | `%cash_on` (notebook) |
+|---|---|---|
+| What is cached | One function call | Each top-level statement, and slow calls inside it |
+| What the key is built from | Arguments, the function's source, the source of the helpers it calls, files it reads | The statement's code, how its input variables were made, files it reads |
+| Edit a helper function | Recomputes | Recomputes |
+| Change a data file | Recomputes | Recomputes |
+| Change an object in place | A call caught changing its arguments is not stored | Detected: statements below see the change |
+| Written to disk | Every result | Results that took more than 0.1 s and reload faster than they recompute |
+| Side effects | Warned about; they run on the first call only | The statement is not cached |
+| Shows what it did | `f.explain()`, `f.cache_info()` | A badge above each cell, `%cash_stats` |
+| Needs IPython | No | Yes |
 
-  <div class="cash-pain-card">
-    <span class="cash-pain-icon">❓</span>
-    <span class="cash-pain-title">"You're not sure if <code>df</code> is stale."</span>
-    <span class="cash-pain-sub">Did the upstream cell change? Did someone mutate it? You squint at the timestamp and hope.</span>
-  </div>
+Details: [`@cash.cache` guide](decorator.md) and
+[notebook guide](notebook_caching_api.md).
 
-  <div class="cash-pain-card">
-    <span class="cash-pain-icon">🥒</span>
-    <span class="cash-pain-title">"Your notebook has 12 pickle files."</span>
-    <span class="cash-pain-sub"><code>tmp.pkl</code>, <code>df_v3_USE_THIS.pkl</code>. You're afraid to delete any of them.</span>
-  </div>
+## When it helps, and when to skip it
 
-  <div class="cash-pain-card">
-    <span class="cash-pain-icon">🌅</span>
-    <span class="cash-pain-title">"Your kernel has been running for 4 days."</span>
-    <span class="cash-pain-sub">You can't restart — that's where the state lives. One crash and you rebuild from scratch.</span>
-  </div>
+cash helps when the same slow work runs again:
 
-</div>
+- **Decorator:** a function called again with the same arguments, in the same
+  process or the next run: a pipeline step, a simulation, a paid API call.
+- **Notebook:** a notebook you re-run while editing it, or after a kernel
+  restart, with slow loads or transforms.
 
-If two of those landed, keep reading.
+Skip it for:
 
-## What happens when you turn cash on
+- Work that takes a few milliseconds. Storing and reloading costs more than
+  recomputing.
+- Results that must differ on every run, such as timestamps or fresh random
+  draws.
+- Results that depend on something cash cannot see, such as a table in a
+  database, unless you give them a `ttl` or an explicit dependency.
 
-Above each cell, cash shows a **badge** summarising what it did. Watch the same notebook through four states — first run, re-run, restart, then editing an upstream cell:
+## Compared with other tools
 
-<iframe class="cash-badge" src="/_badges/why_cash_reel.html" loading="lazy" scrolling="no" height="260" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
-
-Here's the same notebook workflow written three different ways. **The business logic is identical in all three tabs — only the caching scaffolding changes.**
-
-=== "Without cash"
-
-    ```python
-    import pickle, os
-    from pathlib import Path
-
-    CACHE = Path(".cache")
-    CACHE.mkdir(exist_ok=True)
-
-    # Manual: load if fresh, else recompute and dump.
-    df_path = CACHE / "df.pkl"
-    if df_path.exists() and df_path.stat().st_mtime > Path("large_file.csv").stat().st_mtime:
-        with open(df_path, "rb") as f:
-            df = pickle.load(f)
-    else:
-        df = pd.read_csv("large_file.csv")
-        with open(df_path, "wb") as f:
-            pickle.dump(df, f)
-
-    # ... repeat for every expensive variable. Don't forget version stamps.
-    result = df.groupby("category").sum()
-    ```
-
-=== "With `%store`"
-
-    ```python
-    # IPython %store has no granularity, no auto-invalidation:
-    # you have to remember to %store after compute and %store -r on restart,
-    # and there's no signal if the underlying CSV changed.
-    %store -r df
-    if 'df' not in dir():
-        df = pd.read_csv("large_file.csv")
-        %store df
-
-    result = df.groupby("category").sum()
-    # ...did you remember to %store result too? Did df change since you last stored?
-    ```
-
-=== "With cash"
-
-    ```python { .nb-cell }
-    %cash_on
-
-    df = pd.read_csv("large_file.csv")
-    result = df.groupby("category").sum()
-    ```
-
-What each pain looks like with cash:
-
-- 🕐 **Restart cost** → statement-level caching + automatic restore-after-restart. Re-running a cell hits the cache; restarting the kernel hits disk.
-- ❓ **Staleness** → lineage hashes invalidate automatically when any upstream cell changes. The badge tells you what was reused and what was recomputed.
-- 🥒 **Pickle sprawl** → no filenames. The cache is keyed by code + inputs, stored in a single managed backend.
-- 🌅 **Restart fear** → restart freely. The cache survives the kernel, so the next run is CACHED, not recomputed.
-
-### How much time would *you* reclaim?
-
-<div class="cash-calculator" markdown="0"></div>
-
-## Why this works
-
-```mermaid
-flowchart LR
-    subgraph Manual["Manual workflow"]
-        A1[Cell 1: load CSV] -->|pickle.dump| P1[(tmp.pkl)]
-        A2[Cell 2: transform] -->|pickle.dump| P2[(tmp2.pkl)]
-        P1 -.->|"pickle.load (which one?)"| A3[Cell 3: model]
-        P2 -.-> A3
-        A3 -->|pickle.dump| P3[(model_v3_FINAL.pkl)]
-    end
-    subgraph Cash["Cash workflow"]
-        B1[Cell 1: load CSV] --> C[(cash cache)]
-        B2[Cell 2: transform] --> C
-        B3[Cell 3: model] --> C
-        C -.->|automatic restore| B1
-        C -.-> B2
-        C -.-> B3
-    end
-```
-
-*Cash replaces ad-hoc plumbing with a single dependency-aware cache.*
-
-## Is this for you?
-
-<div class="cash-shines-skip-grid" markdown="0">
-  <div class="cash-shines-card">
-    <h4>Cash shines for</h4>
-    <ul>
-      <li>Long-running notebook pipelines (data prep, feature engineering, model exploration).</li>
-      <li>Iterative analysis with frequent upstream-cell editing.</li>
-      <li>Notebooks with expensive file reads (large CSVs, parquet, pickles).</li>
-      <li>Mixed-language teams who don't want to learn Make / snakemake / DVC just for caching.</li>
-    </ul>
-  </div>
-  <div class="cash-skip-card">
-    <h4>Skip cash if</h4>
-    <ul>
-      <li>Your notebook is a single cell with no expensive steps.</li>
-      <li>You're writing a pure I/O script (API ingestion, network polling) — caching is at the wrong layer.</li>
-      <li>You need hard real-time behaviour.</li>
-      <li>Your cells <em>intentionally</em> produce different output each run — though see the <a href="../tutorials/feature-guides/purity-decorators/"><code>@stateful</code> decorator</a> for the nuanced case.</li>
-    </ul>
-  </div>
-</div>
-
-## Cash vs. the alternatives you've tried
-
-If you *do* already use a caching tool, here's where cash sits in the landscape. **All ⚠️ cells have a hover tooltip explaining the partial.**
-
-<div class="cash-matrix-filter" markdown="0">
-  <input type="text" id="cash-matrix-filter" placeholder="Filter capabilities…" aria-label="Filter capability rows">
-</div>
+Hover a "Partly" for the detail. Click a column header to sort.
 
 <div class="cash-matrix-table" markdown="1">
 
-| Capability | Manual pickling | `%store` | `lru_cache` | `joblib.Memory` | `jupyter-cache` | `diskcache` | **cash** |
-|---|---|---|---|---|---|---|---|
-| Statement-level granularity | ❌ | ❌ | ❌ | ❌ | <span title="Whole-notebook: matches on the set of code cells">❌</span> | ❌ | ✅ |
-| Automatic invalidation on upstream change | ❌ | ❌ | ❌ | <span title="Only on direct argument change — not on transitive code edits">⚠️</span> | <span title="Invalidates the whole notebook when any code cell changes — not per-statement or transitive">⚠️</span> | ❌ | ✅ |
-| File-dependency tracking | <span title="Possible if you write mtime checks yourself">⚠️</span> | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
-| Survives kernel restart | <span title="Yes if you remember to dump; no automatic restore">⚠️</span> | ✅ | ❌ | ✅ | <span title="Persists executed outputs across runs/builds, but restores into a book build — not a live interactive kernel">⚠️</span> | ✅ | ✅ |
-| Observable (badges / provenance) | ❌ | ❌ | ❌ | <span title="call_and_shelve prints when verbose; no badges">⚠️</span> | <span title="jcache CLI lists cached notebooks and staging state; no per-cell badges">⚠️</span> | <span title="Hit/miss counts via Cache.stats(); no badges or provenance">⚠️</span> | ✅ |
-| Works in plain scripts (non-notebook) | ✅ | ❌ | ✅ | ✅ | ❌ | ✅ | ✅ |
-| Mutation detection | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
-| Function-source change detection | ❌ | ❌ | ❌ | <span title="Hashes function source — but only the decorated function, not its callees">⚠️</span> | <span title="Re-executes when a code cell's source changes, but is blind to edits in imported .py modules">⚠️</span> | <span title="memoize keys on the function name + arguments (like lru_cache); editing the body does not invalidate">❌</span> | ✅ |
-| Native pandas / numpy / polars / PyArrow hashing | ❌ | ❌ | <span title="Numpy and pandas aren't hashable by default; you'd need a wrapper">⚠️</span> | ✅ | <span title="Caches serialized cell outputs; does not hash input objects">❌</span> | <span title="Stores them fine as cached values, but does not content-hash them for keys">⚠️</span> | ✅ |
-| Zero-config to start | ✅ | ✅ | ✅ | <span title="Requires picking a Memory location and decorating each function">⚠️</span> | <span title="Needs Jupyter Book / MyST-NB or the jcache CLI workflow">⚠️</span> | <span title="Pick a cache directory and wrap each function with @memoize">⚠️</span> | ✅ |
+| Capability | Manual pickle | `%store` | `lru_cache` | `joblib.Memory` | `diskcache` | `jupyter-cache` | `@cash.cache` | `%cash_on` |
+|---|---|---|---|---|---|---|---|---|
+| Survives a restart | <span title="Only if you remember to dump and load">Partly</span> | Yes | No | Yes | Yes | <span title="Stores executed outputs for a book build, not for a live kernel">Partly</span> | Yes | <span title="Results over 0.1 s that reload faster than they recompute">Partly</span> |
+| Recomputes when the function or cell changes | No | No | No | Yes | No | <span title="Re-runs the whole notebook when any code cell changes">Partly</span> | Yes | Yes |
+| Recomputes when a called helper changes | No | No | No | No | No | <span title="Only for helpers defined in the notebook's own cells">Partly</span> | Yes | Yes |
+| Recomputes when a data file changes | <span title="Only if you write the checks yourself">Partly</span> | No | No | No | No | No | Yes | Yes |
+| Accepts DataFrames and arrays as arguments | n/a | n/a | No | Yes | <span title="Stores them, but does not hash them by content for the key">Partly</span> | n/a | Yes | n/a |
+| Caches single statements in a notebook cell | No | No | No | No | No | No | No | Yes |
+| Tracks in-place changes between cells | No | No | No | No | No | No | n/a | Yes |
+| Works outside notebooks | Yes | No | Yes | Yes | Yes | No | Yes | No |
+| No code to add per function | No | No | No | No | No | Yes | No | Yes |
 
 </div>
 
-## Common questions
+- **`functools.lru_cache`** keeps results in memory for one process and needs
+  hashable arguments.
+- **`joblib.Memory`** stores results on disk and hashes the decorated
+  function's own source, but not the helpers it calls, so editing a helper
+  returns the old result.
+- **`diskcache`** is a persistent key-value store. Its `memoize` keys on the
+  function's name and arguments, so editing the function does not invalidate
+  a result.
+- **`%store`** saves and loads variables by hand. It never invalidates
+  anything.
+- **`jupyter-cache`** (behind Jupyter Book and MyST-NB) skips re-executing an
+  unchanged notebook in a book build. Any code-cell edit re-runs the whole
+  notebook.
+- **marimo** is a reactive notebook with its own dependency-aware cache
+  (`mo.cache`, `mo.persistent_cache`). Its cache
+  [does not key on the source of imported modules](https://docs.marimo.io/api/caching/), and file dependencies are declared by hand
+  (`mo.watch.file()`). marimo replaces Jupyter and stores notebooks as `.py`
+  files; cash adds to the Jupyter, Colab or VS Code notebook you already have.
 
-### Correctness
-
-??? question "What if cash returns a stale value?"
-    Cash invalidates a cached result whenever the code that produced it
-    changes *or* any of its inputs change. Inputs are tracked by lineage
-    hash, so a change three cells upstream still propagates. If a cell
-    reads a file, cash hashes the file and invalidates if it changes.
-    See [Knowing when to recompute](how-it-works/invalidation.md).
-
-??? question "What about in-place mutations like `df['x'] = 0`?"
-    Cash uses AST-based mutation detection to flag in-place mutations
-    so cached objects can be invalidated correctly.
-    See [the mutation pattern in the data-science tutorial](tutorials/use-cases/data-science.md).
-
-### Coverage
-
-??? question "Does it work with pandas / numpy / polars / torch / duckdb?"
-    Native built-in hashers cover pandas, numpy, polars, PyArrow, modin,
-    and dask. For anything else — torch tensors, duckdb relations,
-    custom domain types — register a hasher with `cash.register_hasher`.
-    See [API reference](api/cash.md#cash.Cash).
-
-??? question "Notebooks only, or scripts too?"
-    Both. The `@cash.cache` decorator works in plain Python scripts.
-    The notebook integration (`%cash_on` and statement-level caching)
-    is what the rest of this page focuses on, but the underlying engine
-    is independent of Jupyter.
-    See [API reference](api/index.md).
-
-### Overhead
-
-??? question "How much does cash slow down a cold run?"
-    Cash adds ~5–30ms per cached statement on a cold run (lineage
-    computation, cache key, write). For most real notebook work the
-    overhead is dwarfed by the work being cached. The
-    [cost model](cost-model.md) lays out the maths in detail.
-
-??? question "What about disk usage?"
-    Cash uses a tiered backend by default: RAM (L1) → file on disk (L2).
-    Other backends — SQLite, Redis, S3 — are available for custom tier
-    stacks. Eviction rules and a size-budget cap are configurable.
-    See [Configuration](getting-started/configuration.md).
-
-### Production readiness
-
-??? question "Is a 0.x release safe for real work?"
-    The honest answer: if you set out to break it, you probably can. Knowing
-    when a cached value is still valid is a genuinely hard problem, and the
-    notebook's **statement-level** tracking is the hard end of it — it has to
-    reason about what your code reads, writes and mutates across cells, from
-    the source alone. That is where surprises live, and where you should keep
-    an eye on the badge.
-
-    The **`@cash.cache` decorator is a much smaller problem**, and
-    correspondingly more solid: it keys on a function's arguments and its own
-    source, with no cross-cell reasoning involved. If you want the conservative
-    option for something that matters, that's the one.
-
-    Both are validated against many real production workflows, and the test
-    suite runs to thousands of integration tests, a large share of them derived
-    from actual bug reports rather than invented cases. Where cash knows it can
-    be wrong, it says so on one page:
-    [Known limitations](known-limitations.md).
-
-    Treat it like any other library you'd pin a version of — this is a `0.x`
-    release, so the API and the cache format may change between minor versions.
-    The [CHANGELOG](https://github.com/galgtonold/cash/blob/main/CHANGELOG.md)
-    documents breaking changes between releases.
-
-??? question "How do I force a fresh run?"
-    Three escape hatches. (1) `@cash:no-cache` annotation on a single
-    statement. (2) `%cash_off` to turn auto-caching off for the rest of the
-    session -- it is not per-cell; run `%cash_on` to turn it back on. (3) The
-    `cash clear` CLI command. See [annotations](annotations.md) and
-    [CLI reference](cli.md).
-
-### Vs. alternatives
-
-??? question "Why not joblib.Memory?"
-    `joblib.Memory` caches at the function call level — you wrap each
-    function with `@memory.cache` and joblib hashes the arguments. It
-    doesn't see notebook-level dependencies (a cell that uses an
-    upstream variable, file reads, mutations), so you'd still hit all
-    four pains on this page. See [migration guide](migration_guide.md#from-joblibmemory).
-
-??? question "Why not `%store`?"
-    IPython's `%store` is a manual save/load primitive — no automatic
-    invalidation, no granularity, no signal when an underlying file
-    changes. It's a useful primitive for kernel restart, not a caching
-    system. The "With `%store`" tab above shows what its limits look
-    like in practice.
-
-??? question "Why not `functools.lru_cache`?"
-    `lru_cache` keys on hashable function arguments — pandas DataFrames
-    and numpy arrays aren't hashable, and even if they were, an `lru_cache`
-    miss costs a recompute every time the process restarts. It's not in
-    the same category as a persistent, dependency-aware cache.
-    See [migration guide](migration_guide.md).
-
-??? question "Why not `jupyter-cache`?"
-    `jupyter-cache` (the engine behind Jupyter Book / MyST-NB) caches a
-    notebook's executed outputs so a *build* can skip re-running an unchanged
-    notebook. It matches at whole-notebook granularity — hashing the code
-    cells — so editing any one cell re-executes the entire notebook, and it
-    doesn't track data-file reads, imported-module edits, or in-place
-    mutations. It's built for reproducible book builds in CI, not the
-    interactive edit-one-line-and-re-run loop cash optimizes.
-
-??? question "Why not `diskcache`?"
-    `diskcache` is an excellent persistent key→value store — cash can even use
-    a disk backend for the same storage job. Its `@memoize` decorator keys on
-    the function's name and arguments (like `lru_cache`), so results survive a
-    restart, but editing the function body does **not** invalidate the entry,
-    and it has no notebook awareness, dependency lineage, file tracking, or
-    mutation detection. Think of it as a fast storage layer, not a
-    "know-when-to-recompute" layer.
-
-??? question "Why not marimo?"
-    [marimo](https://marimo.io) is a *reactive notebook environment* — it models
-    the dataflow between cells and re-runs exactly the cells that depend on a
-    change, so there's no hidden state or stale output. It also ships its own
-    caching (`mo.cache` in memory, `mo.persistent_cache` to disk) that skips a
-    wrapped block when neither its code nor its ancestors changed, and survives a
-    restart — genuinely dependency-aware, much closer to cash than the key→value
-    caches above.
-
-    Two scope differences if you're comparing the caches directly. marimo keys on
-    a block's arguments and closed-over variables, but
-    [not on the source of imported modules](https://docs.marimo.io/api/caching/) —
-    so editing a helper in a `.py` file next door doesn't invalidate it — and file
-    dependencies are explicit (`mo.watch.file()`) rather than automatic. Cash
-    folds both in for every statement without being asked.
-
-    marimo is clearly ahead on the **artifact**: its notebooks are pure `.py`, so
-    they diff, review, and run as scripts — better than `.ipynb` for anything
-    production-shaped. The trade is what you adopt, and how much of your existing
-    code comes along. marimo is a **replacement** for Jupyter: you migrate with
-    `marimo convert`, and its execution model puts real constraints on ordinary
-    Python — a variable can't be assigned in more than one cell, and IPython
-    magics and `!shell` lines aren't supported. Cash is **additive**: one line in
-    the Jupyter, Colab, or VS Code notebook you already have, running the code you
-    already wrote, in the production setup you already have.
-
-    If you're happy switching environments, marimo's reactivity is a strong answer
-    to notebook staleness. If you'd rather keep your existing notebooks and make
-    re-running cheap, that's cash. The two aren't exclusive either: `@cash.cache`
-    is a plain decorator and cash has **no required dependencies** — it doesn't
-    need IPython — so it runs wherever Python does. (`%cash_on` and the other
-    magics do need IPython.)
-
-## Try it / Go deeper
-
-<div class="cash-cta-split" markdown="0">
-  <a class="cash-cta-card primary" href="../getting-started/quickstart-notebook/">
-    <h3>Try it now →</h3>
-    <p><code>pip install cash-lib</code>, then drop <code>%cash_on</code> in your first cell.</p>
-    <p><strong>Quickstart →</strong></p>
-  </a>
-  <div class="cash-cta-card secondary">
-    <h3>Go deeper →</h3>
-    <p>Read how lineage tracking, upstream simulation, and the cache key work under the hood.</p>
-    <p><a href="../how-it-works/overview/"><strong>How Cash Works</strong></a> · <a href="../cost-model/"><strong>Cost model</strong></a></p>
-  </div>
-</div>
-
-### See it applied to your workflow
-
-End-to-end recipes for the workflows cash is built for:
-
-- [Data science](tutorials/use-cases/data-science.md) — exploratory notebooks
-  with expensive ETL, feature engineering, and model iteration.
-- [LLM API calls](tutorials/use-cases/llm-api-calls.md) — memoising expensive
-  completions, replaying prompts deterministically across runs.
-- [Data engineering](tutorials/use-cases/data-engineering.md) — pipeline-style
-  workflows where intermediate frames need to survive kernel restarts.
-- [Scientific computing](tutorials/use-cases/scientific-computing.md) —
-  simulations, parameter sweeps, and reproducibility against changing code.
+To switch from one of these, see [Coming from other caches](migration_guide.md).
+Questions are answered in the [FAQ](faq.md).
