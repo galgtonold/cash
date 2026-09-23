@@ -1,7 +1,7 @@
 """Replay real user sessions, step by step, against a plain run.
 
 See ``session_harness`` for the steps and what is checked after each, and
-``sessions_r22`` for the sessions. Each session runs twice: with cash's
+``recorded_sessions`` for the sessions. Each session runs twice: with cash's
 defaults, and with every result persisted -- several bugs appeared
 only once a value was big or slow enough to reach the disk, which a small
 dataset alone never makes happen.
@@ -14,11 +14,8 @@ import pytest
 pytest.importorskip("matplotlib")
 pytest.importorskip("sklearn")
 
+from tests._nbharness.recorded_sessions import SESSIONS  # noqa: E402
 from tests._nbharness.session_harness import Player  # noqa: E402
-from tests._nbharness.sessions_r22 import SESSIONS as R22  # noqa: E402
-from tests._nbharness.sessions_r24 import SESSIONS as R24  # noqa: E402
-
-SESSIONS = R22 + R24
 
 pytestmark = [pytest.mark.integration, pytest.mark.upstream, pytest.mark.timeout(900)]
 

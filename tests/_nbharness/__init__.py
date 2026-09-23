@@ -11,4 +11,5 @@ the pytest fixtures built on it.
 * ``trace``: the upstream decision trace behind the ``upstream_trace`` fixture.
 * ``replay_harness``, ``replay_corpus``, ``session_harness``,
   ``session_oracle``: scripted sessions checked against a plain run.
+* ``recorded_sessions``: the real user sessions ``session_harness`` replays.
 """
