@@ -1,8 +1,8 @@
 """The text badge summarises a long loop per statement, not per pass.
 
-Round 25's r25s3: 126+ lines for 63 machines -- a row and a sub-call row per
+126+ lines for 63 machines -- a row and a sub-call row per
 iteration, the not-cached rows each carrying the same 150-character reason --
-and "~400 lines per cell" with all 200 machines. The tester wanted
+and "~400 lines per cell" with all 200 machines. The user wanted
 ``scores[mid] = ... 63 iterations: 31 cached, 32 not cached``. A short loop
 keeps its rows.
 """
@@ -57,7 +57,7 @@ def test_a_short_loop_keeps_its_rows():
 
 
 def test_upstream_steps_not_re_run_are_one_line():
-    """Round 25 (r25s1): 18 ``^SKIPPED: import os, sys`` style rows in a report
+    """18 ``^SKIPPED: import os, sys`` style rows in a report
     cell's text badge, one per step the repair did not need. The HTML badge
     folds them into a count; so does the text badge."""
     from cash.notebook.badge_renderer.renderers.text import render_text
@@ -108,7 +108,7 @@ def _chart_cell(slow_s=0.01):
 
 
 def test_quick_steps_that_are_never_cached_fold_into_one_line():
-    """Round 25 (r25s1, r25s2): 10 of 12 badge lines of a chart cell were
+    """10 of 12 badge lines of a chart cell were
     ``In-place mutation on: ax (...)`` for steps that re-run in milliseconds."""
     from cash.notebook.badge_renderer.renderers.text import render_text
     from cash.notebook.badge_renderer.view_builder import build_interactive_badge

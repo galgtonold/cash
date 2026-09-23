@@ -1,4 +1,4 @@
-"""Net cache-savings reporting in ``%cash_stats`` (CAS-143).
+"""Net cache-savings reporting in ``%cash_stats``.
 
 ``%cash_stats`` used to advertise the GROSS recompute avoided while cash's own
 per-cell overhead quietly ate into it — a 7.4s "saving" that really netted 4.4s
@@ -9,7 +9,7 @@ the honest accounting:
   separately;
 * NET is allowed to read *negative* — and is shown plainly, not floored or
   hidden — when a session of cheap cells paid overhead for no real saving; and
-* accumulating the overhead is a float add, never a per-cell fsync (CAS-149).
+* accumulating the overhead is a float add, never a per-cell fsync.
 """
 
 from __future__ import annotations
@@ -61,10 +61,10 @@ def _stats_json(magics, capsys) -> dict:
 class TestNetPositive:
     """One expensive restore: overhead is subtracted from gross.
 
-    CAS-157 moved the *headline* net onto verified savings only, so a restore
-    whose baseline nobody re-measured no longer prints a positive net — that
-    guarantee is pinned in ``test_stale_baseline_savings.py``. What CAS-143
-    owns, and what these tests still pin, is that the overhead is subtracted
+    The *headline* net counts verified savings only, so a restore whose
+    baseline nobody re-measured no longer prints a positive net — that
+    guarantee is pinned in ``test_stale_baseline_savings.py``. What these
+    tests pin is that the overhead is subtracted
     at all rather than gross being paraded as the saving.
     """
 
@@ -80,7 +80,7 @@ class TestNetPositive:
         assert data["total_time_saved"] == pytest.approx(7.0)
         assert data["total_overhead"] == pytest.approx(0.4)
         # The best-case net is positive and STRICTLY below gross — overhead was
-        # subtracted, which is the CAS-143 guarantee.
+        # subtracted, which is the guarantee.
         assert data["net_time_saved_upper_bound"] == pytest.approx(6.6)
         assert 0 < data["net_time_saved_upper_bound"] < data["total_time_saved"]
 
@@ -141,7 +141,7 @@ class TestOverheadAccountingIsCheap:
 
     def test_overhead_accumulation_adds_no_per_cell_io(self, magics_fixture, tmp_path):
         # Counting committed analytics rows across N cells is the deterministic
-        # CAS-149-style guard: it stays 0 until a real flush, so a per-cell
+        # guard against a per-cell fsync: it stays 0 until a real flush, so a per-cell
         # commit sneaking back in (from the overhead accounting or anywhere in
         # the finaliser) would fail this immediately.
         magics, _shell, _backend = magics_fixture
@@ -160,7 +160,7 @@ class TestOverheadAccountingIsCheap:
 
 
 class TestDiscriminatesGrossOverstatement:
-    """FAILS on the pre-CAS-143 baseline (reports only gross, exposes no net),
+    """FAILS on a baseline that reports only gross and exposes no net,
     proving the suite detects the overstatement it is meant to guard against."""
 
     def test_stats_json_exposes_net_below_gross(self, magics_fixture, capsys):

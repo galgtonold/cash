@@ -1,4 +1,4 @@
-"""CAS-86: compute_hash_full — full-content hashing for key discrimination.
+"""compute_hash_full — full-content hashing for key discrimination.
 
 ``compute_hash`` samples large objects; wherever the hash IS the cache-key
 discriminator (per-iteration loop keys), a difference outside the sample

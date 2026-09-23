@@ -169,7 +169,7 @@ class TestDownstreamAdvancementFallback:
                 cell_code,
                 {"x"},  # required_inputs
                 # A bare MagicMock's result carries a truthy .get('error'),
-                # which the CAS-87 loud-failure path (correctly) raises on -
+                # which the loud-failure path (correctly) raises on -
                 # return None so the auto-executed statement reports cleanly.
                 MagicMock(return_value=None),
                 None,

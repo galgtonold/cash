@@ -1,4 +1,4 @@
-"""Which statements belong to a figure's history (round 21, Phase 2).
+"""Which statements belong to a figure's history.
 
 A figure is drawn by more than calls on ``ax`` itself: ``tot.plot(ax=axes[0])``
 hands the axes to a call on something else, ``axes[1].set_xlabel`` reaches it

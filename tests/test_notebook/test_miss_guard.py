@@ -1,10 +1,9 @@
-"""Tests for the perpetual-miss guard (CAS-172).
+"""Tests for the perpetual-miss guard.
 
 The bug being bounded: an input that hashes unstably across runs gives the
 statement a different cache key every run, so it never hits — yet cash
 re-serialises the (large) value every run. The cache can never pay back and the
-statement is net-negative forever. CAS-165 / CAS-166 / CAS-171 were three
-independent instances; we conceded we cannot enumerate the causes, so the guard
+statement is net-negative forever. There were three independent instances; we conceded we cannot enumerate the causes, so the guard
 bounds the consequence instead.
 
 **The instability is injected through the input LINEAGE, which is what a cache
@@ -178,7 +177,7 @@ class TestVerdictPersistence:
         assert reloaded.should_serialise("src") is False
 
     def test_persists_only_when_the_verdict_flips_never_per_cell(self, tmp_path):
-        """CAS-149 removed an 8-12 ms/cell fsync. This must not reintroduce one
+        """An 8-12 ms/cell fsync was removed once. This must not reintroduce one
         under a new name: the hot path stays in memory."""
         guard = MissGuard(str(tmp_path))
         writes = []
@@ -393,7 +392,7 @@ class TestUnstableKeyStopsSerialising:
         assert "different cache key" in reason  # the WHY: the key churns and never hits
 
     def test_badge_names_what_kept_changing(self, session):
-        """Round 29, r29s1: "unstable key" with no hint of why; their helper
+        """ "unstable key" with no hint of why; their helper
         module was changing the key each run."""
         keys = _unstable()
         for _ in range(N_CHURN + 1):
@@ -410,7 +409,7 @@ class TestUnstableKeyStopsSerialising:
         assert len(session.serialised) == N_CHURN * 3
 
     def test_verdict_store_is_not_written_per_cell(self, session):
-        """CAS-149's fsync-per-cell must not come back under a new name."""
+        """The fsync-per-cell must not come back under a new name."""
         writes = []
         guard = session.magics._statement_processor._miss_guard
         real_persist = guard._persist

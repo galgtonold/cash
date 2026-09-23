@@ -550,11 +550,11 @@ class TestRandomnessDetectorAdvanced:
 
 
 class TestRngCarrierDetection:
-    """Draws off an RNG *object* rather than a module global (CAS-135 hole 1).
+    """Draws off an RNG *object* rather than a module global.
 
-    CAS-114's detector was rooted at RNG module names, so numpy's modern
+    The first detector was rooted at RNG module names, so numpy's modern
     ``default_rng()`` API — the one numpy's own docs have pushed since 1.17, and
-    the one CAS-90 already replays state for — was entirely invisible. An
+    the one cash already replays state for — was entirely invisible. An
     unseeded Monte Carlo written against it cached and froze in silence.
 
     The two halves that matter here: draws off an *unseeded* carrier must warn,
@@ -616,7 +616,7 @@ class TestRngCarrierDetection:
         )
 
     def test_carrier_local_to_a_function_body_detected(self):
-        """The CAS-135 report's actual shape: the generator is a function local.
+        """The reported shape: the generator is a function local.
 
         ``g`` never reaches ``user_ns``, so this can only be caught on the AST of
         the ``def`` itself — no live-value classifier can ever see it.
@@ -631,7 +631,7 @@ class TestRngCarrierDetection:
         assert calls[0].carrier == "g"
 
     def test_rng_param_not_resolved_against_stale_global(self):
-        """CAS-154 Symptom B: a parameter draw must not resolve against a
+        """A parameter draw must not resolve against a
         same-named unseeded GLOBAL left in the session ledger by an earlier cell.
 
         ``def f(rng): rng.standard_normal()`` is pure w.r.t. the module-level
@@ -671,7 +671,7 @@ class TestRngCarrierDetection:
         )
 
     def test_unseeded_rng_arg_flows_into_param_draw(self):
-        """CAS-154 Symptom A: an unseeded generator passed as a keyword argument
+        """An unseeded generator passed as a keyword argument
         into a function that draws off that parameter must warn at the call site.
 
         This is the idiomatic Monte-Carlo shape (``price(..., rng=default_rng())``)
@@ -719,9 +719,9 @@ class TestRngCarrierDetection:
 
 
 class TestPositionalRngCarrierArguments:
-    """The POSITIONAL half of the call-site argument flow (CAS-154 round 4).
+    """The POSITIONAL half of the call-site argument flow.
 
-    CAS-154 taught the detector that ``price(rng=default_rng())`` freezes a
+    The detector first learned that ``price(rng=default_rng())`` freezes a
     Monte Carlo, but scoped the lesson to KEYWORD arguments: a parameter name is
     written in the source there, while a positional argument knows only its
     index. So the form quants actually write —
@@ -807,7 +807,7 @@ class TestPositionalRngCarrierArguments:
         )
 
     def test_keyword_arg_still_warns_with_a_shell_present(self):
-        """Regression: CAS-154's keyword path is untouched by the positional one."""
+        """Regression: the keyword path is untouched by the positional one."""
         calls = self._carriers(
             self._ns(self.DEF_FIRST),
             "import numpy as np",
@@ -987,7 +987,7 @@ class TestPositionalRngCarrierArguments:
 
         ``np.random.seed()`` seeds the legacy global singleton; a ``default_rng()``
         Generator is independent of it. Letting the ledger suppress this would
-        reintroduce the exact silence CAS-135 is about.
+        reintroduce the exact silence about unseeded generators this guards.
         """
         assert (
             len(

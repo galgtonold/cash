@@ -1,4 +1,4 @@
-"""The two halves of r27s4, at unit level.
+"""The two halves of the loop-header dependency bug, at unit level.
 
 The integration twin is
 ``tests/test_notebook_integration/test_a_loop_header_read_is_a_dependency.py``
@@ -163,7 +163,7 @@ class TestAMovedFileIsCheckedEitherWay:
         return stale
 
     def test_a_moved_file_is_stale_although_the_input_lineages_disagree(self, tmp_path):
-        """r27s4's cell 0: ``DATA`` has no runtime lineage, so they never agree."""
+        """The reported cell 0: ``DATA`` has no runtime lineage, so they never agree."""
         data = tmp_path / "rows.txt"
         data.write_text("aa\nbbb\n", encoding="utf-8")
 
@@ -201,7 +201,7 @@ class TestAMovedFileIsCheckedEitherWay:
         The file check moved in front of the input-lineage comparison, so the
         path that adopts the runtime's recorded lineages now hangs off an
         ``elif``. It has to keep doing exactly what it did -- that adoption is
-        what stops a loop re-running after a restart (round 23).
+        what stops a loop re-running after a restart.
         """
         import ast
         import hashlib

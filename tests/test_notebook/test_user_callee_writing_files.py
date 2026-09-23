@@ -1,4 +1,4 @@
-"""Which calls into user code write a file a cache hit would skip (round 22)."""
+"""Which calls into user code write a file a cache hit would skip."""
 
 import json
 import shutil

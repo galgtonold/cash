@@ -1,6 +1,6 @@
 """A fill the carrier pass schedules must be able to RUN.
 
-Round-14 BLOCKING report, reproduced after eleven attempts by constructing the
+A blocking report, reproduced after eleven attempts by constructing the
 condition rather than guessing the session history::
 
     UpstreamStateError: Upstream statement "ax.plot(sub['month'],
@@ -23,7 +23,7 @@ from the namespace the fill cannot run.
 Why it took so long to reproduce: ``fig``, ``ax`` and ``sub`` come from the same
 cell, so they are normally all present or all absent — and both extremes are
 harmless. `fig` absent meant the pass never fired (it classified carriers from
-the live object; since round 21 it also recognises them by their producer's
+the live object; now it also recognises them by their producer's
 code); `sub` present means the fill just runs. Only a state that separates them
 reaches this, which is why every "restart and re-run" attempt came back clean.
 """
@@ -144,7 +144,7 @@ def test_a_file_writing_producer_is_never_dragged_in(live_figure):
 def test_without_a_live_carrier_the_history_is_completed_from_the_code():
     """After a restart there is no live `fig`, so the pass used to stay inert
     and the unfilled-figure-write guard REFUSED the write, leaving the user to
-    run the cell themselves. Round 21 (Phase 2) decided the other way: cash
+    run the cell themselves. Now cash
     re-runs what the notebook needs. The carrier is recognised by the code that
     made it (`plt.subplots(...)`), and the whole history comes back -- the
     producer, both fills, and the data the first fill reads -- in order. The

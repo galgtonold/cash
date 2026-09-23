@@ -1,4 +1,4 @@
-"""CAS-201: a function DEFINED in a cash cell must resolve its source.
+"""A function DEFINED in a cash cell must resolve its source.
 
 Every statement used to compile under one reused literal ``<cash>`` filename that
 was never registered in :mod:`linecache`, so a traceback frame inside a
@@ -88,7 +88,7 @@ def test_is_cash_filename(name, expected):
 
 
 # --------------------------------------------------------------------------
-# the actual CAS-201 symptom
+# the actual symptom
 # --------------------------------------------------------------------------
 
 
@@ -107,7 +107,7 @@ def test_traceback_shows_source_of_cell_defined_function(magics_fixture):
     else:
         pytest.fail("expected ZeroDivisionError")
 
-    # The whole point of CAS-201: the failing SOURCE LINE is present.
+    # The whole point: the failing SOURCE LINE is present.
     assert "return scaled / b" in tb, tb
     assert "compute_ratio" in tb
 

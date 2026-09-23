@@ -1,4 +1,4 @@
-"""Unit tests for the CAS-187 orphaned-``plt.savefig()`` guard.
+"""Unit tests for the orphaned-``plt.savefig()`` guard.
 
 ``plt.savefig(path)`` saves pyplot's process-global current figure; its only
 variable input is the module ``plt``, so the value-lineage planner has no edge

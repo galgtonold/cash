@@ -132,7 +132,7 @@ def test_hint_handles_non_ascii_by_replacement(tmp_path):
 
 
 def test_percent_percent_cash_cell_untouched_is_not_stale(tmp_path):
-    """CAS-274 final-review finding 1 (CRITICAL). `%%cash` is a cell magic:
+    """`%%cash` is a cell magic:
     IPython strips the `%%cash` line before handing the cell's BODY to cash
     (see `magics.py`'s `cash()`), but the file on disk still has that line --
     it is what the user actually saved. Comparing the bare body against
@@ -304,7 +304,7 @@ def test_checker_still_catches_a_real_edit_in_a_percent_percent_cash_cell(tmp_pa
 
 
 def test_reset_caches_clears_the_staleness_verdict(tmp_path):
-    """CAS-274 final-review finding 3 (MINOR). `reset_caches()` is called on
+    """`reset_caches()` is called on
     a notebook switch or a fresh `%cash_on` -- a staleness verdict proven
     against notebook A's file must not survive into notebook B, or the badge
     warns about a file this session no longer even reads from until the

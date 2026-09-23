@@ -1,4 +1,4 @@
-"""ADR-017 detection core: find edited-but-not-rerun seed cells (CAS-225).
+"""ADR-017 detection core: find edited-but-not-rerun seed cells.
 
 `seed_cells_not_yet_run` is the pure, cell-granular primitive that spots the
 one situation nothing runtime can see: a notebook cell that seeds a drawn RNG

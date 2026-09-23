@@ -1,4 +1,4 @@
-"""ipykernel introspects the shell's execution hooks — cash must not lie to it (CAS-134).
+"""ipykernel introspects the shell's execution hooks — cash must not lie to it.
 
 ipykernel decides whether to pass ``cell_id`` to ``shell.run_cell_async`` /
 ``shell.run_cell`` by introspecting their signatures:
@@ -108,7 +108,7 @@ class TestIntrospectionParity:
 class LegacyShell(Configurable):
     """Shell whose hooks carry IPython<8.3 signatures (no ``cell_id``).
 
-    This is the exact configuration CAS-134 bricks: the original rejects
+    This is the exact configuration that used to brick the kernel: the original rejects
     ``cell_id``, so if cash's wrapper claims to accept it, ipykernel passes it
     and the forward blows up with TypeError.
     """
@@ -171,5 +171,5 @@ class TestLegacyIPythonShell:
             f"cash told ipykernel that shell.{hook} accepts cell_id, but the "
             "underlying IPython<8.3 method does not. ipykernel would pass "
             "cell_id=..., the forward would raise TypeError, no execute_reply "
-            "would be sent, and the cell would hang at [*] forever (CAS-134)."
+            "would be sent, and the cell would hang at [*] forever."
         )

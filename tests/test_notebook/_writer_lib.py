@@ -11,7 +11,7 @@ import json
 
 
 def export_summary(data, path):
-    """The r27s2 shape: a project-module export that replaces a file."""
+    """The reported shape: a project-module export that replaces a file."""
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(data, fh)
     return path

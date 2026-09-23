@@ -1,4 +1,4 @@
-"""Sub-calls are grouped by call SITE, not by callee (CAS-243 task 9).
+"""Sub-calls are grouped by call SITE, not by callee.
 
 An intercepted call (a call unit) is a cache line of
 its own, keyed by where it's called from -- the same callee invoked from two
@@ -310,8 +310,7 @@ def test_real_for_loop_stamps_call_events_with_loop_header(magics_fixture):
     # shape used to match a dispatch (``cacheable_accumulator_loop``, called
     # directly from ``control_structures/processor.py``) that routed the
     # WHOLE loop through single-unit caching REGARDLESS of size, never
-    # reaching per-iteration decomposition at all. CAS-259 (2026-07-31) fixed
-    # that: the shape is now consulted only from INSIDE
+    # reaching per-iteration decomposition at all. That is fixed: the shape is now consulted only from INSIDE
     # ``ForLoopHandler``'s cost-based single-unit branch, so a small loop
     # like this one (3 items, well under the ~50-iteration threshold) always
     # decomposes per-iteration regardless of body shape -- the append form
@@ -451,7 +450,7 @@ def _one_site(*events):
 
 
 def test_a_call_cash_did_nothing_with_has_no_sub_call_line():
-    """Round 25 (r25s1): ``sub-call roc_auc_score(...): 0/1 hit`` on every run of
+    """``sub-call roc_auc_score(...): 0/1 hit`` on every run of
     a report cell -- a call below the cost floor, never stored, so never a hit."""
     text = render_text(build_interactive_badge(_one_site(_event("score(y, p)", 0, False, stored=False))))
     assert "sub-call" not in text, text

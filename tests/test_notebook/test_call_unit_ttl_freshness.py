@@ -1,4 +1,4 @@
-"""`CallUnit._ttl_fresh` edge semantics (CAS-268).
+"""`CallUnit._ttl_fresh` edge semantics.
 
 The end-to-end contract is pinned in
 `tests/test_notebook_integration/test_call_unit_ttl.py`. These cover the three
@@ -40,8 +40,8 @@ def test_ttl_zero_expires_without_consulting_the_clock():
 
 def test_a_falsy_ttl_is_not_treated_as_absent():
     """The distinction `is not None` protects, stated directly. Reading `if
-    ttl:` here would make `ttl=0` mean "no TTL" -- which is precisely what
-    CAS-221 was at the statement layer."""
+    ttl:` here would make `ttl=0` mean "no TTL" -- which is precisely the bug
+    the statement layer once had."""
     assert _unit(0)._ttl_fresh({"timestamp": time.time()}) is False
     assert _unit(None)._ttl_fresh({"timestamp": time.time()}) is True
 

@@ -1,7 +1,7 @@
-"""The CAS-172 guard must announce itself quietly (CAS-182).
+"""The unstable-key guard must announce itself quietly.
 
-The guard's mechanism is confirmed working and is NOT under test here: a tester
-verified it fires during edits and drops to zero firings across 12 reps once the
+The guard's mechanism is confirmed working and is NOT under test here: it was
+verified that it fires during edits and drops to zero firings across 12 reps once the
 notebook stabilises. This file pins only its VOICE.
 
 It explained itself in a ~46-word paragraph per statement -- 7 times on a single
@@ -150,8 +150,8 @@ def test_html_keeps_the_full_explanation_in_its_drawer():
 
 
 def test_the_summary_names_which_statements():
-    """Round 25's r25s1: "1 statement stopped caching (unstable key ...)" with
-    no statement named, and none of the rows marked where the tester looked --
+    """ "1 statement stopped caching (unstable key ...)" with
+    no statement named, and none of the rows marked where the user looked --
     one of their model fits, or something trivial? The summary names them."""
     out = _render(1)
     summary = out[out.index("stopped caching") - 30 :]

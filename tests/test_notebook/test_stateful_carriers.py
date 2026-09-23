@@ -1,4 +1,4 @@
-"""Unit tests for the stateful-carrier classifier (CAS-175/178)."""
+"""Unit tests for the stateful-carrier classifier."""
 
 import pytest
 
@@ -81,7 +81,7 @@ class TestNonCarriersIgnored:
 
     def test_matplotlib_line2d_is_not_a_carrier(self):
         """``Line2D`` is a matplotlib Artist but carries no accumulated state of
-        its own -- the CAS-144 table draws the same line."""
+        its own -- the identity-coupled table draws the same line."""
         pytest.importorskip("matplotlib")
         from matplotlib.lines import Line2D
 

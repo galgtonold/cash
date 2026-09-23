@@ -1,6 +1,6 @@
 """`cash inspect` names the function a call-cache entry belongs to.
 
-Round 28, r28s1: "entries in `cash inspect` are all named `call`, so I can't
+"entries in `cash inspect` are all named `call`, so I can't
 tell which function each one belongs to". Call-cache keys are `call:<sha>`,
 and `inspect` names an entry by the key's first segment, which for every
 intercepted call is the literal `call`. The entry now records its function.

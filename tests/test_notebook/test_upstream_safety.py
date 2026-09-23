@@ -10,7 +10,7 @@ class TestUpstreamSafety(unittest.TestCase):
     def setUp(self):
         self.shell = MagicMock()
         # `x` must be LIVE in the namespace: the missing-input check now gates on
-        # the real ``user_ns`` (CAS-94) instead of the tracking dict, since a
+        # the real ``user_ns`` instead of the tracking dict, since a
         # ``del``/``%reset`` leaves a lineage entry behind for a var that no
         # longer exists in memory. A tracked var that is genuinely present (the
         # valid-extension scenario below) must therefore also be in ``user_ns`` —

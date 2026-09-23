@@ -1,4 +1,4 @@
-"""``# @cash:ttl=0`` must expire immediately (CAS-221).
+"""``# @cash:ttl=0`` must expire immediately.
 
 The docs promise this twice — ``docs/annotations.md`` says a ``ttl`` of 0
 "means 'immediately expired' — every run will be a miss" — and the decorator

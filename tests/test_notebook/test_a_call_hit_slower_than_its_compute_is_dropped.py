@@ -1,6 +1,6 @@
 """A call-cache hit that costs more than the compute it saves is dropped.
 
-Round 28, r28s5: `net_returns(orders, w)` hits took ~10 s each against ~4 s
+`net_returns(orders, w)` hits took ~10 s each against ~4 s
 of compute, and the badge reported "4/4 hit". The call cache had no
 restore-cost check at all -- the statement path has one -- and nothing
 compared a hit's real cost with what it saved. Measured on the hit now:

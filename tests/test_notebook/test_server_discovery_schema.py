@@ -10,7 +10,7 @@ it, and discovery returned None.
 The consequence was not a missing convenience: notebook discovery failing turns
 upstream dependency tracking off for the whole session, so an edited-but-not-
 re-run cell silently feeds a STALE value to everything downstream. Two
-independent round-10 testers hit it, and both were misdirected by the log line,
+independent reports hit it, and both were misdirected by the log line,
 which reported a schema mismatch as "Failed to query sessions".
 
 The fast suite could never see it — it drives NotebookClient, not a real server.
@@ -114,7 +114,7 @@ def test_pathless_session_does_not_raise(monkeypatch):
 
 def test_schema_mismatch_is_not_reported_as_a_query_failure(monkeypatch, caplog):
     """The old log line blamed the network for a parse error and sent two
-    testers hunting proxies and tokens. A missing key must say so."""
+    people hunting proxies and tokens. A missing key must say so."""
     broken = {"url": "http://127.0.0.1:8901/", "token": "tok"}  # no dir key at all
     session = {"id": "s1", "name": "work.ipynb"}  # no 'kernel' key
     with _serving(monkeypatch, broken, [session]):

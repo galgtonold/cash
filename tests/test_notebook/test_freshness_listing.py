@@ -1,7 +1,7 @@
 """A lookup over many files in one directory lists it instead of stat-ing each.
 
 On Windows a stat opens the file, ~90 us, and re-running statements derived
-from 3,000 files made one per file per lookup (round 23). A directory listing
+from 3,000 files made one per file per lookup. A directory listing
 reports every entry's size and times at once. It is taken only for files
 hashed in full, where content -- not the listing -- decides freshness.
 """

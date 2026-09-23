@@ -141,7 +141,7 @@ class TestBenchmarkMagic:
         assert "Speedup" in captured.out
 
     def test_compare_uncached_arm_forces_recompute(self, magics_fixture, capsys):
-        """CAS-168: the --compare 'without caching' arm must genuinely recompute
+        """The --compare 'without caching' arm must genuinely recompute
         on every iteration instead of being served from cache.
 
         Before the fix, the uncached arm ran the cell through cash's *patched*
@@ -191,7 +191,7 @@ class TestBenchmarkMagic:
         )
         out = capsys.readouterr().out
 
-        # THE CAS-168 assertion: the uncached arm really recomputed on every
+        # THE assertion: the uncached arm really recomputed on every
         # iteration. Pre-fix this is 0 — the arm went through the cache path
         # (fake_execute_cell) instead of the uncached path.
         assert uncached_runs["n"] == iterations, (

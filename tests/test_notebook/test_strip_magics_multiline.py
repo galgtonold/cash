@@ -1,4 +1,4 @@
-"""CAS-163: ``strip_magics`` must not shred a multi-line statement whose
+"""``strip_magics`` must not shred a multi-line statement whose
 continuation line begins with ``%`` (modulo / ``%``-format) or ``!``.
 
 The magic filter used to test *every* physical line and drop any whose stripped
@@ -89,7 +89,7 @@ def test_pct_inside_triple_quoted_string_is_not_a_magic():
 
 
 def test_genuine_syntax_error_still_degrades():
-    """A real typo must remain a SyntaxError (graceful degrade, no CAS-156 regression)."""
+    """A real typo must remain a SyntaxError (graceful degrade to a clean traceback)."""
     code = "x = = 1"
     cleaned = CodeAnalyzer.strip_magics(code)
     try:

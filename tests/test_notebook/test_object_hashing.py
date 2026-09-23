@@ -72,7 +72,7 @@ class TestComputeHash:
     def test_unpicklable_object_hash_is_the_identity_fallback(self):
         """Pins tier 3's exact formula (`sha256(str(id(obj)))`), not merely
         "some hash came back" -- so a callee like `CallUnit._hash_args`
-        (CAS-243) that has to tell a real content hash apart from this
+        that has to tell a real content hash apart from this
         id-based one via `is_identity_fallback_hash` cannot silently stop
         working if this formula ever changes without `is_identity_fallback_hash`
         changing to match.

@@ -1,11 +1,11 @@
-"""CAS-224: a statement calling @cash.cache(ttl=0) must inherit that TTL.
+"""A statement calling @cash.cache(ttl=0) must inherit that TTL.
 
 Under %cash_on, ``x = f()`` is cached as an ordinary statement. When ``f`` is
 decorated ``@cash.cache(ttl=0)`` — "recompute every call" — the statement cache
 had no TTL and froze ``x`` at the first result, silently overriding the freshness
 the decorator promised. ``_ttl_floor_from_called_functions`` lowers the
 statement's effective TTL to the smallest TTL of any cash-wrapped function it
-calls, so ttl=0 rides the immediate-expiry path (CAS-221) and the body runs every
+calls, so ttl=0 rides the immediate-expiry path and the body runs every
 run.
 
 These unit-test the helper directly with stub wrappers, so no kernel is needed.

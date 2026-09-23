@@ -1,4 +1,4 @@
-"""A sub-unit hit must contribute back into the statement's ambient capture (CAS-243 Task 7).
+"""A sub-unit hit must contribute back into the statement's ambient capture.
 
 The call runs *inside* the statement's ambient ``FileAccessTracker`` / output
 capture. A genuine miss records the call's effects there for free; a hit
@@ -112,7 +112,7 @@ def test_replay_deps_registers_a_local_path_on_the_ambient_tracker(call_unit_har
 
 
 def test_two_reads_of_the_same_path_in_one_tracker_window_both_stay_correct(call_unit_harness, tmp_path):
-    """Regression (coordinator review, round 2): a delta against the AMBIENT
+    """Regression: a delta against the AMBIENT
     tracker silently loses a dependency the moment the same path is read
     twice inside one ``FileAccessTracker`` window.
 

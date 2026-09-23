@@ -1,4 +1,4 @@
-"""A magic must do what it was asked, or say it didn't (CAS-181).
+"""A magic must do what it was asked, or say it didn't.
 
 A trailing ``# comment`` used to defeat an ``== 'reset'``-style match, so the
 flag fell through to the magic's default branch: a *different* operation,
@@ -69,7 +69,7 @@ def test_stats_reset_with_trailing_comment_actually_resets(
     cash_instance,
     capsys,
 ):
-    """A comment must not turn `reset` into "print the stats" (CAS-157 surface)."""
+    """A comment must not turn `reset` into "print the stats"."""
     cash_magics._session.stats["cells_executed"] = 7
     cash_magics._session.stats["statements_computed"] = 3
 

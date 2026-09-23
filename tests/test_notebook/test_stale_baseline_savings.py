@@ -1,6 +1,6 @@
-"""``%cash_stats`` must not claim a win it cannot verify (CAS-157).
+"""``%cash_stats`` must not claim a win it cannot verify.
 
-Reported by independent testers in three consecutive rounds: a big-frame CSV
+Reported independently three times: a big-frame CSV
 ETL notebook run across a kernel restart was ~4x SLOWER by wall clock than just
 recomputing (unpickling 300MB frames costs more than re-parsing an OS-cached
 CSV), and ``%cash_stats`` still reported "Net +5.7s..+9s saved".
@@ -93,7 +93,7 @@ def _replay_retail_etl(magics) -> None:
 
 
 class TestStaleBaselineCannotPrintAWin:
-    """The headline net on the reported session. Fails on the CAS-157 baseline,
+    """The headline net on the reported session. Fails on the old baseline,
     which reports net = 75.0 − 24.0 = +51.0s for a session that lost time."""
 
     def test_restore_dominated_stale_session_nets_non_positive(self, magics_fixture, capsys):
@@ -259,7 +259,7 @@ class TestVerificationFiresOnTheRealPipeline:
 
 
 class TestCertainLossStillReadsAsALoss:
-    """CAS-143's negative case must survive: where even the most generous
+    """The negative case must survive: where even the most generous
     reading of the cache's baselines is a loss, say so plainly."""
 
     def test_no_savings_at_all_still_says_cash_cost_you(self, magics_fixture, capsys):
@@ -281,8 +281,8 @@ class TestUpstreamComputeIsNotOverhead:
     Upstream re-execution is the user's own notebook code rebuilding state the
     user would otherwise have rebuilt by hand. Booking it as cash's overhead
     would make cash understate itself by the size of the user's ETL on exactly
-    the sessions where it helps most. It is also demonstrably NOT the CAS-157
-    mechanism: the reported session re-executes nothing upstream and still
+    the sessions where it helps most. It is also demonstrably NOT the
+    overstatement mechanism: the reported session re-executes nothing upstream and still
     overstated.
     """
 

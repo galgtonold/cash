@@ -1,8 +1,8 @@
 """A statement's entry refers to call results already in the cache.
 
-Round 25: every project's cache held its expensive results twice -- the dict a
+Every project's cache held its expensive results twice -- the dict a
 statement gathered from per-call cached fits, and each fit under its call's key
-(r25s5 ~1.2 of 2.7 GiB, r25s1 ~1.3 of 4 GiB). The statement's entry still
+(~1.2 of 2.7 GiB in one project, ~1.3 of 4 GiB in another). The statement's entry still
 restores the value on its own (a later cell or a restart needs no call
 arguments rebuilt); it just points at the call entries for the parts they hold.
 """

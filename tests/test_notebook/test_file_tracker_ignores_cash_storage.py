@@ -8,8 +8,8 @@ The consequence is not a stale value -- it is an **unstable lineage**. The
 dependency exists on a run where the inner call hit and not on one where it
 missed, so a statement's output lineage differs between those two runs.
 Anything that chains on that lineage then settles one link per run instead of
-immediately. Observed on an 8-iteration loop whose callee mutates a global
-(CAS-265's shape), real calls per restart::
+immediately. Observed on an 8-iteration loop whose callee mutates a global,
+real calls per restart::
 
     without the guard   7, 6, 5, 4, 3     one iteration settles per run, O(N)
     with the guard      0, 0, 0, 0, 0

@@ -1,6 +1,6 @@
 """A call result too big to be worth its bytes is not pickled to be digested.
 
-Measured before round 29 on r28s5's own cells (pandas 2.3): after its 2.8 s
+Measured on a user's own cells (pandas 2.3): after its 2.8 s
 of compute, ``net_returns(orders, 12)`` spent 2.7 s pickling its 1.7 GiB
 result for a digest -- the digest that lets a statement store a reference to
 the call's entry instead of a copy -- and the statement was then refused for

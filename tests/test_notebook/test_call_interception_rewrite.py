@@ -1,4 +1,4 @@
-"""Rewriting eligible calls into cached calls (CAS-243).
+"""Rewriting eligible calls into cached calls.
 
 The transform wraps the **callee expression**, leaving the argument list
 untouched::
@@ -142,7 +142,7 @@ def test_computed_arg_positions_positional_expression_and_keyword_expression():
 
 
 def test_a_comprehension_variable_is_hashed_by_value_not_resolved_by_name():
-    """Round 22: ``fit_full(s, X, y)`` inside ``{... for name, s in ...}`` had
+    """``fit_full(s, X, y)`` inside ``{... for name, s in ...}`` had
     one key for every element -- ``s`` resolved by name to nothing, or to an
     unrelated global ``s`` -- and the second call got the first's model."""
     tree = ast.parse("models = {name: fit_full(s, X, y) for name, s in searches.items()}")
@@ -171,7 +171,7 @@ def test_a_callee_bound_by_the_comprehension_is_not_intercepted():
 def test_a_call_inside_an_uninterceptable_call_is_found():
     """``rows.append(dict(k=k, err=score(df, k)))`` took ``dict(...)`` as the
     outermost call; at runtime a class is not wrapped, and ``score`` inside it
-    was never considered (round 22: a backtest recomputed in full)."""
+    was never considered (a backtest recomputed in full)."""
     tree = ast.parse("rows.append(dict(k=k, err=score(df, k)))")
 
     def score(df, k):
@@ -225,7 +225,7 @@ def test_computed_arg_positions_fail_closed_under_unpacking():
 
 
 def test_has_unpacking_is_set_for_star_args():
-    """CAS-243 review C2: the runtime half (``CallUnit``) needs to know a call
+    """The runtime half (``CallUnit``) needs to know a call
     unpacked its arguments so it can refuse to key it (a static position count
     cannot be trusted against a dynamic runtime arity) -- that decision has to
     be made HERE, at rewrite time, since nothing downstream can recover
@@ -310,7 +310,7 @@ def test_selective_gate_wraps_only_the_accepted_call():
 
 
 def test_stmt_identity_is_the_unparsed_enclosing_statement():
-    """CAS-256: `CallSite.stmt_identity` must reflect the STATEMENT that
+    """`CallSite.stmt_identity` must reflect the STATEMENT that
     contains the call, not just the call itself -- that is the whole fix.
     """
     tree = ast.parse("vals[step] = fetch_next(conn)")
@@ -319,7 +319,7 @@ def test_stmt_identity_is_the_unparsed_enclosing_statement():
 
 
 def test_two_statements_with_identical_call_text_get_different_stmt_identity():
-    """The exact CAS-256 collision shape: two statements whose CALL text and
+    """The exact cross-statement collision shape: two statements whose CALL text and
     free names agree (`fetch_next(conn)` in both) must still get DIFFERENT
     `stmt_identity`, because the statements around the call differ.
 
@@ -360,13 +360,13 @@ def test_same_statement_reparsed_twice_gets_the_same_stmt_identity():
 
 
 def test_stmt_identity_excludes_an_injected_iteration_context_comment():
-    """The documented trap (CAS-242): `for_handler.py` prepends
+    """The documented trap: `for_handler.py` prepends
     `# __iteration_context__: <hash>` to a loop body statement's source
     before parsing it, and that hash is derived in part from the whole
     iterable's lineage -- which changes on every reorder. If that comment
     text ever reached `stmt_identity`, reordering a loop's items would change
-    every iteration's key and re-run the whole tail (CAS-242, the bug this
-    whole feature exists to fix). `ast.unparse` re-serialises the AST, which
+    every iteration's key and re-run the whole tail (the bug this whole
+    feature exists to fix). `ast.unparse` re-serialises the AST, which
     never contained the comment (comments are not AST nodes) -- confirmed
     here by parsing code WITH the comment prepended and checking the hash
     text is nowhere in the resulting identity.
@@ -399,8 +399,8 @@ def test_calls_inside_a_while_body_are_never_intercepted():
     interceptor, and therefore never arrive without a loop variable to
     discriminate them.
 
-    If this ever becomes false (see CAS-255, which proposes decomposing while
-    loops), the key collapses for any call whose arguments are all bare Names:
+    If this ever becomes false (say, if while loops were ever decomposed),
+    the key collapses for any call whose arguments are all bare Names:
     every iteration builds one key and iterations 2..N are served iteration
     1's value. Do not "fix" this test by updating the assertion -- it is the
     tripwire for that ticket.

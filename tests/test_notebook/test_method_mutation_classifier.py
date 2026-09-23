@@ -1,11 +1,11 @@
-"""Receiver-mutation classifier: pin both CAS-194 and CAS-196 directions.
+"""Receiver-mutation classifier: pin both directions.
 
 ``_classify_method_mutations`` (runtime) and ``_mutation_receivers`` (simulation)
 must agree, and must:
 
-* CAS-194 — treat any method call on a live matplotlib Axes/Figure as an
+* treat any method call on a live matplotlib Axes/Figure as an
   in-place draw (``ax.hist()`` returns a data tuple but mutates the Axes), and
-* CAS-196 — NOT treat ``df.to_csv(path)`` / ``fig.savefig(path)`` as a mutation
+* NOT treat ``df.to_csv(path)`` / ``fig.savefig(path)`` as a mutation
   of the receiver (they read it and write a file),
 
 without loosening the genuine cases (``lst.append``, ``df.sort_values(inplace=
@@ -86,11 +86,11 @@ def test_axes_hist_is_a_mutation_but_dataframe_writes_are_not(classifiers):
         }
     )
 
-    # CAS-194: ax.hist(...) draws on the Axes -> mutation, despite the data tuple.
+    # ax.hist(...) draws on the Axes -> mutation, despite the data tuple.
     assert "ax" in _routes_mutation(proc, shell, "ax.hist(data)")
     assert "ax" in _routes_mutation(proc, shell, "ax.plot(data)")
 
-    # CAS-196: df.to_csv reads the frame and writes a file -> NOT a receiver
+    # df.to_csv reads the frame and writes a file -> NOT a receiver
     # mutation, so it never bumps df's lineage and cannot become a spurious
     # producer of df that re-fires the write during reconstruction.
     assert "df" not in _routes_mutation(proc, shell, "df.to_csv('out.csv')")
@@ -98,7 +98,7 @@ def test_axes_hist_is_a_mutation_but_dataframe_writes_are_not(classifiers):
 
     # fig.savefig() is DELIBERATELY still a mutation: fig is identity-coupled
     # (never cached, re-derived as a unit) so bumping it is idempotent, and the
-    # savefig->fig edge is load-bearing for CAS-175 chart-coherence re-derivation.
+    # savefig->fig edge is load-bearing for chart-coherence re-derivation.
     assert "fig" in _routes_mutation(proc, shell, "fig.savefig('out.png')")
 
     # Controls — genuine mutations must STILL route (no under-invalidation).
@@ -112,11 +112,11 @@ def test_axes_hist_is_a_mutation_but_dataframe_writes_are_not(classifiers):
 
 
 def test_captured_return_draw_routes_on_identity_coupled_receiver_only(classifiers):
-    """CAS-199: a draw whose return is CAPTURED into an assignment must route too.
+    """A draw whose return is CAPTURED into an assignment must route too.
 
     ``standalone_method_call_receivers`` sees only bare-``Expr`` calls, so the
     captured form (``counts, bins, _ = ax.hist(...)`` -- an ``ast.Assign``)
-    slipped the CAS-194 routing and was cached, blanking the chart on a warm
+    slipped the Axes routing and was cached, blanking the chart on a warm
     re-run. The extension keys on the RECEIVER (live Axes/Figure), never the
     statement shape: a captured pure read on an ordinary receiver still caches.
     """
@@ -153,7 +153,7 @@ def test_captured_return_draw_routes_on_identity_coupled_receiver_only(classifie
 
 
 def test_call_expression_receiver_is_not_attributed_to_the_callee(classifiers):
-    """CAS-210: ``open(p, 'a').write(x)`` must not record a mutation of ``open``.
+    """``open(p, 'a').write(x)`` must not record a mutation of ``open``.
 
     The receiver of ``.write`` is a Call, not a name. Resolving it walked through
     the Call to the CALLEE and returned ``open`` -- but the callee is not the
@@ -163,7 +163,7 @@ def test_call_expression_receiver_is_not_attributed_to_the_callee(classifiers):
     write is a ``mode='a'`` append, re-execution DUPLICATED the line on disk.
 
     This pins the misattribution only. Whether a non-idempotent write may be
-    re-fired at all is the separate defence-in-depth half of CAS-210.
+    re-fired at all is a separate defence-in-depth question.
     """
     proc, shell = classifiers
     shell.user_ns.update(

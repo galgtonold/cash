@@ -1,4 +1,4 @@
-"""CAS-173: a SyntaxError in an upstream cell must be DISCLOSED, not swallowed.
+"""A SyntaxError in an upstream cell must be DISCLOSED, not swallowed.
 
 Before this fix, one unparseable upstream cell (a half-written cell the user
 had merely SAVED, not run) made the upstream simulator re-raise a SyntaxError
@@ -15,7 +15,7 @@ These in-process tests pin the new contract:
   re-fires when the break changes;
 * the current cell is NOT dropped into the silent uncached fallback — the
   caching pipeline still runs, so ``auto_cache_enabled`` is not a lie;
-* a VALID cell (including a multi-line ``%``-format print — CAS-163) never
+* a VALID cell (including a multi-line ``%``-format print) never
   triggers the warning and never poisons.
 
 Correctness containment (a downstream cell that does not depend on the broken
@@ -138,7 +138,7 @@ def test_broken_upstream_cell_emits_named_warning(harness):
 
 def test_no_warning_and_no_fallback_when_all_cells_valid(harness):
     """A notebook with only valid cells never warns and never drops into the
-    silent uncached fallback (guards against over-eager flagging / CAS-163)."""
+    silent uncached fallback (guards against over-eager flagging)."""
     magics, shell, write_cells, run = harness
 
     write_cells(["x = 10", "result = x * 2"])
@@ -155,7 +155,7 @@ def test_no_warning_and_no_fallback_when_all_cells_valid(harness):
 
 
 def test_multiline_percent_print_upstream_not_flagged(harness):
-    """CAS-163 guard: a VALID multi-line ``%``-format print upstream cell must
+    """A VALID multi-line ``%``-format print upstream cell must
     NOT be reported as broken and must NOT poison the downstream cell."""
     magics, shell, write_cells, run = harness
 
@@ -189,7 +189,7 @@ def test_broken_upstream_does_not_use_silent_uncached_fallback(harness):
     called_with = [c.args[0] for c in magics._original_run_cell.call_args_list if c.args]
     assert "result = x * 2" not in called_with, (
         "downstream cell fell into the silent uncached fallback while a broken "
-        f"upstream cell was present (CAS-173). original_run_cell calls: {called_with}"
+        f"upstream cell was present. original_run_cell calls: {called_with}"
     )
     assert magics._auto_cache_enabled is True
 

@@ -1,9 +1,9 @@
-"""CAS-198: a top-level ``await`` inside a control-structure BODY must not
+"""A top-level ``await`` inside a control-structure BODY must not
 SyntaxError under ``%cash_on``.
 
 ``for x in xs: r = await fetch(x)`` -- the canonical async-batch pattern --
 reached the sync ``ControlStructureProcessor``, whose unflagged ``compile()``
-raises ``SyntaxError: 'await' outside function``. The CAS-164 top-level-await
+raises ``SyntaxError: 'await' outside function``. The top-level-await
 support had landed on the regular-statement path but not the control-body path.
 The fix routes an await-bearing control structure through the
 ``PyCF_ALLOW_TOP_LEVEL_AWAIT``-capable async statement path as ONE awaited unit.
@@ -19,7 +19,7 @@ Two things are pinned here:
 
 The full autoawait ROUTING (ipykernel dispatching the cell to ``run_cell_async``)
 only reproduces against a LIVE Jupyter server, which the nbclient unit harness
-lacks (CAS-136/190); that end-to-end path is covered by ``scripts/wheel_gate.py``
+lacks; that end-to-end path is covered by ``scripts/wheel_gate.py``
 scenario S6.
 """
 

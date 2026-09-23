@@ -45,7 +45,7 @@ class TestCashStats:
         assert "Cells executed:" in captured.out
         assert "Cache hit rate:" in captured.out
         # Gross / overhead / net are shown separately so the headline saving
-        # cannot overstate what cash actually bought (CAS-143).
+        # cannot overstate what cash actually bought.
         assert "Gross time saved:" in captured.out
         assert "Cash overhead:" in captured.out
         assert "Net time saved:" in captured.out
@@ -130,7 +130,7 @@ class TestCashImport:
 
 
 def test_stats_say_they_cover_this_kernel_only(cash_magics, capsys):
-    """Round 25: the totals reset on a kernel restart and a tester read them as
+    """The totals reset on a kernel restart and a user read them as
     the project's. Say the scope, and where the on-disk numbers are."""
     cash_magics.cash("", "x = 42")
     cash_magics.cash_stats("")

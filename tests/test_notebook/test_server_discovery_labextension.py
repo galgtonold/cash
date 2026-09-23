@@ -1,7 +1,7 @@
 """Isolated regression test for the labextension-install probe.
 
-``_labextension_installed()`` gates the ``%cash_on`` save-hint suppression
-(CAS-274 Finding B). ``TestSaveHintLiveReaderAware`` in
+``_labextension_installed()`` gates the ``%cash_on`` save-hint suppression.
+``TestSaveHintLiveReaderAware`` in
 ``test_magics_coverage.py`` monkeypatches the probe itself away in every one
 of its cases (by design -- see that class's docstring: the probe reads the
 real filesystem, so leaving it live would make those tests pass or fail

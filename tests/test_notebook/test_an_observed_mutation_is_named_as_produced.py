@@ -1,6 +1,6 @@
 """A call seen changing its argument names that argument as what it produced.
 
-Round 28, r28s4: ``sc.pp.normalize_total(adata)`` is a bare call; nothing in
+``sc.pp.normalize_total(adata)`` is a bare call; nothing in
 its code says it writes ``adata``. Cash sees it at runtime -- the argument's
 content changed -- and treats ``adata`` as an output from then on. The badge
 row of that first run still said "Produced -": the observed name reached the

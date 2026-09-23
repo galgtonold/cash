@@ -1,4 +1,4 @@
-"""An intercepted call must not cache an identity-coupled result (CAS-243).
+"""An intercepted call must not cache an identity-coupled result.
 
 Found by adversarial probing, and it produced a genuinely wrong file on disk.
 
@@ -15,13 +15,13 @@ wrote *different images* and ``plt.gcf() is fig`` was False; without caching,
 identical and True.
 
 The decorator used to have the same hole when a user wrote ``@cash.cache`` by
-hand (confirmed by the same probe). That was filed as CAS-245 and is now closed
+hand (confirmed by the same probe). That is now closed
 — ``Cash._refuses_identity_coupled`` gates all four decorator store sites, with
 ``tests/test_core/test_decorator_identity_guard.py`` guarding it. This file
 still guards the path that applies caching *without the user asking*, which is
 the one that owes a higher duty of care.
 
-**Migrated to real sites (CAS-243 Task 6).** This file used to be the one
+**Migrated to real sites.** This file used to be the one
 deliberate holdout exercising only the no-site decorator-fallback branch of
 ``resolve()`` — ``CallUnit._storable`` was a stub returning ``True`` before
 Task 6, so a call routed through a REAL ``CallSite`` had no guard at all (see

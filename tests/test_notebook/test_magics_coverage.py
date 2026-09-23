@@ -81,7 +81,7 @@ class TestSaveHintLiveReaderAware:
         assert "saved notebook file" not in out
 
     def test_hint_suppressed_when_the_labextension_is_installed(self, magics_fixture, capsys, monkeypatch):
-        """CAS-274 Finding B: the extension makes the save advice false."""
+        """The extension makes the save advice false."""
         magics, _shell, _backend = magics_fixture
         self._gates(monkeypatch, colab=False, labext=True)
         magics._save_hint_shown = False

@@ -1,9 +1,9 @@
 """A statement's recorded cost is what its own code costs, not cash's overhead.
 
-Round 25: ``%cash_stats`` "saved 16.50s" for a folder read that takes 1.8 s
-without cash (r25s4) -- the recorded cost was the statement's wall time under
+``%cash_stats`` "saved 16.50s" for a folder read that takes 1.8 s
+without cash -- the recorded cost was the statement's wall time under
 cash, file tracking and call caching included, and a later hit credited all of
-it. And "saved 6.55s" for a 50-100 s dict of fits (r25s5): the statement that
+it. And "saved 6.55s" for a 50-100 s dict of fits: the statement that
 built it was served its calls from the cache, so it recorded only what was left
 over, and a later hit credited that. Cash's own time comes off; what the calls
 it served would have cost goes on.

@@ -121,7 +121,7 @@ def test_unreadable_path_is_not_an_error(tmp_path, monkeypatch):
 @pytest.mark.skipif(
     sys.platform == "darwin",
     reason=(
-        "Fails on macOS 3.10-3.13 for a reason not yet found (CAS-271). Two "
+        "Fails on macOS 3.10-3.13 for a reason not yet found. Two "
         "genuine races were removed and macOS 3.14 went green, so a third "
         "factor remains -- most likely the _SAVE_FRESH_WINDOW_S gate declining "
         "to engage on a slow runner, but that is a hypothesis, not a finding. "

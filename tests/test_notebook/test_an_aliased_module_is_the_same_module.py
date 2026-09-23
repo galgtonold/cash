@@ -1,11 +1,11 @@
 """``import lib as x`` is an import of ``lib``, in both places that forgot it.
 
-Round 27, r27s2: a fix to a function in a project module had no effect in a
+A fix to a function in a project module had no effect in a
 live kernel. The cell re-ran and returned the PRE-fix answer, and two exported
 deliverables were computed from it. Only a kernel restart helped. Reproduced
 3/3; three minimal repros written at the time did NOT reproduce, because all
 three wrote ``import mylib`` -- and so does every module-reload test in this
-suite. The tester's notebook wrote ``import tickets_lib as tl``.
+suite. The notebook wrote ``import tickets_lib as tl``.
 
 Two independent places keyed on the name the cell bound rather than on the
 module, and BOTH have to be fixed: with either one alone the integration twin

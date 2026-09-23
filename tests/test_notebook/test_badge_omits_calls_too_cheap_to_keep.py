@@ -1,6 +1,6 @@
 """The badge does not list an intercepted call that was too cheap to keep.
 
-Round 29, r29s5: the badge read ``join() [intercepted]: 0/1 cached`` for
+The badge read ``join() [intercepted]: 0/1 cached`` for
 ``os.path.join(...)`` -- a call cash wrapped, found under the cost floor and
 did not store. Listed like that it reads as a cache that failed.
 """

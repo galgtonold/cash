@@ -2,8 +2,8 @@
 
 The badge already has a home for this: notification rows, the same family as
 FUNC CHANGED and MODULE RELOADED, which render on the red rail and add to the
-`warn` chip. It deliberately does NOT go in the header status word -- per
-CAS-273 that binary is near-permanently EXECUTED, so a fourth meaning would
+`warn` chip. It deliberately does NOT go in the header status word -- that
+binary is near-permanently EXECUTED, so a fourth meaning would
 bury the one thing here worth reading.
 """
 
@@ -67,7 +67,7 @@ def test_the_message_shows_the_running_code_not_the_file_code(tmp_path):
 
 
 def test_the_remedy_survives_print_modes_80_char_cap(tmp_path):
-    """CAS-274 final-review finding 2 (IMPORTANT). `%cash_badge print` renders
+    """`%cash_badge print` renders
     `code` through `renderers.text._row_line`, which hard-truncates a row's
     first line at `theme.HEADER_MAX_LEN` (80 chars) -- unlike HTML, there is
     no tooltip or drawer in that mode to hold the rest. The old message put
@@ -149,8 +149,8 @@ def test_a_raising_tracker_does_not_crash_the_notification_builder(tmp_path):
 
 
 def test_reading_the_saved_file_adds_no_row(tmp_path):
-    """Round 25: "cash cannot see unsaved edits here" on every fresh kernel,
-    for all five testers, in headless runs where nothing can be unsaved; none
+    """ "cash cannot see unsaved edits here" on every fresh kernel,
+    for everyone, in headless runs where nothing can be unsaved; none
     could act on it. Only a proven-stale file is reported."""
     t = StalenessTracker()
     executor = CellExecutor.__new__(CellExecutor)

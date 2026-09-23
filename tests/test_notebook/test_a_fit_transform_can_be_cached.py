@@ -1,6 +1,6 @@
 """``X = vec.fit_transform(texts)`` can be cached -- by asking for it.
 
-Round 29, r29s2: TF-IDF was never cached ("NOT CACHED - In-place mutation on:
+TF-IDF was never cached ("NOT CACHED - In-place mutation on:
 vec") and cost 11-17 s on every pass. ``# @cash:cache-fit`` exists for exactly
 this trade, but covered only a bare ``est.fit(...)`` / ``partial_fit``: the
 assignment form of ``fit_transform`` was refused even when asked. It stays

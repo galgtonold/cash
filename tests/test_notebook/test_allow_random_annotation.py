@@ -1,6 +1,6 @@
 """Tests for unseeded-randomness warnings and the ``# @cash:allow-random`` directive.
 
-CAS-114. The detector, the warning helper, and the annotation field all existed
+The detector, the warning helper, and the annotation field all existed
 long before the feature did: ``allow_random`` was parsed into ``CacheAnnotation``
 and never read, and ``check_and_warn_randomness`` had zero callers, so an
 unseeded ``np.random.rand(1000)`` emitted no warning at all. This module pins the
@@ -320,7 +320,7 @@ class TestAnnotationDoesNotChangeCacheability:
     Note the ``@cash:persist`` in these tests. Without it a fast statement sits
     below the cost model's 0.01 s floor and is never stored, so a "does it still
     cache?" assertion would measure the cost model rather than the directive —
-    the exact confound that made the pre-existing wave5 probe meaningless.
+    the exact confound that made an earlier probe meaningless.
     """
 
     def test_annotated_statement_still_restores_from_cache(self, magics_fixture):
@@ -364,9 +364,9 @@ class TestAnnotationDoesNotChangeCacheability:
 
 
 class TestStaleRandomnessAnnouncedOnRestore:
-    """The replay warning (CAS-135 hole 2).
+    """The replay warning.
 
-    CAS-114 warned on the COLD run — where the value is freshly computed and
+    The first version warned on the COLD run — where the value is freshly computed and
     correct — and went silent on every restore after it, where the value is a
     frozen replay. The alarm was quiet exactly when it mattered.
 
@@ -409,7 +409,7 @@ class TestStaleRandomnessAnnouncedOnRestore:
         assert "@cash:no-cache" in message
 
     def test_replay_warning_is_deduped_like_the_cold_one(self, magics_fixture):
-        """CAS-114's anti-spam contract has to survive: the fact does not change
+        """The anti-spam contract has to survive: the fact does not change
         between run 2 and run 20, so it is stated once per session."""
         magics, shell, _backend, _cash = magics_fixture
         import numpy as np

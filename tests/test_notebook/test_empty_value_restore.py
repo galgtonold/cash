@@ -1,4 +1,4 @@
-"""A legitimately-empty cached value must be restorable (CAS-101).
+"""A legitimately-empty cached value must be restorable.
 
 ``_restore_vars_from_cache`` refused to restore ANY empty sized value whenever
 the namespace happened to hold a non-empty one. The intent was sound — an empty
@@ -73,7 +73,7 @@ class TestEmptyRestoreRespectsConfirmation:
     METADATA = {"output_lineages": {"rows": "h1"}}
 
     def test_confirmed_empty_value_is_restored(self):
-        """The CAS-101 fix: a correctly-empty result reaches the namespace."""
+        """A correctly-empty result reaches the namespace."""
         vl, shell, _ = _make_lineage({"rows": [1, 2, 3]})
 
         restored = vl._restore_vars_from_cache({"rows": []}, self.METADATA, frozenset({"rows"}))

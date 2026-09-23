@@ -148,7 +148,7 @@ class TestAllMutatedVars:
         assert "a" in a.all_mutated_vars
 
     def test_method_mutation_in_list_comprehension(self):
-        # CAS-67: a known-mutating method inside a comprehension element.
+        # A known-mutating method inside a comprehension element.
         a = _analyze("r = [base.append(0) for _ in range(2)]")
         assert "base" in a.all_mutated_vars
 
@@ -191,7 +191,7 @@ class TestAllMutatedVars:
         assert "d" in a.all_mutated_vars
 
     def test_tuple_unpack_subscript_target(self):
-        # CAS-56: subscript writes nested in a tuple target mutate their bases.
+        # Subscript writes nested in a tuple target mutate their bases.
         a = _analyze("df['a'], df['b'] = df['b'], df['a']")
         assert "df" in a.all_mutated_vars
 
@@ -359,7 +359,7 @@ class TestStandaloneMethodCallReceivers:
 class TestAssignedMethodCallReceivers:
     """``assigned_method_call_receivers`` returns ``(base, method)`` for method
     calls on the RHS of a top-level assignment — the captured-return set the
-    runtime routes as a draw when the receiver is identity-coupled (CAS-199).
+    runtime routes as a draw when the receiver is identity-coupled.
     The dual of ``standalone_method_call_receivers``: assignments here, bare
     ``Expr`` there.
     """
@@ -471,7 +471,7 @@ class TestSideEffects:
         assert not any(e.kind == "file_write" for e in a.side_effects)
 
     def test_pathlib_write_text(self):
-        # CAS-83: Path.write_text is a file write; without this the write-only
+        # Path.write_text is a file write; without this the write-only
         # cell is cacheable and a cache hit skips creating the file.
         a = _analyze("from pathlib import Path\nPath('out.json').write_text('x')")
         assert any(e.kind == "file_write" for e in a.side_effects)
@@ -481,7 +481,7 @@ class TestSideEffects:
         assert any(e.kind == "file_write" for e in a.side_effects)
 
     def test_pathlib_mkdir(self):
-        # Round 22: `OUT.mkdir(exist_ok=True)` restored from the cache left an
+        # `OUT.mkdir(exist_ok=True)` restored from the cache left an
         # emptied output folder missing; it must run like any other write.
         from cash.notebook.cacheability import statement_write_repeatability, statement_writes_files
 
@@ -496,7 +496,7 @@ class TestSideEffects:
         assert not any(e.kind == "file_write" for e in a.side_effects)
 
     def test_statement_writes_files_helper(self):
-        # CAS-81/82: the sim/planner seam for scheduling stale writers.
+        # The sim/planner seam for scheduling stale writers.
         from cash.notebook.cacheability import statement_writes_files
 
         assert statement_writes_files("df.to_csv('out.csv', index=False)")
@@ -544,7 +544,7 @@ class TestSideEffects:
         assert not _analyze("ax.hist(a)").side_effects
 
     def test_statement_write_repeatability_classifies_all_three(self):
-        # CAS-210: `statement_writes_files` answers "does this write?"; the
+        # `statement_writes_files` answers "does this write?"; the
         # planner also needs "is repeating it safe?", because re-firing a
         # mode='a' append DUPLICATES the payload on disk.
         from cash.notebook.cacheability import statement_write_repeatability as verdict
@@ -595,7 +595,7 @@ class TestSideEffects:
         let it outrank the provable `open(p,'wb')` beside it, so a plain
         truncating write read as unsafe to repeat. Under a strict gate that
         refused to re-fire it, the edited payload never reached the file and the
-        reader served stale data -- breaking two CAS-82 tests.
+        reader served stale data -- breaking two stale-writer scheduling tests.
         """
         from cash.notebook.cacheability import statement_write_repeatability as verdict
 
@@ -692,7 +692,7 @@ class TestSideEffects:
 
 
 # ---------------------------------------------------------------------------
-# statement_written_paths — output-path extraction for write-provenance (CAS-153)
+# statement_written_paths — output-path extraction for write-provenance
 # ---------------------------------------------------------------------------
 
 
@@ -849,7 +849,7 @@ class TestSkipReasons:
 
 
 class TestAccumulatorHint:
-    """CAS-145 part b: an accumulator mutation (``out.append(f(e))``) that blocks
+    """An accumulator mutation (``out.append(f(e))``) that blocks
     caching also emits a guidance hint pointing at the comprehension form. The
     hint is advisory — it never changes the caching decision, and it is scoped to
     the accumulator methods (append/extend/add/update), NOT every in-place
@@ -936,8 +936,8 @@ class TestImmutability:
 class TestSelfrefInplaceWriteVars:
     """``selfref_inplace_write_vars`` detects NON-IDEMPOTENT self-referential
     in-place subscript/attribute writes (the written target is also read) so the
-    receiver is reset on isolated re-run (CAS-54). New-target writes read from
-    OTHER keys are excluded so they keep their per-statement cache (CAS-42)."""
+    receiver is reset on isolated re-run. New-target writes read from
+    OTHER keys are excluded so they keep their per-statement cache."""
 
     @staticmethod
     def _vars(code):
@@ -962,7 +962,7 @@ class TestSelfrefInplaceWriteVars:
         assert self._vars("obj.total = obj.total + 1") == {"obj"}
 
     def test_new_column_from_other_excluded(self):
-        # CAS-42: writes a NEW column read from a DIFFERENT column -> idempotent.
+        # Writes a NEW column read from a DIFFERENT column -> idempotent.
         assert self._vars("df['b'] = df['a'] + 1") == frozenset()
 
     def test_groupby_transform_excluded(self):
@@ -979,7 +979,7 @@ class TestSelfrefInplaceWriteVars:
         assert self._vars("df['a'] = other['a'] * 2") == frozenset()
 
     def test_loc_masked_self_ref_same_column(self):
-        # CAS-55: masked .loc write reads the SAME column spelled differently
+        # Masked .loc write reads the SAME column spelled differently
         # (df['a']) than the target (df.loc[mask, 'a']) -> still self-referential.
         assert self._vars("df.loc[df['a'] >= 50, 'a'] = df['a'] * 2") == {"df"}
 
@@ -990,14 +990,14 @@ class TestSelfrefInplaceWriteVars:
         assert self._vars("df.loc[mask, ['a', 'b']] = df[['a', 'b']] * 2") == {"df"}
 
     def test_loc_masked_new_column_excluded(self):
-        # CAS-42: masked write to a DIFFERENT column read from another -> idempotent.
+        # Masked write to a DIFFERENT column read from another -> idempotent.
         assert self._vars("df.loc[df['a'] >= 50, 'b'] = df['a'] * 2") == frozenset()
 
     def test_subset_assign_other_column_excluded(self):
         assert self._vars("df.loc[mask, 'b'] = df['a'] + df['c']") == frozenset()
 
     def test_loc_row_grow_len(self):
-        # CAS-74: df.loc[len(df)] = .. appends a row (size-dependent index).
+        # df.loc[len(df)] = .. appends a row (size-dependent index).
         assert self._vars("df.loc[len(df)] = 99") == {"df"}
 
     def test_loc_row_grow_shape(self):
@@ -1013,7 +1013,7 @@ class TestSelfrefInplaceWriteVars:
         assert self._vars("df.iloc[0, 1] = df['a'].sum()") == frozenset()
 
     def test_tuple_unpack_column_swap(self):
-        # CAS-56: df['a'], df['b'] = df['b'], df['a'] -- statement reads & writes
+        # df['a'], df['b'] = df['b'], df['a'] -- statement reads & writes
         # overlapping columns of df -> non-idempotent -> flag df.
         assert self._vars("df['a'], df['b'] = df['b'], df['a']") == {"df"}
 
@@ -1021,14 +1021,14 @@ class TestSelfrefInplaceWriteVars:
         assert self._vars("df['a'], df['b'] = df['a'] * 2, df['b'] * 2") == {"df"}
 
     def test_tuple_unpack_new_columns_excluded(self):
-        # CAS-42: new columns c,d derived from existing a,b -> idempotent.
+        # New columns c,d derived from existing a,b -> idempotent.
         assert self._vars("df['c'], df['d'] = df['a'], df['b']") == frozenset()
 
     def test_tuple_unpack_cross_object_excluded(self):
         assert self._vars("df['a'], df['b'] = other['x'], other['y']") == frozenset()
 
     def test_del_subscript(self):
-        # CAS-56: del df['b'] removes a column in place -> non-idempotent
+        # del df['b'] removes a column in place -> non-idempotent
         # (second del KeyErrors) -> df must reset on isolated re-run.
         assert self._vars("del df['b']") == {"df"}
 
@@ -1040,7 +1040,7 @@ class TestSelfrefInplaceWriteVars:
         assert self._vars("del x") == frozenset()
 
     def test_conditional_self_mutation(self):
-        # CAS-57: a self-mutation nested in an if-body executes at module level.
+        # A self-mutation nested in an if-body executes at module level.
         assert self._vars("if cond:\n    df['a'] = df['a'] * 2") == {"df"}
 
     def test_for_loop_self_mutation(self):
@@ -1063,11 +1063,11 @@ class TestSelfrefInplaceWriteVars:
         assert self._vars("def f():\n    df['a'] = df['a'] * 2") == frozenset()
 
     def test_loop_building_from_source_excluded(self):
-        # CAS-42: loop builds df columns from a DIFFERENT object -> idempotent.
+        # Loop builds df columns from a DIFFERENT object -> idempotent.
         assert self._vars("for c in cols:\n    df[c] = source[c] * 2") == frozenset()
 
     def test_conditional_new_column_excluded(self):
-        # CAS-42: new column derived in a conditional -> idempotent.
+        # New column derived in a conditional -> idempotent.
         assert self._vars("if cond:\n    df['b'] = df['a'] + 1") == frozenset()
 
     def test_none_tree(self):
@@ -1076,7 +1076,7 @@ class TestSelfrefInplaceWriteVars:
 
 class TestParamsMutatedInFunction:
     """``params_mutated_in_function`` reports which PARAMETERS a function body
-    mutates in place (CAS-58, interprocedural arg-mutation detection)."""
+    mutates in place (interprocedural arg-mutation detection)."""
 
     @staticmethod
     def _params(code):
@@ -1189,7 +1189,7 @@ class TestFunctionArgMutations:
 
 
 class TestInterproceduralArgMutations:
-    """``function_arg_mutations`` follows nested calls (CAS-61): a param mutated
+    """``function_arg_mutations`` follows nested calls: a param mutated
     only through a further resolvable call is detected too."""
 
     SRCS = {
@@ -1222,7 +1222,7 @@ class TestInterproceduralArgMutations:
 
 class TestAliasMutationSources:
     """``alias_mutation_sources`` maps an in-place mutation through a bare
-    ``y = x`` alias back to the upstream source ``x`` (CAS-60)."""
+    ``y = x`` alias back to the upstream source ``x``."""
 
     def _src(self, code):
         return alias_mutation_sources(ast.parse(code))
@@ -1271,7 +1271,7 @@ class TestAliasMutationSources:
 
 class TestFunctionGlobalMutations:
     """``function_global_mutations`` attributes a called function's free/global
-    mutations back to the global (CAS-68 A)."""
+    mutations back to the global."""
 
     SRCS = {
         "bump": "def bump():\n    global g\n    g += 1",
@@ -1301,19 +1301,19 @@ class TestFunctionGlobalMutations:
         assert self._f("local()") == frozenset()
 
     def test_param_mutation_excluded(self):
-        # a param mutation is CAS-58's job, not a global
+        # a param mutation is the arg-mutation detector's job, not a global
         assert self._f("arg(d)") == frozenset()
 
 
 class TestCalledFunctionGlobalMutations:
-    """``called_function_global_mutations`` is the CAS-260 watch list: the same
+    """``called_function_global_mutations`` is the watch list: the same
     per-callee analysis as ``function_global_mutations``, over EVERY call in the
     statement rather than only a top-level bare-``Expr`` one.
 
     The difference is the whole reason it exists. Capture-and-restore has to
     cover the spellings where the call's value is used -- ``x = compute(y)`` and
     ``out.append(compute(y))`` -- and a rule that fired for one spelling and not
-    the other is the CAS-145 defect this project has already paid for. Every
+    the other is a defect this project has already paid for. Every
     ``test_*_spelling`` below is a case ``function_global_mutations`` returns
     empty for.
     """
@@ -1376,7 +1376,7 @@ class TestCalledFunctionGlobalMutations:
 
 class TestStatefulSelfFunctions:
     """``stateful_self_functions`` flags a called function that mutates state on
-    its own object — mutable default arg or function attribute (CAS-68 B)."""
+    its own object — mutable default arg or function attribute."""
 
     SRCS = {
         "collect": "def collect(x, acc=[]):\n    acc.append(x)\n    return acc",
@@ -1393,7 +1393,7 @@ class TestStatefulSelfFunctions:
         return stateful_self_functions(ast.parse(code), self.SRCS.get)
 
     def test_lru_cache_memoizer(self):
-        # a functools memoizer carries a persistent cache -> stateful (CAS-80)
+        # a functools memoizer carries a persistent cache -> stateful
         assert self._f("memo(1)") == {"memo"}
 
     def test_bare_lru_cache_memoizer(self):
@@ -1421,7 +1421,7 @@ class TestStatefulSelfFunctions:
 
 class TestStatefulClosureVars:
     """``stateful_closure_vars`` flags a called closure variable whose factory
-    returns an inner function mutating factory-local state (CAS-68 B closure)."""
+    returns an inner function mutating factory-local state."""
 
     FACTORIES = {
         "c": "def make_counter():\n    n = 0\n    def inc():\n        nonlocal n\n        n += 1\n        return n\n    return inc",
@@ -1450,7 +1450,7 @@ class TestStatefulClosureVars:
 
 
 class TestFunctoolsHiddenMutations:
-    """partial / reduce hidden-mutation detectors (CAS-72)."""
+    """partial / reduce hidden-mutation detectors."""
 
     SRCS = {
         "push": "def push(lst, v):\n    lst.append(v)",
@@ -1501,7 +1501,7 @@ class TestObjectProtocolMutations:
     """``object_protocol_mutations`` attributes a hidden mutation reached through
     the object protocol — a ``with`` statement, a custom dunder, a decorated
     call, a constructor, or an instance / class method — to the correct reset
-    channel (free var / receiver / class def), CAS-69/70/71/73."""
+    channel (free var / receiver / class def)."""
 
     CLASSES = {
         "Counter": (
@@ -1639,7 +1639,7 @@ class TestObjectProtocolMutations:
         r = self._f("unknown['k'] = 1")
         assert not (r.free_vars or r.receivers or r.class_defs)
 
-    # --- in-place operator dunders (CAS-78) ----------------------------------
+    # --- in-place operator dunders ----------------------------------
     def test_iadd_free_var(self):
         assert self._f("bx += 1").free_vars == {"log"}
 
@@ -1657,8 +1657,8 @@ class TestObjectProtocolMutations:
 
 
 class TestObjectProtocolInheritance:
-    """``object_protocol_mutations`` follows base classes (CAS-76) and dataclass
-    ``__post_init__`` (CAS-79): an inherited method / __init__ / __enter__ or a
+    """``object_protocol_mutations`` follows base classes and dataclass
+    ``__post_init__``: an inherited method / __init__ / __enter__ or a
     base-owned class variable is attributed to the OWNING class."""
 
     CLASSES = {
@@ -1716,7 +1716,7 @@ class TestObjectProtocolInheritance:
 
 
 class TestObjectProtocolDescriptor:
-    """``object_protocol_mutations`` follows the descriptor protocol (CAS-77): an
+    """``object_protocol_mutations`` follows the descriptor protocol: an
     attribute assign / load dispatching to a ``@property`` setter/getter or a
     data-descriptor ``__set__`` / ``__get__``."""
 
@@ -1794,7 +1794,7 @@ class TestObjectProtocolDescriptor:
 
 
 class TestObjectProtocolExotic:
-    """``object_protocol_mutations`` handles the indirect channels (CAS-80):
+    """``object_protocol_mutations`` handles the indirect channels:
     ``next(it)``, ``ExitStack.enter_context``, a context-manager factory, and a
     class-based decorator."""
 
@@ -1881,7 +1881,7 @@ class TestObjectProtocolExotic:
 
 
 class TestSubscriptViewBindings:
-    """``subscript_view_bindings`` maps ``alias = base[...]`` bindings (CAS-74)."""
+    """``subscript_view_bindings`` maps ``alias = base[...]`` bindings."""
 
     def _f(self, code):
         return subscript_view_bindings(ast.parse(code))
@@ -1907,7 +1907,7 @@ class TestSubscriptViewBindings:
 
 class TestCrossrefReassignedVars:
     """``crossref_reassigned_vars`` flags swap/rotate/temp-swap names but not
-    single-statement self-accumulation (CAS-65)."""
+    single-statement self-accumulation."""
 
     def _f(self, code):
         return crossref_reassigned_vars(ast.parse(code))
@@ -1976,7 +1976,7 @@ class TestAliasedSources:
 class TestBareAliasTargets:
     """``bare_alias_targets`` finds bindings that are pure pointer copies of a
     bare ``Name`` — the statements that must never cache, because a restore hands
-    back a copy where Python guarantees identity (CAS-184)."""
+    back a copy where Python guarantees identity."""
 
     def _f(self, code):
         return bare_alias_targets(ast.parse(code))
@@ -2075,7 +2075,7 @@ class TestAliasSkipReason:
     ],
 )
 def test_a_file_write_is_reported_once(code):
-    """Round 25 (r25s1): ``Side effect: to_csv() (file_write), Side effect:
+    """``Side effect: to_csv() (file_write), Side effect:
     to_csv() (file_write)`` -- a write on a call's result matched both the
     name lookup and the write-method check."""
     from cash.notebook.cacheability import analyze_statement

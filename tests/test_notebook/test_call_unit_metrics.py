@@ -1,4 +1,4 @@
-"""Call-unit events reach the badge through the existing contract (CAS-243).
+"""Call-unit events reach the badge through the existing contract.
 
 ``CallUnit`` used to rely on ``CallCache`` rebuilding a ``module.qualname`` via
 ``Cash._get_func_key`` and stashing it in ``wrapped_names`` so the processor

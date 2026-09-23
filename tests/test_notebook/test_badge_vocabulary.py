@@ -1,4 +1,4 @@
-"""One word per state, at every level, in both renderers (CAS-272).
+"""One word per state, at every level, in both renderers.
 
 The badge grew two vocabularies. The cell header said ``CACHED`` / ``EXECUTED``;
 the statement rows under it said ``RESTORED`` / ``COMPUTED`` for the very same

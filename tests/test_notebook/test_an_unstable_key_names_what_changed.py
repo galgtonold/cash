@@ -1,6 +1,6 @@
 """ "unstable key" says what kept changing.
 
-Round 29, r29s1: ``NOT CACHED: pings = fleet.load_days(DATA, DAYS) (17.06s) -
+``NOT CACHED: pings = fleet.load_days(DATA, DAYS) (17.06s) -
 unstable key`` after five edits to their helper module. None of the causes
 the docs list applied, the docs' advice pointed at nothing, and the badge
 did not say that the helper module was what changed each run. The guard

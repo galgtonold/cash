@@ -1,6 +1,6 @@
 """Checking an input's file dependencies costs one metadata read, not one per file.
 
-Round 23 (r23s2): ``raw`` was read from 1,200 CSVs. Every statement reading
+``raw`` was read from 1,200 CSVs. Every statement reading
 ``raw`` checked all 1,200 of its files, and fetched ``raw``'s producer entry
 with ``backend.get`` once PER FILE -- which deep-copies the cached frame. A
 0.4 s cell took 42 s when served from the cache.

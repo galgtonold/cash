@@ -1,4 +1,4 @@
-"""CAS-205: a connection filename with no kernel id must degrade, not raise.
+"""A connection filename with no kernel id must degrade, not raise.
 
 ``get_notebook_path`` parsed the kernel id with
 ``os.path.basename(f).split('-', 1)[1].split('.')[0]``. Under bare nbclient /
@@ -14,7 +14,7 @@ disclosure.
 
 The integration fixture never caught this because it INJECTS the notebook path,
 so resolution returns long before this branch — the same harness-blindness class
-as CAS-190. These tests therefore drive the parse directly rather than through
+the wheel gate exists for. These tests therefore drive the parse directly rather than through
 ``nb_runner``.
 """
 
@@ -35,7 +35,7 @@ from cash.notebook.server_discovery import _kernel_id_from_connection_file
         ("/rt/kernel-abc123.json", "abc123"),
         # A UUID's own dashes survive (split on the FIRST '-' only).
         ("/rt/kernel-2f9a-4b1c-88de.json", "2f9a-4b1c-88de"),
-        # The CAS-205 shapes: no id to extract -> None, never an exception.
+        # No id to extract -> None, never an exception.
         (r"C:\rt\kernel.json", None),
         ("kernel.json", None),
         ("kernel-.json", None),
@@ -66,7 +66,7 @@ def test_get_notebook_path_degrades_on_idless_connection_file(
     monkeypatch,
     _isolated_discovery,
 ):
-    """The CAS-205 regression: return None rather than raising IndexError."""
+    """Return None rather than raising IndexError."""
     _fake_ipykernel(monkeypatch, r"C:\Temp\runtime\kernel.json")
     assert sd.get_notebook_path() is None
 

@@ -1,6 +1,6 @@
 """``a, b = build()`` refers to the call's entry without pickling the result.
 
-r28s5, measured on HEAD before round 29 under pandas 2.3: their
+Measured on a user's notebook under pandas 2.3:
 ``n_w, inside_w, _ = net_returns(orders, 12)`` took 7 s where plain Jupyter
 took 3. Of cash's 4 s, 2.6 s pickled the 1.7 GiB result for a digest and 0.5 s
 copied it into RAM a second time for the statement, because refs matched only
@@ -86,7 +86,7 @@ def test_a_subscript_of_the_result_is_not_trusted(cash_magics, seen):
 
 
 def test_a_plain_value_worth_keeping_is_not_pickled_either(cash_magics, seen):
-    """r28s5's result was 402 MiB for 3.7 s: worth keeping, and the digest the
+    """A real result of 402 MiB for 3.7 s: worth keeping, and the digest the
     statement's trusted reference does not need took 2.6 s."""
     stored, digests = seen
     cash_magics.cash(

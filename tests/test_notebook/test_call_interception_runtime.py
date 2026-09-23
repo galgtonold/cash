@@ -1,4 +1,4 @@
-"""The runtime half of sub-expression caching (CAS-243).
+"""The runtime half of sub-expression caching.
 
 ``__cash_call__(fn)`` resolves a callee to the thing that should actually be
 called. Structural eligibility is decided from the AST; this is the
@@ -15,10 +15,10 @@ understand is handed back unchanged.
 **Sites are registered** (``call_cache.set_sites([...])``) before every
 ``resolve()`` call below, matching how production actually reaches
 ``resolve()`` — ``_code_and_tree_for_execution`` never binds ``__cash_call__``
-into ``user_ns`` without a non-empty site table. A CAS-243 review (round 2,
-Critical C3) found this file previously tested ONLY the no-site fallback
+into ``user_ns`` without a non-empty site table. A review found this file
+previously tested ONLY the no-site fallback
 branch (the pre-Task-5 decorator path), which is unreachable in real notebook
-execution — that gap is exactly why a wrapper-cache staleness bug (C1) shipped
+execution — that gap is exactly why a wrapper-cache staleness bug shipped
 with a green suite. See ``test_call_interception_no_site_fallback.py`` for the
 one file that deliberately keeps testing the fallback branch on its own terms.
 """
@@ -137,7 +137,7 @@ def test_wrapper_is_reused_for_the_same_function(call_cache):
 
 
 def test_two_sites_at_the_same_index_get_distinct_wrappers_and_keys(call_cache):
-    """The exact shape CAS-243 review C1 found broken: two different
+    """The exact shape that was broken: two different
     statements resolving the SAME function at ``site_index=0`` (every
     statement's own site list starts at 0) must not share a wrapper, because
     each wrapper closes over its own ``CallSite`` and must key independently.
@@ -159,14 +159,14 @@ def test_two_sites_at_the_same_index_get_distinct_wrappers_and_keys(call_cache):
     assert wrapped_a(5) == 6
     assert wrapped_b(5) == 6, (
         "the second site's wrapper served the first site's cached value "
-        "(CAS-243 review C1 -- distinct sites must key distinctly even when "
+        "(distinct sites must key distinctly even when "
         "called with the identical literal argument)"
     )
     assert calls == [5, 5], "both distinct sites should have executed their own call"
 
 
 def test_editing_a_cell_recomputes_instead_of_reusing_the_stale_wrapper(call_cache):
-    """The production repro from CAS-243 review C1, at the ``CallCache``
+    """The production repro of the stale wrapper, at the ``CallCache``
     level: re-registering site_index 0 with a DIFFERENT site (an edited
     statement) must not resolve to the wrapper the previous statement built.
     """

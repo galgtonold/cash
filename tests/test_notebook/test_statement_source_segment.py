@@ -4,7 +4,7 @@
 cache key always needs. For the badge we want the user's own text back, which
 is what ``ast.get_source_segment`` returns; for an ORDINARY statement,
 ``_execute_statement`` also compiles THIS (not the unparsed form) whenever it
-is available AND the CAS-243 call-interception rewrite did not fire for it
+is available AND the call-interception rewrite did not fire for it
 (a rewritten statement always executes the rewritten text instead -- see the
 guard in ``processor.py``'s ``process_statement``).
 

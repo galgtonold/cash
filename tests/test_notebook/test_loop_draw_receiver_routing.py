@@ -1,4 +1,4 @@
-"""CAS-220: in-loop draws are routed to skip-cache by receiver identity.
+"""in-loop draws are routed to skip-cache by receiver identity.
 
 A control-structure body statement carries an injected marker comment, and
 ``process_statement`` skips method-mutation classification for such statements
@@ -59,20 +59,20 @@ def test_a_bare_draw_on_an_axes_is_caught(axes):
 
 
 def test_a_figure_receiver_is_caught(axes):
-    """``fig.savefig(...)`` is identity-coupled too, per CAS-194's reasoning."""
+    """``fig.savefig(...)`` is identity-coupled too, for the same reason as a drawn Axes."""
     fig, _ax = axes
     assert _receivers("fig.savefig('x.png')", {"fig": fig}) == {"fig"}
 
 
 def test_a_captured_return_draw_is_caught(axes):
-    """``counts, bins, patches = ax.hist(...)`` draws AND binds (CAS-199 shape)."""
+    """``counts, bins, patches = ax.hist(...)`` draws AND binds."""
     _fig, ax = axes
     assert _receivers("counts, bins, patches = ax.hist([1, 2])", {"ax": ax}) == {"ax"}
 
 
 def test_an_axes_handed_to_a_plain_function_is_caught(axes):
     """``draw_panel(ax, kind, y, s)`` has no method-call receiver at all, yet
-    draws on ``ax`` (round 23: every chart of a loop saved blank on re-run)."""
+    draws on ``ax`` (otherwise every chart of a loop saved blank on re-run)."""
     _fig, ax = axes
     assert _receivers("draw_panel(ax, 'roc', y)", {"ax": ax, "y": [1]}) == {"ax"}
 

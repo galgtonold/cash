@@ -1,4 +1,4 @@
-"""Analytics batching guards (CAS-149).
+"""Analytics batching guards.
 
 The per-cell finaliser used to call ``analytics_manager.flush()`` on *every*
 cell, force-draining a buffer explicitly designed to batch events. Each
@@ -63,7 +63,7 @@ def _committed_row_count(db_path: str) -> int:
 
 
 class TestPerCellDoesNotFsync:
-    """The core CAS-149 guard: no commit-per-cell."""
+    """The core guard: no commit-per-cell."""
 
     def test_running_cells_does_not_commit_per_cell(self, magics_fixture, tmp_path):
         magics, _shell, _backend = magics_fixture

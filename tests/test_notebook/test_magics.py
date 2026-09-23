@@ -252,7 +252,7 @@ final_value = result * multiplier
 
         # We need to patch capture_output used in statement_processor.py where it's actually called
         # Also patch publish_display_data to avoid IPython initialization issues.
-        # processor.py imports publish_display_data function-locally (CAS-132), so
+        # processor.py imports publish_display_data function-locally, so
         # it resolves through IPython.display at call time -- patch it at the
         # source. magics.py binds the name at import time, so it needs its own.
         with (

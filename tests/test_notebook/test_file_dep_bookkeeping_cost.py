@@ -1,14 +1,14 @@
 """File-dependency bookkeeping must cost each file once, not once per use.
 
-Round 23's notebooks were slower with cash than without, and the profile put
-nearly all of it in the same place (2026-09-14):
+Some real notebooks were slower with cash than without, and the profile put
+nearly all of it in the same place:
 
-* r23s4 read 5,222 files into ``docs``. Every statement derived from it
+* One read 5,222 files into ``docs``. Every statement derived from it
   inherited all 5,222, and each save, each lookup and each upstream simulation
   re-hashed every one: 19-108 s of hashing per cell, against a notebook that
   runs in about 25 s uncached. The digest memo gave up at that scale -- 4,096
   entries, and a 5 s window shorter than one pass over the files.
-* r23s2 read 1,312 CSVs in a loop. ``d = pd.read_csv(f)`` rebinds ``d`` each
+* Another read 1,312 CSVs in a loop. ``d = pd.read_csv(f)`` rebinds ``d`` each
   iteration, but its recorded files were MERGED, so iteration k snapshotted all
   k files so far: 865,265 hashes in one cell.
 """
@@ -160,7 +160,7 @@ def test_outside_a_cell_run_the_window_still_bounds_reuse(tmp_path, monkeypatch,
 
 def test_a_full_memo_keeps_memoizing(tmp_path, monkeypatch, count_hashes):
     """At 4,096 entries the memo stopped taking new ones, so file 4,097 on was
-    hashed every time (r23s4: 5,222 files)."""
+    hashed every time (one notebook had 5,222 files)."""
     monkeypatch.setattr(file_dep_snapshot, "_HASH_MEMO_MAX", 3)
     file_dep_snapshot.begin_file_state_epoch()
     paths = [_aged(tmp_path, f"f{i}.csv") for i in range(5)]
@@ -185,8 +185,8 @@ def test_two_spellings_of_one_file_share_a_digest(tmp_path, monkeypatch, count_h
 
 def test_without_a_file_identity_the_path_keeps_files_apart(tmp_path, count_hashes):
     """Where the filesystem reports no inode, two files with the same size and
-    timestamps must not share a digest (CAS-108: two release copies laid down
-    by one deploy did)."""
+    timestamps must not share a digest (two release copies laid down by one
+    deploy did)."""
     a = _aged(tmp_path, "a.csv", b"x" * 2048)
     b = _aged(tmp_path, "b.csv", b"y" * 2048)
     fields = list(os.stat(a))

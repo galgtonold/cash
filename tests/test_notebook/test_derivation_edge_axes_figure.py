@@ -1,6 +1,6 @@
 """An Axes is part of its Figure: drawing on ``ax`` changes what ``fig.savefig`` writes.
 
-Until round 21 a chart re-drew after an upstream edit only because ``fig`` also
+A chart used to re-draw after an upstream edit only because ``fig`` also
 drifted for no reason (matplotlib's fonts and the PNG itself were recorded as
 file dependencies). With those gone, nothing linked ``ax.bar(names, totals)``
 to ``fig``, and editing ``totals`` left the old chart on disk -- the

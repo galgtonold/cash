@@ -41,7 +41,7 @@ def test_a_scalar_that_happens_to_be_an_argument_is_still_cached(call_unit_harne
     """`score(1, 10)` returns `1 * 10`, and CPython hands back the very `10`
     object it was passed -- small ints are shared. The identity rule above
     refused it on every run, so the first iteration of a sweep always re-ran
-    (found by the tester-session tests). Nothing can rely on an int's identity.
+    (found by the session-replay tests). Nothing can rely on an int's identity.
     """
     calls = []
 

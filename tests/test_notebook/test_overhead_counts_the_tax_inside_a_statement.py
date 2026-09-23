@@ -1,8 +1,8 @@
 """Cash's own time INSIDE a statement counts as overhead, not as your compute.
 
-Round 30, r30s4: a paired Restart & Run All measured cash 370 s slower than
+A paired Restart & Run All measured cash 370 s slower than
 plain Jupyter while ``%cash_stats`` reported 210 s of overhead -- "understated
-again (harmonise loop alone +240 s)". Two other testers reported the same
+again (harmonise loop alone +240 s)". Two other reports had the same
 shape.
 
 Overhead was computed as ``cell wall time - the execution_time of the

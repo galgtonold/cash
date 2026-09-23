@@ -49,7 +49,7 @@ EXT_NAME = "cash-live-cells"
 # string literals, so the same pattern matches the built bundle.
 FORCES_MAIN_SHELL = re.compile(r"""commsOverSubshells\s*[=:]\s*["']disabled["']""")
 
-# The C1 fix (CAS-274 review): a comm the kernel refused must not be latched on
+# A comm the kernel refused must not be latched on
 # to forever. Both patterns are written to survive minification -- property
 # names and the `catch` keyword both do -- so one regex serves the TypeScript
 # source and the shipped bundle.
@@ -211,7 +211,7 @@ def test_the_extension_targets_the_comm_the_kernel_registers():
     )
 
 
-# --- The payload schema: seq, cell_type, id, source (CAS-274 review, item 6) --
+# --- The payload schema: seq, cell_type, id, source ---------------------------
 #
 # Unlike TARGET above, none of these four field names has a shared Python
 # constant to compare against -- index.ts and the kernel side each spell them
@@ -342,7 +342,7 @@ While the id read `cash:live-cells` and the package was `cash-live-cells`, the
 documented disable command wrote {"cash-live-cells": true} into page_config.json,
 matched nothing, and the extension went on pushing -- while `jupyter labextension
 list` reported it `disabled ok`. The kill switch lied in both directions
-(measured end to end, CAS-274 Task 4 Finding A). A feature whose safety story is
+(measured end to end). A feature whose safety story is
 "degrade, never break" has to be switchable off.
 
 Keep the id `<npm package name>:<plugin name>`."""

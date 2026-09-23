@@ -238,7 +238,6 @@ class TestRemoteUrlChannel:
     and ``snapshot_file_deps`` drops it — so the entry would be stored with no
     dependency at all and hit forever even after the object changed. URLs are
     therefore kept on their own channel and tracked by the store's validator.
-    CAS-236.
     """
 
     def test_a_url_lands_on_the_remote_channel_not_the_file_one(self):
@@ -266,7 +265,7 @@ class TestRemoteUrlChannel:
         assert tracker.get_accessed_remote_urls() == {url}
 
     def test_tracking_a_url_does_not_warn(self):
-        """The CAS-236 'cannot track this' warning is obsolete: it can now."""
+        """The old 'cannot track this' warning for URLs is obsolete: it can now."""
         import warnings
 
         from cash.exceptions import CashCacheIneffectiveWarning

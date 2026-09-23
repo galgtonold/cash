@@ -1,6 +1,6 @@
 """An augmented assignment into a selection reads what selects it.
 
-Round 25's r25s2 (BLOCKING): an upstream cell gained
+An upstream cell gained
 ``too_high = store_median > 50 * sales['price'].median()`` and
 ``sales.loc[too_high, ['price']] /= 100``; running a cell below raised
 ``UpstreamStateError: name 'too_high' is not defined``. A plain ``=`` into

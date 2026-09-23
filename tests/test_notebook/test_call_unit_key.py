@@ -1,4 +1,5 @@
-"""A call unit's key is order-independent — that IS the CAS-242 fix."""
+"""A call unit's key is order-independent, so reordering a loop's items does
+not re-run every iteration."""
 
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_interception import CallSite
@@ -290,14 +291,14 @@ def test_loop_vars_prefer_precomputed_digest_over_the_live_value():
 
 
 def test_different_stmt_identity_gives_different_key():
-    """CAS-256: the collision this whole field exists to break.
+    """The collision this whole field exists to break.
 
     Two `CallSite`s with IDENTICAL source, free names, occurrence index, and
     loop_vars -- the exact shape `vals[step] = fetch_next(conn)` and
     `other[step] = fetch_next(conn)` produce, since both statements' call text
     and free names agree -- must still mint different keys once their
     `stmt_identity` differs, or the second statement is served the first's
-    cached values (CAS-256's reported bug, reproduced end-to-end in
+    cached values (the reported bug, reproduced end-to-end in
     `test_notebook_integration/test_call_unit_statement_identity.py`).
 
     Mutation that must make this fail: drop the `if site.stmt_identity:
@@ -330,7 +331,7 @@ def test_same_stmt_identity_gives_the_same_key():
     reruns of one cell, each re-parsing the same source into a fresh AST and
     building a fresh (but equal) `CallSite` -- must still collapse onto the
     same key. Without this, folding in `stmt_identity` would have traded the
-    CAS-256 cross-statement collision for a new per-run/per-iteration miss on
+    cross-statement collision for a new per-run/per-iteration miss on
     every unchanged statement.
 
     Deliberately TWO separate `_site(...)` calls, not one object reused for
@@ -361,7 +362,7 @@ def test_same_stmt_identity_gives_the_same_key():
 
 def test_empty_stmt_identity_matches_pre_feature_key():
     """Backward compatibility: a `CallSite` that never sets `stmt_identity`
-    (every direct construction predating CAS-256, including every other test
+    (every direct construction predating `stmt_identity`, including every other test
     in this file, and every real production `CallSite` where
     `wrap_eligible_calls` could not unparse the enclosing statement) must
     build the EXACT key it built before this field existed -- not merely "a"
@@ -397,7 +398,7 @@ def test_empty_stmt_identity_matches_pre_feature_key():
 
 
 def test_a_dunder_entry_in_loop_vars_cannot_reach_the_key():
-    """The CAS-242 channel this feature actually creates.
+    """The reorder channel this feature actually creates.
 
     `loop_vars` is documented as "the non-dunder entries", but documenting a
     contract is not enforcing it: if `__iterable_lineage__` ever reaches this
@@ -422,8 +423,8 @@ def test_a_dunder_entry_in_loop_vars_cannot_reach_the_key():
 
 
 def test_a_depth_prefixed_dunder_entry_in_loop_vars_cannot_reach_the_key():
-    """The same CAS-242 channel, in the shape production actually sends it in
-    since CAS-257: `loop_vars` entries are keyed ``"{depth}:{name}"``
+    """The same reorder channel, in the shape production actually sends it in:
+    `loop_vars` entries are keyed ``"{depth}:{name}"``
     (`StatementProcessor.current_loop_vars_for_call_key`), so a leaked dunder
     would arrive as `"0:__iterable_lineage__"`, which does NOT itself start
     with `"__"`.

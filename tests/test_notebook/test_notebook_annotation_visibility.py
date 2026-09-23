@@ -71,7 +71,7 @@ def test_an_unannotated_line_still_warns_in_a_notebook_cell(cell_runner):
 
 
 def test_a_pep614_parenthesised_decorator_does_not_kill_the_cell():
-    """FINDING 1 (review round 1). A decorator whose expression begins on the
+    """A decorator whose expression begins on the
     line AFTER the ``@`` -- legal since PEP 614 (Python 3.9) -- made
     ``_exec_source_for_node`` prepend from ``decorator_list[0].lineno``,
     which is the EXPRESSION's line, not the ``@`` line. The recovered text
@@ -164,9 +164,9 @@ PLAIN_ASYNC = (
 
 
 def test_an_annotated_line_is_waived_in_a_notebook_cell_with_top_level_await(async_cell_runner):
-    """FINDING 6 (review round 1). The plumbing is symmetric -- the reviewer
-    confirmed by runtime spy that ``exec_source`` reaches
-    ``_execute_statement_async`` and that the CAS-243 guard fires there too
+    """The plumbing is symmetric -- a runtime spy confirmed that
+    ``exec_source`` reaches ``_execute_statement_async`` and that the
+    call-interception guard fires there too
     -- but nothing in the suite pinned it, and this project has shipped
     one-sided sync/async fixes before. Async twin of
     ``test_an_annotated_line_is_waived_in_a_notebook_cell``: a cell with a

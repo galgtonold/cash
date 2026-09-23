@@ -1,4 +1,4 @@
-"""The hit rate must not understate a session where caching worked (CAS-177).
+"""The hit rate must not understate a session where caching worked.
 
 ``%cash_stats`` reported ``Cache hit rate: 14.9%`` for a session in which 100%
 of the expensive statements hit. The denominator counted every ``print`` and
@@ -6,8 +6,8 @@ of the expensive statements hit. The denominator counted every ``print`` and
 sit below its own "too cheap to cache" floor. Counting cash's correct decisions
 as misses makes a perfect session look like a failure.
 
-CAS-157 fixed an OVERstatement of savings; this is the same failure inverted.
-The binding rule is CAS-157's: the number must not imply a conclusion the data
+An OVERstatement of savings was fixed earlier; this is the same failure
+inverted. The binding rule is the same: the number must not imply a conclusion the data
 does not support, in EITHER direction. So these tests pin both sides --
 
 * a session of expensive hits buried in trivia must NOT read as a failure; and
@@ -172,7 +172,7 @@ def test_reset_zeroes_every_stat_a_session_can_hold(cash_magics, capsys):
     cash_magics.cash_stats("reset")
 
     assert cash_magics._session.stats == new_session_stats()
-    # CAS-157: the verified-saving baselines are part of the stats, not the
+    # The verified-saving baselines are part of the stats, not the
     # cache, so a reset must drop them too.
     assert cash_magics._session.measured_compute == {}
 

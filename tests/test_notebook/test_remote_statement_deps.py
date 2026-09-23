@@ -13,7 +13,6 @@ Two mechanisms, and both are needed — a statement's ``cache_key`` is computed
 
 Remote URLs deliberately do NOT enter ``executed_file_deps``: that set is
 stat'ed and getmtime'd by its consumers, so a URL there contributes nothing.
-See CAS-237.
 """
 
 from __future__ import annotations
@@ -85,8 +84,7 @@ class TestRemoteInTheKeyComponent:
         origin.etag = '"v2"'
         after = compute_file_hash_component(set(), {origin.url})
         assert before != after, (
-            "a changed object must yield a different key, or the statement "
-            "serves a stale value forever - the CAS-237 bug"
+            "a changed object must yield a different key, or the statement serves a stale value forever"
         )
 
     def test_an_unchanged_object_holds_the_component(self, origin):
@@ -114,7 +112,7 @@ class TestRemoteInTheKeyComponent:
 
 
 class TestThroughARealStatement:
-    """The CAS-237 claim end to end: a notebook statement reading a URL.
+    """End to end: a notebook statement reading a URL.
 
     Before this, ``FileAccessTracker`` recorded the URL on its remote channel
     but the statement path never read that channel, so the statement cached and

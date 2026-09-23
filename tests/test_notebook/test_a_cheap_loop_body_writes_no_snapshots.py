@@ -1,6 +1,6 @@
 """A cheap loop body does not store a snapshot of what it changes, per iteration.
 
-Round 28, r28s3: a 631-iteration loop setting a column slice of a 3130x800
+A 631-iteration loop setting a column slice of a 3130x800
 bool frame took 0.05 s plain and 11-23 s under cash (180 s once in their
 notebook). After one run the RAM tier held 1,265 entries -- one per iteration
 for ``members.loc[...] = True``, each a full 2.4 MB snapshot of ``members``
@@ -9,7 +9,7 @@ a re-run deep-copied every snapshot back.
 
 The statements take ~0.1 ms, below the "too cheap to cache" floor. They got
 past it through ``_final_over_costly_inputs``, which gives a cheap FINAL value
-over costly inputs an entry (round 25, r25s2). Inside a loop nothing is final
+over costly inputs an entry. Inside a loop nothing is final
 -- the next iteration overwrites it -- and the inputs' unsaved cost only grows
 with every iteration, so every iteration qualified.
 """
@@ -62,7 +62,7 @@ def test_the_loop_is_still_right_when_run_again(cash_magics):
 
 
 def test_a_long_cheap_itertuples_loop_runs_as_one_unit(cash_magics):
-    """Even with no snapshots, r28s3's loop cost ~5 ms of per-statement
+    """Even with no snapshots, that loop cost ~5 ms of per-statement
     machinery per statement against ~0.1 ms of work: 9 s for 0.07 s. The
     handler already runs a long cheap loop as ONE unit -- but it sized the loop
     with len(), which a DataFrame.itertuples() iterator does not have, and it

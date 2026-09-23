@@ -4,7 +4,7 @@ The failure this guards is silent. The re-execution planner runs the
 statements the *simulator* modelled, so if the two sides ever derive
 different halves, the planner re-runs one thing while entries exist for
 another -- a stale value with nothing red anywhere. Three reverted attempts
-at CAS-261 step 2 died on variations of exactly that.
+at splitting loops died on variations of exactly that.
 
 These are unit tests of the derivation itself; the behavioural proof (an
 upstream edit still invalidates a split loop) lives in the integration suite.

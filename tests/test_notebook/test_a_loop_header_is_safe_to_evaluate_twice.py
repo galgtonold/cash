@@ -4,11 +4,11 @@ The single-unit fast path runs a loop from source, so its header is evaluated
 twice: once to measure the loop, once to run it. That is only correct when the
 second evaluation yields the same iteration.
 
-Two defects, found together in round 27:
+Two defects, found together:
 
 * **Too strict** -- `len` was not on the list of pure builtins, so the
   commonest header in Python, ``range(0, len(frame), STEP)``, was refused the
-  fast path and every iteration was decomposed. r27s3: 16.9 s cached against
+  fast path and every iteration was decomposed: 16.9 s cached against
   1.0 s uncached, BLOCKING, and slower again on a re-run.
 * **Too loose** -- the one-shot check looked only at the RESULT. ``sorted(g)``
   returns a list, so the first evaluation drained ``g`` and the loop then ran
@@ -38,7 +38,7 @@ class TestTooStrict:
     """Headers that are safe and were refused."""
 
     def test_a_range_bounded_by_len(self):
-        """r27s3's header, verbatim."""
+        """The reported header, verbatim."""
         ns = {"frame": list(range(3131)), "STEP": 5}
         assert _safe("range(0, len(frame), STEP)", ns), (
             "len() cannot drain or mutate anything; refusing this header is "
@@ -103,8 +103,8 @@ class TestUnchanged:
         # zip() returns a self-iterator, and was refused on that RESULT. But the
         # header CALLS zip, so evaluating it again builds a fresh zip over the
         # same two lists -- as `df.itertuples()` builds a fresh iterator, which
-        # the same rule kept r28s3's 631-iteration loop off the fast path for
-        # (round 28). What still refuses is a header over a STORED iterator:
+        # the same rule kept a real 631-iteration loop off the fast path for.
+        # What still refuses is a header over a STORED iterator:
         # see test_zip_over_a_stored_iterator_is_still_refused.
         assert _safe(header, ns)
 

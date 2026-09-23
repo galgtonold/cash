@@ -1,6 +1,6 @@
 """Reads that are not the user's data do not become file dependencies.
 
-Round 25 (r25s1): a ``cross_val_predict(n_jobs=4)`` loop recorded joblib's
+A ``cross_val_predict(n_jobs=4)`` loop recorded joblib's
 memmap scratch files, which joblib deletes when the call returns, so the loop
 read as stale on every later run; and ``open(3)`` -- a file descriptor --
 was recorded as a read of ``<cwd>/3``, a directory every report written under
@@ -52,7 +52,7 @@ def test_opening_a_file_descriptor_records_no_path(tmp_path, monkeypatch):
 
 
 def test_a_jit_or_bytecode_cache_read_is_not_a_dependency(tmp_path):
-    """Round 28, r28s4, 3/3 (``r28s4/repro/numba_restart``): scanpy's
+    """Reproduced 3/3: scanpy's
     normalize reads numba's cache index,
     ``scanpy/preprocessing/__pycache__/_normalize_csr-parallel-29.py314.nbi``,
     and it was recorded as a file the statement read. Any other process in

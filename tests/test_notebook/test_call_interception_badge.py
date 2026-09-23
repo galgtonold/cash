@@ -1,4 +1,4 @@
-"""An intercepted call must be legible as such on the badge (CAS-243).
+"""An intercepted call must be legible as such on the badge.
 
 Interception is on by DEFAULT (task 10) — no directive needed to trigger it,
 ``# @cash:no-cache-calls`` is the opt-out. Intercepted calls land in the same

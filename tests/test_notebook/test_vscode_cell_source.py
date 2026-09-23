@@ -7,7 +7,7 @@ Code's hot-exit backup through ``get_notebook_cells()`` /
 (``find_backup``, ``parse_backup``, ``live_cells``) but never imports
 ``server_discovery``, so a passing run of that file alone is not evidence
 ``_try_vscode_backup_cells`` is ever reached from the real entry points --
-the exact failure mode CAS-274 hit, where a feature shipped dead while every
+the exact failure mode seen before, where a feature shipped dead while every
 unit test passed. This file plants a real backup on disk and asserts through
 the real ``server_discovery`` entry points instead, mirroring
 ``test_colab_cell_source.py``'s shape for the analogous Colab wiring.

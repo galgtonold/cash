@@ -82,7 +82,7 @@ def test_the_site_knows_which_arguments_are_passed_by_name():
 
 
 def test_an_argument_passed_by_name_is_keyed_on_its_value():
-    # r24s5: `cutoff` is rebuilt from the frame, so its lineage moves on any fix
+    # `cutoff` is rebuilt from the frame, so its lineage moves on any fix
     assert _by_name_key("before", 6) == _by_name_key("after-a-fix", 6)
     assert _by_name_key("x", 6) != _by_name_key("x", 7)
     assert _by_name_key("x", 6) != _by_name_key("x", 6, params={"alpha": 1.0})
@@ -178,7 +178,7 @@ def test_a_dunder_loop_entry_is_not_asked():
     ids=["global", "through_a_helper", "closure", "default"],
 )
 def test_a_callee_reaching_such_state_keeps_the_statement(source):
-    """CAS-256's ``fetch_next(conn)``, reached through the callee instead of
+    """The cross-statement collision's ``fetch_next(conn)``, reached through the callee instead of
     an argument: two statements must keep their own entries."""
     assert not _decide(_fn(source), (1,))
 

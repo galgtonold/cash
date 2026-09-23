@@ -7,7 +7,7 @@ comment, a blank line or a reformat re-ran everything built on the module.
 
 Measured 2026-09-21: adding ONE comment to a module re-executed a 1.2 s call
 that used a function the edit did not touch -- both for ``import lib`` and
-``import lib as x``. Round 27 r27s2 hit the same thing at scale: editing one
+``import lib as x``. A real notebook hit the same thing at scale: editing one
 helper re-read all 10,000 of their ticket files, 48.7 s against a 17.3 s
 control, later 9.1x.
 

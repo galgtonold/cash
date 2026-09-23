@@ -1,7 +1,7 @@
-"""CAS-260 at the call unit: identifying, keying on, and restoring the globals
+"""Callee-written globals at the call unit: identifying, keying on, and restoring the globals
 a cached callee writes.
 
-The statement path handles ``x = compute(y)``; this covers the half CAS-243
+The statement path handles ``x = compute(y)``; this covers the half call interception
 widened the bug into — a call whose enclosing statement is skip-cached
 (``sink.append(compute(y))``), where the intercepted call is the only thing
 serving a hit and therefore the only thing that can put the write back.
@@ -112,7 +112,7 @@ class TestIdentification:
         import textwrap
         from pathlib import Path
 
-        tmp = Path(__file__).parent / "_cas260_redef_probe.py"
+        tmp = Path(__file__).parent / "_callee_globals_redef_probe.py"
         try:
             tmp.write_text(
                 textwrap.dedent("""
@@ -124,7 +124,7 @@ class TestIdentification:
                 encoding="utf-8",
             )
             sys.path.insert(0, str(tmp.parent))
-            mod = importlib.import_module("_cas260_redef_probe")
+            mod = importlib.import_module("_callee_globals_redef_probe")
             assert callee_mutated_globals(mod.edited) == ("MARK",)
 
             tmp.write_text(
@@ -144,7 +144,7 @@ class TestIdentification:
                 "the memo served the pre-edit verdict for a rebuilt function"
             )
         finally:
-            sys.modules.pop("_cas260_redef_probe", None)
+            sys.modules.pop("_callee_globals_redef_probe", None)
             if str(tmp.parent) in sys.path:
                 sys.path.remove(str(tmp.parent))
             tmp.unlink(missing_ok=True)
@@ -344,7 +344,7 @@ def test_restore_tolerates_a_malformed_entry(bad):
 
 
 class TestPayloadLivesOnTheValueNotInMetadata:
-    """CAS-260: the captured globals ride on the VALUE, with only a plain bool
+    """The captured globals ride on the VALUE, with only a plain bool
     in metadata.
 
     Metadata is unpickled for every entry in the directory by anything that

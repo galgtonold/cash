@@ -1,4 +1,4 @@
-"""Round 21: reads the interpreter and libraries make for THEMSELVES are not data.
+"""Reads the interpreter and libraries make for THEMSELVES are not data.
 
 The tracker patches the process-wide ``open`` and ``os.listdir``, so it also
 saw the import system list every ``sys.path`` directory (the notebook's own
@@ -140,7 +140,7 @@ def test_an_installed_tool_reading_its_own_data_is_tracked_for_its_own_functions
 
 
 def test_another_packages_data_read_by_the_standard_library_is_not_tracked(fake_site):
-    """Round 30 (r30s1): ``zoneinfo`` loads ``tzdata/zoneinfo/UTC`` once per
+    """``zoneinfo`` loads ``tzdata/zoneinfo/UTC`` once per
     process. The reader is not the package that owns the file."""
     res = fake_site / "fakelib" / "res.txt"
     tracker = _run(lambda: open(res, encoding="utf-8").read())

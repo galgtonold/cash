@@ -82,7 +82,7 @@ def test_collect_iterations_already_descends_into_nested() -> None:
 
 
 def test_the_loop_tip_counts_trips_not_statement_runs() -> None:
-    """Round 29, r29s4: ``for mg in [200, 400, 600]:`` with three body
+    """``for mg in [200, 400, 600]:`` with three body
     statements read "Iterations 9" -- the statement-iterations summed. The
     loop ran three times."""
     from cash.notebook.badge_renderer.renderers.html import _for_loop_group_html

@@ -1,6 +1,6 @@
 """A ``fig.savefig()`` must not flush a figure that was rebuilt but never drawn.
 
-Found while hunting the round-14 plot-cell report, and worse than it: asking for
+Found while hunting a plot-cell report, and worse than it: asking for
 an UNRELATED downstream cell after a kernel restart overwrote the user's chart
 with a blank one. Measured on the reporter's own notebook, same file across one
 session::

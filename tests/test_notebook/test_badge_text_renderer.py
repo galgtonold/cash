@@ -13,7 +13,7 @@ def test_cached_summary_header() -> None:
     assert text.startswith("[Cash]")
     # The header and the row under it use the SAME word for the same state.
     # They used to disagree -- header "CACHED", row "RESTORED" -- which is what
-    # sent four docs pages describing the wrong label (CAS-272).
+    # sent four docs pages describing the wrong label.
     assert text.count("CACHED") == 2, text
     assert "RESTORED" not in text, "internal vocabulary leaked into the badge"
     assert "saved 0.50s" in text

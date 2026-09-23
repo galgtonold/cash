@@ -3,7 +3,7 @@
 pathlib does not always reach the patched ``os.scandir``: on 3.10 it lists
 through ``_NormalAccessor``, and on 3.13 ``Path.glob`` goes through
 ``glob._Globber``, both holding the original function captured at import. A
-round-22 notebook globbing a ledger folder with ``Path.glob`` on 3.13 never
+notebook globbing a ledger folder with ``Path.glob`` on 3.13 never
 saw the new month's file.
 """
 

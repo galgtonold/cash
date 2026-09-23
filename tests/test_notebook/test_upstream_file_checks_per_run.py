@@ -1,9 +1,9 @@
 """The upstream check answers each file once per cell run, not once per entry.
 
-Every upstream entry of r23s4 depended on the same 5,222 documents, in two
+Every upstream entry of one real notebook depended on the same 5,222 documents, in two
 spellings, and the check before each cell validated all of them for every
 entry, then stat-ed them all again for their mtimes: 7-11 s before every cell
-of a notebook that runs in 30 s uncached (round 23). An answer holds for the
+of a notebook that runs in 30 s uncached. An answer holds for the
 rest of the cell run -- the trust whole entries already had -- until a
 statement of the run writes files.
 """

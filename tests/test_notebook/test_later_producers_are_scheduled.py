@@ -1,6 +1,6 @@
 """A re-run producer of a variable brings every later producer of it along.
 
-Round 25's r25s1: the plan re-ran ``results = {}`` and the functions reading
+The plan re-ran ``results = {}`` and the functions reading
 ``results``, but not the ``for`` loop below the init that fills it; ``results``
 was left empty in the kernel and the report raised ``UpstreamStateError:
 'logreg'``. The trigger (functions counted as built on an older ``results``)
@@ -54,7 +54,7 @@ def test_a_last_producer_needs_nothing_after_it():
     assert planner._complete_later_producers([2, 4], TRACE) == [2, 4]
 
 
-# What actually put `results = {}` in that plan (traced on the tester's repro):
+# What actually put `results = {}` in that plan (traced on the original repro):
 # the accumulator-init pass decides a loop accumulator is being fully re-run
 # when a scheduled statement's TEXT matches `results.<method>(` or
 # `results[...] =`. `def draw_roc` iterating `results.items()` matched, so the

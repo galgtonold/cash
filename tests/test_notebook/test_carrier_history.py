@@ -86,7 +86,7 @@ def test_a_loop_in_the_span_is_one_statement_of_the_history():
     """A loop is one trace entry to the simulation, and the runtime logs it the
     same way (`StatementProcessor.begin_control_log`). It used to make the
     history unknowable -- and a chart drawn through ``for ax in axes`` was then
-    never known to be current, or to be stale (round 29, r29s4)."""
+    never known to be current, or to be stale."""
     looped = CHART + [("for c in cols:\n    ax.plot(df[c])", {"cols": "C", "ax": "A2", "df": "D"})]
     fingerprint = carrier_history_fingerprint(looped, "fig")
     assert fingerprint is not None

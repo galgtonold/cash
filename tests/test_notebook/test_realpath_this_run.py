@@ -2,7 +2,7 @@
 
 ``realpath`` is ~60us on Windows and a statement's files were resolved again at
 every tracked read, lineage component and snapshot: 13% of a cell reading
-3,000 files (round 23). The memo lasts one cell run; outside a run, and in the
+3,000 files. The memo lasts one cell run; outside a run, and in the
 next one, a path resolves afresh.
 """
 
@@ -82,7 +82,7 @@ def test_a_relative_path_follows_a_chdir(tmp_path, monkeypatch):
     assert second.endswith(os.path.join("two", "data.csv"))
 
 
-# Round 25 (r25s4): a folder of 5,030 small files still paid a full `realpath`
+# A folder of 5,030 small files still paid a full `realpath`
 # per file -- two `_getfinalpathname` calls each on Windows. A regular file that
 # is not a link resolves through its directory, resolved once.
 from cash.notebook.file_dep_snapshot import realpath_of_read_this_run  # noqa: E402

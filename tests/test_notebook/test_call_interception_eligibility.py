@@ -1,4 +1,4 @@
-"""Which call nodes may be cached independently of their statement (CAS-243).
+"""Which call nodes may be cached independently of their statement.
 
 One structural rule decides it: **a call is eligible when its free variables do
 not include the statement's assignment / mutation target.** If the call reads
@@ -56,8 +56,8 @@ class TestEligibility(unittest.TestCase):
 
         Wrapping a call replaces its callee expression only, so ``g(x)``
         executes either way: taking it as well is the only way its work is
-        ever reused (round 30, r30s3 -- nine fits nested in another call
-        re-ran every time). The outer call comes first.
+        ever reused (nine fits nested in another call once re-ran every
+        time). The outer call comes first.
         """
         self.assertEqual(_calls("out.append(f(g(x)))"), ["f(g(x))", "g(x)"])
 

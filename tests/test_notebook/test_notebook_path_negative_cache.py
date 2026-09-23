@@ -1,4 +1,4 @@
-"""Negative (not-found) cache for notebook-path discovery (CAS-150).
+"""Negative (not-found) cache for notebook-path discovery.
 
 ``get_notebook_path()`` cached SUCCESS for 300s but never cached the ``None``
 (not-found) result, and the upstream checker resolves the path 5-15 times per

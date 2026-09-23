@@ -1,4 +1,4 @@
-"""The output paths notebooks actually write to must resolve (round 21, R5).
+"""The output paths notebooks actually write to must resolve.
 
 ``fig.savefig(OUT / 'chart.png')`` was "unresolvable" -- only a literal or a
 bare name was -- so the reconstruction scope gate never suppressed it and a
@@ -39,7 +39,7 @@ def test_computed_paths_still_do_not_resolve():
 
 
 def test_a_read_over_a_list_of_paths_resolves_to_its_elements():
-    """Round 30 (r30s5): ``pd.concat([pd.read_csv(f) for f in TF])`` read as
+    """``pd.concat([pd.read_csv(f) for f in TF])`` read as
     "unknown", so a cell doing it re-drew an unrelated stale chart above."""
     ns = dict(NS, TF=[Path("a.csv"), "b.csv"])
     want = {"a.csv", "b.csv"}

@@ -1,6 +1,6 @@
 """A file is checked once per cell, not once per statement, until code runs.
 
-Round 24 (r24s4): a cell whose statements all derive from 10,000 documents
+A cell whose statements all derive from 10,000 documents
 re-checked every document for every statement lookup -- 120,000 checks, 1.1 s,
 in a cell served entirely from the cache. The answer for a file holds until a
 statement executes (it may write the file) or the next cell begins.
@@ -80,7 +80,7 @@ def test_outside_a_cell_every_lookup_checks(tmp_path, monkeypatch):
 
 
 def test_a_set_already_found_fresh_is_not_walked_again(tmp_path, monkeypatch):
-    """Round 25 (r25s4): a 25-iteration loop over a frame read from 5,226
+    """A 25-iteration loop over a frame read from 5,226
     files. Each file was checked once, but every lookup still walked all 5,226
     answers -- a million calls, 2.4 s of a cell that takes 1.1 s plain. A
     dependency set found fresh whole is not walked again until the answers

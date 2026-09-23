@@ -9,7 +9,7 @@ Windows a file just written is routinely held open for a moment by an
 antivirus or indexer scan, so under load the delete failed, the reload ran
 the old code, and the badge said MODULE RELOADED over a stale answer: the
 intermittent ``test_a_helper_edit_reaches_a_cell_below::test_a_from_import``
-failure (sweep9, 2026-09-21; once in round 28).
+failure.
 """
 
 import importlib

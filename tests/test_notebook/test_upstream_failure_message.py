@@ -1,6 +1,6 @@
 """An upstream failure message must point at the remedy that exists.
 
-Round-14 gate finding, the second half of the BLOCKING plot-cell issue. When
+The second half of a blocking plot-cell issue. When
 reconstruction re-executed a statement whose input was missing, the user got:
 
     ... failed during auto-re-execution: NameError: name 'sub' is not defined.
@@ -111,13 +111,13 @@ def test_the_gap_note_rides_along_in_the_message():
     assert "\n" not in m and "'''" not in m
 
 
-# --- Round 25: the advice reaches the user on the path failures really take ---
+# --- The advice reaches the user on the path failures really take ------------
 #
 # A repaired statement runs silently, so the processor reports its failure in
 # ``result['error']`` rather than raising. That path formatted ``str(error)`` --
-# ``'f1'`` for a KeyError -- with no planning-gap check, and all four round-25
-# repair failures (r25s1, r25s2 x2, r25s3) told the tester to "fix the upstream
-# cell", which had nothing wrong in it.
+# ``'f1'`` for a KeyError -- with no planning-gap check, and four reported
+# repair failures all told the user to "fix the upstream cell", which had
+# nothing wrong in it.
 
 from cash.exceptions import UpstreamStateError
 

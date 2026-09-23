@@ -1,11 +1,11 @@
-"""Round 21: a DataFrame with a text column hashed by memory address.
+"""A DataFrame with a text column hashed by memory address.
 
 ``compute_hash`` sampled ``obj.head(5).values.tobytes()``. For a frame with a
 text column ``.values`` is an object array, whose bytes are pointers: the hash
 changed in every process and even between a frame and its copy. The notebook
 folds that hash into the lineage of anything an ``if`` or ``for`` body may
 reassign, so after every restart such a frame looked new, and nothing
-downstream of an untaken ``if FLAG:`` ever restored (r21s1, 4/4). An integer
+downstream of an untaken ``if FLAG:`` ever restored (4/4). An integer
 frame was always stable, which is why it went unnoticed.
 """
 
@@ -78,7 +78,7 @@ def test_a_numeric_frame_hash_is_unchanged():
 
 
 def test_a_small_collection_of_large_frames_is_not_pickled_whole():
-    """Round 28, r28s5: a dict holding a few large frames was hashed by
+    """A dict holding a few large frames was hashed by
     pickling the WHOLE dict -- every frame byte for byte -- after each restore
     and after each loop iteration that changed it, while the same frame on its
     own is hashed by sampling. At 400 MiB a frame that is seconds per hit, and

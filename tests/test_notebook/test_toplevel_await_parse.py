@@ -1,11 +1,11 @@
-"""CAS-164: cash's cell-level parse must tolerate a top-level ``await``.
+"""cash's cell-level parse must tolerate a top-level ``await``.
 
 A module-level ``await`` is a SyntaxError to plain ``ast.parse`` (it needs
 ``PyCF_ALLOW_TOP_LEVEL_AWAIT``), so an async cell under ``%cash_on`` used to
 raise inside ``analyze_code_block`` and be silently skipped — the coroutine
 never ran, output was swallowed, no error, no badge. This pins the parse point
 directly; the end-to-end no-op only reproduces against a LIVE Jupyter server,
-which the nbclient unit harness lacks (CAS-136).
+which the nbclient unit harness lacks.
 """
 
 import pytest
@@ -32,6 +32,6 @@ def test_strip_magics_survives_await_cell():
 
 
 def test_genuine_syntax_error_still_raises():
-    """A real typo is still a SyntaxError (CAS-156 clean-traceback path)."""
+    """A real typo is still a SyntaxError (clean-traceback path)."""
     with pytest.raises(SyntaxError):
         CodeAnalyzer._parse_cell("x = (1 + ")

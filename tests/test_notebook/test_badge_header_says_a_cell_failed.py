@@ -1,6 +1,6 @@
 """A cell whose statement raised does not say EXECUTED in its header.
 
-Round 25's r25s2 (and r25s1's repros): ``[Cash] EXECUTED (0.70s)`` above a row
+``[Cash] EXECUTED (0.70s)`` above a row
 reading ``ERROR: ints = array('i', ...)``. The header is the one line a reader
 glances at; it read like the cell had run.
 """

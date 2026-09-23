@@ -1,4 +1,4 @@
-"""A call unit stores and restores through the statement backend (CAS-243).
+"""A call unit stores and restores through the statement backend.
 
 ``CallCache.resolve`` used to delegate to ``@cash.cache`` -- the decorator,
 which keys a call by pickling every argument. ``CallUnit`` is the replacement:
@@ -97,7 +97,7 @@ def test_a_computed_argument_is_hashed_into_the_key(call_unit_harness):
 
 
 def test_unpacking_call_is_keyed_on_every_value_it_receives(call_unit_harness):
-    """CAS-243 review C2: ``*args``/``**kwargs`` unpacking makes the live
+    """``*args``/``**kwargs`` unpacking makes the live
     arity dynamic, so ``computed_arg_positions`` (a STATIC, fail-closed-to-
     "every position" count from the AST) cannot be trusted to match the
     RUNTIME flattened argument list. Reproduced end to end before that fix:
@@ -105,7 +105,7 @@ def test_unpacking_call_is_keyed_on_every_value_it_receives(call_unit_harness):
     second, genuinely different ``make_pair()`` result was served the first
     call's cached value. The site was then refused outright.
 
-    Round 25 (r25s5) keys it instead, on every value that arrived and each
+    Now it is keyed instead, on every value that arrived and each
     keyword's name, when the call may be keyed on content: the second pair
     still computes its own value, and the first pair again is a hit.
     """

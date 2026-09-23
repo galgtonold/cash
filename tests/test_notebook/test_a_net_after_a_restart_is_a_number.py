@@ -1,6 +1,6 @@
 """After a restart, the net is a measured number, not a range around zero.
 
-Round 30, r30s5 (and r30s3): "%cash_stats after a restart: 'Net time saved:
+"%cash_stats after a restart: 'Net time saved:
 at least -10.3s, at best 1.3min'. A range whose lower bound is just
 -overhead (nothing 'verified' in a fresh kernel). My pair measured 80.2s
 saved, so the upper bound was the right one; the lower bound tells me
@@ -141,7 +141,7 @@ def test_reset_forgets_the_measurements_it_claims_to_forget(kernel, capsys):
 
 
 def test_a_cached_call_is_credited_across_kernels_too(kernel, capsys):
-    """The shape testers actually measure: the work sits behind a call, and
+    """The shape people actually measure: the work sits behind a call, and
     the Restart & Run All restores it."""
     monday = kernel()
     monday._update_session_stats(

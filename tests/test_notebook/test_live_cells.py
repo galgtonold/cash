@@ -161,7 +161,7 @@ def test_wiring_control_nothing_pushed_reads_the_file(tmp_path):
 
 
 def test_wiring_a_non_string_source_falls_back_to_the_file_not_ast_parse(tmp_path):
-    """CAS-274 review, item 2. A cell whose `source` is not a string must not
+    """A cell whose `source` is not a string must not
     become a `[123]`-shaped "notebook cell" that reaches `ast.parse` --
     `_extract_cell_entry` uses a non-list `source` UNCHANGED, and `ast.parse`
     raises `TypeError` on it, which the upstream checker's `except
@@ -178,7 +178,7 @@ def test_wiring_a_non_string_source_falls_back_to_the_file_not_ast_parse(tmp_pat
     assert sd.get_notebook_cells(str(nb_path)) == ["from_file = True"]
 
 
-# --- A comm_open supersedes the previous connection (CAS-274 review, C2) ------
+# --- A comm_open supersedes the previous connection ---------------------------
 #
 # These drive the REAL closures `register_target` installs, rather than calling
 # `handle_message` directly, because the behaviour under test lives in _on_open
@@ -300,7 +300,7 @@ def test_wiring_a_reopen_falls_back_to_the_file_until_the_new_snapshot_lands(tmp
     assert sd.get_notebook_cells(str(nb_path)) == ["from_file = True"]
 
 
-# --- A snapshot is valid for ONE execution (CAS-274 review, Critical) ---------
+# --- A snapshot is valid for ONE execution ------------------------------------
 #
 # `_store` lives as long as the KERNEL; the frontend that fills it does not. A
 # page reload with the extension disabled, a second client attached without it,
@@ -438,7 +438,7 @@ def test_a_shell_without_events_is_a_false_not_a_raise():
 
 
 def test_install_expiry_hook_survives_a_keyerror_from_events_register():
-    """CAS-274 review, item 3. `_FakeEvents` above models IPython's real
+    """`_FakeEvents` above models IPython's real
     `EventManager`, which raises `KeyError` -- not `AttributeError` or
     `TypeError` -- on an unknown event name, because `callbacks` is
     pre-populated from a closed set (`available_events`).

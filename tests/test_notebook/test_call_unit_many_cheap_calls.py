@@ -2,7 +2,7 @@
 
 A call in a comprehension is made once per element; caching each one costs a
 key, a lookup, a store and a file tracker -- ~14 ms a call around a function
-reading one small file, which made r23s4's 5,030-file read go 8.4 s -> 71.6 s.
+reading one small file, which made a real 5,030-file read go 8.4 s -> 71.6 s.
 Past ``_GUARD_AFTER_CALLS`` calls, cheap ones are timed plain on a few samples
 and, when caching costs more than ``_OVERHEAD_FACTOR`` times the work, the
 rest of the statement's calls to the site run plain. Expensive calls are never
@@ -91,7 +91,7 @@ def test_expensive_calls_are_never_run_plain_to_measure_them(call_unit_harness, 
 
 
 def test_calls_a_hit_could_not_beat_stop_being_cached(call_unit_harness, slow_lookup):
-    """Round 25 (r25s5): ``add_features(g)`` over 360 groups, ~5 ms a call,
+    """``add_features(g)`` over 360 groups, ~5 ms a call,
     cost ~8 ms more a call to cache and still under 4x its work, so it kept
     being cached. Keying and looking it up alone cost as much as the call: a
     hit would never have been faster. Measured on the same samples, a site
@@ -110,7 +110,7 @@ def test_calls_a_hit_could_not_beat_stop_being_cached(call_unit_harness, slow_lo
 
 
 def test_every_call_is_counted_including_the_plain_ones(call_unit_harness, slow_lookup):
-    """Round 25 (r25s4): the badge read ``sub-call read_doc(p): 5220/5225`` for
+    """The badge read ``sub-call read_doc(p): 5220/5225`` for
     5,225 files, ``296/301``, ``495/500``: every count five short. The calls
     the guard ran plain -- its samples and the rest of the run -- were never
     logged, so they vanished from the denominator. They are logged now, and
@@ -160,7 +160,7 @@ def test_the_sub_call_line_says_how_many_ran_plain():
 
 
 def test_a_row_whose_calls_were_served_says_what_they_saved():
-    """Round 25 (r25s1): ``EXECUTED: results[name] = evaluate(...)  (0.03s)``
+    """``EXECUTED: results[name] = evaluate(...)  (0.03s)``
     for a model fit served from the cache -- the word EXECUTED and 0.03 s, and
     only the footer's "3/4 cached" said otherwise. The statement did run; the
     row says what its cached calls saved."""

@@ -1,6 +1,6 @@
 """Every scheduled statement gets the LATEST producer of each input before it.
 
-Round 25's r25s2 (WRONG, silent): after a restart, running only the export cell
+A silent wrong answer: after a restart, running only the export cell
 rebuilt the cleaning cell without ``sales['refund'] = is_refund.astype(int)``,
 and the summary showed 0 refunds for three stores. The trace showed the plan
 schedule every statement of the cell but that one: completing
@@ -10,7 +10,7 @@ schedule every statement of the cell but that one: completing
 
 The notebook arm is
 ``tests/test_notebook_integration/test_a_rebuilt_cleaning_cell_keeps_every_column_write.py``;
-the tester's own repro (3 million rows) is the one that reached this state.
+the original repro (3 million rows) is the one that reached this state.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ def test_a_live_input_still_needs_no_producer():
     assert planner._complete_inputs_produced_before([5], CLEANING) == [5]
 
 
-# Round 25's r25s3: run the export cell (adds `results["f1"] = ...` in place),
+# Run the export cell (adds `results["f1"] = ...` in place),
 # re-run the sweep cell (rebinds `results`, no f1), then the chart cell. The
 # plan re-ran `best = results.sort_values(['f1', ...])` without the f1 write
 # above it -- `results` was live, so it needed no producer -- and raised

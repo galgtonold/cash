@@ -1,12 +1,12 @@
 """What counts as a module-level read, for the forward-reference guard.
 
-Round 27, r27s5. The guard refuses a cell that reads, at module level, a name
+The guard refuses a cell that reads, at module level, a name
 only a LATER cell binds -- and it was written on the premise that "a name
 inside a function body resolves at call time, so it is not a module-level
 read". That premise is true and it is not the condition. It only protects the
 cell if the call happens AFTER the binding.
 
-Two shapes slipped through, both from the tester's real notebook, both of
+Two shapes slipped through, both from a real notebook, both of
 which ran clean under cash and raise ``NameError`` from the top:
 
     out = s.map(lambda v: f(len(v)))     # the lambda is called by .map, NOW
@@ -51,14 +51,14 @@ class TestReadNow:
         assert "Base" in reads("class C(Base):\n    pass")
 
     def test_a_lambda_passed_to_a_call(self):
-        """r27s5's shape: `.map` invokes the lambda inside this statement."""
+        """The reported shape: `.map` invokes the lambda inside this statement."""
         assert "f" in reads("out = s.map(lambda v: f(v))")
 
     def test_a_lambda_passed_as_a_keyword(self):
         assert "rank" in reads("ys = sorted(xs, key=lambda v: rank(v))")
 
     def test_a_function_defined_and_called_in_the_same_cell(self):
-        """r27s5's other shape: `use_it()` runs before the cell is over."""
+        """The other reported shape: `use_it()` runs before the cell is over."""
         assert "f" in reads("def use_it():\n    return f(21)\nprint(use_it())")
 
 

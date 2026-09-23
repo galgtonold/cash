@@ -1,4 +1,4 @@
-"""The production call site must apply the object-level gate too (CAS-243).
+"""The production call site must apply the object-level gate too.
 
 ``wrap_eligible_calls``'s ``gate`` parameter (Task 4) was tested at the AST
 level but never wired into ``statement/processor.py``'s
@@ -16,7 +16,7 @@ is a builtin and ``CallCache.resolve``'s own type check passes it straight
 through) -- but the processor believed it had found something cacheable when
 it had not.
 
-Interception is on by default now (CAS-243 task 10), so the earlier "warns
+Interception is on by default now, so the earlier "warns
 when nothing is eligible" signal (``test_cache_calls_noop_warning.py``, since
 deleted -- silence is the ordinary case under default-on, not a mistake worth
 a warning) no longer exists to assert on. The two tests below instead spy on
@@ -112,7 +112,7 @@ def test_an_ordinary_eligible_call_is_wrapped(magics_fixture, monkeypatch):
 
 
 def test_a_gate_exception_fails_closed_instead_of_crashing_the_cell(magics_fixture, monkeypatch):
-    """CAS-243 review I1: the gate runs the full ``decide_cacheability`` /
+    """The gate runs the full ``decide_cacheability`` /
     ``analyze_statement`` / ``scan_for_forbidden_functions`` stack against a
     bare ``ast.Expr(Call)`` sub-expression -- a shape that stack had never
     been run against before this task wired the gate in. The ``try`` around
@@ -141,7 +141,7 @@ def test_a_gate_exception_fails_closed_instead_of_crashing_the_cell(magics_fixtu
 
 
 def test_the_gate_is_given_variable_lineage(magics_fixture, monkeypatch):
-    """CAS-243 review I2: ``call_site_is_cacheable``'s ``variable_lineage``
+    """``call_site_is_cacheable``'s ``variable_lineage``
     parameter is optional and, per its own docstring, omitting it makes
     "missing lineage" an unreachable refusal reason -- correct for the
     AST-only rewrite-time case that docstring describes, but this call site
@@ -184,7 +184,7 @@ def test_a_no_cache_statement_never_reaches_the_gate(magics_fixture, monkeypatch
     """``# @cash:no-cache`` must short-circuit BEFORE the gate is ever built,
     not merely produce the same observable result because
     ``decide_cacheability``'s own no-cache short-circuit happens to refuse
-    the call downstream too (CAS-243 task 10 review I3).
+    the call downstream too.
 
     There are genuinely two independent enforcement layers for "no-cache
     wins over interception": the outer clause in
@@ -225,7 +225,7 @@ def test_a_no_cache_statement_never_reaches_the_gate(magics_fixture, monkeypatch
 
 
 def test_identity_contract_holds_on_the_no_eligible_call_and_opt_out_branches(magics_fixture):
-    """FINDING 7 (notebook-annotation-visibility Task 1, review round 1).
+    """The identity contract holds on the no-eligible-call and opt-out branches.
 
     ``process_statement``/``process_statement_async`` forward the cell's
     original text for compilation (``exec_source``) ONLY when this method

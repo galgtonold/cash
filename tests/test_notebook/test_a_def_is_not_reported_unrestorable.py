@@ -1,6 +1,6 @@
 """A ``def`` is not reported as a statement cash could not cache.
 
-Round 25 (r25s1): four ``^NOT CACHED: def draw_roc(ax): ... __main__
+Four ``^NOT CACHED: def draw_roc(ax): ... __main__
 function/class output(s) draw_roc are unrestorable by value; statement
 re-executes (lineage persists)`` rows in a report cell's badge. A definition
 always re-runs at no cost and its lineage persists either way; the reason is for

@@ -11,7 +11,7 @@ fitted from, which is committed beside them.
 Deterministic: it reads measured numbers off a CSV and compares decisions. It
 times nothing.
 
-It would have caught what round 26 found by hand. The constants shipped before
+It would have caught what was once found by hand. The constants shipped before
 came from a matrix that timed each read while a write of the same key was still
 in flight, through the backend that had just written the file, with a leaked
 backend per cell still running its threads. The fitted intercept landed at

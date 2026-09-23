@@ -39,7 +39,7 @@ class TestSizeAwareCaching:
     def test_should_skip_large_object_basic(self):
         """A large object whose predicted restore exceeds both budgets is skipped.
 
-        The numbers here moved when the cost model was refitted before round 26.
+        The numbers here moved when the cost model was refitted.
         This used to use a 100 MB ndarray with a 0.1 s compute, on the strength
         of a model that predicted over 160 ms to restore it; a fresh-process read
         of that array measures ~79 ms, so persisting it genuinely pays and the

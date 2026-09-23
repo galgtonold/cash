@@ -1,6 +1,6 @@
 """A cell that was mostly restored does not headline as EXECUTED.
 
-Round 29, r29s4: "every badge headline says EXECUTED even when nearly
+"every badge headline says EXECUTED even when nearly
 everything was restored". Their sweep cell read ``EXECUTED · 10.05s · saved
 257.45s``; the only statements that ran were an import and ``sweep_rows =
 []``. Scanning 16 headlines they could not tell restored cells from

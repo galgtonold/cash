@@ -5,7 +5,7 @@ for any statement with file dependencies ("file I/O is inherently
 expensive"). But the dependencies it looked at included every file the
 statement's INPUTS were built from, so everything downstream of a load was
 exempt: a value whose restore takes longer than recomputing it was cached
-anyway, and served as a hit (round 28, r28s5: ~400 MiB frames restoring in
+anyway, and served as a hit (~400 MiB frames restoring in
 ~10 s against ~4 s of compute, "1/1 cache hits" on the badge).
 """
 

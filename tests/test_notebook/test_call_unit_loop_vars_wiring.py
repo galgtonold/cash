@@ -1,4 +1,4 @@
-"""The `loop_vars` route from `for_handler.py` to `CallUnit._build_key` (CAS-243).
+"""The `loop_vars` route from `for_handler.py` to `CallUnit._build_key`.
 
 `call_cache_key`'s `loop_vars` parameter is fully covered at the unit level
 (`test_call_unit_key.py`) -- given a dict, it discriminates correctly. What
@@ -144,7 +144,7 @@ def test_hidden_state_loop_vars_still_discriminate_on_a_rerun(magics_fixture):
     `{1: 1, 2: 2, 3: 3}` and passed only because all three iterations minted an
     identical key, so the calls hit and nothing advanced -- it was reading a
     false-hit as cache reuse. Once a callee-mutated global entered the key
-    (CAS-260/265) the keys stopped repeating, and the assertion failed while
+    the keys stopped repeating, and the assertion failed while
     the product was correct: the same notebook on a REAL kernel returns
     `{1: 1, 2: 2, 3: 3}` on every rerun. The cross-run contract therefore lives
     where a checker exists, in
@@ -218,7 +218,7 @@ def test_loop_vars_scope_nests_and_pops_back_to_the_outer_scope():
 
 # --------------------------------------------------------- loop_var_digests stack
 #
-# The round-3 review fix (reading a loop var's digest from `variable_lineage`)
+# An earlier fix (reading a loop var's digest from `variable_lineage`)
 # was correct on the discrimination question but wrong on scope: that dict is
 # flat, keyed only by name, and never popped, so a nested loop reusing an
 # outer loop's target name left a STALE entry for the rest of the outer
@@ -271,7 +271,7 @@ def test_loop_var_digests_reused_name_does_not_outlive_its_scope():
     assert proc.current_loop_vars_for_call_key() == {}
 
 
-# --------------------------------------------------------- depth-keyed call-key scope (CAS-257 defect 1)
+# --------------------------------------------------------- depth-keyed call-key scope
 #
 # The key build reads the loop stacks through `_depth_keyed_loop_scope`
 # (exposed via `current_loop_vars_for_call_key` /
@@ -284,7 +284,7 @@ def test_loop_var_digests_reused_name_does_not_outlive_its_scope():
 
 
 def test_depth_keyed_scope_gives_a_reused_name_two_distinct_slots():
-    """The exact shape CAS-257 defect 1 reports: ``for q in A: for q in B:
+    """The exact reported shape: ``for q in A: for q in B:
     <call>`` -- while BOTH scopes are simultaneously active (the call sits
     INSIDE the inner loop, not after it), the outer 'q' and the inner 'q'
     must occupy two different (depth, name) slots, not collide onto one
@@ -292,7 +292,7 @@ def test_depth_keyed_scope_gives_a_reused_name_two_distinct_slots():
 
     Mutation that must make this fail: key the entries by bare name (top of
     the value stack, bare-name merge of the digest stack), undoing the
-    CAS-257 fix. Both calls then return `{'q': 7}` / `{'q': 'digest-inner'}`
+    fix. Both calls then return `{'q': 7}` / `{'q': 'digest-inner'}`
     -- only the inner scope survives -- and the assertions below fail
     (`'0:q'` is missing entirely from either dict).
     """
@@ -328,8 +328,8 @@ def test_depth_prefix_is_positional_not_order_dependent():
     iterable was walked. So the SAME call site contributes an entry under
     the SAME depth-keyed name regardless of which value is bound there --
     only the value/digest attached to that name varies. This is the
-    property `test_loop_reorder_reuse_claim.py` / the CAS-257 write-up rely
-    on to rule out reintroducing CAS-242 (reordering an iterable must not
+    property `test_loop_reorder_reuse_claim.py` relies on to rule out
+    reintroducing the reorder bug (reordering an iterable must not
     change a call's key beyond the value it actually reads): a depth-keyed
     name is never a stand-in for iteration order or an execution counter.
 

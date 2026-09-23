@@ -1,4 +1,4 @@
-"""A file dependency on a path that NEVER existed must not invalidate (CAS-185).
+"""A file dependency on a path that NEVER existed must not invalidate.
 
 ``tracking_state.executed_file_deps`` is a strict superset of the producer's
 persisted ``file_dependencies`` snapshot:
@@ -15,7 +15,7 @@ that legitimately does not exist (``direct_url.json``, ``entry_points.txt``,
 
 The bug: ``_input_file_changed`` judged the path missing BEFORE consulting the
 producer's snapshot, so every consumer of such a variable missed on every run,
-forever (CAS-171's ``make_classification`` chain). A path that never existed
+forever (seen on a ``make_classification`` chain). A path that never existed
 cannot have *changed*.
 """
 
@@ -26,7 +26,7 @@ import pytest
 from cash.notebook.file_dep_snapshot import file_dep_is_fresh, snapshot_file_deps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
 
-PHANTOM = "C:/nonexistent-dir-cas185/numpy-1.0.dist-info/direct_url.json"
+PHANTOM = "C:/nonexistent-dir-phantom/numpy-1.0.dist-info/direct_url.json"
 
 
 class _StubBackend:
@@ -67,7 +67,7 @@ def test_phantom_freshness_verdict_is_stable(real_file):
 
 
 def test_phantom_input_dep_does_not_invalidate(real_file):
-    """CAS-185: a never-existed path must not make the consumer stale."""
+    """A never-existed path must not make the consumer stale."""
     producer_meta = {
         "key": "stmt:producer",
         "file_dependencies": snapshot_file_deps({real_file}),

@@ -1,7 +1,7 @@
 """``_expr_has_trailing_semicolon`` must locate the ``;`` the way the parser
 locates the node it follows.
 
-CAS-96 recovers a trailing ``;`` (IPython display suppression) from the raw
+cash recovers a trailing ``;`` (IPython display suppression) from the raw
 cell, because ``ast.unparse`` drops it. It did so by indexing
 ``raw_cell.splitlines()`` with ``node.end_lineno`` and then slicing that line
 with ``node.end_col_offset``. Two independent mismatches with the parser's own

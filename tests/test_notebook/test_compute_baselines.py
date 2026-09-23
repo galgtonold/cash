@@ -1,10 +1,10 @@
 """The measured cost of a computation, kept across kernels.
 
-Round 30, r30s3 and r30s5: after a Restart & Run All, `%cash_stats` said
+After a Restart & Run All, `%cash_stats` said
 "Net time saved: at least -10.3s, at best 1.3min". A saving counted only
 when THIS kernel had recomputed the same statement, and a fresh kernel has
 recomputed nothing -- so the floor was exactly minus the overhead, in the one
-measurement every tester takes. "The lower bound tells me nothing. For a team
+measurement everyone takes. "The lower bound tells me nothing. For a team
 lead the range reads as 'cash may have cost you time', which the measurement
 contradicts."
 

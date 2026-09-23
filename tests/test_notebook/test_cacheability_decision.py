@@ -310,7 +310,7 @@ class TestReasonOrdering:
 
 
 class TestIdentityCoupledReason:
-    """``identity_coupled_reason`` — the CAS-144 refusal of matplotlib Figure/Axes.
+    """``identity_coupled_reason`` — the refusal of matplotlib Figure/Axes.
 
     These objects are only correct while they ARE the object pyplot's ``Gcf``
     registry points at.  Caching one makes the RAM tier deep-copy it, and
@@ -355,7 +355,7 @@ class TestIdentityCoupledReason:
         assert identity_coupled_reason("axes", axes) is not None
 
     def test_dict_of_axes_is_refused(self):
-        """CAS-155: ``plt.subplot_mosaic(...)`` returns ``dict[str, Axes]`` and
+        """``plt.subplot_mosaic(...)`` returns ``dict[str, Axes]`` and
         typically binds ONLY the dict, so nothing bare-Figure/Axes co-occurs."""
         figure_mod = pytest.importorskip("matplotlib.figure")
         fig = figure_mod.Figure()
@@ -363,7 +363,7 @@ class TestIdentityCoupledReason:
         assert identity_coupled_reason("axd", axd) is not None
 
     def test_nested_list_of_axes_is_refused(self):
-        """CAS-155: a hand-built ``[[ax, ax], [ax, ax]]`` grid (no numpy)."""
+        """A hand-built ``[[ax, ax], [ax, ax]]`` grid (no numpy)."""
         figure_mod = pytest.importorskip("matplotlib.figure")
         fig = figure_mod.Figure()
         grid = [
@@ -373,7 +373,7 @@ class TestIdentityCoupledReason:
         assert identity_coupled_reason("grid", grid) is not None
 
     def test_list_of_ndarray_rows_is_refused(self):
-        """CAS-155: ``rows = list(axes)`` after ``subplots(2, 2)`` — a list of
+        """``rows = list(axes)`` after ``subplots(2, 2)`` — a list of
         1-D ndarrays of Axes; the pre-fix one-level scan saw only the ndarrays."""
         figure_mod = pytest.importorskip("matplotlib.figure")
         rows = list(figure_mod.Figure().subplots(2, 2))

@@ -1,7 +1,7 @@
 """What reading some names from a module depends on.
 
 ``closure_digest`` is what lets editing one function in a module leave the
-statements that read OTHER functions alone (round 27, r27s2: 2.8x then 9.1x).
+statements that read OTHER functions alone (2.8x then 9.1x in one notebook).
 Leaving something out of the closure serves a value computed from code that
 has since changed, so the tests are mostly the other direction: every way a
 name's behaviour can change without its own source changing must move the
@@ -309,7 +309,7 @@ class TestNondeterministicImportTimeCode:
         assert _d(src, "load") is not None
 
     def test_a_clock_read_inside_a_function_is_not_import_time_code(self):
-        """Round 29, r29s1 and r29s3: a helper that times its own steps made
+        """A helper that times its own steps made
         every edit to its module -- even appending an unrelated function --
         re-run everything built on it. A clock read that runs only when the
         function is CALLED gives no new value on a reload."""

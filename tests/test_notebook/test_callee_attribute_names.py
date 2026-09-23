@@ -1,8 +1,8 @@
-"""Round 21: a callee's ATTRIBUTE names are not globals it reads.
+"""A callee's ATTRIBUTE names are not globals it reads.
 
 ``called_function_dependencies`` walks each callee's ``co_names``, which holds
 attribute names too (``m.forecast(h)`` puts ``forecast`` there). In a
-tester's notebook ``forecast = run_forecast(series, H)`` called a helper that
+user's notebook ``forecast = run_forecast(series, H)`` called a helper that
 calls ``m.forecast(h)``: the key held ``forecast:ABSENT`` before the first run
 and ``forecast:<lineage>`` after, so the simulation never found the entry and
 the export cell re-ran the forecast.

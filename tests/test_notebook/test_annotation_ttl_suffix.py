@@ -1,4 +1,4 @@
-"""A `ttl` value that is not whole seconds is rejected, loudly (CAS-249).
+"""A `ttl` value that is not whole seconds is rejected, loudly.
 
 `ANNOTATION_PATTERN`'s value group used to be an unanchored `\\d+`, which
 matched the leading digit run and dropped the rest:
@@ -72,7 +72,7 @@ def test_a_valid_ttl_still_parses_and_stays_quiet(line, expected, recwarn):
     tests above and break every annotated notebook.
 
     `ttl=0` is here deliberately: it is a real value meaning "always miss", and
-    a falsy-vs-None slip would drop it (CAS-221).
+    a falsy-vs-None slip would drop it.
     """
     ann = parse_annotation_line(line)
 

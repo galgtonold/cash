@@ -1,4 +1,4 @@
-"""Parsing and merging for the ``# @cash:no-cache-calls`` opt-out (CAS-243).
+"""Parsing and merging for the ``# @cash:no-cache-calls`` opt-out.
 
 Call-level caching is on by default now (see ``test_cache_calls_gate_wiring.py``
 and ``tests/test_notebook_integration/test_cache_calls_directive.py`` for the

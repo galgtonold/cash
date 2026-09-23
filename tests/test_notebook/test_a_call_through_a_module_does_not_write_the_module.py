@@ -1,6 +1,6 @@
 """`sc.pp.calculate_qc_metrics(adata, inplace=True)` does not write `sc`.
 
-Round 28, r28s4: the badge said these lines "Produced sc" -- the module.
+The badge said these lines "Produced sc" -- the module.
 ``inplace=True`` makes the analysis treat the call's receiver as mutated, and
 for a function reached through a module the receiver chain is rooted at the
 module name. At runtime that bumped ``sc``'s lineage on every such line, so

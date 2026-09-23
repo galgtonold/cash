@@ -1,4 +1,4 @@
-"""Cash's own file-tracking shims must never be intercepted (CAS-246).
+"""Cash's own file-tracking shims must never be intercepted.
 
 ``file_tracker`` replaces ``open``, ``pd.read_csv`` and friends with tracking
 wrappers. A wrapper is a plain ``types.FunctionType``, so the builtin exclusion
@@ -11,8 +11,8 @@ file handle. The audit-log repro raised and wrote nothing:
                                                           # on cash's own shim
 
 ``_is_file_tracker_patch`` is the sentinel every install site already sets, and
-which ``cache_key.py`` already reads defensively for the same reason (CAS-214,
-where this shim poisoned a cache key). Reusing it means new shims are covered
+which ``cache_key.py`` already reads defensively for the same reason (this shim
+once poisoned a cache key). Reusing it means new shims are covered
 with no second list to maintain -- which the coverage test below pins.
 
 A site is registered before every ``resolve()`` call: production always has

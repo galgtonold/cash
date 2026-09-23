@@ -99,7 +99,7 @@ def test_an_unannotated_cell_defined_function_does_not(cell_runner):
     unparsed form. The reason is measured: the upstream checker/restorer
     recompiles a def on a path that never threads the original source, so
     recovering it here unconditionally gave one unedited function two textual
-    representations, which hashed differently, moved its CAS-243 call-cache key,
+    representations, which hashed differently, moved its call-cache key,
     and re-ran its body on the next same-session re-run. Gating on the directive
     keeps every unannotated function on exactly the path it used before.
 

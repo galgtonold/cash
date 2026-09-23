@@ -1,6 +1,6 @@
 """A ``def`` does not consume a version of the globals its body reads.
 
-Round 25's r25s5: after the summary cell had repaired the chain, running the
+After the summary cell had repaired the chain, running the
 export cell re-ran the back-test cell again -- ``bt = []``, its loop, and both
 ``backtest`` statements. The export cell needed ``def plot_region`` re-run, and
 the shadowed-variable pass read the def's recorded ``backtest`` as a consumed,

@@ -2,7 +2,7 @@
 
 ``UpstreamChecker._prepend_rng_chain_for_reexecuted_draws`` re-runs the RNG
 chain ahead of a re-executed draw so that draw lands at the stream position it
-holds top-to-bottom (ADR-017 / CAS-223). It selects statements by whether they
+holds top-to-bottom (ADR-017). It selects statements by whether they
 touch an RNG module and has no notion of what those statements *read*, so a
 draw sharing a cell with an ordinary assignment was scheduled without it::
 

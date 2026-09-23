@@ -1,4 +1,4 @@
-"""Call interception must honour the refusals cash already supports (CAS-243).
+"""Call interception must honour the refusals cash already supports.
 
 Found while analysing whether the directive could be made default-on. Both are
 live bugs in the opt-in feature, not hypotheticals:

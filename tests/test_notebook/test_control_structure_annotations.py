@@ -1,4 +1,4 @@
-"""Annotation resolution inside control structures (CAS-135 hole 3).
+"""Annotation resolution inside control structures.
 
 ``# @cash:no-cache`` — the documented escape hatch for the deliberate
 "unseeded randomness is cached" policy — worked on a top-level statement and was
@@ -109,7 +109,7 @@ class TestInheritanceAndMerging:
         assert ann.ttl == 60  # from the body statement
 
     def test_no_raw_cell_falls_back_to_inherited(self):
-        """``raw_cell=None`` is the pre-CAS-135 behaviour, kept so direct callers
+        """``raw_cell=None`` is the old behaviour, kept so direct callers
         constructing handlers with mock deps keep working."""
         cell = "for t in range(3):\n    # @cash:no-cache\n    a = draw()\n"
         node = _for_node(cell)

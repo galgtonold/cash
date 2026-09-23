@@ -1,6 +1,6 @@
 """A function that writes a file is a writer whichever way the call is spelled.
 
-Round 27, r27s2: four export functions lived in the tester's own project
+Four export functions lived in the user's own project
 module and were called as ``tl.export_corpus_summary(...)``. Every one was
 cached. They deleted a deliverable from ``report/``, re-ran the cell, got
 ``CACHED (saved 0.00s)``, and the file did not come back -- for two sessions
@@ -67,7 +67,7 @@ def test_a_bare_name_writer_is_seen(ns):
 
 
 def test_a_module_spelled_writer_is_seen(ns):
-    """r27s2's shape, and the one the docs promise: a project module."""
+    """The reported shape, and the one the docs promise: a project module."""
     assert statement_calls_user_writer("p = tl.export_summary(d, 'out.json')", ns) == "export_summary"
 
 

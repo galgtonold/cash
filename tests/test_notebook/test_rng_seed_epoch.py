@@ -1,4 +1,4 @@
-"""CAS-223: re-seeding must invalidate the draws that follow it.
+"""re-seeding must invalidate the draws that follow it.
 
 `np.random.seed(0)` -> `seed(1)` left every downstream draw unchanged: the draw
 has a stable source and no tracked inputs, so its cache key never moved and cash

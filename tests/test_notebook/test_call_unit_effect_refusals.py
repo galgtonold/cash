@@ -85,7 +85,7 @@ def test_a_callee_that_mutates_its_argument_is_never_cached(call_unit_harness):
 def test_a_callee_that_draws_is_never_cached(call_unit_harness):
     """RNG is a consumed linear resource; v1 refuses rather than replays.
 
-    See CAS-254. A hit would leave the global stream where it was, so every
+    A hit would leave the global stream where it was, so every
     downstream draw diverges from the uncached oracle.
 
     Mutation-that-breaks-this-test: dropping the
