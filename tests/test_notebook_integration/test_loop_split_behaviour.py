@@ -184,7 +184,7 @@ def test_a_recorded_split_costs_only_its_head(nb_runner, tmp_path):
     Splitting the two was not tidiness. As one test it failed ~4 of 7 full
     parallel runs with 124/124: under 40+ processes on 32 cores the kernel was
     descheduled during the 5-iteration probe, measured per_iter crossed
-    ``for_handler._SPLIT_MAX_ITER_SEC`` (6ms, against a body of ~1ms plus
+    ``split_policy.MAX_ITER_SEC`` (6ms, against a body of ~1ms plus
     ~2.2ms decomposition overhead -- under 2x headroom), and no verdict was
     ever recorded. Instrumented at the moment of failure, the store file did
     not exist on disk. So the flake was in the LEARNING, while the assertion

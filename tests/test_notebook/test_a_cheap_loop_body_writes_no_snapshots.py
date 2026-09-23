@@ -70,22 +70,22 @@ def test_a_long_cheap_itertuples_loop_runs_as_one_unit(cash_magics):
     with len(), which a DataFrame.itertuples() iterator does not have, and it
     refused to re-evaluate a header whose value is a one-shot iterator, which
     itertuples() makes afresh every time it is called."""
-    from cash.notebook.control_structures.for_handler import ForLoopHandler
+    from cash.notebook.control_structures import single_unit_policy
 
     calls = []
-    orig = ForLoopHandler._should_execute_loop_as_single_unit
+    orig = single_unit_policy.should_run_as_single_unit
 
-    def spy(self, node, iterable, parent_context):
-        result = orig(self, node, iterable, parent_context)
-        calls.append(result and self._iter_header_safe_to_reevaluate(node.iter, iterable))
+    def spy(node, iterable, user_ns, **kwargs):
+        result = orig(node, iterable, user_ns, **kwargs)
+        calls.append(result and single_unit_policy.header_safe_to_reevaluate(node.iter, iterable, user_ns))
         return result
 
-    ForLoopHandler._should_execute_loop_as_single_unit = spy
+    single_unit_policy.should_run_as_single_unit = spy
     try:
         run_cash_cell(cash_magics, SETUP)
         run_cash_cell(cash_magics, LOOP)
     finally:
-        ForLoopHandler._should_execute_loop_as_single_unit = orig
+        single_unit_policy.should_run_as_single_unit = orig
     assert calls and calls[0] is True, calls
     assert int(cash_magics.shell.user_ns["members"].values.sum()) == _expected()
 

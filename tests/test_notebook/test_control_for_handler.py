@@ -187,7 +187,7 @@ def test_fast_loop_falls_back_to_single_unit(handler, mock_dispatcher):
     """Loops with many iterations × many stmts hit the fast-loop heuristic.
 
     1000 iterations × 200 body stmts × 8ms = 1600s estimated overhead,
-    well over the 1s _MIN_OVERHEAD_SEC threshold.
+    well over the 1s MIN_OVERHEAD_SEC threshold.
     """
     body = "\n    ".join([f"x{i} = {i}" for i in range(200)])
     node = _parse_for(f"for i in range(1000):\n    {body}")
@@ -212,7 +212,7 @@ def test_fast_loop_fires_even_when_nested(handler, mock_dispatcher, mock_stateme
 
 def test_fast_loop_skipped_for_small_loop(handler, mock_dispatcher, mock_statement_processor):
     """Loops with few iterations always go per-iteration regardless of size."""
-    # 10 iterations is well below _MIN_ITERATIONS_FOR_SINGLE_UNIT (50).
+    # 10 iterations is well below MIN_ITERATIONS_FOR_SINGLE_UNIT (50).
     node = _parse_for("for i in range(10): x = i")
     handler.process(node, None, True, None)
     assert mock_dispatcher.execute_as_single_unit.call_count == 0
@@ -223,8 +223,8 @@ def test_fast_loop_skipped_when_body_has_file_io(handler, mock_dispatcher, mock_
     """File-I/O calls in the body disable the fast-loop optimisation.
 
     The loop is intentionally small but still clears the single-unit
-    thresholds: 100 iterations (> _MIN_ITERATIONS_FOR_SINGLE_UNIT = 50) and
-    100 × 6 × 8ms = 4.8s estimated overhead (> _MIN_OVERHEAD_SEC = 1s). The
+    thresholds: 100 iterations (> MIN_ITERATIONS_FOR_SINGLE_UNIT = 50) and
+    100 × 6 × 8ms = 4.8s estimated overhead (> MIN_OVERHEAD_SEC = 1s). The
     control assertion below proves file I/O — not loop size — is what flips
     the decision. Kept small on purpose: when single-unit is (correctly)
     declined, ``process`` runs the full per-iteration fallback, which was a

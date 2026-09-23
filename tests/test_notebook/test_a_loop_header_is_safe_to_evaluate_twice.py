@@ -16,22 +16,16 @@ Two defects, found together:
 """
 
 import ast
-import types
 
 import pytest
 
-from cash.notebook.control_structures.for_handler import ForLoopHandler
-
-
-def _handler(user_ns):
-    shell = types.SimpleNamespace(user_ns=user_ns)
-    return ForLoopHandler(shell, statement_processor=None, debug=False, dispatcher=None)
+from cash.notebook.control_structures.single_unit_policy import header_safe_to_reevaluate
 
 
 def _safe(header, user_ns):
     node = ast.parse("for x in %s:\n    pass" % header).body[0]
     iterable = eval(header, dict(user_ns), dict(user_ns))
-    return _handler(user_ns)._iter_header_safe_to_reevaluate(node.iter, iterable)
+    return header_safe_to_reevaluate(node.iter, iterable, user_ns)
 
 
 class TestTooStrict:

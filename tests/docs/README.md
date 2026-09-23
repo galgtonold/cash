@@ -114,7 +114,7 @@ number still reads as authoritative. That is what makes it worse than no
 citation.
 
 **Name the symbol instead** — `Cash._compute_with_lock`, `MUTATING_METHODS`,
-`ForLoopHandler._should_execute_loop_as_single_unit`. It moves with the code,
+`single_unit_policy.should_run_as_single_unit`. It moves with the code,
 `--report` can find it when the code changes, and a [claim
 anchor](#claim-anchors) can re-verify it.
 
