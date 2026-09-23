@@ -434,7 +434,6 @@ def disable_auto_magic_registration(monkeypatch):
 _OWN_CACHE_DIRS = ("test_notebook_integration", "test_wheel_gate")
 _DEFAULT_CACHE_DIRS = itertools.count()
 _IMPORT_TIME_CACHE_DIR: str | None = None
-_ENV_BEFORE_IMPORT: list[str | None] = []
 
 
 def _runs_in_process(path: Path) -> bool:
@@ -450,22 +449,27 @@ def _import_time_cache_dir() -> str:
     return _IMPORT_TIME_CACHE_DIR
 
 
-def pytest_collectstart(collector):
-    if isinstance(collector, pytest.Module) and _runs_in_process(collector.path):
-        _ENV_BEFORE_IMPORT.append(os.environ.get("CASH_CACHE_DIR"))
-        os.environ["CASH_CACHE_DIR"] = _import_time_cache_dir()
+@pytest.hookimpl(wrapper=True)
+def pytest_make_collect_report(collector):
+    """Set the import-time folder around a module's collection, which imports it.
 
-
-def _restore_env_after_import(report) -> None:
-    if not _ENV_BEFORE_IMPORT or not report.nodeid.endswith(".py"):
-        return
-    if not _runs_in_process(Path(report.fspath)):
-        return
-    previous = _ENV_BEFORE_IMPORT.pop()
-    if previous is None:
-        os.environ.pop("CASH_CACHE_DIR", None)
-    else:
-        os.environ["CASH_CACHE_DIR"] = previous
+    Set and put back in one wrapper, not in ``pytest_collectstart`` and
+    ``pytest_collectreport``: pytest skips the report for a module it only
+    passes through on the way to a test named by node id, which is how the
+    core set and CI select tests, and the folder then stayed set for the rest
+    of the session and reached every notebook kernel booted after it.
+    """
+    if not (isinstance(collector, pytest.Module) and _runs_in_process(collector.path)):
+        return (yield)
+    previous = os.environ.get("CASH_CACHE_DIR")
+    os.environ["CASH_CACHE_DIR"] = _import_time_cache_dir()
+    try:
+        return (yield)
+    finally:
+        if previous is None:
+            os.environ.pop("CASH_CACHE_DIR", None)
+        else:
+            os.environ["CASH_CACHE_DIR"] = previous
 
 
 def pytest_unconfigure(config):
@@ -614,7 +618,6 @@ def pytest_collectreport(report):
     exactly like a stall.
     """
     _STALL_WATCHDOG.poke(f"collecting {report.nodeid}")
-    _restore_env_after_import(report)
 
 
 def pytest_collection_finish(session):
