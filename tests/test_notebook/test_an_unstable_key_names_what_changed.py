@@ -25,7 +25,8 @@ def _churn(guard, changing: str, runs: int = GUARD_AFTER_CONSECUTIVE_CHURN_MISSE
 def test_the_guard_names_the_input_that_kept_changing():
     guard = MissGuard(None)
     _churn(guard, "fleet")
-    assert guard.is_guarded("src")
+    guard._ensure_loaded()
+    assert guard._records["src"].guarded
     assert guard.cause("src") == "`fleet` changed each run"
 
 
