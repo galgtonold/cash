@@ -13,7 +13,7 @@ from cash.control_markers import strip_markers
 
 from ...analysis.annotations import get_statement_annotations, parse_annotation_line
 from ...analysis.ast_util import called_names, parse_cached
-from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
 from ...analysis.mutation_effects import CellEffects, NotebookSources, cell_effects
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import AmbiguousCellError, CashUpstreamSyntaxWarning, ForwardReferenceError, UpstreamStateError
@@ -55,6 +55,16 @@ class UpstreamResult(NamedTuple):
 
 
 logger = logging.getLogger(__name__)
+
+
+def _cell_writes(cell_code: str) -> set[str]:
+    """The names a cell binds or changes (by its source); raises SyntaxError
+    when it does not parse."""
+    tree = parse_cell_source(cell_code)
+    if tree is None:
+        # ``await`` at the top of a cell parses here and not in the simulation.
+        return CodeAnalyzer.analyze_code_block(cell_code)[1]
+    return CodeAnalyzer.analyze_code_block(cell_code, tree=tree)[1]
 
 
 @functools.lru_cache(maxsize=1024)
@@ -582,10 +592,9 @@ class UpstreamChecker:
         produced: set[str] = set()
         for cell in (*notebook_cells, cell_code):
             try:
-                _, outs = CodeAnalyzer.analyze_code_block(cell)
+                produced |= _cell_writes(cell)
             except (SyntaxError, ValueError):
                 return  # can't be sure what is produced — do nothing
-            produced |= outs
 
         user_ns = self.shell.user_ns
         orphaned = {
@@ -658,9 +667,8 @@ class UpstreamChecker:
         ``None`` when the cell cannot be parsed, which the caller treats as
         "do not refuse anything".
         """
-        try:
-            tree = ast.parse(CodeAnalyzer.strip_magics(cell_code.replace("\r\n", "\n")))
-        except (SyntaxError, ValueError):
+        tree = parse_cell_source(cell_code)
+        if tree is None:
             return None
 
         names: set[str] = set()
@@ -773,7 +781,7 @@ class UpstreamChecker:
         below: dict[str, int] = {}
         for idx, cell in enumerate((*notebook_cells, cell_code)):
             try:
-                _, outs = CodeAnalyzer.analyze_code_block(cell)
+                outs = _cell_writes(cell)
             except (SyntaxError, ValueError):
                 return  # can't be sure what binds what — never refuse on a guess
             if idx <= current_cell_idx or idx >= len(notebook_cells):
@@ -826,14 +834,11 @@ class UpstreamChecker:
         for idx in range(min(current_cell_idx, len(notebook_cells))):
             raw = notebook_cells[idx]
             try:
-                clean = CodeAnalyzer.strip_magics(raw.replace("\r\n", "\n"))
+                if not clean_cell_source(raw).strip():
+                    continue
             except (ValueError, TypeError):
                 continue
-            if not clean.strip():
-                continue
-            try:
-                ast.parse(clean)
-            except SyntaxError:
+            if parse_cell_source(raw) is None:
                 broken[idx] = hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
         for idx, cell_hash in broken.items():
@@ -892,12 +897,10 @@ class UpstreamChecker:
         progress_callback: Callable[..., None] | None = None,
         control_structure_callback: Callable[..., Any] | None = None,
     ) -> UpstreamResult:
-        """
-        Check if upstream notebook content differs from executed state.
-        Simulates execution of all upstream statements.
+        """Bring the state the cell reads up to date with the notebook above it.
 
-        Returns:
-            Tuple of (all_upstream_metrics, total_restore_time, total_execution_time)
+        Find the cell, vet the notebook, simulate, re-run or restore what the
+        simulation found stale, then resync the simulation with what ran.
         """
         try:
             notebook_cells, current_cell_idx = self._load_notebook_and_find_cell(
@@ -905,36 +908,7 @@ class UpstreamChecker:
             )
             if notebook_cells is None or current_cell_idx is None:
                 return UpstreamResult([], 0.0, 0.0)
-            self.tracking_state.read_by_later_cells = frozenset().union(
-                *(_cell_reads(code) for code in notebook_cells[current_cell_idx + 1 :])
-            )
-
-            # disclose any unparseable UPSTREAM cell BEFORE simulating.
-            # The simulator skips such a cell (VirtualLineage.simulate_one_cell)
-            # so unrelated downstream cells keep caching, but the user must be
-            # told which cell is broken — otherwise caching degrades silently
-            # mid-edit while the badge and auto_cache_enabled still say it is on.
-            self._warn_broken_upstream_cells(notebook_cells, current_cell_idx)
-
-            # a variable whose definition was removed/renamed across an
-            # edit is orphaned — no cell produces it anymore. Evict it (and its
-            # transitive consumers) so they re-run from the start and raise
-            # NameError like a fresh kernel, instead of serving a stale value.
-            self._evict_orphaned_definitions(notebook_cells, cell_code)
-
-            # ...and the other half: a name only a cell BELOW binds. Same
-            # invisible-while-it-works shape, so it is checked in the same
-            # place, but it raises -- see `_refuse_forward_references`.
-            self._refuse_forward_references(
-                notebook_cells,
-                cell_code,
-                current_cell_idx,
-                required_inputs,
-            )
-
-            if self.debug:
-                logger.debug("[UPSTREAM_DEBUG] Current cell found at index %s", current_cell_idx)
-                logger.debug("[UPSTREAM_DEBUG] Will simulate %s upstream cells", current_cell_idx)
+            self._vet_notebook(notebook_cells, cell_code, current_cell_idx, required_inputs)
 
             records_before = self._lineage_records()
             # The cell's own source goes along: the classifier re-simulates it to
@@ -946,43 +920,14 @@ class UpstreamChecker:
                 effects,
                 cell_code=cell_code,
             )
-
-            if self.debug:
-                logger.debug(
-                    "[UPSTREAM_DEBUG] Simulation result: %s stmts to re-execute, %s stmts restored from cache",
-                    len(statements_to_reexecute),
-                    len(restored_info),
-                )
-
-            # ADR-017: a bare ``np.random.seed(N)`` binds no variable,
-            # so the simulator never links it to a downstream draw. If the
-            # current cell draws and an upstream seed cell was edited but not
-            # re-run, re-execute that seed cell first — its side effect (the new
-            # seed) must be in place before the draw, and re-running a seed is
-            # idempotent. The unrun guard keeps warm draws untouched (an
-            # unchanged seed cell's source is already in the executed set).
-            # Snapshot before the RNG prepends so we can tell which statements
-            # were pulled in solely to re-establish the random stream, and label
-            # them for the badge (Stage 2 of the randomness UX).
-            _before_rng_prepend = set(statements_to_reexecute)
-            statements_to_reexecute = self._prepend_stale_seed_cells(
-                cell_code,
-                notebook_cells,
-                statements_to_reexecute,
-                current_cell_idx,
+            logger.debug(
+                "[UPSTREAM_DEBUG] Simulation result: %s stmts to re-execute, %s stmts restored from cache",
+                len(statements_to_reexecute),
+                len(restored_info),
             )
-
-            # A draw re-executed because an ORDINARY input changed (not the seed)
-            # must still run from its top-to-bottom stream position; re-establish
-            # its upstream RNG chain when the seed itself isn't being re-run.
-            statements_to_reexecute = self._prepend_rng_chain_for_reexecuted_draws(
-                notebook_cells,
-                statements_to_reexecute,
-                current_cell_idx,
+            statements_to_reexecute, rng_rerun = self._with_rng_chain(
+                cell_code, notebook_cells, current_cell_idx, statements_to_reexecute
             )
-            rng_rerun = {
-                s for s in statements_to_reexecute if s not in _before_rng_prepend and self.cell_touches_rng(s)
-            }
 
             executed_metrics = []
             if statements_to_reexecute:
@@ -1007,22 +952,9 @@ class UpstreamChecker:
             # RNG before the cell.
             self._restore_position_rng_state(cell_code, notebook_cells, current_cell_idx)
 
-            # CRITICAL: Sync simulation cache with actual runtime lineages.
-            # After upstream statements execute (or skip/restore), variable_lineage
-            # holds the authoritative lineage for each variable.  The simulation
-            # cache may store stale virtual_lineage values from an earlier run
-            # where forward propagation failed (e.g., fallback lineage computed
-            # differently than runtime lineage).  Without this sync, subsequent
-            # re-executions will always see a lineage mismatch and trigger
-            # unnecessary upstream restoration.
-            rerecorded = self._rerecorded_since(records_before)
-            self._sync_simulation_cache_lineages(rerecorded)
-            # The snapshots of the cells replayed here may not know the files
-            # behind what the replay restored (see record_replayed_file_deps).
-            self.simulator.record_replayed_file_deps(rerecorded)
+            self._resync_after_replay(records_before)
 
             all_metrics = self._in_notebook_order(restored_info + executed_metrics, notebook_cells)
-
             return UpstreamResult(all_metrics, total_restore_time, total_execution_time)
 
         except (RuntimeError, SyntaxError):
@@ -1030,6 +962,63 @@ class UpstreamChecker:
         except (KeyError, TypeError, ValueError, OSError) as e:
             logger.debug("[UPSTREAM] Error in notebook-based checking: %s", e)
             raise UpstreamStateError(f"Failed to restore or simulate upstream state: {e}") from e
+
+    def _vet_notebook(
+        self, notebook_cells: list[str], cell_code: str, current_cell_idx: int, required_inputs: set[str]
+    ) -> None:
+        """What must be settled about the notebook before simulating it.
+
+        Raises ForwardReferenceError for a name only a cell below binds.
+        """
+        self.tracking_state.read_by_later_cells = frozenset().union(
+            *(_cell_reads(code) for code in notebook_cells[current_cell_idx + 1 :])
+        )
+        # Disclose any unparseable UPSTREAM cell. The simulator skips such a
+        # cell so unrelated downstream cells keep caching, but the user must be
+        # told which cell is broken — otherwise caching degrades silently
+        # mid-edit while the badge and auto_cache_enabled still say it is on.
+        self._warn_broken_upstream_cells(notebook_cells, current_cell_idx)
+        # A variable whose definition was removed/renamed across an edit is
+        # orphaned — no cell produces it anymore. Evict it (and its transitive
+        # consumers) so they re-run from the start and raise NameError like a
+        # fresh kernel, instead of serving a stale value.
+        self._evict_orphaned_definitions(notebook_cells, cell_code)
+        # ...and the other half: a name only a cell BELOW binds. Same
+        # invisible-while-it-works shape, but it raises.
+        self._refuse_forward_references(notebook_cells, cell_code, current_cell_idx, required_inputs)
+        logger.debug("[UPSTREAM_DEBUG] Current cell found at index %s", current_cell_idx)
+
+    def _with_rng_chain(
+        self, cell_code: str, notebook_cells: list[str], current_cell_idx: int, statements: list[str]
+    ) -> tuple[list[str], set[str]]:
+        """*statements*, with what re-establishes the random stream the cell
+        draws from in front; and which of those were added for that alone.
+
+        ADR-017: a bare ``np.random.seed(N)`` binds no variable, so the
+        simulator never links it to a downstream draw. An upstream seed cell
+        edited but not re-run is re-run first -- re-running a seed is
+        idempotent -- and a draw re-executed because an ORDINARY input changed
+        still runs from its top-to-bottom stream position.
+        """
+        before = set(statements)
+        statements = self._prepend_stale_seed_cells(cell_code, notebook_cells, statements, current_cell_idx)
+        statements = self._prepend_rng_chain_for_reexecuted_draws(notebook_cells, statements, current_cell_idx)
+        return statements, {s for s in statements if s not in before and self.cell_touches_rng(s)}
+
+    def _resync_after_replay(self, records_before: dict[str, tuple]) -> None:
+        """Bring the simulation's snapshots in line with what the replay recorded.
+
+        After upstream statements run or are restored, ``variable_lineage``
+        holds the authoritative lineage of each. A snapshot may hold a
+        simulated one that differs (a control structure simulated as one
+        unit), and without the sync the next check sees a mismatch and
+        repairs again.
+        """
+        rerecorded = self._rerecorded_since(records_before)
+        self._sync_simulation_cache_lineages(rerecorded)
+        # The snapshots of the cells replayed here may not know the files
+        # behind what the replay restored (see record_replayed_file_deps).
+        self.simulator.record_replayed_file_deps(rerecorded)
 
     def _lineage_records(self) -> dict[str, tuple]:
         """Each variable's recorded lineage and input-lineage map, as held now.
@@ -1378,9 +1367,8 @@ class UpstreamChecker:
             all_stmts: list[str] = []
             rng_positions: list[tuple[int, bool]] = []
             for cell in upstream:
-                try:
-                    tree = ast.parse(cell)
-                except SyntaxError:
+                tree = parse_cached(cell)
+                if tree is None:
                     continue
                 for node in tree.body:
                     try:
@@ -1632,9 +1620,8 @@ class UpstreamChecker:
         """
         order: dict[str, int] = {}
         for cell in notebook_cells or ():
-            try:
-                tree = ast.parse(CodeAnalyzer.strip_magics(cell.replace("\r\n", "\n")))
-            except (SyntaxError, ValueError):
+            tree = parse_cell_source(cell)
+            if tree is None:
                 continue
             for node in tree.body:
                 at = len(order)
@@ -1668,11 +1655,10 @@ class UpstreamChecker:
         for cell in notebook_cells or ():
             if "@cash:" not in cell:
                 continue
-            try:
-                clean = CodeAnalyzer.strip_magics(cell.replace("\r\n", "\n"))
-                tree = ast.parse(clean)
-            except (SyntaxError, ValueError):
+            tree = parse_cell_source(cell)
+            if tree is None:
                 continue
+            clean = clean_cell_source(cell)
             for node in tree.body:
                 try:
                     annotation = get_statement_annotations(clean, node)
@@ -1913,9 +1899,8 @@ class UpstreamChecker:
         if notebook_cells and stmt_code:
             found: tuple[str, int | None] | None = None
             for cell_idx, cell in enumerate(notebook_cells):
-                try:
-                    tree = ast.parse(CodeAnalyzer.strip_magics(cell.replace("\r\n", "\n")))
-                except (SyntaxError, ValueError):
+                tree = parse_cell_source(cell)
+                if tree is None:
                     continue
                 for node in tree.body:
                     code = ast.unparse(node)

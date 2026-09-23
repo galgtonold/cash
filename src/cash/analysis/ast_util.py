@@ -38,7 +38,7 @@ def parse_cached(code: str) -> ast.Module | None:
     """
     try:
         return ast.parse(code)
-    except SyntaxError:
+    except (SyntaxError, ValueError):  # ValueError: a null byte in the source
         return None
 
 

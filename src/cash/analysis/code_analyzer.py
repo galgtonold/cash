@@ -22,9 +22,10 @@ from typing import Any
 
 from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from .ast_util import parse_cached
 from .cacheability import NOTEBOOK_POLICY, SCANNED_KINDS, callee_global_mutations
 
-__all__ = ["CodeAnalyzer"]
+__all__ = ["CodeAnalyzer", "clean_cell_source", "parse_cell_source"]
 
 logger = logging.getLogger(__name__)
 
@@ -867,3 +868,19 @@ class CodeAnalyzer:
         visitor = _ForbiddenVisitor(user_ns)
         visitor.visit(tree)
         return list(set(visitor.found_reasons))
+
+
+@functools.lru_cache(maxsize=1024)
+def clean_cell_source(cell_code: str) -> str:
+    """*cell_code* as the upstream simulation reads it: ``\r\n`` normalised,
+    magics stripped (:meth:`CodeAnalyzer.strip_magics`)."""
+    return CodeAnalyzer.strip_magics(cell_code.replace("\r\n", "\n"))
+
+
+def parse_cell_source(cell_code: str) -> ast.Module | None:
+    """:func:`clean_cell_source` parsed, or None when it does not parse.
+
+    Both steps are memoised, so the steps of one upstream check share a single
+    parse of each cell: read the tree, never change it.
+    """
+    return parse_cached(clean_cell_source(cell_code))

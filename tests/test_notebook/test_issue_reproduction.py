@@ -39,7 +39,7 @@ class TestIssueReproduction(unittest.TestCase):
         # Current execution requires ONLY 'ticker_stats'
 
         # 1. Notebook Content
-        cell1_code = "stats = 1; ticker_stats = 1"
+        cell1_code = "stats, ticker_stats = 1, 1"
         cell2_code = "ticker_stats.keys()"
         mock_get_cells.return_value = [cell1_code, cell2_code]
 
@@ -80,54 +80,38 @@ class TestIssueReproduction(unittest.TestCase):
             with patch.object(self.checker.simulator.virtual_lineage, "try_virtual_restore") as mock_restore:
                 mock_restore.return_value = ({"stats", "ticker_stats"}, 0.1, 0.1)
 
-                # Mock ast.parse to valid body
-                with patch("ast.parse") as mock_parse:
-                    # Return a dummy node that unparses to cell1_code
-                    MagicMock()
-                    mock_body = MagicMock()
+                # Only the producer's simulation is stubbed; the cells parse
+                # as they are, one statement binding both names.
+                with patch(
+                    "cash.notebook.upstream.virtual_lineage.is_control_structure", return_value=False
+                ) as mock_is_cs:
+                    # Execute Check for cell2
+                    # Note: cell_code=cell2_code. REQUIRED INPUTS match what we setup.
+                    all_metrics, _, _ = self.checker._check_notebook_based(cell2_code, required_inputs, None, None)
 
-                    # We need parse to return nodes for cell1
-                    # And check_notebook_based to execute logic for cell1
+                    # The patches must reach the code under test: without the
+                    # notebook cells the check returns before simulating
+                    # anything, and the assertion below passes vacuously.
+                    mock_get_cells.assert_called()
+                    mock_update.assert_called()
+                    mock_is_cs.assert_called()
 
-                    # _check_notebook_based calls simulate_upstream
-                    # which calls ast.parse on cell1_code.
+                    restored_codes = [r["code"] for r in all_metrics if r.get("status") == CacheStatus.RESTORED]
+                    print(f"Restored Codes: {restored_codes}")
 
-                    mock_parse.return_value.body = [mock_body]
+                    # The fix ensures that unused broken variables (like 'stats')
+                    # do NOT trigger restoration. Only 'ticker_stats' is a required input,
+                    # and it matches the virtual lineage, so no restoration should occur.
+                    if not restored_codes:
+                        print("✓ FIX VERIFIED: Unused 'stats' did NOT trigger unnecessary restoration")
+                    else:
+                        print(f"X BUG STILL PRESENT: Unnecessary restoration occurred: {restored_codes}")
 
-                    # When unparsing stmt from cell1, return cell1_code
-                    with (
-                        patch("ast.unparse", return_value=cell1_code),
-                        patch(
-                            "cash.notebook.upstream.virtual_lineage.is_control_structure", return_value=False
-                        ) as mock_is_cs,
-                    ):
-                        # Execute Check for cell2
-                        # Note: cell_code=cell2_code. REQUIRED INPUTS match what we setup.
-                        all_metrics, _, _ = self.checker._check_notebook_based(cell2_code, required_inputs, None, None)
-
-                        # The patches must reach the code under test: without the
-                        # notebook cells the check returns before simulating
-                        # anything, and the assertion below passes vacuously.
-                        mock_get_cells.assert_called()
-                        mock_update.assert_called()
-                        mock_is_cs.assert_called()
-
-                        restored_codes = [r["code"] for r in all_metrics if r.get("status") == CacheStatus.RESTORED]
-                        print(f"Restored Codes: {restored_codes}")
-
-                        # The fix ensures that unused broken variables (like 'stats')
-                        # do NOT trigger restoration. Only 'ticker_stats' is a required input,
-                        # and it matches the virtual lineage, so no restoration should occur.
-                        if not restored_codes:
-                            print("✓ FIX VERIFIED: Unused 'stats' did NOT trigger unnecessary restoration")
-                        else:
-                            print(f"X BUG STILL PRESENT: Unnecessary restoration occurred: {restored_codes}")
-
-                        self.assertEqual(
-                            restored_codes,
-                            [],
-                            "Unused broken variable 'stats' should NOT trigger restoration when only 'ticker_stats' is required",
-                        )
+                    self.assertEqual(
+                        restored_codes,
+                        [],
+                        "Unused broken variable 'stats' should NOT trigger restoration when only 'ticker_stats' is required",
+                    )
 
 
 if __name__ == "__main__":

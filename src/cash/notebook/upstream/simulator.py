@@ -33,7 +33,7 @@ from ...analysis.cacheability import (
     resolve_path_list,
     statement_read_paths,
 )
-from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
 from ...analysis.mutation_effects import CellEffects
 from ...tracking.function_tracker import FunctionTracker, is_local_module
 from ...value_types import BUILTIN_NAMES
@@ -53,9 +53,11 @@ def _statement_codes(cell_source: str) -> list[str]:
     """The cell's top-level statements as the runtime keys them (unparsed,
     with an expression's trailing ``;`` kept); the raw text if it does not parse."""
     try:
-        clean = CodeAnalyzer.strip_magics(cell_source.replace("\r\n", "\n"))
-        tree = ast.parse(clean)
-    except (SyntaxError, ValueError, TypeError):
+        clean = clean_cell_source(cell_source)
+        tree = parse_cell_source(cell_source)
+    except (ValueError, TypeError):
+        return [cell_source]
+    if tree is None:
         return [cell_source]
     # Local: import cycle upstream.simulator -> ipython.cell_executor -> ... -> upstream.simulator.
     from ..ipython.cell_executor import CellExecutor
@@ -779,9 +781,8 @@ class NotebookSimulator:
         """
         if not notebook_cells or current_cell_idx is None or not 0 <= current_cell_idx < len(notebook_cells):
             return set()
-        try:
-            tree = ast.parse(notebook_cells[current_cell_idx].replace("\r\n", "\n"))
-        except SyntaxError:
+        tree = parse_cached(notebook_cells[current_cell_idx].replace("\r\n", "\n"))
+        if tree is None:
             return set()
         invisible: set[str] = set()
         pending: list[ast.stmt] = list(tree.body)

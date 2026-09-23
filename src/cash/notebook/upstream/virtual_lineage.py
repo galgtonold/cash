@@ -33,7 +33,7 @@ from ...analysis.cacheability import (
     selfref_reassignment_targets,
     statement_writes_files,
 )
-from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
 from ...analysis.mutation_effects import classify_receivers, live_function_source, statement_effects
 from ...source_norm import source_identity_digest
 from ...tracking import file_dep_snapshot as _fds
@@ -340,9 +340,8 @@ class VirtualLineage:
         """
         sources: dict[str, str] = {}
         for code in notebook_cells:
-            try:
-                tree = ast.parse(code.replace("\r\n", "\n"))
-            except (SyntaxError, ValueError):
+            tree = parse_cached(code.replace("\r\n", "\n"))
+            if tree is None:
                 continue
             for node in tree.body:
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -688,9 +687,8 @@ class VirtualLineage:
         all_notebook_stmts: set[str] = set()
         for cell_code in notebook_cells:
             try:
-                clean_code = CodeAnalyzer.strip_magics(cell_code.replace("\r\n", "\n"))
-                if clean_code.strip():
-                    tree = parse_cached(clean_code)
+                if clean_cell_source(cell_code).strip():
+                    tree = parse_cell_source(cell_code)
                     if tree is not None:
                         for node in tree.body:
                             try:
@@ -1356,7 +1354,7 @@ class VirtualLineage:
                 virtual_modules.clear()
 
         try:
-            clean_cell_code = CodeAnalyzer.strip_magics(cell_code)
+            clean_cell_code = clean_cell_source(cell_code)
             if not clean_cell_code.strip():
                 new_cache_entries.append(
                     SimulationCacheEntry(
@@ -1371,7 +1369,7 @@ class VirtualLineage:
                 )
                 return
 
-            tree = parse_cached(clean_cell_code)
+            tree = parse_cell_source(cell_code)
             if tree is None:
                 ast.parse(clean_cell_code)  # will raise SyntaxError
 
@@ -1438,7 +1436,7 @@ class VirtualLineage:
         """What the environment reads written in *cell_code* return now
         (``statement_environment_component``), for telling a cell simulated
         under another value from one that may be reused."""
-        return statement_environment_component(CodeAnalyzer.strip_magics(cell_code), self.shell.user_ns)
+        return statement_environment_component(clean_cell_source(cell_code), self.shell.user_ns)
 
     def simulate_cells_pass1(
         self,
@@ -2904,11 +2902,10 @@ class VirtualLineage:
         try:
             normalized_mem_code = normalize_stmt(mem_code)
             for cell_code in notebook_cells:
-                clean_cell = CodeAnalyzer.strip_magics(cell_code.replace("\r\n", "\n"))
-                if not clean_cell.strip():
+                if not clean_cell_source(cell_code).strip():
                     continue
                 try:
-                    cell_tree = parse_cached(clean_cell)
+                    cell_tree = parse_cell_source(cell_code)
                     if cell_tree is None:
                         continue
                     for node in cell_tree.body:
@@ -3160,8 +3157,10 @@ def _first_cell_reading(notebook_cells: list[str], limit: int, names: set[str]) 
         return None
     for idx in range(min(limit, len(notebook_cells))):
         try:
-            tree = ast.parse(CodeAnalyzer.strip_magics(notebook_cells[idx].replace("\r\n", "\n")))
-        except (SyntaxError, ValueError, TypeError):
+            tree = parse_cell_source(notebook_cells[idx])
+        except (ValueError, TypeError):
+            tree = None
+        if tree is None:
             return idx  # cannot tell: assume it reads them
         for node in ast.walk(tree):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in names:
