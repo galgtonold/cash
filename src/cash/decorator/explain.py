@@ -509,7 +509,7 @@ class ExplainMixin:
                 if isinstance(ds, DataSource):
                     try:
                         ids.append(ds.get_id())
-                    except Exception:  # noqa: BLE001
+                    except Exception:  # noqa: BLE001 - a user DataSource; explain() is best-effort
                         ids.append(repr(ds))
         return ids
 

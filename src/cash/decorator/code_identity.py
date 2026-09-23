@@ -1411,9 +1411,8 @@ class CodeIdentityMixin:
         ``getattr(x, name, default)`` only swallows ``AttributeError`` -- a
         module implementing PEP 562 ``__getattr__`` (a real pattern for
         deprecation shims: raise a custom error for an old name instead of
-        just returning it) can make this walk raise something else entirely.
-        Task 1's original predicate, which this refines, could never raise;
-        this must not become the first way ``_is_user_code_object`` can.
+        just returning it) can make this walk raise something else entirely,
+        and ``_is_user_code_object`` must never raise.
         """
         qualname = getattr(obj, "__qualname__", None) or getattr(obj, "__name__", None)
         if not qualname:
@@ -1427,7 +1426,7 @@ class CodeIdentityMixin:
                 if cur is None:
                     return False
             return cur is obj
-        except Exception:
+        except Exception:  # noqa: BLE001 - a module __getattr__ may raise anything
             return False  # could not confirm reachability - do not trust it
 
     @staticmethod

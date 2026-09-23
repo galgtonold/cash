@@ -377,7 +377,7 @@ class RngMixin:
 
         try:
             unseeded, _messages, _has_seed = RandomnessDetector().analyze_code(src)
-        except Exception:  # pragma: no cover - detector must never break caching
+        except Exception:  # noqa: BLE001  # pragma: no cover - the scan must never break caching
             logger.debug("randomness scan failed for %s", func_name, exc_info=True)
             return
 

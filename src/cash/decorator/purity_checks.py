@@ -507,7 +507,7 @@ class PurityChecksMixin:
         started = _perf_counter()
         try:
             after = self._serialize_args(func_name, args, kwargs)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - user arguments' hashing
             # Hashing is best-effort here. An argument that hashed once and
             # not twice (a generator drained by the body, say) is not evidence
             # of mutation, and must not be reported as such.
@@ -628,7 +628,7 @@ class PurityChecksMixin:
         try:
             if name not in self._read_global_data_names(reader):
                 return False
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - user source; a heuristic must not break a call
             return False
         value = module_ns[name]
         if isinstance(value, types.ModuleType):
