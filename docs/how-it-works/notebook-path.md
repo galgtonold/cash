@@ -21,7 +21,7 @@ The shape of every statement's journey is the same:
 
 ## What happens when you run a cell
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics._execute_cell @6944c822, cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @a7df9ff6, cash/notebook/ipython/cell_executor.py:CellExecutor._prepare_cell @1eda1a92 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics._execute_cell @6944c822, cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @2561f548, cash/notebook/ipython/cell_executor.py:CellExecutor._prepare_cell @29e0dc47 -->
 `CashMagics` stands in front of IPython's `run_cell`, resolves the cell's id,
 and hands the cell to `CellExecutor.execute_cell()` with that id and the
 session's TTL. Steps 2-7 below are that method's own phases (`_prepare_cell`
@@ -52,7 +52,7 @@ A few of these steps deserve a closer look:
   [Staying correct: invalidation](invalidation.md). This page and that one
   describe the same engine from two angles: here it's "how a cell runs," there
   it's "how a cell knows it's stale."
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6, cash/notebook/statement/processor.py:StatementProcessor.process_statement @93d2de89 -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6, cash/notebook/statement/processor.py:StatementProcessor.process_statement @04870aa4 -->
 - **Step 7 — the per-statement decision.** Each statement passes the detector
   pre-checks from [Safety](safety.md) — merged into one verdict by
   `decide_cacheability` — before the cache is consulted at all. If the verdict
@@ -103,7 +103,7 @@ flowchart TD
     I3 --> K3
 ```
 
-<!-- claim: cash/notebook/control_structures/common.py:compute_context_hash @10c994da, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @db744afb -->
+<!-- claim: cash/notebook/control_structures/common.py:compute_context_hash @10c994da, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @f4b52c27 -->
 The mechanism is deliberately plain: the context hash is prepended to the body
 statement as a *comment*, so it flows into the ordinary statement cache key
 through the source hash — no special key format is needed.

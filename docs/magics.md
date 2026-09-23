@@ -32,7 +32,7 @@ parsed flag, and a working example. Behaviour is derived directly from
 ## Enabling and configuring (user-facing)
 
 ### `%cash_on`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @418e758d -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @8cbb17b4 -->
 
 Enable automatic caching for every subsequent cell.
 
@@ -103,7 +103,7 @@ Disable automatic caching. Subsequent cells run uncached until you call
 ```
 
 ### `%cash_persist`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_persist @9e42999a -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_persist @6b423b4b -->
 
 Cache *every* statement regardless of how cheap it was to compute — equivalent
 to putting `# @cash:persist` on every statement. It bypasses the cost-aware
@@ -181,7 +181,7 @@ blob   = %cash_status json # capture as JSON string
 ```
 
 ### `%cash_badge`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_badge @15b462c4 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_badge @016db083 -->
 
 Set the badge display mode for subsequent cached cells. See
 [Reading the Cash Badge](badges.md) for the full anatomy of each mode.
@@ -263,11 +263,11 @@ not, and the entries are still missing from disk afterwards.
 ```
 
 ### `%cash_debug`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @a6c43007 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @fb6167b9 -->
 
-Toggle or configure debug logging. Levels propagate to the global `cash` logger,
-which the upstream checker logs through, and to the statement processor and the
-core Cash instance.
+Toggle or configure debug logging. The level is set on the global `cash`
+logger, which the upstream checker and the statement pipeline log through, and
+passed to the core Cash instance.
 
 **Signature:** `%cash_debug [on|off|json|file <path>]`
 

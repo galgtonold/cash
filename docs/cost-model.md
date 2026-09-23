@@ -18,7 +18,7 @@ model behind that decision.
 The decision reduces to your statement's **compute time**. There are two floors,
 and together they sort every statement into one of three outcomes:
 
-<!-- claim: cash/notebook/statement/call_routing.py:CallRouting.statement_cost @a49c0cd3 -->
+<!-- claim: cash/notebook/statement/call_routing.py:CallRouting.statement_cost @f4929b3d -->
 Compute time is your code's, not cash's: time cash spends inside the statement
 tracking the files it reads, or keying and storing the calls it intercepts, is
 taken out, and a call served from the cache counts at what it cost to compute.

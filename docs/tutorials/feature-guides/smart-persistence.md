@@ -74,7 +74,7 @@ The rate ceiling exists because the first two gates, on their own, filled five u
 > single-tier persistent backend (`Cash(backend=FileBackend(...))` or
 > `SQLiteBackend`), which writes every entry regardless of compute time.
 
-<!-- claim: cash/notebook/statement/rebuild_cost.py:RebuildCostLedger.end_cell_persistence @72ff88af, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @0c20fd53 -->
+<!-- claim: cash/notebook/statement/rebuild_cost.py:RebuildCostLedger.end_cell_persistence @b5fce68e, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @0c20fd53 -->
 In a notebook, "cheaper to re-run" is judged once more at the end of each cell.
 A statement is often fast only because its inputs are there: `latest =
 sales['week'].max()` takes milliseconds, but after a restart `sales` is gone too,

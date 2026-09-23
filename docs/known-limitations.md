@@ -15,7 +15,7 @@ This page lists every such case we know about, what you actually see, and what t
 
 The single most-often-misread behaviour, and it is working as designed.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @a4042c14, cash/tracking/randomness/state.py:restore_rng_state @3e10fc77 -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @f9c1baa7, cash/tracking/randomness/state.py:restore_rng_state @3e10fc77 -->
 An unseeded random draw that is expensive enough to cache **is** cached. Re-running the cell returns the *same* numbers, because you are seeing a restored value rather than a fresh draw:
 
 <!-- test:skip reason="illustrative: demonstrates replayed randomness across re-runs" -->
@@ -358,7 +358,7 @@ puts you on the content-hashed eager path, or name the file:
 
 Unlike the mutation cases above, this one is **not** isolated-re-run only — it can give a wrong answer on a fresh `Run All`, the first time the loop ever executes.
 
-<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @6ad17c5e -->
+<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @ff4763c8 -->
 Cash decomposes a `for` loop per iteration and uses the loop variable's value — captured at the moment it is *bound*, before any body statement runs — as the per-iteration cache discriminator. That applies both to an ordinary cached statement in the body and to an intercepted (on by default) sub-call whose own arguments give the key nothing else to vary on. If the body **mutates the loop variable before it is used**, the discriminator was already captured before that mutation and cannot see it:
 
 <!-- test:skip reason="illustrative: pull() stands in for a slow call whose only per-iteration signal is the loop variable; call-level caching is on by default and needs no directive to make pull(handle) itself the cached, keyed unit" -->
@@ -371,7 +371,7 @@ for q in [[1], [1]]:            # two iterations, EQUAL at binding time
 
 Both iterations bind `q` to an equal value (`[1]`), so both get the same discriminator even though the body has since made them different — the second iteration is served the first's cached result instead of a fresh call.
 
-<!-- claim: cash/notebook/call_unit.py:_loop_var_digest @59a76faf -->
+<!-- claim: cash/notebook/call_unit.py:_loop_var_digest @3f8b36a4 -->
 This is true of a plain cached statement in the loop exactly as it is of an intercepted call: `v = pull(handle)` on its own line, with no directive at all, collapses the same way, because both channels read the same value, frozen at the same moment. Neither spelling is a special case of the other.
 
 **What to do:** the fix is not "mutate vs. rebind" — a body-local rebind is exactly as invisible as an in-place mutation:

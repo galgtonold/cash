@@ -6,7 +6,7 @@ Every cached result is stored under a key that captures exactly what was compute
 
 A cache key is a deterministic fingerprint of a computation: the same source code over the same inputs always produces the same key, so a hit means the result can be reused without re-executing anything. Any relevant change — edited code, a recomputed upstream variable, a changed helper function — produces a different key and causes a miss.
 
-<!-- claim: cash/notebook/cache_key.py:compute_cache_key @54721829 -->
+<!-- claim: cash/notebook/cache_key.py:compute_cache_key @7e3891b5 -->
 The statement-level key is built by `compute_cache_key()` in `cash.notebook.cache_key`:
 
 ```
@@ -103,7 +103,7 @@ flowchart TD
 ```
 
 ??? warning "Keys survive a restart, not a move to another machine"
-    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @bd050962 -->
+    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @ce37ff53 -->
     Keys carry no wall-clock value *of their own*, so re-running the same notebook in a
     fresh kernel recomputes the same key and hits. But a statement that reads a file folds
     that file's **mtime and size** into its lineage (`compute_file_hash_component` in

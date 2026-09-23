@@ -17,7 +17,7 @@ the first thing you see, and
 usually all you need. The full field-by-field guide lives in
 [Reading the Cash Badge](../badges.md).
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:_statement_source @dc85d1e5, cash/notebook/badge_renderer/renderers/html.py:_row_code_html @7ebcdfa1 -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:_statement_source @48c9b937, cash/notebook/badge_renderer/renderers/html.py:_row_code_html @7ebcdfa1 -->
 The code shown for each row is **your own source**, laid out across its
 original lines — not the single-line, normalized form Cash always hashes for
 the cache key. That original text is also what actually gets compiled and
@@ -115,7 +115,7 @@ When a cache decision surprises you, turn on debug mode to see Cash's
 reasoning — key computations, lineage calculations, upstream detection, and
 restoration decisions:
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @a6c43007, cash/_log.py:setup_logging @1d39182c -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @fb6167b9, cash/_log.py:setup_logging @1d39182c -->
 <!-- test:skip reason="IPython magic command — requires kernel context" -->
 ```python
 %cash_debug on            # human-readable (default)

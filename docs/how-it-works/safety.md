@@ -313,7 +313,7 @@ The badge carries the same information as a text pill on the statement row:
 | `random` | The statement draws, from a seeded (reproducible) source |
 | `unseeded` | The statement draws unseeded — the cached value is a frozen replay |
 
-<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @41fe639f, cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @a4042c14 -->
+<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @41fe639f, cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @f9c1baa7 -->
 To silence the warning deliberately, annotate the statement with
 `@cash:allow-random` (see [Annotations](../annotations.md)). That is *advisory
 only* — it suppresses the message and changes no caching decision. To actually

@@ -356,7 +356,7 @@ element, which no key can see, so it is not intercepted. The same holds for a
 lambda's parameters, and for an argument computed from the element
 (`make_features(cleaned[mid], W)`): it too is hashed in full.
 
-<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @385a552c, cash/notebook/call_unit.py:_GUARD_AFTER_CALLS == 50, cash/notebook/call_unit.py:_OVERHEAD_FACTOR == 3.0 -->
+<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @427cce7a, cash/notebook/call_unit.py:_GUARD_AFTER_CALLS == 50, cash/notebook/call_unit.py:_OVERHEAD_FACTOR == 3.0 -->
 A comprehension makes its call once per element, and caching each one has a
 cost of its own — a key, a lookup, a store. So past 50 calls in one run of the
 statement, cash times a few of them uncached; when caching a call costs more
@@ -368,7 +368,7 @@ run as one unit. The badge's `sub-call` line counts those calls too and says
 how many ran plain. A call that does real work, like fitting a model per
 element, is never re-run to be timed.
 
-<!-- claim: cash/notebook/call_unit.py:_keys_by_content @f28dca7c, cash/notebook/call_unit.py:call_cache_key @8d42ec2d, cash/notebook/call_unit.py:_CONTENT_KEY_MAX_BYTES == 67108864, cash/notebook/call_unit.py:_NAME_CONTENT_MAX_BYTES == 1048576 -->
+<!-- claim: cash/notebook/call_unit.py:_keys_by_content @f28dca7c, cash/notebook/call_unit.py:call_cache_key @c1ad39e8, cash/notebook/call_unit.py:_CONTENT_KEY_MAX_BYTES == 67108864, cash/notebook/call_unit.py:_NAME_CONTENT_MAX_BYTES == 1048576 -->
 **The key holds what the call receives.** When everything a call reads is plain
 data — numbers, strings, dates, numpy arrays, pandas frames, and lists or dicts
 of those — its key is the function it calls and the values it is handed. An
@@ -476,7 +476,7 @@ expensive work often lives in a **call entry** of its own. Those are two
 different cache entries, so "does this directive reach the call?" is a real
 question with a per-directive answer:
 
-<!-- claim: cash/notebook/statement/call_routing.py:CallRouting.current_call_ttl @936edf75, cash/notebook/statement/call_routing.py:CallRouting.current_call_persist @accdde94 -->
+<!-- claim: cash/notebook/statement/call_routing.py:CallRouting.current_call_ttl @2d43c3de, cash/notebook/statement/call_routing.py:CallRouting.current_call_persist @acb22cc8 -->
 | Directive | Reaches the intercepted call? |
 |---|---|
 | `# @cash:no-cache` | Yes — it switches interception off entirely, so there is no call entry to miss |
