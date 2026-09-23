@@ -10,13 +10,6 @@ def test_experimental_import_cache_explorer():
     assert CacheExplorer is not None
 
 
-def test_experimental_import_cache_debugger():
-    """Test that CacheDebugger can be imported from experimental."""
-    from cash.experimental import CacheDebugger
-
-    assert CacheDebugger is not None
-
-
 def test_experimental_import_analytics():
     """Test that AnalyticsManager can be imported from experimental."""
     from cash.experimental import AnalyticsManager

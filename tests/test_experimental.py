@@ -24,18 +24,6 @@ class TestUIInit:
 
         assert CacheExplorer is not None
 
-    def test_lazy_import_cache_debugger(self):
-        """CacheDebugger can be lazy-imported from cash.ui."""
-        from cash.ui import CacheDebugger
-
-        assert CacheDebugger is not None
-
-    def test_lazy_import_visualize_notebook(self):
-        """visualize_notebook can be lazy-imported from cash.ui."""
-        from cash.ui import visualize_notebook
-
-        assert visualize_notebook is not None
-
     def test_lazy_import_invalid(self):
         """Invalid attribute raises AttributeError."""
         import cash.ui

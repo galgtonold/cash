@@ -500,7 +500,7 @@ __all__ = [
 ]
 
 # Experimental features are available via:
-#   from cash.experimental import CacheExplorer, CacheDebugger, etc.
+#   from cash.experimental import CacheExplorer, AnalyticsManager, etc.
 
 
 def _jupyter_labextension_paths():

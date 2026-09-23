@@ -47,8 +47,6 @@ def _load_s3_backend():
 # Maps experimental attribute name -> loader callable (no args).
 _LOADERS = {
     "CacheExplorer": lambda: _load_simple("..ui.explorer", "CacheExplorer"),
-    "CacheDebugger": lambda: _load_simple("..ui.debugger", "CacheDebugger"),
-    "visualize_notebook": lambda: _load_simple("..ui.visualizer", "visualize_notebook"),
     "DependencyGraph": lambda: _load_simple("..graph", "DependencyGraph"),
     "AnalyticsManager": lambda: _load_simple("..analytics", "AnalyticsManager"),
     "TieredBackend": lambda: _load_simple("..backends.tiered_backend", "TieredBackend"),
@@ -67,8 +65,6 @@ def __getattr__(name):
 
 __all__ = [
     "CacheExplorer",
-    "CacheDebugger",
-    "visualize_notebook",
     "DependencyGraph",
     "AnalyticsManager",
     "TieredBackend",

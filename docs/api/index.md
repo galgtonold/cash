@@ -17,7 +17,7 @@ source — if you spot an issue, file it against the corresponding
 | [Data sources](data_sources.md) | `FileDataSource` and the `DataSource` ABC for custom dependency tracking. |
 | [Exceptions & warnings](exceptions.md) | The full hierarchy of `CashError` subclasses and `CashWarning` subclasses. |
 | [Notebook integration](notebook.md) | `CashStripPreprocessor` (nbconvert), `CacheStatus`, `ExecutionResult`, `CashMagics`, `CodeAnalyzer`. The Python-side hooks used by tooling around the magics. |
-| [Experimental](experimental.md) | `CacheExplorer`, `CacheDebugger`, `DependencyGraph`, `AnalyticsManager`, `visualize_notebook`. Useful but unstable APIs under `cash.experimental`. |
+| [Experimental](experimental.md) | `CacheExplorer`, `DependencyGraph`, `AnalyticsManager`. Useful but unstable APIs under `cash.experimental`. |
 
 ## Looking for narrative guides?
 

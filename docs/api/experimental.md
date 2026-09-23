@@ -1,6 +1,6 @@
 # Experimental
 
-<!-- claim: cash/experimental/__init__.py:_LOADERS @55e9a011, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/experimental/__init__.py:_LOADERS @b2b28cf4, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 APIs under `cash.experimental` are useful but their surfaces are
 still evolving — minor versions may rearrange them. Importing emits
 a `FutureWarning` so you can spot the dependency in any project that
@@ -11,10 +11,8 @@ upgrades cash unexpectedly.
 ```python
 from cash.experimental import (
     CacheExplorer,        # browse / search / clear cache entries
-    CacheDebugger,        # step through the cell-cache pipeline
     DependencyGraph,      # the structure behind Cash.graph
     AnalyticsManager,     # rolling cache analytics db
-    visualize_notebook,   # render the dependency graph as a graphic
 )
 ```
 
@@ -64,29 +62,6 @@ c.graph.get_dependents("my_module.load_raw_data")
 ::: cash.graph.DependencyGraph
     options:
       members: true
-
----
-
-## CacheDebugger
-
-Step-through debugger for the notebook cache decision pipeline.
-Useful when the badge isn't detailed enough to explain a stubborn
-miss. Requires an active IPython shell.
-
-::: cash.ui.debugger.CacheDebugger
-    options:
-      members:
-        - __init__
-
----
-
-## visualize_notebook
-
-Render the current notebook's dependency graph as a visualization
-(uses `graphviz` if available). Useful for sanity-checking the
-lineage Cash inferred.
-
-::: cash.ui.visualizer.visualize_notebook
 
 ---
 

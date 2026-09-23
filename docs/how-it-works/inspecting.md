@@ -338,7 +338,7 @@ For the thresholds that actually drive persistence, see
 
 ## Programmatic inspection
 
-<!-- claim: cash/experimental/__init__.py:_LOADERS @55e9a011, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/experimental/__init__.py:_LOADERS @b2b28cf4, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 For everything you'd want to do from code rather than a magic, Cash ships a set
 of (experimental) tools — importing any of them raises a `FutureWarning`, which
 is the API-stability promise being kept rather than a problem to suppress:
@@ -346,12 +346,10 @@ is the API-stability promise being kept rather than a problem to suppress:
 | Tool | What it's for |
 |------|---------------|
 | `CacheExplorer` | Browse, search, and clear cache entries |
-| `CacheDebugger` | Step through the cell-cache pipeline |
-| `visualize_notebook` | Render the dependency graph as a graphic |
 | `AnalyticsManager` | Hit-rate and timing analytics behind the dashboard |
 
 ```python
-from cash.experimental import CacheExplorer, CacheDebugger, visualize_notebook
+from cash.experimental import CacheExplorer, AnalyticsManager
 ```
 
 See [Experimental API](../api/experimental.md) for the full surface.

@@ -296,10 +296,10 @@ The CLI has no confirmation prompt; double-check the path before pressing enter.
 
 ## Experimental UI tools
 
-Two interactive helpers live under `cash.experimental` for richer inspection. Both emit a `FutureWarning` on import — the API may change between releases.
+An interactive cache browser lives under `cash.experimental` for richer inspection. It emits a `FutureWarning` on import — the API may change between releases.
 
 ```python
-from cash.experimental import CacheExplorer, CacheDebugger
+from cash.experimental import CacheExplorer
 import cash
 
 c = cash.Cash()
@@ -311,9 +311,9 @@ explorer.clear_function("mod.func")    # surgical per-function clear
 ```
 
 <!-- claim: cash/ui/explorer.py:CacheExplorer @65748b90 broad="the listed method set is a claim about the whole class", cash/core.py:Cash.explorer @599913c8 -->
-`CacheExplorer` is the read-side: list, search, preview, and surgically clear entries by function name without touching the rest of the cache. `CacheDebugger` is a step-through inspector for the notebook decision pipeline — drives the same machinery `%cash_on` uses but stops between phases so you can see what Cash sees.
+`CacheExplorer` is the read-side: list, search, preview, and surgically clear entries by function name without touching the rest of the cache.
 
-Both are experimental: stick to `f.explain()` and `%cash_debug` for anything that needs to survive a version bump.
+It is experimental: stick to `f.explain()` and `%cash_debug` for anything that needs to survive a version bump.
 
 ## API reference
 
@@ -333,7 +333,6 @@ Both are experimental: stick to `f.explain()` and `%cash_debug` for anything tha
 | `cash clear [path] [--all]` | CLI | shell command | Delete a cache directory. **No confirmation prompt.** |
 | `CacheExplanation` | Type | `from cash import CacheExplanation` | Frozen dataclass returned by `explain()`. Fields: `would_hit`, `reason`, `func_name`, `cache_key`, `details`, `cache_dir`. |
 | `cash.experimental.CacheExplorer` | UI | `from cash.experimental import CacheExplorer` | List/preview/clear backend entries. Experimental. |
-| `cash.experimental.CacheDebugger` | UI | `from cash.experimental import CacheDebugger` | Step-through inspector for the notebook pipeline. Experimental. |
 
 ## Related
 

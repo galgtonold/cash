@@ -66,7 +66,7 @@ src/cash/
 │   └── *.py            #   analysis, annotations, file/function tracking,
 │                       #   cost_model, consumables, randomness, purity,
 │                       #   provenance, audit, …
-├── ui/                 # Interactive display components (explorer, debugger, …)
+├── ui/                 # Interactive display components (explorer, dashboard)
 ├── experimental/       # Lazy-imported experimental APIs
 └── labextension/       # PREBUILT JupyterLab extension (cash-live-cells), shipped
                         #   in the wheel. Source is TypeScript under
