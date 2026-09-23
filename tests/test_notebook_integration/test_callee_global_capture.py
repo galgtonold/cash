@@ -202,11 +202,8 @@ def test_a_same_session_rerun_neither_freezes_nor_accumulates(nb_runner, tmp_pat
     ],
 )
 def test_every_spelling_of_the_call_behaves_the_same(nb_runner, tmp_path, spelling, source):
-    """A rule that fires for one spelling and not another is a defect
-    this project has already paid for. ``function_global_mutations`` only ever
-    walked top-level bare-``Expr`` calls, so every spelling here except a bare
-    ``bump()`` was invisible to it.
-    """
+    """A callee's write to a global is seen whatever the spelling of the
+    call, not only for a top-level bare-``Expr`` call like ``bump()``."""
     cp, cf, ci = (tmp_path / f"{n}.log" for n in ("p", "f", "i"))
     nb_runner.create_notebook([SETUP, _defs(cp, cf, ci), source])
     nb_runner.start_kernel()

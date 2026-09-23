@@ -509,7 +509,7 @@ from ...analysis.cacheability import (
     analyze_statement,
     assigned_method_call_receivers,
     bare_call_arguments,
-    called_function_global_mutations,
+    callee_global_mutations,
     chain_is_pure,
     fits_its_receiver,
     function_arg_mutations,
@@ -1169,15 +1169,7 @@ class StatementProcessor:
         except SyntaxError:
             _parsed_tree = None
 
-        # Globals a CALLEE mutates (CAS-260). Routed exactly like an INLINE
-        # in-place mutation (``mut_pre_route`` below): the name joins
-        # ``outputs`` so its lineage is bumped, and the statement is
-        # SKIP-CACHED so the mutation actually re-happens.
-        # Not for a control-structure BODY statement: the loop is ONE unit to
-        # the upstream simulation, and bumping/skip-caching per iteration makes
-        # the planner replay only the last writer (measured: LOOP_F == [2]
-        # instead of [1, 2, 3]). The loop owns its body's writes -- CAS-265.
-        callee_globals = set() if is_control_body(code) else self._callee_mutated_globals(_parsed_tree)
+        callee_globals = self._callee_mutated_globals(code, _parsed_tree)
         inputs, outputs, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(
             code, occurrence_index=occurrence_index, tree=_parsed_tree
         )
@@ -1540,15 +1532,7 @@ class StatementProcessor:
         except SyntaxError:
             _parsed_tree = None
 
-        # CAS-260, same seam as the sync path -- see ``process_statement`` for
-        # the reasoning. Present here too so a top-level-await statement gets
-        # the identical treatment; the upstream simulation does not know which
-        # statements ran through the await path.
-        # Not for a control-structure BODY statement: the loop is ONE unit to
-        # the upstream simulation, and bumping/skip-caching per iteration makes
-        # the planner replay only the last writer (measured: LOOP_F == [2]
-        # instead of [1, 2, 3]). The loop owns its body's writes -- CAS-265.
-        callee_globals = set() if is_control_body(code) else self._callee_mutated_globals(_parsed_tree)
+        callee_globals = self._callee_mutated_globals(code, _parsed_tree)
         inputs, outputs, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(
             code, occurrence_index=occurrence_index, tree=_parsed_tree
         )
@@ -3632,47 +3616,22 @@ class StatementProcessor:
                     continue
         return None
 
-    def _callee_mutated_globals(self, tree: ast.Module | None) -> set[str]:
-        """Notebook globals a callee writes, to capture and restore (CAS-260).
+    def _callee_mutated_globals(self, code: str, tree: ast.Module | None) -> set[str]:
+        """Notebook globals a callee of this statement mutates in place.
 
-        ``CALLS.append(v)`` written INLINE in the cell is tracked, captured and
-        restored like any other mutated variable. Written inside ``compute``
-        and called as ``x = compute(v)`` it was silently dropped: the callee's
-        body is not the statement's source, so nothing surfaced ``CALLS`` as an
-        output. Measured on a kernel restart, where the seed re-runs and the
-        statement hits::
-
-            CALLS_I.append(1); ai = compute_i(1)   ->  CALLS_I == [1]   (inline)
-            af = compute_f(1)                      ->  CALLS_F == []    (in-callee)
-
-        Same mutation, same value, two spellings, two answers. This closes it
-        by naming the callee's writes and handing them to the statement's own
-        capture/restore machinery — identification, not replay. Replaying an
-        arbitrary sequence of mutations has no handle (ADR-017 replays exactly
-        one side effect, an RNG seed, and only because a seed has a known
-        replay); restoring an END STATE needs no sequence, no ordering and no
-        idempotence, which is why this is tractable where replay is not.
-
-        Filtered to what can actually be captured:
-
-        * absent from the namespace — the callee's own module-level global,
-          not a notebook variable. Capturing it would invent a variable;
-        * a module — never a value to serialise, mirroring
-          ``_classify_method_mutations`` and ``_function_arg_mutation_receivers``.
-
-        The complement of :meth:`_function_arg_mutation_receivers`, which
-        handles the same problem one scope over: a callee mutating its
-        ARGUMENT. Between them a called function's two channels into
-        caller-visible state are both surfaced as outputs.
+        ``x = compute(v)`` where ``compute`` appends to ``CALLS`` mutates
+        ``CALLS`` exactly as ``CALLS.append(v)`` written inline would, so it gets
+        the same treatment: the name joins the outputs (its lineage is bumped)
+        and the statement re-executes. A control-structure body statement is
+        left to its loop or branch, which owns its body's writes.
         """
-        if tree is None:
+        if is_control_body(code):
             return set()
-        try:
-            names = called_function_global_mutations(tree, self._resolve_live_function_source)
-        except (SyntaxError, ValueError, RecursionError):
-            return set()
-        ns = self.shell.user_ns
-        return {n for n in names if n in ns and not isinstance(ns[n], types.ModuleType)}
+        return set(
+            callee_global_mutations(
+                tree, self._resolve_live_function_source, scope="no_control_bodies", namespace=self.shell.user_ns
+            )
+        )
 
     def _function_arg_mutation_receivers(
         self,

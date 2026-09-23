@@ -1,11 +1,10 @@
-"""Resolving what a call expression names, without running the user's code.
+"""AST helpers shared by the decorator's analyzer, the notebook's
+cacheability scan and the upstream simulation.
 
-Three copies of this lived in the decorator's analyzer, the notebook's
-cacheability scan and the upstream simulation. The simulation's followed
-``getattr`` on any object, so a statement like ``x = cfg.value()`` read
-``cfg.value`` during what is meant to be a side-effect-free simulation -- and
-a property ran. Here an attribute is read with ``getattr`` only on a module;
-on anything else it is looked up statically, or not at all.
+:func:`resolve_callee` names the object a call expression refers to without
+running the user's code: an attribute is read with ``getattr`` only on a
+module; on anything else it is looked up statically, or not at all.
+:func:`called_names` lists the bare names a tree calls.
 """
 
 from __future__ import annotations
@@ -16,9 +15,9 @@ import inspect
 import sys
 import types
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
-__all__ = ["resolve_callee"]
+__all__ = ["CallScope", "called_names", "resolve_callee"]
 
 #: Descriptors implemented in C that bind a method and run nothing else.
 _C_METHOD_DESCRIPTORS = (
@@ -115,3 +114,49 @@ def _is_mock(obj: Any) -> bool:
     """A ``unittest.mock`` object; never imports ``unittest.mock`` itself."""
     module = sys.modules.get("unittest.mock")
     return module is not None and isinstance(obj, module.NonCallableMock)
+
+
+#: Which calls :func:`called_names` reports.
+#:
+#: * ``"all"`` -- every call in the tree.
+#: * ``"top_level"`` -- skips the tree's own ``def`` / ``class`` statements (but
+#:   not a function defined inside an ``if``), the same scope as the
+#:   top-level mutation visitor in ``cacheability.analyze_statement``.
+#: * ``"eager"`` -- skips every function, class and lambda body: only the calls
+#:   that happen while the tree itself runs.
+#: * ``"no_control_bodies"`` -- skips the bodies of ``for`` / ``while`` / ``if`` /
+#:   ``with`` / ``try`` (their headers still count). A control structure's body
+#:   belongs to the control-structure handler, not to the statement around it.
+CallScope = Literal["all", "top_level", "eager", "no_control_bodies"]
+
+_DEFINITIONS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+_DEFERRED = (*_DEFINITIONS, ast.Lambda)
+_CONTROL_STATEMENTS = (ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try)
+_CONTROL_BODY_FIELDS = frozenset({"body", "orelse", "finalbody", "handlers"})
+
+
+def called_names(tree: ast.AST | None, scope: CallScope = "all") -> frozenset[str]:
+    """The bare names called as ``name(...)`` in *tree*, within *scope*."""
+    if tree is None:
+        return frozenset()
+    if scope == "all":
+        return frozenset(n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name))
+    out: set[str] = set()
+
+    def visit(node: ast.AST, top: bool) -> None:
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            out.add(node.func.id)
+        for field, value in ast.iter_fields(node):
+            if scope == "no_control_bodies" and isinstance(node, _CONTROL_STATEMENTS) and field in _CONTROL_BODY_FIELDS:
+                continue
+            for child in value if isinstance(value, list) else (value,):
+                if not isinstance(child, ast.AST):
+                    continue
+                if scope == "top_level" and top and isinstance(child, _DEFINITIONS):
+                    continue
+                if scope == "eager" and isinstance(child, _DEFERRED):
+                    continue
+                visit(child, False)
+
+    visit(tree, True)
+    return frozenset(out)

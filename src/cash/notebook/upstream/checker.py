@@ -12,12 +12,12 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from cash.control_markers import strip_markers
 
 from ...analysis.annotations import extract_annotations_for_statements, get_statement_annotations, parse_annotation_line
+from ...analysis.ast_util import called_names
 from ...analysis.cacheability import (
     alias_mutation_sources,
     aliased_sources,
     analyze_statement,
-    called_function_global_mutations,
-    called_function_names,
+    callee_global_mutations,
     crossref_reassigned_vars,
     function_arg_mutations,
     mutating_partials,
@@ -143,27 +143,6 @@ def _bound_by(fn: "ast.AST") -> set[str]:
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             bound.add(node.name)
     return bound
-
-
-def _names_called_at_module_level(tree: "ast.Module") -> set[str]:
-    """Bare names this cell CALLS while it runs, ignoring deferred bodies.
-
-    ``print(use_it())`` calls ``use_it``; a call written inside a function or
-    lambda body does not happen until that function is called, so those are
-    skipped for the same reason the reads are.
-    """
-    called: set[str] = set()
-
-    def walk(node: "ast.AST") -> None:
-        for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-                continue
-            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
-                called.add(child.func.id)
-            walk(child)
-
-    walk(tree)
-    return called
 
 
 class UpstreamChecker:
@@ -413,7 +392,7 @@ class UpstreamChecker:
             # global there disables the very reset that makes the statement's
             # key converge (measured: [1, 1] where inline gives [1]).
             _cell_resolver = None
-            if called_function_names(ast.parse(cell_code)):
+            if called_names(ast.parse(cell_code)):
                 _cell_resolver = self._notebook_function_sources(cell_code, notebook_path).get
             current_cell_mutated = set(
                 analyze_statement(cell_code, None, resolve_source=_cell_resolver).all_mutated_vars
@@ -460,7 +439,7 @@ class UpstreamChecker:
             # Everything that needs the notebook-wide function sources and is
             # keyed on ANY call in the cell (captured or bare), rather than on a
             # bare-``Expr`` call the way the argument-mutation block above is.
-            if called_function_names(ast.parse(cell_code)):
+            if called_names(ast.parse(cell_code)):
                 func_sources_all = self._notebook_function_sources(cell_code, notebook_path)
                 # A called function that mutates a module GLOBAL / free variable
                 # in place (``def bump(): global g; g += 1`` + ``bump()``) leaves
@@ -469,7 +448,7 @@ class UpstreamChecker:
                 # global and add it to the cell's inputs so the reset loop (which
                 # iterates required_inputs) restores its producer's base (A).
                 #
-                # ``called_function_global_mutations``, and gated on ANY call
+                # Every call counts, not only a bare-``Expr`` one
                 # rather than on a bare-``Expr`` one (CAS-260). The reset is what
                 # makes the statement's own cache converge: the statement now
                 # keys on the global's PRE-state, so without a reset the value it
@@ -484,14 +463,7 @@ class UpstreamChecker:
                 #
                 # The narrow gate is not a smaller version of the fix, it is the
                 # half that makes the other half diverge.
-                func_global_muts = (
-                    called_function_global_mutations(
-                        ast.parse(cell_code),
-                        func_sources_all.get,
-                        include_control_bodies=True,
-                    )
-                    - nocache_vars
-                )
+                func_global_muts = callee_global_mutations(ast.parse(cell_code), func_sources_all.get) - nocache_vars
                 current_cell_mutated |= func_global_muts
                 required_inputs = required_inputs | func_global_muts
                 # A called function that carries mutable state on its own object
@@ -1223,7 +1195,7 @@ class UpstreamChecker:
             return None
 
         names: set[str] = set()
-        called_here = _names_called_at_module_level(tree)
+        called_here = set(called_names(tree, "eager"))
 
         def visit(node: ast.AST, into: set[str]) -> None:
             for child in ast.iter_child_nodes(node):

@@ -14,6 +14,7 @@ network call) visitor, with their supporting dataclasses.
 from __future__ import annotations
 
 import ast
+import functools
 import inspect
 import os
 import re
@@ -26,7 +27,7 @@ from typing import Any
 from ..effects import Action, EffectKind, classify_call, is_open_write_mode, writes_to_console
 from ..install_paths import installed_roots, normcase_path
 from ..purity import is_pure
-from .ast_util import resolve_callee
+from .ast_util import CallScope, called_names, resolve_callee
 
 __all__ = [
     # Primary API
@@ -45,10 +46,9 @@ __all__ = [
     "params_mutated_in_function",
     "standalone_call_arg_targets",
     "function_arg_mutations",
-    "function_global_mutations",
-    "called_function_global_mutations",
-    "callee_mutated_globals_for_tree",
-    "callee_source_global_mutations",
+    "source_global_mutations",
+    "callee_global_mutations",
+    "capturable_globals",
     "stateful_self_functions",
     "stateful_closure_vars",
     "partial_arg_mutations",
@@ -1915,118 +1915,20 @@ def _free_vars_mutated_in_function(
     return frozenset(mutated - params - local_assigned)
 
 
-def function_global_mutations(tree: ast.Module | None, resolve_source) -> frozenset[str]:
-    """Module globals mutated in place by a called function (part A).
+@functools.lru_cache(maxsize=4096)
+def source_global_mutations(source: str) -> frozenset[str]:
+    """Globals the function defined by *source* mutates in place.
 
-    For each top-level bare-``Expr`` call ``f()`` whose source resolves, find the
-    free / global variables ``f`` mutates in place and return them. The checker
-    marks these for reset (adds them to the current cell's inputs and mutation
-    set) so their producers restore the cell-entry base on an isolated re-run,
-    instead of the hidden global accumulating (``g = 0; def bump(): global g;
-    g += 1`` + ``bump()`` doubling).
-    """
-    if tree is None:
-        return frozenset()
-    out: set[str] = set()
-    for func_name, _positional, _keywords in standalone_call_arg_targets(tree):
-        fdef = _resolve_function_def(func_name, resolve_source)
-        if fdef is None:
-            continue
-        out |= _free_vars_mutated_in_function(fdef)
-    return frozenset(out)
+    The one per-callee answer to "which globals does calling this function
+    change": the free variables its body mutates (see
+    :func:`_free_vars_mutated_in_function`). Every engine asks this, whether it
+    found the source through the user namespace, the notebook's cell text or a
+    live function object, so they cannot disagree on what counts as a
+    callee's write.
 
-
-def called_function_global_mutations(
-    tree,
-    resolve_source,
-    include_control_bodies: bool = False,
-) -> frozenset[str]:
-    """Module globals mutated in place by ANY function called in *tree*
-    (CAS-260) — the capture-and-restore watch list.
-
-    Sibling of :func:`function_global_mutations`, and the difference is the
-    whole point: that one walks :func:`standalone_call_arg_targets`, i.e. only
-    a top-level bare-``Expr`` call (``bump()``), because a *reset* target only
-    makes sense for a call made for its effect. Capture-and-restore has to
-    cover the spellings where the call's VALUE is used as well::
-
-        x = compute(y)              # statement path
-        out.append(compute(y))      # call path (CAS-243)
-
-    Both are ``ast.Call`` nodes anywhere in the statement, which is exactly
-    what :func:`called_function_names` already collects, so this is that
-    walk plus the same per-callee :func:`_free_vars_mutated_in_function`
-    analysis. A rule that fired for one spelling and not the other is the
-    CAS-145 defect this project has already paid for.
-
-    **Why the caller must still filter.** This is pure AST: it names what the
-    callee's source mutates, and says nothing about whether that name is a
-    live, capturable notebook variable. A name that is a module, or absent
-    from the namespace entirely (the callee's own module-level global, not the
-    notebook's), must be dropped by the caller before it reaches an output
-    set — capturing it would either serialise a module or invent a variable.
-
-    **Calls inside a loop or branch body are deliberately NOT included.** A
-    control structure is one unit to the upstream simulation and to the
-    accumulator machinery, so its body's writes are the loop's to own, not any
-    single body statement's. Three narrower placements were measured on::
-
-        for t in [1, 2, 3]:
-            of.append(loop_f(t))       # loop_f appends to a global LOOP_F
-
-        per-iteration capture      LOOP_F == [2]           one iteration's
-                                                           ABSOLUTE post-state,
-                                                           restored over the
-                                                           accumulation
-        per-iteration skip-cache   LOOP_F == [2]           the planner replays
-                                                           only the last writer
-        per-call restore           LOOP_F == [1, 2, 2, 3]  restores interleaved
-                                                           with the iterations
-                                                           that genuinely ran
-
-    All three are WORSE than the pre-existing behaviour, where the write is
-    merely skipped and the value stays where the last real execution left it.
-    Notably the third survives making the body statement always re-execute,
-    which was the hypothesis under which the exclusion was briefly lifted.
-    Owning this at the loop level is CAS-265; until then, one rule -- the loop
-    owns its body -- applied at every site that consults this.
-
-    Not interprocedural, matching :func:`function_global_mutations`: a global
-    mutated only by a helper the callee calls is not detected. That is a
-    fail-open gap (the write is silently skipped on a hit, exactly as today),
-    not a new failure mode, and it keeps this identical to the analysis the
-    checker has already shipped.
-    """
-    if tree is None:
-        return frozenset()
-    out: set[str] = set()
-    # The checker asks with ``include_control_bodies=True``: it acts per CELL,
-    # and its idempotent-rerun reset must cover everything the cell writes,
-    # including through a loop. The statement path asks without it -- it acts
-    # per STATEMENT, and a body statement claiming the whole accumulator was
-    # measured wrong (CAS-265).
-    names = called_function_names(tree) if include_control_bodies else _cell_level_called_function_names(tree)
-    for name in names:
-        fdef = _resolve_function_def(name, resolve_source)
-        if fdef is not None:
-            out |= _free_vars_mutated_in_function(fdef)
-    return frozenset(out)
-
-
-def callee_source_global_mutations(source: str) -> frozenset[str]:
-    """Globals a single function's own SOURCE mutates in place.
-
-    The same per-callee analysis :func:`called_function_global_mutations`
-    applies, entered one level lower: given the text of one ``def``, name the
-    free variables its body writes. Exists so the call unit -- which holds a
-    live function object and resolves its source through ``inspect``, not
-    through a name in the user namespace -- can share this analysis rather than
-    reach past the module boundary for a private helper. The two paths agreeing
-    on what counts as a callee's write is the point (CAS-145: a rule that fires
-    for one spelling and not another is a defect this project has paid for).
-
-    Returns an empty set for anything that is not a single function
-    definition, and never raises.
+    Empty for anything that is not a single function definition; never raises.
+    The verdict is purely syntactic (no namespace is consulted), so memoising
+    on the source text is sound.
     """
     try:
         parsed = ast.parse(textwrap.dedent(source))
@@ -2041,50 +1943,55 @@ def callee_source_global_mutations(source: str) -> frozenset[str]:
         return frozenset()
 
 
-#: Statement nodes whose bodies a control-structure handler owns, not the
-#: statement path. Mirrors what ``statement/processor.py`` marks with
-#: ``# __iteration_context__:`` / ``# control_context:``.
-_CONTROL_STATEMENTS = (
-    ast.For,
-    ast.AsyncFor,
-    ast.While,
-    ast.If,
-    ast.With,
-    ast.AsyncWith,
-    ast.Try,
-)
+def capturable_globals(names, namespace: Mapping[str, Any]) -> frozenset[str]:
+    """The *names* that are real notebook variables in *namespace*.
+
+    A name a callee's source mutates is only a variable of the caller's when it
+    is bound there: otherwise it is the callee's own module global, or a
+    closure cell that never appears in any namespace, and declaring it would
+    invent a variable (reconstruction then tries to produce it and re-runs the
+    statement). A module is never a value to capture either.
+    """
+    return frozenset(n for n in names if n in namespace and not isinstance(namespace[n], types.ModuleType))
 
 
-def _cell_level_called_function_names(tree) -> frozenset[str]:
-    """``name(...)`` callees reachable WITHOUT entering a control structure.
+def callee_global_mutations(
+    tree: ast.AST | None,
+    resolve_source,
+    *,
+    scope: CallScope = "all",
+    namespace: Mapping[str, Any] | None = None,
+) -> frozenset[str]:
+    """Globals mutated in place by the functions *tree* calls by name.
 
-    :func:`called_function_names` walks everything; this stops at a ``for`` /
-    ``while`` / ``if`` / ``with`` / ``try``, so a call in the body of one is not
-    reported. The control structure's own header expressions ARE walked --
-    ``for t in gen(): ...`` reads ``gen()`` once, outside any iteration, so it
-    belongs to the cell.
+    *resolve_source* maps a called name to its source (or None when it is not a
+    user function); each resolved callee contributes
+    :func:`source_global_mutations`. *scope* picks the calls (see
+    :data:`~cash.analysis.ast_util.CallScope`). With *namespace*, the result is
+    narrowed to :func:`capturable_globals`.
+
+    Only the callee's own body counts: a global mutated by a helper the callee
+    calls is not detected (the write is then skipped on a hit, as for any call
+    cash cannot see into).
+
+    The statement path asks with ``scope="no_control_bodies"``: a loop or
+    branch is one unit to the upstream simulation and to the accumulator
+    machinery, so a write in its body belongs to the control structure, not to
+    one body statement (claiming it per statement makes the planner replay
+    only the last writer). The upstream checker asks with ``scope="all"``: its
+    idempotent-rerun reset acts per cell and must cover everything the cell
+    writes, including through a loop.
     """
     out: set[str] = set()
-
-    def walk(node):
-        for child in ast.iter_child_nodes(node):
-            if isinstance(child, _CONTROL_STATEMENTS):
-                # The header (`iter`, `test`, `items`) still belongs to the
-                # cell; only the bodies are the control structure's.
-                for field, value in ast.iter_fields(child):
-                    if field in ("body", "orelse", "finalbody", "handlers"):
-                        continue
-                    for sub in value if isinstance(value, list) else [value]:
-                        if isinstance(sub, ast.AST):
-                            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
-                                out.add(sub.func.id)
-                            walk(sub)
-                continue
-            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
-                out.add(child.func.id)
-            walk(child)
-
-    walk(tree)
+    for name in called_names(tree, scope):
+        try:
+            source = resolve_source(name)
+        except Exception:  # noqa: BLE001 - a resolver must never break analysis
+            continue
+        if source:
+            out |= source_global_mutations(source)
+    if namespace is not None:
+        return capturable_globals(out, namespace)
     return frozenset(out)
 
 
@@ -2158,11 +2065,6 @@ def _function_mutates_own_object(func: ast.FunctionDef | ast.AsyncFunctionDef) -
     return False
 
 
-def called_function_names(tree: ast.Module) -> frozenset[str]:
-    """Names called as ``name(...)`` anywhere in the cell (bare OR captured)."""
-    return frozenset(n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name))
-
-
 def stateful_self_functions(tree: ast.Module | None, resolve_source) -> frozenset[str]:
     """Called functions that carry mutable state on their own object (B).
 
@@ -2175,7 +2077,7 @@ def stateful_self_functions(tree: ast.Module | None, resolve_source) -> frozense
     if tree is None:
         return frozenset()
     out: set[str] = set()
-    for name in called_function_names(tree):
+    for name in called_names(tree):
         fdef = _resolve_function_def(name, resolve_source)
         if fdef is not None and _function_mutates_own_object(fdef):
             out.add(name)
@@ -2220,7 +2122,7 @@ def partial_arg_mutations(tree: ast.Module | None, resolve_partial, resolve_sour
     if tree is None:
         return frozenset()
     out: set[str] = set()
-    for name in called_function_names(tree):
+    for name in called_names(tree):
         binding = resolve_partial(name)
         if binding is None:
             continue
@@ -2249,7 +2151,7 @@ def mutating_partials(tree: ast.Module | None, resolve_partial, resolve_source) 
     if tree is None:
         return frozenset()
     out: set[str] = set()
-    for name in called_function_names(tree):
+    for name in called_names(tree):
         binding = resolve_partial(name)
         if binding is None:
             continue
@@ -2332,7 +2234,7 @@ def stateful_closure_vars(tree: ast.Module | None, resolve_var_factory) -> froze
     if tree is None:
         return frozenset()
     out: set[str] = set()
-    for name in called_function_names(tree):
+    for name in called_names(tree):
         factory = resolve_var_factory(name)
         if factory is not None and _factory_returns_stateful_closure(factory):
             out.add(name)
@@ -4261,93 +4163,6 @@ def cacheable_accumulator_loop(
     return acc, tuple(loop_vars), for_node.iter, call
 
 
-#: ``source text -> globals that function's body mutates in place``.
-#:
-#: The verdict is purely syntactic -- "is this name a parameter, a plain local,
-#: or free?" is read off the function's own AST with no reference to any
-#: namespace -- so keying on the source text alone is sound, and it is what
-#: keeps this affordable on the per-statement hot path.
-_CALLEE_GLOBALS_BY_SOURCE: dict[str, frozenset[str]] = {}
-
-
-def _globals_mutated_by_callees(names, resolve_source) -> frozenset[str]:
-    """Union of the globals each named callee mutates in place."""
-    out: set[str] = set()
-    for name in names:
-        try:
-            source = resolve_source(name)
-        except Exception:  # noqa: BLE001 - a resolver must never break analysis
-            continue
-        if not source:
-            continue
-        cached = _CALLEE_GLOBALS_BY_SOURCE.get(source)
-        if cached is None:
-            cached = callee_source_global_mutations(source)
-            _CALLEE_GLOBALS_BY_SOURCE[source] = cached
-        out |= cached
-    return frozenset(out)
-
-
-def _called_name_scopes(tree) -> tuple[frozenset[str], frozenset[str]]:
-    """``(all_called, top_level_called)`` bare-``Name`` callees.
-
-    Two walks, mirroring the two mutation visitors in
-    :func:`analyze_statement` exactly, so a mutation PROPAGATED from a callee
-    lands in the same two sets an inline one would: the full walk feeds
-    ``all_mutated_vars``, and the walk that skips nested function/class bodies
-    feeds ``top_level_mutated_vars``. A loop body is top level by this rule --
-    which is correct, and is why the inline spelling of the same mutation is
-    already surfaced there.
-    """
-    all_names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            all_names.add(node.func.id)
-    top_names: set[str] = set()
-    for child in ast.iter_child_nodes(tree):
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            continue
-        for node in ast.walk(child):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                top_names.add(node.func.id)
-    return frozenset(all_names), frozenset(top_names)
-
-
-def callee_mutated_globals_for_tree(tree, resolve_source, user_ns=None) -> frozenset[str]:
-    """Globals mutated in place by any function called anywhere in *tree*.
-
-    The input/output half of CAS-265's propagation, and deliberately the SAME
-    per-callee analysis :func:`analyze_statement` uses for the mutation half --
-    one verdict feeding both, so a name can never be declared a mutation
-    without also being declared a read and a write.
-    """
-    if tree is None:
-        return frozenset()
-    names = _globals_mutated_by_callees(_called_name_scopes(tree)[0], resolve_source)
-    if user_ns is None:
-        return names
-    # Filter to names that are REAL notebook variables, mirroring
-    # ``StatementProcessor._callee_mutated_globals``. Without this the analysis
-    # invents variables: ``_free_vars_mutated_in_function`` reports every free
-    # name a callee writes, including CLOSURE cells, which live in a cell object
-    # and never appear in the namespace at all::
-    #
-    #     def make():
-    #         total = 0
-    #         def add(v):
-    #             nonlocal total
-    #             total += v
-    #         return add
-    #
-    #     final = add(15)   -> declared inputs/outputs ['add','history','total']
-    #
-    # Declaring `total` an output makes reconstruction try to PRODUCE it, which
-    # re-runs the statement -- measured, ``add(15)`` executed twice on a FIRST
-    # run and `final` came out 55 where 40 is correct. A module is excluded for
-    # the same reason it is everywhere else: never a value to serialise.
-    return frozenset(n for n in names if n in user_ns and not isinstance(user_ns[n], types.ModuleType))
-
-
 #: ``(code, the identifiers in it that name a module) -> StatementAnalysis``.
 #: See ``analyze_statement``.
 _ANALYSIS_MEMO: dict[tuple[str, frozenset], StatementAnalysis] = {}
@@ -4452,9 +4267,8 @@ def _analyze_statement(
     # in here, at the one place every consumer already reads, so the write is
     # treated exactly as the inline spelling of it would be.
     if resolve_source is not None:
-        all_called, top_called = _called_name_scopes(tree)
-        all_mutated = all_mutated | _globals_mutated_by_callees(all_called, resolve_source)
-        top_level_mutated = top_level_mutated | _globals_mutated_by_callees(top_called, resolve_source)
+        all_mutated = all_mutated | callee_global_mutations(tree, resolve_source)
+        top_level_mutated = top_level_mutated | callee_global_mutations(tree, resolve_source, scope="top_level")
 
     # Top-level vars grown by an accumulator method (append/extend/add/update) —
     # the only mutations that earn the comprehension guidance hint (b).
@@ -4466,17 +4280,11 @@ def _analyze_statement(
     se_visitor = _SideEffectVisitor()
     se_visitor.visit(tree)
 
-    # --- Called bare names (for stateful-call check in caller) ---
-    called: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            called.add(node.func.id)
-
     return StatementAnalysis(
         top_level_mutated_vars=top_level_mutated,
         all_mutated_vars=all_mutated,
         side_effects=tuple(se_visitor.effects),
-        called_names=frozenset(called),
+        called_names=called_names(tree),
         accumulator_mutated_vars=accumulator_mutated,
         alias_targets=bare_alias_targets(tree) | reference_alias_targets(tree, user_ns),
     )

@@ -42,10 +42,11 @@ from typing import Any
 
 from cash._clock import perf_counter as _perf_counter
 from cash.analysis.annotations import CacheAnnotation
-from cash.analysis.cacheability import analyze_statement, callee_source_global_mutations
+from cash.analysis.cacheability import analyze_statement, capturable_globals, source_global_mutations
 from cash.analysis.cacheability_decision import decide_cacheability, identity_coupled_reason
 from cash.backends._base import ttl_expired
 from cash.backends.value_policy import worth_its_bytes
+from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
 from cash.install_paths import is_user_path
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
@@ -236,55 +237,26 @@ def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, st
     return digest if digest is not None else compute_hash_full(value)
 
 
-#: ``fn.__code__ -> names the body mutates``, before the live-namespace filter.
+#: ``fn.__code__ -> the globals its body mutates``, before the namespace filter.
 #:
-#: Keyed on the CODE OBJECT, not on a hash of the source, and that is a
-#: performance decision with a correctness argument attached.
-#:
-#: * **Performance.** Reaching a source hash means calling
-#:   ``inspect.getsource`` first, and that is the whole cost of this analysis:
-#:   measured 74us for a pure callee and 84us for a mutating one, per call,
-#:   against a 3ms cost floor -- ~2.5% of the bar a call has to clear to be
-#:   worth caching at all, paid on every intercepted call including hits, for a
-#:   result that is ``()`` for nearly all of them. Keying on the code object
-#:   skips ``getsource`` entirely on the second and later calls.
-#: * **Correctness.** A code object is strictly finer than its source: one code
-#:   object has exactly one body, and redefining a function in a notebook cell
-#:   produces a NEW one, so an edit can never be served the old verdict. It also
-#:   sidesteps the question a source hash raises -- identical source meaning
-#:   different things in different scopes -- which was answerable here (the
-#:   verdict is purely syntactic: "is this name a parameter, a plain local, or
-#:   free?" is read off the function's own AST with no reference to a namespace)
-#:   but is better not relied upon.
-#: * **Why a plain dict is safe.** It holds a strong reference to each key, so a
-#:   code object in here cannot be collected and have its ``id`` reused by a
-#:   different one -- the failure an ``id()``-keyed memo would have. Growth is
-#:   bounded by the number of distinct function versions in a session, i.e. by
-#:   how often the user edits a cell, and a code object is a few hundred bytes.
+#: Keyed on the code object so that a hit skips ``inspect.getsource``, which is
+#: the whole cost of the analysis and would otherwise be paid on every
+#: intercepted call. A redefined function has a new code object, so an edit is
+#: never served the old verdict. Cleared when it reaches
+#: :data:`_GLOBAL_MUTATION_CACHE_MAX` entries.
 _GLOBAL_MUTATION_CACHE: dict[Any, tuple[str, ...]] = {}
+_GLOBAL_MUTATION_CACHE_MAX = 4096
 
 
 def callee_mutated_globals(fn) -> tuple[str, ...]:
-    """Names in *fn*'s own globals that calling *fn* mutates in place (CAS-260).
+    """Names in *fn*'s own globals that calling *fn* mutates in place, sorted.
 
-    The call-unit half of the statement path's
-    ``StatementProcessor._callee_mutated_globals``, and deliberately the SAME
-    underlying analysis (``cacheability._free_vars_mutated_in_function``) so the
-    two paths cannot drift on what counts as a callee's write. The difference is
-    only where the source comes from: there, a name resolved against the user
-    namespace; here, the live function object already in hand.
-
-    Returned sorted, so the key component built from it is order-stable.
-
-    Memoised on the callee's code object -- see ``_GLOBAL_MUTATION_CACHE`` for
-    why that key and not a source hash.
-
-    Never raises. A callee whose source cannot be read (a C builtin, an
-    ``exec``'d string, a partial) yields ``()``, which means "no globals to
-    capture" -- the pre-existing behaviour, i.e. the write is silently skipped
-    on a hit exactly as it is today. That is fail-OPEN, and it is the
-    deliberate choice: this feature must never be why user code breaks, and a
-    callee cash cannot read is not made safer by refusing to cache it.
+    The same analysis the statement path applies to a callee it finds by name
+    (:func:`~cash.analysis.cacheability.source_global_mutations`), read from
+    the live function object instead. Never raises: a callee whose source
+    cannot be read (a C builtin, an ``exec``'d string, a partial) yields
+    ``()``, so its writes are not captured -- as for any call cash cannot see
+    into.
     """
     globals_dict = getattr(fn, "__globals__", None)
     if not isinstance(globals_dict, dict):
@@ -293,16 +265,17 @@ def callee_mutated_globals(fn) -> tuple[str, ...]:
     cached = _GLOBAL_MUTATION_CACHE.get(memo_key) if memo_key is not None else None
     if cached is None:
         try:
-            cached = tuple(sorted(callee_source_global_mutations(_inspect.getsource(fn))))
-        except Exception:  # noqa: BLE001 - analysis must never break a call
+            cached = tuple(sorted(source_global_mutations(_inspect.getsource(fn))))
+        except SOURCE_RETRIEVAL_ERRORS:
             cached = ()
         if memo_key is not None:
+            if len(_GLOBAL_MUTATION_CACHE) >= _GLOBAL_MUTATION_CACHE_MAX:
+                _GLOBAL_MUTATION_CACHE.clear()
             _GLOBAL_MUTATION_CACHE[memo_key] = cached
-    # Filtered per call, not memoised: a name is only capturable while it is
-    # actually bound and is not a module. `import` order or a `del` can change
-    # that between calls, and the memo above is about the SOURCE, not the
-    # namespace.
-    return tuple(n for n in cached if n in globals_dict and not isinstance(globals_dict[n], _ModuleType))
+    # Filtered per call, not memoised: whether a name is bound (and not a
+    # module) can change between calls, and the memo is about the source.
+    capturable = capturable_globals(cached, globals_dict)
+    return tuple(n for n in cached if n in capturable)
 
 
 def call_cache_key(

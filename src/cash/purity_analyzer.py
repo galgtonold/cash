@@ -55,7 +55,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ._annotation_refs import annotation_referents
-from .analysis.ast_util import resolve_callee
+from .analysis.ast_util import called_names, resolve_callee
 from .analysis.cacheability import (
     PANDAS_INPLACE_METHODS,
     get_base_name,
@@ -2252,10 +2252,7 @@ def _log_helper_names(func_def: ast.AST, func: Any) -> frozenset[str]:
     module_ns = getattr(func, "__globals__", None)
     if not isinstance(module_ns, dict):
         return frozenset()
-    called = {
-        node.func.id for node in ast.walk(func_def) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
-    return frozenset(name for name in called if _is_log_helper_function(module_ns.get(name)))
+    return frozenset(name for name in called_names(func_def) if _is_log_helper_function(module_ns.get(name)))
 
 
 def _is_log_helper_function(value: Any) -> bool:

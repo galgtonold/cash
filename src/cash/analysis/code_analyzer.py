@@ -22,7 +22,7 @@ from typing import Any
 
 from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from .cacheability import NOTEBOOK_POLICY, SCANNED_KINDS, callee_mutated_globals_for_tree
+from .cacheability import NOTEBOOK_POLICY, SCANNED_KINDS, callee_global_mutations
 
 __all__ = ["CodeAnalyzer"]
 
@@ -761,7 +761,7 @@ class CodeAnalyzer:
         inputs, outputs = visitor.real_inputs, visitor.outputs
         if resolve_source is not None:
             try:
-                extra = callee_mutated_globals_for_tree(tree, resolve_source, user_ns)
+                extra = callee_global_mutations(tree, resolve_source, namespace=user_ns)
             except Exception:  # noqa: BLE001 - analysis must never break a cell
                 extra = frozenset()
             if extra:

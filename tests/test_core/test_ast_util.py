@@ -14,7 +14,7 @@ import types
 
 import pytest
 
-from cash.analysis.ast_util import resolve_callee
+from cash.analysis.ast_util import called_names, resolve_callee
 from cash.notebook.upstream.simulator import _binds_without_reading
 
 
@@ -106,3 +106,32 @@ def test_a_mock_standing_in_for_a_module_is_read():
     fake = mock.MagicMock()
     found = resolve_callee(_func("json.loads"), {"json": fake})
     assert found is fake.loads
+
+
+_SCOPES_CELL = """
+setup()
+def helper():
+    inner()
+class Box:
+    made = build()
+if flag():
+    in_if()
+    def nested():
+        deep()
+for t in source():
+    per_item(t)
+f = lambda: later()
+"""
+
+
+def test_called_names_scopes():
+    tree = ast.parse(_SCOPES_CELL)
+    everything = {"setup", "inner", "build", "flag", "in_if", "deep", "source", "per_item", "later"}
+    assert called_names(tree) == everything
+    # The cell's own def/class statements are skipped, a def inside an `if` is not.
+    assert called_names(tree, "top_level") == everything - {"inner", "build"}
+    # Only what runs while the cell itself runs.
+    assert called_names(tree, "eager") == {"setup", "flag", "in_if", "source", "per_item"}
+    # A control structure's header belongs to the cell, its body does not.
+    assert called_names(tree, "no_control_bodies") == {"setup", "inner", "build", "flag", "source", "later"}
+    assert called_names(None) == frozenset()

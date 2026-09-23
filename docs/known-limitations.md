@@ -132,7 +132,7 @@ Literal unpacking — flat (`(y,) = (x,)`) *and* nested (`(p, (q,)) = (x, (y,))`
 
 ### Mutating global state inside a function
 
-<!-- claim: cash/analysis/cacheability.py:called_function_global_mutations @2fb7ed3d -->
+<!-- claim: cash/analysis/cacheability.py:callee_global_mutations @8b0847b6 -->
 Cash analyses what a *statement* reads and writes, and it tracks the **arguments**
 a called function mutates — including imported helpers and bare calls (`proc(df)`
 that mutates `df`). It also tracks a function mutating a **global** it wasn't

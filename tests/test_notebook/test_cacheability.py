@@ -19,16 +19,16 @@ from cash.analysis.cacheability import (
     analyze_statement,
     assigned_method_call_receivers,
     bare_alias_targets,
-    called_function_global_mutations,
+    callee_global_mutations,
     crossref_reassigned_vars,
     function_arg_mutations,
-    function_global_mutations,
     mutating_partials,
     object_protocol_mutations,
     params_mutated_in_function,
     partial_arg_mutations,
     reduce_free_mutations,
     selfref_inplace_write_vars,
+    source_global_mutations,
     standalone_call_arg_targets,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
@@ -1269,9 +1269,9 @@ class TestAliasMutationSources:
         assert self._src("a, b = compute()\na.append(1)") == frozenset()
 
 
-class TestFunctionGlobalMutations:
-    """``function_global_mutations`` attributes a called function's free/global
-    mutations back to the global."""
+class TestCalleeGlobalMutations:
+    """``callee_global_mutations`` attributes a called function's free/global
+    in-place mutations back to the global, whatever the spelling of the call."""
 
     SRCS = {
         "bump": "def bump():\n    global g\n    g += 1",
@@ -1280,10 +1280,11 @@ class TestFunctionGlobalMutations:
         "pure": "def pure():\n    return 42",
         "local": "def local():\n    acc = []\n    acc.append(1)\n    return acc",
         "arg": "def arg(x):\n    x.append(1)",
+        "compute": "def compute(v):\n    CALLS.append(v)\n    return v * 10",
     }
 
-    def _f(self, code):
-        return function_global_mutations(ast.parse(code), self.SRCS.get)
+    def _f(self, code, **kwargs):
+        return callee_global_mutations(ast.parse(code), self.SRCS.get, **kwargs)
 
     def test_global_augassign(self):
         assert self._f("bump()") == {"g"}
@@ -1294,57 +1295,14 @@ class TestFunctionGlobalMutations:
     def test_free_var_subscript(self):
         assert self._f("put()") == {"store"}
 
-    def test_pure_excluded(self):
-        assert self._f("pure()") == frozenset()
-
-    def test_local_excluded(self):
-        assert self._f("local()") == frozenset()
-
-    def test_param_mutation_excluded(self):
-        # a param mutation is the arg-mutation detector's job, not a global
-        assert self._f("arg(d)") == frozenset()
-
-
-class TestCalledFunctionGlobalMutations:
-    """``called_function_global_mutations`` is the watch list: the same
-    per-callee analysis as ``function_global_mutations``, over EVERY call in the
-    statement rather than only a top-level bare-``Expr`` one.
-
-    The difference is the whole reason it exists. Capture-and-restore has to
-    cover the spellings where the call's value is used -- ``x = compute(y)`` and
-    ``out.append(compute(y))`` -- and a rule that fired for one spelling and not
-    the other is a defect this project has already paid for. Every
-    ``test_*_spelling`` below is a case ``function_global_mutations`` returns
-    empty for.
-    """
-
-    SRCS = TestFunctionGlobalMutations.SRCS | {
-        "compute": "def compute(v):\n    CALLS.append(v)\n    return v * 10",
-    }
-
-    def _f(self, code):
-        return called_function_global_mutations(ast.parse(code), self.SRCS.get)
-
-    def _narrow(self, code):
-        return function_global_mutations(ast.parse(code), self.SRCS.get)
-
-    def test_bare_call_spelling(self):
-        # The one shape the narrow version already covered -- kept so a
-        # regression that traded one spelling for another is visible here.
-        assert self._f("add()") == {"items"}
-        assert self._narrow("add()") == {"items"}
-
     def test_assignment_spelling(self):
         assert self._f("x = compute(1)") == {"CALLS"}
-        assert self._narrow("x = compute(1)") == frozenset()
 
     def test_append_spelling(self):
         assert self._f("out.append(compute(1))") == {"CALLS"}
-        assert self._narrow("out.append(compute(1))") == frozenset()
 
     def test_nested_in_another_call_spelling(self):
         assert self._f("print('C', compute(1))") == {"CALLS"}
-        assert self._narrow("print('C', compute(1))") == frozenset()
 
     def test_comprehension_spelling(self):
         assert self._f("vals = [compute(i) for i in range(3)]") == {"CALLS"}
@@ -1371,7 +1329,31 @@ class TestCalledFunctionGlobalMutations:
         assert self._f("x = mystery(1)") == frozenset()
 
     def test_no_tree_is_empty(self):
-        assert called_function_global_mutations(None, self.SRCS.get) == frozenset()
+        assert callee_global_mutations(None, self.SRCS.get) == frozenset()
+
+    def test_a_raising_resolver_is_silent(self):
+        def resolve(name):
+            raise RuntimeError(name)
+
+        assert callee_global_mutations(ast.parse("bump()"), resolve) == frozenset()
+
+    def test_control_body_calls_belong_to_the_loop(self):
+        code = "for t in [1, 2]:\n    out.append(compute(t))"
+        assert self._f(code) == {"CALLS"}
+        assert self._f(code, scope="no_control_bodies") == frozenset()
+
+    def test_control_header_calls_belong_to_the_statement(self):
+        assert self._f("for t in compute(3):\n    pass", scope="no_control_bodies") == {"CALLS"}
+
+    def test_namespace_keeps_only_bound_non_module_names(self):
+        code = "x = compute(1)\nbump()\nadd()"
+        namespace = {"CALLS": [], "g": ast}  # `items` unbound, `g` a module
+        assert self._f(code, namespace=namespace) == {"CALLS"}
+
+    def test_source_verdict_ignores_non_functions(self):
+        assert source_global_mutations("x = 1") == frozenset()
+        assert source_global_mutations("def (") == frozenset()
+        assert source_global_mutations("    def f():\n        G.append(1)") == {"G"}
 
 
 class TestStatefulSelfFunctions:

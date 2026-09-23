@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from cash.control_markers import iteration_digest
 
+from ...analysis.ast_util import called_names
 from ...analysis.cacheability import (
     REPEATABILITY_ACCUMULATING,
     REPEATABILITY_REPLACING,
@@ -1286,9 +1287,7 @@ class ReexecutionPlanner:
             tree = ast.parse(code)
         except SyntaxError:
             return set()
-        return {
-            node.func.id for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        }
+        return set(called_names(tree))
 
     def _trace_defs(self, simulation_trace: list | None) -> dict:
         """``{name: trace entry}`` of the last ``def`` binding each name.

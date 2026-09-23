@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ...analysis.cacheability import (
-    called_function_global_mutations,
+    callee_global_mutations,
     statement_calls_user_writer,
     statement_writes_files,
 )
@@ -609,7 +609,7 @@ class ControlStructureProcessor:
                 return None
         if CodeAnalyzer.scan_for_forbidden_functions(code, user_ns) or statement_environment_reads(code, user_ns):
             return None
-        if called_function_global_mutations(ast.parse(code), resolve, include_control_bodies=True):
+        if callee_global_mutations(ast.parse(code), resolve):
             return None
         return {name: before.get(name, "ABSENT") for name in sorted(callee_names)}
 
