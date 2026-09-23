@@ -59,6 +59,10 @@ CASES = {
         "        log.append('inner finally')\nexcept ZeroDivisionError:\n    log.append('outer')\nfinally:\n"
         "    log.append('outer finally')\n",
     ],
+    "break and continue inside try in a loop": [
+        "log = []\nfor i in range(6):\n    try:\n        if i == 1:\n            continue\n        if i == 4:\n"
+        "            break\n        log.append(i)\n    finally:\n        log.append(-i)\n",
+    ],
     # if
     "an if condition's error keeps its type for an enclosing handler": [
         "d = {}\ntry:\n    if d['k']:\n        x = 1\nexcept KeyError:\n    caught = True\n",
@@ -88,6 +92,33 @@ CASES = {
     ],
     "a for-else nested in a loop": [
         "log = []\nfor i in range(3):\n    for j in range(i):\n        log.append(j)\n    else:\n        log.append('e')\n",
+    ],
+    "while-else": [
+        "n = 0\nwhile n < 3:\n    n += 1\nelse:\n    we = 'ran'\n",
+    ],
+    "while-else is skipped after a break": [
+        "n = 0\nwhile True:\n    n += 1\n    if n == 3:\n        break\nelse:\n    we = 'ran'\n",
+    ],
+    "a generator expression consumed by a loop": [
+        "tot = 0\nfor v in (x * x for x in range(4)):\n    tot = tot + v\n",
+    ],
+    "a generator function consumed by a loop": [
+        "def gen(n):\n    for i in range(n):\n        yield i * 2\n",
+        "out = []\nfor v in gen(8):\n    out.append(v)\n",
+    ],
+    "a stored generator consumed by a loop": [
+        "g = (i * 3 for i in range(9))",
+        "out = []\nfor v in g:\n    out.append(v)\n",
+    ],
+    "a generator consumed by a nested loop": [
+        "out = []\nfor i in range(3):\n    for v in (i + j for j in range(i)):\n        out.append(v)\n",
+    ],
+    "a loop that raises midway inside try": [
+        "seen = []\ntry:\n    for i in range(8):\n        seen.append(i)\n        if i == 3:\n"
+        "            raise ValueError(i)\nexcept ValueError:\n    stopped = True\n",
+    ],
+    "a loop that fills a list from a generator in its body": [
+        "rows = []\nfor i in range(7):\n    rows.append(sum(j for j in range(i)))\n",
     ],
     "a split loop that raises in its head skips the tail": [
         "boom = False\nseen = []",
