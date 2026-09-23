@@ -135,7 +135,7 @@ came from.
 | `file_hash_full_max_bytes` | `CASH_FILE_HASH_FULL_MAX_BYTES` | `268435456` (256 MiB) | Largest tracked file hashed IN FULL when checking freshness. Above it, three head/middle/tail regions plus the timestamps decide — cheap on a multi-GB parquet, and blind to a same-size interior edit that leaves the mtime as it was: one restored by `cp -p` or `rsync -a`, or a write through `np.memmap(mode="r+")` on Windows, which moves no timestamp at all. Linux and macOS catch that through the inode change time; Windows does not. The default sits above the ordinary CSV, parquet or `.npy` so that hole does not reach one (it used to be 64 MiB). A full hash costs about 0.72 ms per MiB, but only the FIRST check pays it: digests are memoized per process, so later looks at an unchanged file cost a `stat`. Lower it for large inputs on a slow mount read by many short-lived processes; [`CACHE-FRESHNESS-COST`](../warnings.md#cache-freshness-cost) reports when checking has become a bad trade. |
 | `shutdown_write_timeout` | `CASH_SHUTDOWN_WRITE_TIMEOUT` | `60.0` | Seconds a finishing process waits for background cache writes before exiting without them. Finite on purpose: a write that cannot complete (an unwritable directory, a stalled mount) must never keep a finished process alive. Expiry warns [`CACHE-WRITE-ABANDONED`](../warnings.md#cache-write-abandoned). |
 
-<!-- claim: cash/backends/adaptive_caps.py:resolve_ram_cap @02a19f23, cash/backends/adaptive_caps.py:_cgroup_memory_limit @c42e9359 -->
+<!-- claim: cash/backends/adaptive_caps.py:resolve_ram_cap @02a19f23, cash/backends/adaptive_caps.py:_cgroup_memory_limit @b30940d8 -->
 #### What "auto" resolves to
 
 Both tiers are bounded by default, and neither number is one you set:
