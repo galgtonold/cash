@@ -1209,23 +1209,11 @@ def selfref_reassignment_targets(node: ast.AST) -> frozenset[str]:
 # Accumulator-loop shape detection
 # ---------------------------------------------------------------------------
 #
-# History: this used to be consulted directly by a dispatcher in
-# ``control_structures/processor.py`` that routed a matching loop through the
-# statement cache as one unit BEFORE the cost-based
-# ``_should_execute_loop_as_single_unit`` check ever ran -- so every
-# accumulator loop, however cheap, skipped per-iteration decomposition and
-# interception. Deleting that dispatch was too broad:
-# a follow-up review (measured on a 150-iteration, 4.6s-body loop)
-# found that above the cost check's own single-unit threshold (>50
-# iterations, >1s estimated overhead), NEITHER mechanism caches anymore --
-# decomposition never runs (the cost check chose single-unit), and the
-# chosen single-unit branch is refused outright by the statement cache's
-# in-place-mutation detector, because nothing was suppressing that refusal.
-# ``force_outputs`` (passed by ``ForLoopHandler`` at its single-unit branch,
-# ``for_handler.py``) is what suppresses it -- so this detector is consulted
-# again, but now from INSIDE the cost path, purely to compute that
-# ``force_outputs`` set. It is no longer a dispatch decision of its own: the
-# cost check alone decides single-unit vs. decompose in both directions.
+# Not a dispatch decision: the cost check in ``ForLoopHandler`` alone decides
+# single-unit vs. decompose. When it picks single-unit, this detector supplies
+# the ``force_outputs`` that lets the statement cache store the loop despite
+# its in-place growth of the accumulator; without it the cache refuses the
+# loop and nothing is cached at all.
 
 # Accumulator method -> the empty-seed kind(s) that legitimately seed it.
 # ``append``/``extend`` grow a list; ``add`` grows a set; ``update`` grows a

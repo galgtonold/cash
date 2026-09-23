@@ -236,9 +236,7 @@ def _analyze_statement(
             ``pure_mutations``. Wiring those separately was tried and each one
             alone makes the tree worse than leaving the write dropped.
 
-            Omitting it (``None``, the default) keeps pure-AST behaviour
-            exactly as before, so a caller with no way to resolve callee source
-            is unchanged rather than silently degraded.
+            Omitted (``None``), only the statement's own text is analysed.
     """
     if tree is None:
         try:
