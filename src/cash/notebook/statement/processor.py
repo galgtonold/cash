@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 import ast
-import base64
 import hashlib
-import importlib.util
 import inspect
 import logging
-import marshal
-import os
 import pickle
 import sys
 import time
@@ -31,8 +27,6 @@ from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, Tracki
 from cash.notebook.cache_key import (
     CacheKeyContext,
     compute_cache_key,
-    read_provenance_key,
-    write_provenance_key,
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.statement._metadata import StatementCacheMetadata
@@ -49,22 +43,20 @@ from cash.notebook.statement.miss_guard import (
 from cash.notebook.statement.mutations import MutationClassifier
 from cash.notebook.statement.randomness import StatementRandomness
 from cash.notebook.statement.rebuild_cost import RebuildCostLedger
+from cash.notebook.statement.records import StatementRecords
 from cash.notebook.statement.restore import StatementRestorer
 from cash.notebook.statement.results import DecoratorCallMetric, ProcessResult
 from cash.notebook.statement.run import CodeRunner, StatementExecution, StatementRun
 from cash.object_hashing import estimate_object_size
 from cash.purity import is_known_pure, is_stateful
-from cash.tracking.file_dep_snapshot import snapshot_dependencies, snapshot_file_deps
+from cash.tracking.file_dep_snapshot import snapshot_dependencies
 
 from ...analysis.cacheability import statement_writes_files
-from ...analysis.namespace_effects import statement_calls_user_writer, statement_written_paths
+from ...analysis.namespace_effects import statement_calls_user_writer
 from ...tracking import file_dep_snapshot
 from ...tracking.file_tracker import tracking_seconds
-from ..cache_key import called_function_dependencies, called_function_globals, import_bindings_key, mutation_verdict_key
 from ..call_refs import REF_BYTES_FIELD, REFS_FIELD, with_call_refs
-from ..carrier_history import FIGURE_KINDS, carrier_history_fingerprint
 from ..consumables import is_consumable_unrestorable
-from ..stateful_carriers import stateful_carrier_kind
 from .derivation_edges import is_uncacheable_alias
 
 __all__ = [
@@ -340,9 +332,6 @@ class StatementProcessor:
 
         # Document: function_tracker must be explicitly passed to UpstreamChecker
         self.function_tracker = FunctionTracker()
-        # This cell's statements so far, each with the lineages it read, for a
-        # chart writer's provenance (``carrier_history``).
-        self._cell_stmt_log: list[tuple[str, dict[str, str]]] = []
 
         # The one shared record of lineage and dependency state (see
         # TrackingState); the processor never aliases its fields.
@@ -388,6 +377,9 @@ class StatementProcessor:
             compute_hash=compute_hash_fn,
             debug=debug,
             rng_seed_epochs=self._randomness.seed_epochs,
+        )
+        self._records = StatementRecords(
+            shell, self.tracking_state, cash_instance, self._stmt_restorer, self.function_tracker
         )
 
         # Used to prevent the "redundant import" optimization from skipping
@@ -679,6 +671,29 @@ class StatementProcessor:
         """Write to disk what this cell left that would be costly to rebuild
         (see :meth:`RebuildCostLedger.end_cell_persistence`)."""
         self._rebuild_cost.end_cell_persistence()
+
+    def begin_control_log(self, code: str):
+        """Start logging control structure *code* as one statement
+        (see :meth:`StatementRecords.begin_control_log`)."""
+        return self._records.begin_control_log(code)
+
+    def end_control_log(self, mark) -> None:
+        """Replace what the structure's body logged with the structure itself."""
+        self._records.end_control_log(mark)
+
+    def persist_read_provenance(self, code: str, accessed_files: set[str]) -> None:
+        """Record, across restarts, which files *code* read."""
+        self._records.persist_read_provenance(code, accessed_files)
+
+    def persist_write_provenance(
+        self, code: str, inputs: set[str], tree: ast.Module | None, written: frozenset[str] | set[str] = frozenset()
+    ) -> None:
+        """Record what file(s) the writer statement *code* produced."""
+        self._records.persist_write_provenance(code, inputs, tree, written)
+
+    def user_written_paths(self, paths) -> frozenset[str]:
+        """*paths* without cash's own storage (its cache directories)."""
+        return self._records.user_written_paths(paths)
 
     def begin_cell_rng_observation(self) -> None:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""
@@ -1222,60 +1237,12 @@ class StatementProcessor:
             floor = declared if floor is None else min(floor, declared)
         return floor
 
-    #: Statements logged per cell for ``carrier_history``; a longer cell (a loop's
-    #: iterations) stops logging, and its charts are judged as before.
-    _MAX_CELL_STMT_LOG = 5000
-
     def begin_cell_statement_log(self) -> None:
         """Start this cell's statement log, before its statements run."""
-        self._cell_stmt_log = []
+        self._records.begin_cell()
         self._rebuild_cost.begin_cell()
         if self._call_cache is not None:
             self._call_cache.begin_cell()
-
-    def _log_statement_reads(self, code: str, inputs: set[str]) -> None:
-        """Record *code* with the lineages it reads, as the simulation keys them:
-        its inputs, and the globals its callees read."""
-        log = self._cell_stmt_log
-        if len(log) >= self._MAX_CELL_STMT_LOG:
-            return
-        log.append((code, self._lineages_read(inputs)))
-
-    def _lineages_read(self, inputs: set[str]) -> dict[str, str]:
-        read = {}
-        for dep in called_function_dependencies(
-            sorted(inputs), self.shell.user_ns, self.tracking_state.variable_lineage, None
-        ):
-            name, _, lineage = dep.partition(":")
-            if lineage != "ABSENT":
-                read[name] = lineage
-        read.update(
-            {n: self.tracking_state.variable_lineage[n] for n in inputs if n in self.tracking_state.variable_lineage}
-        )
-        return read
-
-    def begin_control_log(self, code: str):
-        """Start logging control structure *code* as ONE statement, the way the
-        upstream simulation traces it: with the lineages it reads as it starts.
-        Its body's statements log themselves per iteration, and a figure drawn
-        through ``for ax in axes`` then had a history the simulation could never
-        reproduce -- a chart drawn in a loop was never known to be current, nor
-        known to be stale (round 29, r29s4). Pass the result to `end_control_log`."""
-        try:
-            inputs, _outputs = CodeAnalyzer.analyze_code_block(
-                code, resolve_source=self._resolve_live_function_source, user_ns=self.shell.user_ns
-            )
-            return len(self._cell_stmt_log), (code, self._lineages_read(inputs))
-        except Exception:  # noqa: BLE001 - a history is optional; none means "cannot vouch"
-            return len(self._cell_stmt_log), (code, {})
-
-    def end_control_log(self, mark) -> None:
-        """Replace what the body of the control structure begun at *mark* logged
-        with the structure itself."""
-        start, entry = mark
-        del self._cell_stmt_log[start:]
-        if len(self._cell_stmt_log) < self._MAX_CELL_STMT_LOG:
-            self._cell_stmt_log.append(entry)
 
     def _do_cache_lookup(
         self,
@@ -1329,7 +1296,7 @@ class StatementProcessor:
             source_hash,
             cache_key,
             hit=cached_data is not None,
-            components=self._lineages_read(inputs) if inputs else {},
+            components=self._records.lineages_read(inputs) if inputs else {},
         )
 
     #: The perpetual-miss guard spares a statement whose value is written in at
@@ -1641,7 +1608,7 @@ class StatementProcessor:
                         + self._mutations.cache_fit_hint(skip_observed)
                     )
             self.tracking_state.mutation_verdicts[source_hash] = set(run.mut_assumed) | newly_mutated
-            self._persist_mutation_verdict(source_hash, self.tracking_state.mutation_verdicts[source_hash])
+            self._records.persist_mutation_verdict(source_hash, self.tracking_state.mutation_verdicts[source_hash])
 
         # Auto-track newly imported local modules so _capture_variables includes
         # the module source hash in the lineage on first execution.
@@ -1649,7 +1616,7 @@ class StatementProcessor:
             self.function_tracker.auto_track_local_imports(code)
         except (ImportError, AttributeError, OSError):
             logger.debug("%s Failed to auto-track local imports", _LOG_PROCESSOR)
-        self._persist_import_bindings(code, tree)
+        self._records.persist_import_bindings(code, tree)
 
         captured_vars = self.lineage_builder.capture_and_track_variables(
             self.tracking_state,
@@ -1724,7 +1691,7 @@ class StatementProcessor:
         # to tell an edited/new writer from one that already ran.
         # A write the code does not spell (``save_chart(kind)``, whose savefig
         # is in the helper) counts too: it was observed (``write_observer``).
-        written = self.user_written_paths(execution.written_paths)
+        written = self._records.user_written_paths(execution.written_paths)
         try:
             if written or any(e.kind == "file_write" for e in run.analysis.side_effects):
                 self.tracking_state.executed_write_stmt_codes.add(code)
@@ -1742,11 +1709,11 @@ class StatementProcessor:
                 # loop body statement: the simulation sees the loop, which
                 # records its own (ControlStructureProcessor).
                 if not is_control_body(code):
-                    self.persist_write_provenance(code, inputs, tree, written)
+                    self._records.persist_write_provenance(code, inputs, tree, written)
         except AttributeError:
             pass
         if accessed_files:
-            self.persist_read_provenance(code, accessed_files)
+            self._records.persist_read_provenance(code, accessed_files)
 
         # Detect in-place mutations (detection-only; do not modify lineage).
         # Reuses the StatementAnalysis from process_statement to avoid a
@@ -1822,219 +1789,6 @@ class StatementProcessor:
             saved_time=0.0,
             code_hash=cache_key,
         )
-
-    def _persist_import_bindings(self, code: str, tree: ast.Module | None) -> None:
-        """Record, across restarts, what a ``from X import Y`` statement bound.
-
-        See :func:`~cash.notebook.cache_key.import_bindings_key`. For each name:
-        whether it is a module, and for a callable the source digest the
-        lineage and key take from it, and a plain function's code (marshal,
-        tagged with the bytecode magic) for the callee walk. Written only when
-        it changed this session; best-effort.
-        """
-        if "import" not in code:
-            return
-        try:
-            nodes = [n for n in (tree or ast.parse(code)).body if isinstance(n, ast.ImportFrom)]
-        except SyntaxError:
-            return
-        if not nodes:
-            return
-
-        user_ns = self.shell.user_ns
-        bindings: dict[str, dict[str, Any]] = {}
-        for node in nodes:
-            for alias in node.names:
-                name = alias.asname or alias.name
-                if name == "*" or name not in user_ns:
-                    continue
-                value = user_ns[name]
-                entry: dict[str, Any] = {"module": isinstance(value, types.ModuleType)}
-                if callable(value) and not entry["module"] and self.function_tracker is not None:
-                    try:
-                        entry["digest"] = self.function_tracker.get_function_source_hash(value)
-                    except Exception:  # noqa: BLE001 - no digest is a smaller record, not an error
-                        entry["digest"] = None
-                    entry["is_class"] = isinstance(value, type)
-                    func_code = getattr(value, "__code__", None)
-                    if isinstance(func_code, types.CodeType) and not entry["is_class"]:
-                        try:
-                            entry["code"] = base64.b64encode(marshal.dumps(func_code)).decode("ascii")
-                        except ValueError:
-                            pass
-                bindings[name] = entry
-        if not bindings:
-            return
-        written = self.__dict__.setdefault("_import_bindings_written", {})
-        if written.get(code) == bindings:
-            return
-        backend = self.cash_instance.backend if self.cash_instance else None
-        if backend is None:
-            return
-
-        try:
-            self._stmt_restorer.persist_metadata_only(
-                backend,
-                import_bindings_key(code),
-                {
-                    "import_bindings": True,
-                    "bindings": bindings,
-                    "code": code,
-                    "ttl": None,
-                    "magic": importlib.util.MAGIC_NUMBER.hex(),
-                },
-            )
-            written[code] = bindings
-        except (OSError, TypeError, ValueError, AttributeError):
-            logger.debug("%s import-binding persistence failed", _LOG_PROCESSOR)
-
-    def _persist_mutation_verdict(self, source_hash: str, receivers: set[str]) -> None:
-        """Record, across restarts, which receivers this bare method call mutated.
-
-        See :func:`~cash.notebook.cache_key.mutation_verdict_key`. Written only
-        when the verdict is new this session. Best-effort: without it the
-        simulation after a restart assumes the call mutates, as it always did.
-        """
-        verdict = sorted(receivers)
-        written = self.__dict__.setdefault("_mutation_verdicts_written", {})
-        if written.get(source_hash) == verdict:
-            return
-        backend = self.cash_instance.backend if self.cash_instance else None
-        if backend is None:
-            return
-
-        try:
-            self._stmt_restorer.persist_metadata_only(
-                backend,
-                mutation_verdict_key(source_hash),
-                {"mutation_verdict": True, "receivers": verdict, "ttl": None},
-            )
-            written[source_hash] = verdict
-        except (OSError, TypeError, ValueError, AttributeError):
-            logger.debug("%s mutation-verdict persistence failed", _LOG_PROCESSOR)
-
-    def persist_read_provenance(self, code: str, accessed_files: set[str]) -> None:
-        """Record, across restarts, which files this statement read.
-
-        See :func:`~cash.notebook.cache_key.read_provenance_key`. Written only
-        when the statement's read set is new this session, so a notebook re-run
-        costs no extra writes. Best-effort: a failure leaves the read set
-        unknown after a restart, which is the conservative old behaviour.
-        """
-        paths = sorted(accessed_files)
-        written = self.__dict__.setdefault("_read_provenance_written", {})
-        if written.get(code) == paths:
-            return
-        backend = self.cash_instance.backend if self.cash_instance else None
-        if backend is None:
-            return
-        try:
-            self._stmt_restorer.persist_metadata_only(
-                backend,
-                read_provenance_key(code),
-                {"read_provenance": True, "paths": paths, "code": code, "ttl": None},
-            )
-            written[code] = paths
-        except (OSError, TypeError, ValueError, AttributeError):
-            logger.debug("%s read-provenance persistence failed", _LOG_PROCESSOR)
-
-    #: A writer that produced more files than this gets no provenance.
-    _MAX_PROVENANCE_FILES = 1000
-
-    def user_written_paths(self, paths) -> frozenset[str]:
-        """*paths* without cash's own storage (its cache directories)."""
-        if not paths:
-            return frozenset()
-        roots = set()
-        backend = self.cash_instance.backend if self.cash_instance else None
-        root = backend.local_dir if backend is not None else None
-        if isinstance(root, (str, os.PathLike)):
-            roots.add(os.path.normcase(os.path.abspath(os.fspath(root))) + os.sep)
-        return frozenset(p for p in paths if not any(os.path.normcase(p).startswith(r) for r in roots))
-
-    def persist_write_provenance(
-        self,
-        code: str,
-        inputs: set[str],
-        tree: ast.Module | None,
-        written: frozenset[str] | set[str] = frozenset(),
-    ) -> None:
-        """Record what file(s) a just-executed writer statement produced.
-
-        Persists ``{paths, file_deps snapshot, input lineages}`` to the backend
-        under a writer-specific key derived from the statement source, so a
-        post-restart isolated downstream reader can short-circuit an
-        already-fresh writer (:meth:`ReexecutionPlanner._writer_output_already_fresh`)
-        instead of re-firing a non-idempotent side effect and re-deriving stale
-        data. Best-effort and CONSERVATIVE: a writer whose output paths neither
-        resolve from the code nor were *written* as it ran records nothing,
-        and keeps re-firing as before.
-
-        *written* is what the statement was seen writing (``write_observer``,
-        cash's own storage removed). A path it wrote that is gone again -- a
-        temporary file renamed into place -- is dropped; a path the code names
-        must exist. The input lineages cover the globals the statement's
-        callees read too: an edited helper is a new payload.
-        """
-        try:
-            raw_paths = statement_written_paths(code, tree, self.shell.user_ns) or set()
-            named = {os.path.abspath(p) for p in raw_paths}
-            seen = {p for p in written if os.path.exists(p)} - named
-            if not named and not seen:
-                return  # nothing resolvable, nothing observed -> stay conservative
-            if len(named) + len(seen) > self._MAX_PROVENANCE_FILES:
-                return  # snapshotting would cost more than a re-fire saves
-            paths = sorted(named | seen)
-            file_deps = snapshot_file_deps(set(paths))
-            # Every recorded path must be readable now, else there is nothing to
-            # vouch for (and a later freshness check would fail anyway).
-            if any(p not in file_deps for p in paths):
-                return
-            names = set(inputs) | called_function_globals(inputs, self.shell.user_ns)
-            input_lineages = {
-                v: self.tracking_state.variable_lineage[v] for v in names if v in self.tracking_state.variable_lineage
-            }
-            record = {
-                "write_provenance": True,
-                "paths": paths,
-                "file_deps": file_deps,
-                "input_lineages": input_lineages,
-                "code": code,
-                "ttl": None,  # provenance must not expire out from under a reader
-            }
-            histories = self._carrier_histories(code, inputs)
-            if histories:
-                record["carrier_histories"] = histories
-            backend = self.cash_instance.backend if self.cash_instance else None
-            if backend is not None:
-                self._stmt_restorer.persist_metadata_only(
-                    backend,
-                    write_provenance_key(code),
-                    record,
-                )
-        except (OSError, TypeError, ValueError, AttributeError):
-            logger.debug("%s write-provenance persistence failed", _LOG_PROCESSOR)
-
-    def _carrier_histories(self, code: str, inputs: set[str]) -> dict[str, str]:
-        """``{figure name: history fingerprint}`` for the figures writer *code* reads.
-
-        A figure's own lineage cannot vouch for it after a restart (see
-        ``carrier_history``); the history that drew it, taken from this cell's
-        statements before the write, can.
-        """
-
-        log = self._cell_stmt_log
-        end = next((k for k in range(len(log) - 1, -1, -1) if log[k][0] == code), None)
-        if end is None:
-            return {}
-        histories = {}
-        for name in inputs:
-            if stateful_carrier_kind(self.shell.user_ns.get(name)) not in FIGURE_KINDS:
-                continue
-            fingerprint = carrier_history_fingerprint(log[:end], name)
-            if fingerprint is not None:
-                histories[name] = fingerprint
-        return histories
 
     def _resolve_live_function_source(self, name: str) -> str | None:
         return live_function_source(name, self.shell.user_ns)
@@ -2825,7 +2579,7 @@ class StatementProcessor:
             control_body=is_control_body(code),
         )
         inputs, outputs = set(effects.inputs), set(effects.outputs)
-        self._log_statement_reads(code, inputs)
+        self._records.log_statement_reads(code, inputs)
         analysis_time = time.time() - t1
 
         t2 = time.time()
