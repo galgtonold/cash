@@ -1,17 +1,15 @@
 import os
-import shutil
 import tempfile
 import time
-from unittest.mock import MagicMock
 
 import pytest
-from traitlets.config.configurable import Configurable
 
 from cash.analysis.annotations import CacheAnnotation
 from cash.backends import FileBackend, InMemoryBackend
 from cash.core import Cash
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.magics import CashMagics
+from tests.conftest import MockShell
 
 # Annotation that forces caching regardless of execution time.
 # Used in tests that exercise cache mechanics (restore-after-write, etc.)
@@ -20,67 +18,23 @@ from cash.notebook.ipython.magics import CashMagics
 _PERSIST = CacheAnnotation(persist=True)
 
 
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-
-
-@pytest.fixture
-def mock_shell():
-    shell = MockShell()
-    return shell
-
-
 @pytest.fixture(params=["memory", "disk"])
-def storage_backend(request):
-    """Fixture to provide both InMemoryBackend and FileBackend."""
+def processor_fixture(request, mock_shell, clean_backend, tmp_path):
+    """The statement processor of a CashMagics on each storage: memory and disk."""
     if request.param == "memory":
-        backend = InMemoryBackend()
-        yield backend, None  # No temp dir for memory
-        backend.clear()
-    elif request.param == "disk":
-        temp_dir = tempfile.mkdtemp()
+        backend, temp_dir = clean_backend, None
+    else:
+        temp_dir = str(tmp_path / "cache")
         backend = FileBackend(cache_dir=temp_dir)
-        yield backend, temp_dir
-
-        # Cleanup
-        backend.clear()
-        backend.shutdown()
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-@pytest.fixture(params=["memory", "disk"])
-def processor_fixture(request, mock_shell):
-    """Fixture providing StatementProcessor backed by different storages."""
-    if request.param == "memory":
-        backend = InMemoryBackend()
-        temp_dir = None
-    elif request.param == "disk":
-        temp_dir = tempfile.mkdtemp()
-        backend = FileBackend(cache_dir=temp_dir)
-
-    cash = Cash(backend=backend, register_magic=False)
 
     # We create Magics to get tracking dicts initialized
-    magics = CashMagics(mock_shell, cash)
-    processor = magics._statement_processor
+    magics = CashMagics(mock_shell, Cash(backend=backend, register_magic=False))
 
-    yield processor, mock_shell, backend, temp_dir
+    yield magics._statement_processor, mock_shell, backend, temp_dir
 
-    # Cleanup
-    backend.clear()
     if request.param == "disk":
+        backend.clear()
         backend.shutdown()
-        shutil.rmtree(temp_dir, ignore_errors=True)
-    mock_shell.user_ns.clear()
 
 
 class TestStorageIntegration:
@@ -205,36 +159,32 @@ obj = Unpicklable()
         # If all outputs are unpicklable, entry might be saved with empty vars?
         pass
 
-    def test_persistence_restart_simulation(self):
+    def test_persistence_restart_simulation(self, tmp_path):
         """Test specifically for FileBackend: Persistence across 'restarts'.
         _PERSIST forces caching regardless of the 10 ms min-execution-time floor."""
 
-        temp_dir = tempfile.mkdtemp()
-        try:
-            # Session 1
-            backend1 = FileBackend(cache_dir=temp_dir)
-            shell1 = MockShell()
-            cash1 = Cash(backend=backend1, register_magic=False)
-            magics1 = CashMagics(shell1, cash1)
-            proc1 = magics1._statement_processor
+        temp_dir = str(tmp_path / "cache")
+        # Session 1
+        backend1 = FileBackend(cache_dir=temp_dir)
+        shell1 = MockShell()
+        cash1 = Cash(backend=backend1, register_magic=False)
+        magics1 = CashMagics(shell1, cash1)
+        proc1 = magics1._statement_processor
 
-            code = "x = 42"
-            metrics1 = proc1.process_statement(code, annotation=_PERSIST)
-            assert metrics1["status"] == CacheStatus.COMPUTED
-            backend1.shutdown()
+        code = "x = 42"
+        metrics1 = proc1.process_statement(code, annotation=_PERSIST)
+        assert metrics1["status"] == CacheStatus.COMPUTED
+        backend1.shutdown()
 
-            # Session 2 (New objects, same directory)
-            backend2 = FileBackend(cache_dir=temp_dir)
-            shell2 = MockShell()
-            cash2 = Cash(backend=backend2, register_magic=False)
-            magics2 = CashMagics(shell2, cash2)
-            proc2 = magics2._statement_processor
+        # Session 2 (New objects, same directory)
+        backend2 = FileBackend(cache_dir=temp_dir)
+        shell2 = MockShell()
+        cash2 = Cash(backend=backend2, register_magic=False)
+        magics2 = CashMagics(shell2, cash2)
+        proc2 = magics2._statement_processor
 
-            metrics2 = proc2.process_statement(code, annotation=_PERSIST)
-            assert metrics2["status"] == CacheStatus.RESTORED
-            assert shell2.user_ns["x"] == 42
+        metrics2 = proc2.process_statement(code, annotation=_PERSIST)
+        assert metrics2["status"] == CacheStatus.RESTORED
+        assert shell2.user_ns["x"] == 42
 
-            backend2.shutdown()
-
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+        backend2.shutdown()

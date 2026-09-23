@@ -2,51 +2,10 @@
 Test for dependency invalidation when upstream cells change.
 """
 
-from unittest.mock import MagicMock
-
-import pytest
-from traitlets.config.configurable import Configurable
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
+from tests._cell_driver import run_cash_cell
 
 
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.user_ns = {}
-        self.user_ns["_ih"] = []  # Execution history
-        self.run_cell = MagicMock()
-        self.input_transformers_cleanup = []
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-        self.ast_transformers = []
-        self.events = MagicMock()
-        self.events.register = MagicMock(return_value=None)
-
-
-@pytest.fixture
-def dep_invalidation_magics():
-    """Provide CashMagics instance for dependency invalidation tests."""
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-
-    shell = MockShell()
-
-    magics = CashMagics(shell, cash)
-    magics._debug = False  # Keep output clean
-    magics._auto_cache_enabled = True
-
-    yield magics, shell, backend
-
-    # Cleanup
-    backend.clear()
-    shell.user_ns.clear()
-
-
-def test_upstream_cell_change_invalidates_cache(dep_invalidation_magics):
+def test_upstream_cell_change_invalidates_cache(cash_magics, mock_shell):
     """
     Test scenario:
     1. Cell 1: selected_region = 'South'
@@ -55,29 +14,30 @@ def test_upstream_cell_change_invalidates_cache(dep_invalidation_magics):
     4. Change Cell 1 to selected_region = 'North'
     5. Run Cell 2 - should detect Cell 1 changed and re-execute it first
     """
-    magics, shell, backend = dep_invalidation_magics
 
     # Step 1: Set variable
     cell1_v1 = "selected_region = 'South'"
-    magics._execute_cell(cell1_v1)
+    run_cash_cell(cash_magics, cell1_v1)
 
-    assert shell.user_ns["selected_region"] == "South", "Step 1: selected_region should be South"
+    assert mock_shell.user_ns["selected_region"] == "South", "Step 1: selected_region should be South"
 
     # Step 2: Use variable (will be cached)
     cell2 = "result = f'Region: {selected_region}'"
-    magics._execute_cell(cell2)
+    run_cash_cell(cash_magics, cell2)
 
-    assert shell.user_ns["result"] == "Region: South", 'Step 2: result should be "Region: South"'
+    assert mock_shell.user_ns["result"] == "Region: South", 'Step 2: result should be "Region: South"'
 
     # Step 3: Run Cell 2 again (should get cache hit)
-    magics._execute_cell(cell2)
+    run_cash_cell(cash_magics, cell2)
 
-    assert shell.user_ns["result"] == "Region: South", 'Step 3: result should still be "Region: South" (from cache)'
+    assert mock_shell.user_ns["result"] == "Region: South", (
+        'Step 3: result should still be "Region: South" (from cache)'
+    )
 
     # Step 4: Change Cell 1 code (simulate user editing notebook)
     # In real scenario, Cell 1's code in notebook file changes but hasn't been executed
     # selected_region is still 'South' in memory
-    assert shell.user_ns["selected_region"] == "South", "Step 4: selected_region should still be South in memory"
+    assert mock_shell.user_ns["selected_region"] == "South", "Step 4: selected_region should still be South in memory"
 
     # Step 5: Run Cell 2 - should detect Cell 1 changed and re-execute it
     # The system should:
@@ -90,12 +50,12 @@ def test_upstream_cell_change_invalidates_cache(dep_invalidation_magics):
     # For now, manually simulate what should happen:
     # Execute the NEW version of Cell 1
     cell1_v2 = "selected_region = 'North'"
-    magics._execute_cell(cell1_v2)
+    run_cash_cell(cash_magics, cell1_v2)
 
     # Now run Cell 2
-    magics._execute_cell(cell2)
+    run_cash_cell(cash_magics, cell2)
 
     # Should have new value
-    assert shell.user_ns["result"] == "Region: North", (
+    assert mock_shell.user_ns["result"] == "Region: North", (
         'Step 5: result should be "Region: North" after dependency change'
     )

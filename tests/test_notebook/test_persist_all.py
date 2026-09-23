@@ -9,23 +9,22 @@ statement is cached, as if each carried `# @cash:persist`.
 
 from __future__ import annotations
 
+import pytest
+
 from cash import Cash
-from cash.backends import InMemoryBackend
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.magics import CashMagics
-from tests.conftest import MockShell
 
 
-def _make(persist_all: bool):
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False, persist_all=persist_all)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    return magics, shell, magics._statement_processor
+@pytest.fixture
+def persist_all_processor(mock_shell, clean_backend):
+    """The statement processor of a Cash configured with ``persist_all=True``."""
+    magics = CashMagics(mock_shell, Cash(backend=clean_backend, register_magic=False, persist_all=True))
+    return magics._statement_processor
 
 
-def test_trivial_statement_not_cached_by_default():
-    _magics, _shell, p = _make(persist_all=False)
+def test_trivial_statement_not_cached_by_default(statement_processor):
+    p = statement_processor
     assert p.persist_all is False
     p.process_statement("x = 1 + 1")
     m2 = p.process_statement("x = 1 + 1")
@@ -33,8 +32,8 @@ def test_trivial_statement_not_cached_by_default():
     assert m2["status"] == CacheStatus.COMPUTED
 
 
-def test_persist_all_config_caches_trivial_statement():
-    _magics, _shell, p = _make(persist_all=True)
+def test_persist_all_config_caches_trivial_statement(persist_all_processor):
+    p = persist_all_processor
     assert p.persist_all is True
     m1 = p.process_statement("y = 2 + 3")
     assert m1["status"] == CacheStatus.COMPUTED
@@ -42,8 +41,8 @@ def test_persist_all_config_caches_trivial_statement():
     assert m2["status"] in (CacheStatus.RESTORED, CacheStatus.SKIPPED)
 
 
-def test_cash_persist_magic_toggles_at_runtime():
-    magics, _shell, p = _make(persist_all=False)
+def test_cash_persist_magic_toggles_at_runtime(cash_magics, statement_processor):
+    magics, p = cash_magics, statement_processor
 
     magics.cash_persist("on")
     assert magics._persist_all is True
@@ -61,10 +60,10 @@ def test_cash_persist_magic_toggles_at_runtime():
     assert p.process_statement("w = 6 + 7")["status"] == CacheStatus.COMPUTED
 
 
-def test_explicit_no_cache_still_wins_over_persist_all():
+def test_explicit_no_cache_still_wins_over_persist_all(persist_all_processor):
     """A statement annotated @cash:no-cache must not be cached even in
     persist_all mode (skip_cache takes precedence)."""
-    _magics, _shell, p = _make(persist_all=True)
+    p = persist_all_processor
     from cash.analysis.annotations import CacheAnnotation
 
     no_cache = CacheAnnotation(no_cache=True)

@@ -17,68 +17,8 @@ control processor consuming it.
 """
 
 import ast
-import json
-import os
-import tempfile
-from unittest.mock import MagicMock, patch
 
-import pytest
-from traitlets.config.configurable import Configurable
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-
-
-@pytest.fixture
-def magics_fixture():
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    yield magics, shell, backend
-    backend.clear()
-    shell.user_ns.clear()
-
-
-def _run_cell(magics, code, cells=None):
-    """Execute *code* as a cell of a notebook whose cells are *cells*."""
-    cells = cells or [code]
-    notebook_path = os.path.join(tempfile.mkdtemp(), "test.ipynb")
-    with open(notebook_path, "w", encoding="utf-8") as fh:
-        json.dump(
-            {
-                "cells": [
-                    {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": c}
-                    for c in cells
-                ],
-                "metadata": {},
-                "nbformat": 4,
-                "nbformat_minor": 4,
-            },
-            fh,
-        )
-    with (
-        patch("cash.notebook.upstream.checker.get_notebook_cells") as get,
-        patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids") as ids,
-    ):
-        get.side_effect = lambda _path=None: list(cells)
-        ids.return_value = None
-        magics._execute_cell(code)
+from tests._cell_driver import run_cash_cell
 
 
 class TestTheFallback:
@@ -123,18 +63,16 @@ class TestTheFallback:
 class TestTheWiring:
     """The field is written by one component and read by another."""
 
-    def test_the_simulator_leaves_its_view_on_the_tracking_state(self, magics_fixture):
+    def test_the_simulator_leaves_its_view_on_the_tracking_state(self, cash_magics):
         """Without this the fallback above has nothing to fall back to."""
-        magics, shell, _backend = magics_fixture
-        _run_cell(magics, "SECOND = FIRST * 2", cells=["FIRST = 21", "SECOND = FIRST * 2"])
-        simulated = magics.tracking_state.simulated_lineage
+        run_cash_cell(cash_magics, "SECOND = FIRST * 2", cells=["FIRST = 21", "SECOND = FIRST * 2"])
+        simulated = cash_magics.tracking_state.simulated_lineage
         assert simulated.get("FIRST"), "the simulation knows what FIRST is worth and did not pass it on: %r" % (
             simulated,
         )
 
-    def test_a_loop_records_a_lineage_for_an_untracked_name_it_read(self, magics_fixture, tmp_path):
+    def test_a_loop_records_a_lineage_for_an_untracked_name_it_read(self, cash_magics, mock_shell, tmp_path):
         """The end the bug was at: what lands in ``control_outcomes``."""
-        magics, shell, _backend = magics_fixture
         data = tmp_path / "rows.txt"
         data.write_text("aa\nbbb\n", encoding="utf-8")
 
@@ -142,16 +80,16 @@ class TestTheWiring:
         # notebook the simulation reads, but never executed through cash, so
         # the runtime has no lineage for it.
         bind = "DATA = " + repr(str(data))
-        shell.user_ns["DATA"] = str(data)
+        mock_shell.user_ns["DATA"] = str(data)
         code = "OUT = {}\nfor line in open(DATA).read().splitlines():\n    OUT[line] = len(line)"
-        _run_cell(magics, code, cells=[bind, code])
+        run_cash_cell(cash_magics, code, cells=[bind, code])
 
         import hashlib
 
         key = hashlib.sha256(ast.unparse(ast.parse(code).body[1]).encode("utf-8")).hexdigest()
-        outcome = magics.tracking_state.control_outcomes.get(key)
-        assert outcome is not None, sorted(magics.tracking_state.control_outcomes)
-        simulated = magics.tracking_state.simulated_lineage.get("DATA")
+        outcome = cash_magics.tracking_state.control_outcomes.get(key)
+        assert outcome is not None, sorted(cash_magics.tracking_state.control_outcomes)
+        simulated = cash_magics.tracking_state.simulated_lineage.get("DATA")
         assert simulated, "the simulation should know what DATA is worth"
         assert outcome[0].get("DATA") == simulated, (
             "the loop read DATA and recorded nothing about it, so its outcome "

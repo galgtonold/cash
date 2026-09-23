@@ -1,59 +1,26 @@
-from cash.notebook.cache_status import CacheStatus
-
 """
 Test for loop dict mutation caching bug.
 
 Reproduces the issue where `ticker_stats[ticker] = stats` in a for loop
-fails to restore from cache on the 3rd iteration (AAPL) when re-executing 
+fails to restore from cache on the 3rd iteration (AAPL) when re-executing
 the cell, even though the 1st and 2nd iterations (TSLA, z) restore fine.
 """
+
 import json
 import os
 import tempfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-from traitlets.config.configurable import Configurable
 
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-
-
-@pytest.fixture
-def magics_fixture():
-    """Provide CashMagics instance for testing."""
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    magics._debug = True
-
-    yield magics, shell, backend
-
-    backend.clear()
-    shell.user_ns.clear()
+from cash.notebook.cache_status import CacheStatus
+from tests._cell_driver import run_cash_cell
 
 
 class TestLoopDictMutationCache:
     """Test that dict mutations in loops restore correctly from cache."""
 
-    def test_dict_subscript_assignment_in_loop_caches_all_iterations(self, magics_fixture):
+    def test_dict_subscript_assignment_in_loop_caches_all_iterations(self, cash_magics, mock_shell):
         """
         Reproduces the bug where ticker_stats[ticker] = stats fails to
         cache for the 3rd iteration on repeated execution.
@@ -66,7 +33,6 @@ class TestLoopDictMutationCache:
 
         On second execution, ALL iterations should be restored from cache.
         """
-        magics, shell, backend = magics_fixture
 
         # The cell code that reproduces the issue.
         # sum(range(5_000_000)) keeps val = ... above the 10 ms min-execution-time
@@ -119,21 +85,21 @@ print("Done!")"""
 
                 # === First execution ===
                 print("\n=== First execution ===")
-                magics._execute_cell(cell_code)
+                run_cash_cell(cash_magics, cell_code)
 
                 # Verify the result
-                assert "ticker_stats" in shell.user_ns
-                assert set(shell.user_ns["ticker_stats"].keys()) == {"TSLA", "AAPL", "MSFT", "GOOGL"}
+                assert "ticker_stats" in mock_shell.user_ns
+                assert set(mock_shell.user_ns["ticker_stats"].keys()) == {"TSLA", "AAPL", "MSFT", "GOOGL"}
 
                 # === Second execution (should restore everything) ===
                 print("\n=== Second execution (should restore ALL from cache) ===")
-                magics._execute_cell(cell_code)
+                run_cash_cell(cash_magics, cell_code)
 
                 # Verify result is still correct
-                assert set(shell.user_ns["ticker_stats"].keys()) == {"TSLA", "AAPL", "MSFT", "GOOGL"}
+                assert set(mock_shell.user_ns["ticker_stats"].keys()) == {"TSLA", "AAPL", "MSFT", "GOOGL"}
 
                 # Check the metrics to see which statements were COMPUTED vs RESTORED
-                last_metrics = magics._last_cell_metrics
+                last_metrics = cash_magics.cash_status("dict")["last_cell"]
                 stmts = last_metrics.get("statements", [])
 
                 computed_stmts = [m for m in stmts if m.get("status") == CacheStatus.COMPUTED]

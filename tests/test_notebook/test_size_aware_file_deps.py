@@ -18,23 +18,11 @@ Special cases that always allow caching:
 import numpy as np
 import pandas as pd
 import pytest
-from traitlets.config.configurable import Configurable
 
-from cash.backends import FileBackend, InMemoryBackend
+from cash.backends import FileBackend
 from cash.core import Cash
 from cash.notebook.statement import StatementProcessor
 from tests._cell_driver import run_cash_cell
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
 
 
 class TestSizeAwareCachingWithFileDeps:
@@ -47,13 +35,9 @@ class TestSizeAwareCachingWithFileDeps:
     """
 
     @pytest.fixture
-    def processor(self, tmp_path):
+    def processor(self, tmp_path, mock_shell):
         """Create a StatementProcessor with a disk backend for testing."""
-        backend = FileBackend(cache_dir=str(tmp_path))
-        cash_instance = Cash(backend=backend, register_magic=False)
-        shell = MockShell()
-        processor = StatementProcessor(shell, cash_instance)
-        yield processor
+        return StatementProcessor(mock_shell, Cash(backend=FileBackend(cache_dir=str(tmp_path)), register_magic=False))
 
     def test_skip_large_object_without_file_deps(self, processor):
         """Large object without file deps and fast compute → should skip cache."""
@@ -109,32 +93,14 @@ class TestBackendAwareCaching:
     """Test that the caching heuristic adapts to backend type."""
 
     @pytest.fixture
-    def ram_processor(self):
+    def ram_processor(self, mock_shell, cash_instance):
         """Processor with InMemoryBackend (RAM)."""
-        backend = InMemoryBackend()
-        cash_instance = Cash(backend=backend, register_magic=False)
-        shell = MockShell()
-        processor = StatementProcessor(shell, cash_instance)
-        yield processor
-        backend.clear()
+        return StatementProcessor(mock_shell, cash_instance)
 
     @pytest.fixture
-    def disk_processor(self):
+    def disk_processor(self, mock_shell, tmp_path):
         """Processor with FileBackend (disk)."""
-        import tempfile
-
-        from cash.backends import FileBackend
-
-        tmp = tempfile.mkdtemp()
-        backend = FileBackend(cache_dir=tmp)
-        cash_instance = Cash(backend=backend, register_magic=False)
-        shell = MockShell()
-        processor = StatementProcessor(shell, cash_instance)
-        yield processor
-        backend.clear()
-        import shutil
-
-        shutil.rmtree(tmp, ignore_errors=True)
+        return StatementProcessor(mock_shell, Cash(backend=FileBackend(cache_dir=str(tmp_path)), register_magic=False))
 
     def test_ram_caches_large_dataframe_easily(self, ram_processor):
         """RAM backend uses fast deepcopy — 80MB DataFrame with 0.1s compute is cached."""
@@ -206,35 +172,12 @@ class TestBackendAwareCaching:
 class TestReadCsvCachingUnit:
     """Unit test that pd.read_csv caches correctly even for large files."""
 
-    @pytest.fixture
-    def magics_fixture(self):
-        """Provide CashMagics + mock shell for testing."""
-        from unittest.mock import MagicMock
-
-        from cash.notebook.ipython.magics import CashMagics
-
-        backend = InMemoryBackend()
-        cash_instance = Cash(backend=backend, register_magic=False)
-        shell = MockShell()
-        shell.run_cell = MagicMock()
-        shell.events = MagicMock()
-
-        magics = CashMagics(shell, cash_instance)
-        magics._auto_cache_enabled = True
-        magics._debug = False
-
-        yield magics, shell, backend
-
-        backend.clear()
-        shell.user_ns.clear()
-
-    def test_read_csv_large_file_is_cached(self, magics_fixture, tmp_path):
+    def test_read_csv_large_file_is_cached(self, cash_magics, mock_shell, clean_backend, tmp_path):
         """
         A large CSV file read via pd.read_csv should be cached,
         even if the resulting DataFrame exceeds 50MB.
         """
-        magics, shell, backend = magics_fixture
-        magics._debug = True
+        magics, shell, backend = cash_magics, mock_shell, clean_backend
 
         # Create a large-ish CSV (not 100MB but enough to trigger size check)
         csv_path = tmp_path / "large_data.csv"
@@ -273,8 +216,7 @@ class TestReadCsvCachingUnit:
         assert len(shell.user_ns["df"]) == n_rows
 
         # Check that a cache entry was stored (not skipped)
-        sp = magics._statement_processor
-        assert "df" in sp.tracking_state.variable_lineage, "df should have a lineage after caching"
+        assert "df" in magics.tracking_state.variable_lineage, "df should have a lineage after caching"
 
         # The key test: the backend should have a cache entry for read_csv.
         # data_path = '...' is a trivial string assignment — it may be skipped by the

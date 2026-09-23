@@ -1,47 +1,18 @@
-import os
-import sys
+"""Restoring a variable reports what the restore saved."""
 
 import pytest
 
 from cash.notebook.cache_status import CacheStatus
-
-# Add src to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src")))
-
-from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
 
 
-class MockShell:
-    def __init__(self):
-        self.user_ns = {}
-        self.user_global_ns = {}
-        self.events = self.Events()
-        self.run_cell = self._run_cell_dummy
-
-    class Events:
-        def register(self, event, callback):
-            pass
-
-    def _run_cell_dummy(self, raw_cell, *args, **kwargs):
-        pass
-
-    def get_parent(self):
-        return None
-
-
 @pytest.fixture
-def cash_instance(tmp_path):
-    return Cash(cache_dir=str(tmp_path / "cache"), debug=True)
+def magics(mock_shell, cash_with_file_backend):
+    """CashMagics over a disk cache."""
+    return CashMagics(mock_shell, cash_with_file_backend)
 
 
-@pytest.fixture
-def magics(cash_instance):
-    shell = MockShell()
-    return CashMagics(shell, cash_instance)
-
-
-def test_restore_variable_returns_metrics(magics, cash_instance):
+def test_restore_variable_returns_metrics(magics, cash_with_file_backend):
     """
     Test that Restorer.restore_variable returns metrics with saved_time.
     """
@@ -66,7 +37,7 @@ def test_restore_variable_returns_metrics(magics, cash_instance):
 
     data = {"variables": {var_name: value}}
 
-    cash_instance.backend.set(cache_key, data, metadata)
+    cash_with_file_backend.backend.set(cache_key, data, metadata)
 
     # 2. Call restore_variable
     # Ensure it's NOT in user_ns

@@ -9,50 +9,12 @@ This tests the scenario:
 When we change Cell 1 to a = 7, Cell 3 should get updated value.
 """
 
-from unittest.mock import MagicMock
-
 import pytest
-from traitlets.config import Configurable
 
-from cash import Cash
-from cash.backends import InMemoryBackend
-from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
 
 
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.user_ns = {}
-        self.user_ns["_ih"] = []  # Execution history
-        self.run_cell = MagicMock()
-        self.input_transformers_cleanup = []
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-        self.ast_transformers = []
-        self.events = MagicMock()
-        self.events.register = MagicMock(return_value=None)
-
-
-@pytest.fixture
-def transitive_magics():
-    """Provide CashMagics instance for transitive dependency tests."""
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    magics._debug = False
-
-    yield magics, shell, backend
-
-    # Cleanup
-    backend.clear()
-    shell.user_ns.clear()
-
-
-def test_three_cell_cascade(transitive_magics):
+def test_three_cell_cascade():
     """Test that changing a affects b affects c across 3 cells.
 
     NOTE: This test is xfail because transitive upstream re-execution
@@ -67,28 +29,27 @@ def test_three_cell_cascade(transitive_magics):
     )
 
 
-def test_direct_dependency_invalidation(transitive_magics):
+def test_direct_dependency_invalidation(cash_magics, mock_shell):
     """Test that changing an input variable invalidates the cache."""
-    magics, shell, backend = transitive_magics
 
     # Cell 1: x = 10
     cell1 = "x = 10"
-    run_cash_cell(magics, cell1)
-    assert shell.user_ns["x"] == 10, "x should be 10"
+    run_cash_cell(cash_magics, cell1)
+    assert mock_shell.user_ns["x"] == 10, "x should be 10"
 
     # Cell 2: y = x + 5 (should be 15)
     cell2 = "y = x + 5"
-    run_cash_cell(magics, cell2)
-    assert shell.user_ns["y"] == 15, "y should be 15 (10 + 5)"
+    run_cash_cell(cash_magics, cell2)
+    assert mock_shell.user_ns["y"] == 15, "y should be 15 (10 + 5)"
 
     # Change x directly in namespace (simulating upstream change)
-    shell.user_ns["x"] = 20
+    mock_shell.user_ns["x"] = 20
 
     # Update the lineage hash for x to reflect the change
-    if hasattr(magics, "tracking_state") and "x" in magics.tracking_state.variable_lineage:
+    if hasattr(cash_magics, "tracking_state") and "x" in cash_magics.tracking_state.variable_lineage:
         # Force lineage change by removing x's lineage (simulating new value)
-        magics.tracking_state.lineage.discard("x")
+        cash_magics.tracking_state.lineage.discard("x")
 
     # Re-run Cell 2: y should be recalculated to 25
-    run_cash_cell(magics, cell2)
-    assert shell.user_ns["y"] == 25, "y should be recalculated to 25 after x changed to 20"
+    run_cash_cell(cash_magics, cell2)
+    assert mock_shell.user_ns["y"] == 25, "y should be recalculated to 25 after x changed to 20"

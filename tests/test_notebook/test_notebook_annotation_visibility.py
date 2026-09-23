@@ -17,7 +17,6 @@ broken generally would look like a pass.
 from __future__ import annotations
 
 import asyncio
-import tempfile
 import warnings
 
 import pytest
@@ -28,18 +27,23 @@ from cash import Cash
 from cash.notebook.ipython.cell_executor import PipelineSyntaxError
 from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
-from tests.conftest import MockShell
 
 
 @pytest.fixture
-def cell_runner():
-    """Run cells through the real magic, returning the impurity-warning count."""
-    shell = MockShell()
-    cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
-    magics = CashMagics(shell, cash)
+def magics(mock_shell, tmp_path):
+    """The real magic under ``%cash_on`` over a disk cache, with that Cash bound
+    to ``c`` in the notebook so a cell can decorate with ``@c.cache``."""
+    cash = Cash(cache_dir=str(tmp_path / "cache"), register_magic=False)
+    magics = CashMagics(mock_shell, cash)
     magics.cash_on("")
     magics.badges.mode = "off"  # keep the badge out of the captured output
-    shell.user_ns["c"] = cash
+    mock_shell.user_ns["c"] = cash
+    return magics
+
+
+@pytest.fixture
+def cell_runner(magics):
+    """Run cells through the real magic, returning the impurity-warning count."""
 
     def run(cell: str) -> int:
         with warnings.catch_warnings(record=True) as caught:
@@ -71,7 +75,7 @@ def test_an_unannotated_line_still_warns_in_a_notebook_cell(cell_runner):
     assert cell_runner(PLAIN) == 1
 
 
-def test_a_pep614_parenthesised_decorator_does_not_kill_the_cell():
+def test_a_pep614_parenthesised_decorator_does_not_kill_the_cell(magics, mock_shell):
     """A decorator whose expression begins on the
     line AFTER the ``@`` -- legal since PEP 614 (Python 3.9) -- made
     ``_exec_source_for_node`` prepend from ``decorator_list[0].lineno``,
@@ -90,23 +94,16 @@ def test_a_pep614_parenthesised_decorator_does_not_kill_the_cell():
     ``inspect.getsource`` for this one rare shape -- the same behaviour
     every function had before Task 1 -- but the cell runs.
     """
-    shell = MockShell()
-    cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
-    magics = CashMagics(shell, cash)
-    magics.cash_on("")
-    magics.badges.mode = "off"
-    shell.user_ns["c"] = cash
-
     cell = "@(\n    c.cache\n)\ndef f(n):\n    return n  # @cash:assume-safe\nf(3)\n"
 
     run_cash_cell(magics, cell)  # must not raise -- this is the regression itself
 
-    assert "f" in shell.user_ns, "the cell aborted before the def bound the name"
-    assert shell.user_ns["f"](3) == 3, "the fallback-executed function must still work"
+    assert "f" in mock_shell.user_ns, "the cell aborted before the def bound the name"
+    assert mock_shell.user_ns["f"](3) == 3, "the fallback-executed function must still work"
 
 
 @pytest.fixture
-def async_cell_runner():
+def async_cell_runner(magics, mock_shell):
     """Async twin of ``cell_runner``.
 
     ``run_cash_cell`` (``CellExecutor.execute_cell``) is a purely SYNC entry point -- its
@@ -124,18 +121,12 @@ def async_cell_runner():
     ``process_statement_async`` / ``_execute_statement_async`` machinery
     without needing one.
     """
-    shell = MockShell()
-    cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
-    magics = CashMagics(shell, cash)
-    magics.cash_on("")
-    magics.badges.mode = "off"  # keep the badge out of the captured output
-    shell.user_ns["c"] = cash
 
     async def _tick(n):
         await asyncio.sleep(0)
         return n
 
-    shell.user_ns["_tick"] = _tick
+    mock_shell.user_ns["_tick"] = _tick
 
     def run(cell: str) -> int:
         with warnings.catch_warnings(record=True) as caught:

@@ -27,46 +27,23 @@ from __future__ import annotations
 
 import json
 import warnings
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-from traitlets.config.configurable import Configurable
 
 from cash import CashUpstreamSyntaxWarning
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
-
-
-class MockShell(Configurable):
-    """Mock IPython shell (real Configurable, not a sys.modules mock)."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.user_ns = {}
-        self.user_ns["_ih"] = []
-        self.run_cell = MagicMock()
-        self.input_transformers_cleanup = []
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-        self.ast_transformers = []
-        self.events = MagicMock()
-        self.events.register = MagicMock(return_value=None)
 
 
 @pytest.fixture
-def harness(tmp_path):
+def harness(tmp_path, cash_magics, mock_shell):
     """Return ``(magics, shell, write_cells, run)``.
 
     ``write_cells`` rewrites the on-disk notebook (the SAVE step); ``run``
     executes a cell through the ``%cash_on`` hook pipeline while the checker
     reads the saved notebook.
     """
-    backend = InMemoryBackend()
-    backend.clear()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
+    magics, shell = cash_magics, mock_shell
+    magics.cash_on("")
 
     nb_path = tmp_path / "test.ipynb"
 
@@ -191,7 +168,7 @@ def test_broken_upstream_does_not_use_silent_uncached_fallback(harness):
         "downstream cell fell into the silent uncached fallback while a broken "
         f"upstream cell was present. original_run_cell calls: {called_with}"
     )
-    assert magics._auto_cache_enabled is True
+    assert magics.cash_status("dict")["auto_cache_enabled"] is True
 
 
 def test_persistent_break_warns_once_then_re_warns_on_change(harness):

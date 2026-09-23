@@ -8,50 +8,17 @@ does NOT trigger unnecessary upstream restoration.
 import json
 import os
 import tempfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-from traitlets.config.configurable import Configurable
 
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-
-
-@pytest.fixture
-def magics_fixture():
-    """Provide CashMagics instance for testing."""
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    magics._debug = True
-
-    yield magics, shell, backend
-
-    backend.clear()
-    shell.user_ns.clear()
+from tests._cell_driver import run_cash_cell
 
 
 class TestRepeatedExecution:
     """Test that repeated execution doesn't cause unnecessary restoration."""
 
-    def test_middle_cell_after_downstream_modification(self, magics_fixture):
+    def test_middle_cell_after_downstream_modification(self, cash_magics, mock_shell):
         """
         Scenario that replicates the financial_analysis_demo issue:
 
@@ -72,7 +39,6 @@ class TestRepeatedExecution:
              should show df at its position in the notebook, not with
              downstream mutations applied.
         """
-        magics, shell, backend = magics_fixture
 
         notebook_cells = [
             "import pandas as pd\ndf = pd.DataFrame({'a': [3,1,2]})",  # Cell 0: Create df
@@ -121,14 +87,14 @@ class TestRepeatedExecution:
                 print("\n=== Initial execution of all cells ===")
                 for i, cell in enumerate(notebook_cells):
                     print(f"\n--- Executing Cell {i} ---")
-                    magics._execute_cell(cell)
+                    run_cash_cell(cash_magics, cell)
 
                 # Verify df has the downstream modification
-                assert "b" in shell.user_ns["df"].columns, "df should have column 'b' from cell 3"
+                assert "b" in mock_shell.user_ns["df"].columns, "df should have column 'b' from cell 3"
 
                 # Capture the lineage after cell 1 (the upstream state for cell 2)
                 # and after all cells
-                lineage_after_all_cells = magics.tracking_state.variable_lineage.get("df")
+                lineage_after_all_cells = cash_magics.tracking_state.variable_lineage.get("df")
                 print(f"\ndf lineage after all cells: {lineage_after_all_cells[:16]}...")
 
                 # Now execute cell 2 again (the middle "print" cell)
@@ -139,9 +105,9 @@ class TestRepeatedExecution:
                 # downstream cell 3, and restore df to its upstream state (after cell 1).
                 # This ensures the display cell shows df without the 'b' column.
 
-                magics._execute_cell(notebook_cells[2])
+                run_cash_cell(cash_magics, notebook_cells[2])
 
-                lineage_after_rerun = magics.tracking_state.variable_lineage.get("df")
+                lineage_after_rerun = cash_magics.tracking_state.variable_lineage.get("df")
                 print(f"df lineage after re-running cell 2: {lineage_after_rerun[:16]}...")
 
                 # The lineage SHOULD change — the downstream modification should be
@@ -157,7 +123,7 @@ class TestRepeatedExecution:
 
                 # The column 'b' should NOT be present since df was restored
                 # to its upstream state (after sort, before column addition)
-                assert "b" not in shell.user_ns["df"].columns, (
+                assert "b" not in mock_shell.user_ns["df"].columns, (
                     "Column 'b' should NOT exist after re-running cell 2 — df should be restored to upstream state"
                 )
 
@@ -169,12 +135,11 @@ class TestRepeatedExecution:
             if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
-    def test_repeated_same_cell_no_change(self, magics_fixture):
+    def test_repeated_same_cell_no_change(self, cash_magics):
         """
         Simpler test: Just run the same cell twice without any downstream modifications.
         This should definitely NOT trigger any restoration.
         """
-        magics, shell, backend = magics_fixture
 
         notebook_cells = [
             "import pandas as pd\ndf = pd.DataFrame({'a': [1,2,3]})",
@@ -221,16 +186,16 @@ class TestRepeatedExecution:
                 print("\n=== Initial execution ===")
                 for i, cell in enumerate(notebook_cells):
                     print(f"--- Cell {i} ---")
-                    magics._execute_cell(cell)
+                    run_cash_cell(cash_magics, cell)
 
-                df_lineage_1 = magics.tracking_state.variable_lineage.get("df")
+                df_lineage_1 = cash_magics.tracking_state.variable_lineage.get("df")
                 print(f"df lineage after first run: {df_lineage_1[:16]}...")
 
                 # Run cell 1 again
                 print("\n=== Re-executing cell 1 ===")
-                magics._execute_cell(notebook_cells[1])
+                run_cash_cell(cash_magics, notebook_cells[1])
 
-                df_lineage_2 = magics.tracking_state.variable_lineage.get("df")
+                df_lineage_2 = cash_magics.tracking_state.variable_lineage.get("df")
                 print(f"df lineage after second run: {df_lineage_2[:16]}...")
 
                 assert df_lineage_1 == df_lineage_2, "Lineage should not change"

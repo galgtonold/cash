@@ -1,42 +1,9 @@
 from unittest.mock import MagicMock, patch
 
-import pytest
-from traitlets.config.configurable import Configurable
-
 from cash.analysis.annotations import CacheAnnotation
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
 
 # Force caching regardless of the 10 ms min-execution-time floor.
 _PERSIST = CacheAnnotation(persist=True)
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-
-
-@pytest.fixture
-def notebook_caching_magics():
-    """Provide CashMagics instance for notebook caching tests."""
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-
-    yield magics, shell, backend
-
-    # Cleanup
-    backend.clear()
-    shell.user_ns.clear()
 
 
 # Define a local class (picklable if at module level)
@@ -48,21 +15,20 @@ class LocalClass:
         return f"LocalClass({self.x})"
 
 
-def test_cache_unpicklable_object_in_memory(notebook_caching_magics):
+def test_cache_unpicklable_object_in_memory(cash_magics, mock_shell, clean_backend):
     """Test that unpicklable objects can be cached in memory.
     _PERSIST forces the cache write regardless of the 10 ms min-execution-time floor."""
-    magics, shell, backend = notebook_caching_magics
 
     obj = LocalClass(42)
 
     # Mock execution
     code = "x = LocalClass(42)"
-    shell.user_ns["x"] = obj
-    shell.user_ns["x"] = obj
-    shell.user_ns["LocalClass"] = LocalClass
+    mock_shell.user_ns["x"] = obj
+    mock_shell.user_ns["x"] = obj
+    mock_shell.user_ns["LocalClass"] = LocalClass
 
     # Needs lineage to be cacheable
-    magics.tracking_state.lineage.record("LocalClass", "mock_class_hash")
+    cash_magics.tracking_state.lineage.record("LocalClass", "mock_class_hash")
 
     # Mock capture_output context manager
     with patch("cash.notebook.statement.capture.capture_output") as mock_capture:
@@ -74,15 +40,15 @@ def test_cache_unpicklable_object_in_memory(notebook_caching_magics):
         mock_context.outputs = []
 
         # Process statement — use _PERSIST so the trivially-fast statement is cached
-        magics._statement_processor.process_statement(code, annotation=_PERSIST)
+        cash_magics._statement_processor.process_statement(code, annotation=_PERSIST)
 
         # Verify it is cached
-        entries = backend.list_entries()
+        entries = clean_backend.list_entries()
         assert len(entries) == 1, "Should have exactly one cache entry"
 
         # Verify we can retrieve it
         key = entries[0]["key"]
-        metadata, payload = backend.get(key)
+        metadata, payload = clean_backend.get(key)
 
         assert payload is not None, "Payload should not be None"
         assert "variables" in payload, "Payload should contain variables"
