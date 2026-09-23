@@ -15,6 +15,7 @@ import weakref
 # Any is used at IPython API boundaries where types come from the shell's dynamic
 # namespace (user_ns, execution info objects).  These cannot be typed more precisely
 # without declaring a hard IPython dependency in production code.
+from collections.abc import Iterator
 from typing import Any
 
 from IPython.core.magic import Magics, line_magic, magics_class
@@ -56,11 +57,12 @@ from ..statement.store import config_float
 from ..upstream import UpstreamChecker
 from ._args import strip_inline_comment
 from ._help import help_text
-from ._types import CellMetrics, TimingBreakdown
+from ._types import CellMetrics
 from .admin import CashAdminMagicsMixin
 from .cell_executor import (
     CellExecutor,
     EarlyReturn,
+    PipelineCompleted,
     PipelineSyntaxError,
     discarded_writes_notification,
 )
@@ -1130,17 +1132,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         if isinstance(result, PipelineSyntaxError):
             return self._original_run_cell(raw_cell, *args, **kwargs)
 
-        return self._finalize_cell_execution(
-            raw_cell,
-            result.all_metrics,
-            result.buffered_outputs,
-            result.badge_display_id,
-            result.hook_start,
-            result.timing_breakdown,
-            result.badge_render_time,
-            args,
-            kwargs,
-        )
+        return self._finalize_cell_execution(raw_cell, result, args, kwargs)
 
     async def _execute_cell_async(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
         """Proxy for ``interactiveshell.run_cell_async`` (stage 2).
@@ -1207,17 +1199,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             # will render the SyntaxError) exactly once on its live loop.
             return await self._original_run_cell_async(raw_cell, *args, **kwargs)
 
-        return await self._finalize_cell_execution_async(
-            raw_cell,
-            result.all_metrics,
-            result.buffered_outputs,
-            result.badge_display_id,
-            result.hook_start,
-            result.timing_breakdown,
-            result.badge_render_time,
-            args,
-            kwargs,
-        )
+        return await self._finalize_cell_execution_async(raw_cell, result, args, kwargs)
 
     def _substitute_cell_kwargs(self, source: str, kwargs: dict) -> dict:
         """Kwargs for delegating the stand-in cell *source* to ``run_cell_async``.
@@ -1244,36 +1226,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         args: tuple,
         kwargs: dict,
     ) -> Any:
-        """Async twin of :meth:`_synthesize_run_cell_raise`.
-
-        Re-raise *e* through the original ``run_cell_async`` so the kernel
-        reply status is "error" while suppressing IPython's duplicate traceback
-        (the clean error display was already rendered by the executor's
-        ``_finalize_error_badge``).
-        """
-        self.shell.user_ns["__cash_exception__"] = e
-        orig_showtb = getattr(self.shell, "showtraceback", None)
-        try:
-            self.shell.showtraceback = lambda *a, **kw: None
-        except (AttributeError, TypeError):
-            logger.debug("Could not suppress IPython showtraceback")
-        ipython_error_result = None
-        try:
-            ipython_error_result = await self._original_run_cell_async(
+        """:meth:`_synthesize_run_cell_raise` through the original ``run_cell_async``."""
+        with self._raising_quietly(e):
+            return await self._original_run_cell_async(
                 "raise __cash_exception__",
                 *args,
                 **self._substitute_cell_kwargs("raise __cash_exception__", kwargs),
             )
-        finally:
-            try:
-                if orig_showtb is not None:
-                    self.shell.showtraceback = orig_showtb
-                else:
-                    with contextlib.suppress(AttributeError, TypeError):
-                        del self.shell.showtraceback
-            except (AttributeError, TypeError):
-                logger.debug("Could not restore showtraceback")
-        return ipython_error_result
 
     def _synthesize_run_cell_raise(
         self,
@@ -1282,20 +1241,28 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         kwargs: dict,
     ) -> Any:
         """Re-raise *e* through IPython's run_cell so the kernel reply status
-        is "error" while suppressing IPython's duplicate traceback.
+        is "error" while suppressing IPython's duplicate traceback (the clean
+        error display was already rendered by the executor's
+        ``_finalize_error_badge``).
 
         Hook-path only: makes sense when ``_execute_cell`` is itself standing
         in for ``run_cell``.
         """
+        with self._raising_quietly(e):
+            return self._original_run_cell("raise __cash_exception__", *args, **kwargs)
+
+    @contextlib.contextmanager
+    def _raising_quietly(self, e: BaseException) -> Iterator[None]:
+        """Bind *e* as ``__cash_exception__`` for a ``raise __cash_exception__``
+        cell, with IPython's traceback display switched off for its duration."""
         self.shell.user_ns["__cash_exception__"] = e
         orig_showtb = getattr(self.shell, "showtraceback", None)
         try:
             self.shell.showtraceback = lambda *a, **kw: None
         except (AttributeError, TypeError):
             logger.debug("Could not suppress IPython showtraceback")
-        ipython_error_result = None
         try:
-            ipython_error_result = self._original_run_cell("raise __cash_exception__", *args, **kwargs)
+            yield
         finally:
             try:
                 if orig_showtb is not None:
@@ -1305,17 +1272,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                         del self.shell.showtraceback
             except (AttributeError, TypeError):
                 logger.debug("Could not restore showtraceback")
-        return ipython_error_result
 
     def _finalize_cell_execution(
         self,
         raw_cell: str,
-        all_metrics: list[ProcessResult],
-        buffered_result_outputs: list,
-        badge_display_id: str,
-        hook_start: float,
-        timing_breakdown: TimingBreakdown,
-        badge_render_time: float,
+        done: PipelineCompleted,
         args: tuple,
         kwargs: dict,
     ) -> Any:
@@ -1327,30 +1288,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         ``self._original_run_cell("pass", *args, **kwargs)`` so IPython's
         internal bookkeeping (execution count, history) stays in sync.
         """
-        self._finalize_cell_body(
-            raw_cell,
-            all_metrics,
-            buffered_result_outputs,
-            badge_display_id,
-            hook_start,
-            timing_breakdown,
-            badge_render_time,
-        )
+        self._finalize_cell_body(raw_cell, done)
 
         # Delegate to original run_cell with "pass" so IPython keeps its
         # execution count + history consistent.
         return self._original_run_cell("pass", *args, **kwargs)
 
-    def _finalize_cell_body(
-        self,
-        raw_cell: str,
-        all_metrics: list[ProcessResult],
-        buffered_result_outputs: list,
-        badge_display_id: str,
-        hook_start: float,
-        timing_breakdown: TimingBreakdown,
-        badge_render_time: float,
-    ) -> None:
+    def _finalize_cell_body(self, raw_cell: str, done: PipelineCompleted) -> None:
         """Finaliser body shared by the sync and async tails.
 
         Everything the finaliser does *except* the ``"pass"`` delegation to
@@ -1359,7 +1303,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         top-level-await path from drifting on analytics, session stats,
         observability, buffered-output replay, and the final badge render.
         """
-        hook_total = time.time() - hook_start
+        all_metrics, timing_breakdown = done.all_metrics, done.timing_breakdown
+        hook_total = time.time() - done.hook_start
 
         # Analytics events are intentionally NOT flushed here, per cell.
         # The AnalyticsManager buffers events and flushes on its own policy —
@@ -1395,11 +1340,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             hook_total * 1000,
             timing_breakdown.get("badge_init", 0) * 1000,
             timing_breakdown.get("upstream_check", 0) * 1000,
-            badge_render_time * 1000,
+            done.badge_render_time * 1000,
         )
 
         # Show the buffered result (if any)
-        for output in buffered_result_outputs:
+        for output in done.buffered_outputs:
             if isinstance(output, dict) and "data" in output:
                 publish_display_data(data=output["data"], metadata=output.get("metadata", {}))
             else:
@@ -1425,7 +1370,10 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self.cancel_progress_badge()
         if self.badge_mode == "html":
             self.render_interactive_badge(
-                all_metrics, display_id=badge_display_id, cell_total_time=hook_total, timing_breakdown=timing_breakdown
+                all_metrics,
+                display_id=done.badge_display_id,
+                cell_total_time=hook_total,
+                timing_breakdown=timing_breakdown,
             )
         elif self.badge_mode == "print":
             self.print_text_badge(all_metrics, cell_total_time=hook_total)
@@ -1433,12 +1381,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
     async def _finalize_cell_execution_async(
         self,
         raw_cell: str,
-        all_metrics: list[ProcessResult],
-        buffered_result_outputs: list,
-        badge_display_id: str,
-        hook_start: float,
-        timing_breakdown: TimingBreakdown,
-        badge_render_time: float,
+        done: PipelineCompleted,
         args: tuple,
         kwargs: dict,
     ) -> Any:
@@ -1452,15 +1395,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         already executed per-statement by the async pipeline, so this ``"pass"``
         adds no side effects (execute-exactly-once).
         """
-        self._finalize_cell_body(
-            raw_cell,
-            all_metrics,
-            buffered_result_outputs,
-            badge_display_id,
-            hook_start,
-            timing_breakdown,
-            badge_render_time,
-        )
+        self._finalize_cell_body(raw_cell, done)
         # Replace ``transformed_cell`` so IPython runs our ``"pass"`` and NOT
         # the original user cell again (see _substitute_cell_kwargs).
         return await self._original_run_cell_async(

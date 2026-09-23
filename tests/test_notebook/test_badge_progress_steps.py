@@ -47,40 +47,37 @@ class _RecordingMagics:
         pass
 
 
+class _StubProcessor:
+    """Stands in for the statement processor: every statement computes."""
+
+    def process_statement(self, code, **_kwargs):
+        return {"code": code, "status": "COMPUTED"}
+
+    def set_written_later_in_cell(self, _names):
+        pass
+
+
 @pytest.fixture
 def executor():
     """A CellExecutor wired to a recording magics, with execution stubbed out.
 
     `__new__` rather than the constructor: the loop under test needs only the
-    badge hooks and `_process_regular_stmt`, and building a real executor would
-    drag in a shell, a cache backend and a control-structure processor that
-    none of these assertions touch.
+    badge hooks and the statement processor, and building a real executor
+    would drag in a shell, a cache backend and a control-structure processor
+    that none of these assertions touch.
     """
     from cash.notebook.ipython.cell_executor import CellExecutor
 
     ex = CellExecutor.__new__(CellExecutor)
     ex._magics = _RecordingMagics()
-    ex._debug = False
-
-    def _stub_process(
-        stmt_code, annotation, occ, is_last, all_metrics, buffered_result_outputs, display_code=None, exec_source=None
-    ):
-        all_metrics.append({"code": stmt_code, "status": "COMPUTED"})
-        return buffered_result_outputs
-
-    ex._process_regular_stmt = _stub_process  # type: ignore[assignment]
+    ex._statement_processor = _StubProcessor()
     return ex
 
 
 def _run(executor, cell: str = CELL):
-    executor._execute_cell_statements(
-        cell,
-        ast.parse(cell),
-        [],
-        "display-1",
-        0.0,
-        {},
-    )
+    from cash.notebook.ipython.cell_executor import _CellRun
+
+    executor._execute_cell_statements(_CellRun(cell, ast.parse(cell), [], "display-1", 0.0, {}))
     return executor._magics
 
 

@@ -31,14 +31,6 @@ def run_cash_cell(magics: Any, code: str, *, ttl: int | None = None) -> None:
         result = magics._cell_executor.execute_cell(code)
         if isinstance(result, (EarlyReturn, PipelineSyntaxError)):
             return
-        magics._finalize_cell_body(
-            code,
-            result.all_metrics,
-            result.buffered_outputs,
-            result.badge_display_id,
-            result.hook_start,
-            result.timing_breakdown,
-            result.badge_render_time,
-        )
+        magics._finalize_cell_body(code, result)
     finally:
         magics.global_ttl = saved_ttl

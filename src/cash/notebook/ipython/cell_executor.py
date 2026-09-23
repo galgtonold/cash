@@ -47,8 +47,9 @@ import hashlib
 import sys
 import time
 import uuid
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from collections.abc import Awaitable, Callable, Generator, Iterator
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from IPython.display import display, publish_display_data
 
@@ -103,7 +104,7 @@ class PipelineSyntaxError:
     __slots__ = ()
 
 
-class _PipelineCompleted:
+class PipelineCompleted:
     """Successful pipeline run: carries everything the finaliser needs."""
 
     __slots__ = (
@@ -130,6 +131,72 @@ class _PipelineCompleted:
         self.hook_start = hook_start
         self.timing_breakdown = timing_breakdown
         self.badge_render_time = badge_render_time
+
+
+@dataclass
+class _CellRun:
+    """A cell on its way through the pipeline, once phases 1-6 are done."""
+
+    raw_cell: str
+    tree: ast.Module
+    #: Every row the badge will show, the upstream rows first.
+    all_metrics: list[ProcessResult]
+    badge_display_id: str
+    hook_start: float
+    timing_breakdown: TimingBreakdown
+
+
+@dataclass(frozen=True)
+class _Step:
+    """The one part of a cell the sync and async paths run differently.
+
+    A statement for the statement processor (*kwargs* are its arguments), or,
+    with *await_unit*, a control structure whose body awaits, run as one
+    awaited unit (*kwargs* then go to ``process_await_unit``).
+    """
+
+    kwargs: dict[str, Any]
+    await_unit: ast.stmt | None = None
+
+
+_StepResult = TypeVar("_StepResult")
+
+
+def _drive(steps: Generator[_Step, Any, _StepResult], run: Callable[[_Step], Any]) -> _StepResult:
+    """Run *steps* to completion, handing each yielded step to *run*.
+
+    An exception *run* raises is raised back inside *steps*, at the ``yield``
+    that asked for the step, so the loop's own handlers see it exactly as if
+    the step had run in place.
+    """
+    try:
+        step = next(steps)
+        while True:
+            try:
+                reply = run(step)
+            except BaseException as exc:  # noqa: BLE001 - re-raised inside the loop, where it happened
+                step = steps.throw(exc)
+            else:
+                step = steps.send(reply)
+    except StopIteration as done:
+        return done.value
+
+
+async def _drive_async(
+    steps: Generator[_Step, Any, _StepResult], run: Callable[[_Step], Awaitable[Any]]
+) -> _StepResult:
+    """:func:`_drive`, awaiting each step."""
+    try:
+        step = next(steps)
+        while True:
+            try:
+                reply = await run(step)
+            except BaseException as exc:  # noqa: BLE001 - re-raised inside the loop, where it happened
+                step = steps.throw(exc)
+            else:
+                step = steps.send(reply)
+    except StopIteration as done:
+        return done.value
 
 
 def _pyplot_open_fignums() -> set[int]:
@@ -949,23 +1016,56 @@ class CellExecutor:
         args: tuple = (),
         kwargs: dict | None = None,
         original_run_cell: Callable[..., Any] | None = None,
-    ) -> _PipelineCompleted | PipelineSyntaxError | EarlyReturn:
+    ) -> PipelineCompleted | PipelineSyntaxError | EarlyReturn:
         """Run *raw_cell* through the 7-phase cached-execution pipeline.
 
         Returns one of:
-        - :class:`_PipelineCompleted` — caller invokes the finaliser
+        - :class:`PipelineCompleted` — caller invokes the finaliser
         - :class:`PipelineSyntaxError` — the cell's own AST failed to parse
         - :class:`EarlyReturn` — propagate the wrapped value (hook only)
         """
-        # Each file is hashed at most once per cell run (file_dep_snapshot).
+        with self._cell_scope():
+            cell = self._prepare_cell(raw_cell, args, kwargs or {}, original_run_cell)
+            if not isinstance(cell, _CellRun):
+                return cell
+            with self._statements_scope(cell):
+                result = self._execute_cell_statements(cell)
+            return self._complete_cell(cell, result)
+
+    async def execute_cell_async(
+        self,
+        raw_cell: str,
+        args: tuple = (),
+        kwargs: dict | None = None,
+        original_run_cell: Callable[..., Any] | None = None,
+    ) -> PipelineCompleted | PipelineSyntaxError | EarlyReturn:
+        """:meth:`execute_cell` for a cell with a top-level ``await``.
+
+        Every phase is the sync pipeline's own; only the statements are run
+        through :meth:`_execute_cell_statements_async`, so a top-level
+        ``await`` runs on IPython's live loop.
+        """
+        with self._cell_scope():
+            cell = self._prepare_cell(raw_cell, args, kwargs or {}, original_run_cell)
+            if not isinstance(cell, _CellRun):
+                return cell
+            with self._statements_scope(cell):
+                result = await self._execute_cell_statements_async(cell)
+            return self._complete_cell(cell, result)
+
+    @contextlib.contextmanager
+    def _cell_scope(self) -> Iterator[None]:
+        """What holds for the whole cell run: one file-state epoch (each file
+        is hashed at most once per cell), one batch of backend notices (one
+        CACHE-NOT-WORTH-BYTES per cell, not per statement), and IPython's
+        builtin trap."""
         begin_file_state_epoch()
-        # One CACHE-NOT-WORTH-BYTES per cell, not per statement (round 29).
         backend = self._cell_warning_backend()
         if backend is not None:
             backend.hold_notices()
         try:
             with _builtin_trap(self.shell):
-                return self._execute_cell_pipeline(raw_cell, args, kwargs, original_run_cell)
+                yield
         finally:
             end_file_state_epoch()
             if backend is not None:
@@ -979,16 +1079,14 @@ class CellExecutor:
         except Exception:  # noqa: BLE001 - batching is cosmetic; never block a cell
             return None
 
-    def _execute_cell_pipeline(
+    def _prepare_cell(
         self,
         raw_cell: str,
         args: tuple,
-        kwargs: dict | None,
+        kwargs: dict,
         original_run_cell: Callable[..., Any] | None,
-    ) -> _PipelineCompleted | PipelineSyntaxError | EarlyReturn:
-        """The body of :meth:`execute_cell`."""
-        kwargs = kwargs or {}
-
+    ) -> _CellRun | PipelineSyntaxError | EarlyReturn:
+        """Phases 1-6: everything before the cell's statements run."""
         # 1. Cell ID & notebook path
         self._extract_cell_id_and_notebook_path()
 
@@ -1030,45 +1128,43 @@ class CellExecutor:
             pre_upstream_metrics,
             upstream_metrics,
         )
+        return _CellRun(raw_cell, tree, all_metrics, badge_display_id, hook_start, timing_breakdown)
 
+    @contextlib.contextmanager
+    def _statements_scope(self, cell: _CellRun) -> Iterator[None]:
+        """Phase 7's frame around the statements: a fresh RNG observation and
+        statement log for the cell, remote freshness checks measured into the
+        breakdown, and -- once every statement ran -- the persisting of what
+        the cell left that would be costly to rebuild after a restart."""
         logger.debug("[TIMING_PROXY] Start executing statements")
-
-        # 7. Statement execution. The per-statement RNG observer does the
-        # measuring; this only opens a fresh accumulation for the cell.
         self._statement_processor.begin_cell_rng_observation()
         self._statement_processor.begin_cell_statement_log()
         # Remote freshness checks (a cached function reading s3:// and friends)
         # are network round trips that land on the HIT path, where the badge
-        # reports a saving and nothing reports what establishing it cost. The
-        # measurement writes itself into the breakdown on exit, so it survives
-        # the early return below.
-        with _measured_validation(sink=timing_breakdown):
-            result = self._execute_cell_statements(
-                raw_cell,
-                tree,
-                all_metrics,
-                badge_display_id,
-                hook_start,
-                timing_breakdown,
-            )
-        # What the cell left that would be costly to rebuild after a restart
-        # goes to disk now, once, as its final version.
+        # reports a saving and nothing reports what establishing it cost.
+        with _measured_validation(sink=cell.timing_breakdown):
+            yield
         t_persist = time.time()
         self._statement_processor.end_cell_persistence()
-        timing_breakdown["persist_final"] = time.time() - t_persist
+        cell.timing_breakdown["persist_final"] = time.time() - t_persist
+
+    def _complete_cell(
+        self,
+        cell: _CellRun,
+        result: EarlyReturn | tuple[list[ProcessResult], list, float],
+    ) -> PipelineCompleted | EarlyReturn:
+        """What the finaliser needs, once the cell's statements have run."""
         if isinstance(result, EarlyReturn):
             return result
-
         all_metrics, buffered_result_outputs, badge_render_time = result
-        timing_breakdown["badge_progress"] = badge_render_time
-        self._record_executed_cell_hash(raw_cell)
-
-        return _PipelineCompleted(
+        cell.timing_breakdown["badge_progress"] = badge_render_time
+        self._record_executed_cell_hash(cell.raw_cell)
+        return PipelineCompleted(
             all_metrics=all_metrics,
             buffered_outputs=buffered_result_outputs,
-            badge_display_id=badge_display_id,
-            hook_start=hook_start,
-            timing_breakdown=timing_breakdown,
+            badge_display_id=cell.badge_display_id,
+            hook_start=cell.hook_start,
+            timing_breakdown=cell.timing_breakdown,
             badge_render_time=badge_render_time,
         )
 
@@ -1117,124 +1213,6 @@ class CellExecutor:
                     )
         except (AttributeError, TypeError):  # pragma: no cover - defensive
             pass
-
-    async def execute_cell_async(
-        self,
-        raw_cell: str,
-        args: tuple = (),
-        kwargs: dict | None = None,
-        original_run_cell: Callable[..., Any] | None = None,
-    ) -> _PipelineCompleted | PipelineSyntaxError | EarlyReturn:
-        """Async twin of :meth:`execute_cell` for top-level-await cells.
-
-        Runs the identical 7-phase pipeline — cell id, badge/timing init, module
-        change detection, upstream resolution, AST parse, pre-execution
-        notifications — then awaits :meth:`_execute_cell_statements_async` so a
-        top-level ``await`` executes on IPython's live loop.  Because every phase
-        but statement execution is shared verbatim, the async path can never
-        drift from the sync path in upstream reconstruction, cacheability, or
-        badge accounting.
-        """
-        # Each file is hashed at most once per cell run (file_dep_snapshot).
-        begin_file_state_epoch()
-        backend = self._cell_warning_backend()  # as execute_cell
-        if backend is not None:
-            backend.hold_notices()
-        try:
-            with _builtin_trap(self.shell):
-                return await self._execute_cell_pipeline_async(raw_cell, args, kwargs, original_run_cell)
-        finally:
-            end_file_state_epoch()
-            if backend is not None:
-                backend.release_notices()
-
-    async def _execute_cell_pipeline_async(
-        self,
-        raw_cell: str,
-        args: tuple,
-        kwargs: dict | None,
-        original_run_cell: Callable[..., Any] | None,
-    ) -> _PipelineCompleted | PipelineSyntaxError | EarlyReturn:
-        """The body of :meth:`execute_cell_async`."""
-        kwargs = kwargs or {}
-
-        # 1. Cell ID & notebook path
-        self._extract_cell_id_and_notebook_path()
-
-        # 2. Badge & timing init
-        badge_display_id = str(uuid.uuid4())
-        timing_breakdown = self._init_cell_timing_and_badge(badge_display_id)
-        hook_start = time.time()
-        logger.debug("[TIMING_PROXY] Start cached_run_cell (async)")
-
-        # 3. Module change detection (must precede upstream check)
-        pre_upstream_metrics = self._detect_module_changes(raw_cell)
-
-        # 4. Upstream resolution
-        upstream_result = self._resolve_upstream_state(
-            raw_cell,
-            pre_upstream_metrics,
-            badge_display_id,
-            timing_breakdown,
-            args,
-            kwargs,
-            original_run_cell,
-        )
-        if isinstance(upstream_result, EarlyReturn):
-            return upstream_result
-        upstream_metrics, _restore_time, _execution_time = upstream_result
-
-        # 5. AST parse (tolerate a top-level ``await``; a bare
-        # ast.parse rejects module-level await and would silently skip the cell)
-        try:
-            tree = CodeAnalyzer.parse_cell(raw_cell)
-        except SyntaxError:
-            self._magics.cancel_progress_badge()
-            self._magics.render_interactive_badge([], display_id=badge_display_id, status="DONE")
-            return PipelineSyntaxError()
-
-        # 6. Pre-execution notifications
-        all_metrics = self._build_pre_execution_notifications(
-            raw_cell,
-            pre_upstream_metrics,
-            upstream_metrics,
-        )
-
-        logger.debug("[TIMING_PROXY] Start executing statements (async)")
-
-        # 7. Statement execution (awaited). Same single observer as the sync path.
-        self._statement_processor.begin_cell_rng_observation()
-        self._statement_processor.begin_cell_statement_log()
-        # Remote freshness checks, measured exactly as in the sync path.
-        with _measured_validation(sink=timing_breakdown):
-            result = await self._execute_cell_statements_async(
-                raw_cell,
-                tree,
-                all_metrics,
-                badge_display_id,
-                hook_start,
-                timing_breakdown,
-            )
-        # What the cell left that would be costly to rebuild after a restart
-        # goes to disk now, once, as its final version.
-        t_persist = time.time()
-        self._statement_processor.end_cell_persistence()
-        timing_breakdown["persist_final"] = time.time() - t_persist
-        if isinstance(result, EarlyReturn):
-            return result
-
-        all_metrics, buffered_result_outputs, badge_render_time = result
-        timing_breakdown["badge_progress"] = badge_render_time
-        self._record_executed_cell_hash(raw_cell)
-
-        return _PipelineCompleted(
-            all_metrics=all_metrics,
-            buffered_outputs=buffered_result_outputs,
-            badge_display_id=badge_display_id,
-            hook_start=hook_start,
-            timing_breakdown=timing_breakdown,
-            badge_render_time=badge_render_time,
-        )
 
     # ------------------------------------------------------------------
     # Phase 1: cell ID & notebook path
@@ -1845,86 +1823,6 @@ class CellExecutor:
             buffered_result_outputs,
         )
 
-    def _process_regular_stmt(
-        self,
-        stmt_code: str,
-        annotation: Any,
-        occurrence_index: int,
-        is_last_statement: bool,
-        all_metrics: list[ProcessResult],
-        buffered_result_outputs: list,
-        display_code: str | None = None,
-        exec_source: str | None = None,
-    ) -> list:
-        """Process one non-control statement with caching; return updated buffer.
-
-        ``display_code`` and ``exec_source`` are usually the SAME text (the
-        loop passes ``stmt_display`` for both -- see ``_statement_source``),
-        but diverge for a top-level ``def``/``class``: the badge withholds
-        the body there (``display_code`` stays ``None``), while
-        ``exec_source`` recovers the original text for execution -- but ONLY
-        when the purity analyzer recognises the body as carrying an
-        ``# @cash:assume-safe`` waiver (see ``_exec_source_for_node``); a
-        def/class with no waiver gets ``exec_source=None`` too and executes
-        from the same unparsed form it always did. See the caller in
-        ``_execute_cell_statements``.
-        """
-        metrics = self._statement_processor.process_statement(
-            stmt_code,
-            self._magics.global_ttl,
-            silent=True,
-            annotation=annotation,
-            display_code=display_code,
-            exec_source=exec_source,
-            occurrence_index=occurrence_index,
-            # IPython echoes only the CELL's last expression; cash executes each
-            # statement as its own unit, so it must be told which one that is
-            # .
-            is_last=is_last_statement,
-        )
-        return self._handle_regular_stmt_metrics(
-            metrics,
-            is_last_statement,
-            all_metrics,
-            buffered_result_outputs,
-        )
-
-    async def _process_regular_stmt_async(
-        self,
-        stmt_code: str,
-        annotation: Any,
-        occurrence_index: int,
-        is_last_statement: bool,
-        all_metrics: list[ProcessResult],
-        buffered_result_outputs: list,
-        display_code: str | None = None,
-        exec_source: str | None = None,
-    ) -> list:
-        """Async twin of :meth:`_process_regular_stmt`.
-
-        Routes every regular statement through ``process_statement_async`` so a
-        top-level ``await`` is executed on IPython's live loop.  A statement
-        with no top-level await compiles without ``CO_COROUTINE`` and runs
-        through the same synchronous exec/eval inside the async executor, so its
-        behaviour (and cache key) is identical to the sync path.
-        """
-        metrics = await self._statement_processor.process_statement_async(
-            stmt_code,
-            self._magics.global_ttl,
-            silent=True,
-            annotation=annotation,
-            display_code=display_code,
-            exec_source=exec_source,
-            occurrence_index=occurrence_index,
-            is_last=is_last_statement,  # as in the sync path
-        )
-        return self._handle_regular_stmt_metrics(
-            metrics,
-            is_last_statement,
-            all_metrics,
-            buffered_result_outputs,
-        )
-
     def _collect_ctrl_outputs(
         self,
         ctrl_result: Any,
@@ -1949,16 +1847,7 @@ class CellExecutor:
             )
         return buffered_result_outputs
 
-    def _finalize_error_badge(
-        self,
-        e: BaseException,
-        raw_cell: str,
-        node: ast.stmt,
-        all_metrics: list[ProcessResult],
-        badge_display_id: str,
-        hook_start: float,
-        timing_breakdown: "TimingBreakdown",
-    ) -> None:
+    def _finalize_error_badge(self, e: BaseException, cell: _CellRun, node: ast.stmt) -> None:
         """Show a clean error display + render the final DONE badge.
 
         Does **not** re-raise — that is the pipeline caller's job.
@@ -1967,34 +1856,51 @@ class CellExecutor:
         # (it hadn't finished, so nothing cancelled it yet) -- stop it before
         # rendering the DONE badge below so a late fire can't overwrite it.
         self._magics.cancel_progress_badge()
-        self._magics.show_clean_error(e, raw_cell, node)
-        hook_total = time.time() - hook_start
+        self._magics.show_clean_error(e, cell.raw_cell, node)
+        hook_total = time.time() - cell.hook_start
         if self._magics.badge_mode == "html":
             self._magics.render_interactive_badge(
-                all_metrics,
-                display_id=badge_display_id,
+                cell.all_metrics,
+                display_id=cell.badge_display_id,
                 cell_total_time=hook_total,
-                timing_breakdown=timing_breakdown,
+                timing_breakdown=cell.timing_breakdown,
                 status="DONE",
             )
         elif self._magics.badge_mode == "print":
-            self._magics.print_text_badge(all_metrics, cell_total_time=hook_total)
+            self._magics.print_text_badge(cell.all_metrics, cell_total_time=hook_total)
 
-    def _execute_cell_statements(
-        self,
-        raw_cell: str,
-        tree: ast.Module,
-        all_metrics: list[ProcessResult],
-        badge_display_id: str,
-        hook_start: float,
-        timing_breakdown: "TimingBreakdown",
-    ) -> EarlyReturn | tuple[list[ProcessResult], list, float]:
-        """Iterate over AST statements, executing or caching each one.
+    def _execute_cell_statements(self, cell: _CellRun) -> tuple[list[ProcessResult], list, float]:
+        """Run the cell's statements (see :meth:`_cell_steps`).
 
         Returns ``(all_metrics, buffered_result_outputs, badge_render_time)``
         on success, or raises if a statement raised an error (after first
         rendering the error badge via :meth:`_finalize_error_badge`).
         """
+        return _drive(self._cell_steps(cell, awaitable=False), self._run_step)
+
+    async def _execute_cell_statements_async(self, cell: _CellRun) -> tuple[list[ProcessResult], list, float]:
+        """:meth:`_execute_cell_statements`, awaiting each statement, so a
+        top-level ``await`` runs on IPython's live loop."""
+        return await _drive_async(self._cell_steps(cell, awaitable=True), self._run_step_async)
+
+    def _run_step(self, step: _Step) -> Any:
+        return self._statement_processor.process_statement(**step.kwargs)
+
+    async def _run_step_async(self, step: _Step) -> Any:
+        if step.await_unit is not None:
+            return await self._control_structure_processor.process_await_unit(step.await_unit, **step.kwargs)
+        return await self._statement_processor.process_statement_async(**step.kwargs)
+
+    def _cell_steps(
+        self, cell: _CellRun, *, awaitable: bool
+    ) -> Generator[_Step, Any, tuple[list[ProcessResult], list, float]]:
+        """Iterate over the cell's statements, executing or caching each one.
+
+        Yields a :class:`_Step` for the work the sync and async paths run
+        differently, and is sent back its result: each regular statement, and
+        -- when *awaitable* -- a control structure whose body awaits.
+        """
+        raw_cell, tree, all_metrics = cell.raw_cell, cell.tree, cell.all_metrics
         buffered_result_outputs: list = []
         badge_render_time = 0.0
 
@@ -2046,7 +1952,7 @@ class CellExecutor:
             t_badge_pre = time.time()
             self._magics.arm_progress_badge(
                 all_metrics,
-                display_id=badge_display_id,
+                display_id=cell.badge_display_id,
                 step=unified_step,
                 total=total_steps_unified,
                 code=stmt_code,
@@ -2056,7 +1962,6 @@ class CellExecutor:
             try:
                 try:
                     if is_control_structure(node):
-                        logger.debug("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
                         # ``raw_cell`` (not the annotation) is what goes down: the
                         # structure's statements each resolve their OWN directive
                         # against the original source, and ``ast.unparse`` has already
@@ -2069,13 +1974,26 @@ class CellExecutor:
                         # traces it, for the figure histories a writer records.
                         control_log = self._statement_processor.begin_control_log(stmt_code)
                         try:
-                            ctrl_result = self._control_structure_processor.process(
-                                node,
-                                ttl=self._magics.global_ttl,
-                                silent=True,
-                                raw_cell=raw_cell,
-                                prev_node=tree.body[i - 1] if i > 0 else None,
-                            )
+                            if awaitable and contains_top_level_await(node):
+                                # The sync ControlStructureProcessor cannot compile a
+                                # body that awaits (``'await' outside function``), so
+                                # the whole structure runs as one awaited unit.
+                                logger.debug("[CONTROL] Await inside control body, running as awaited single unit")
+                                ctrl_result = yield _Step(
+                                    {"ttl": self._magics.global_ttl, "silent": True, "raw_cell": raw_cell},
+                                    await_unit=node,
+                                )
+                            else:
+                                logger.debug(
+                                    "[CONTROL] Detected control structure, delegating to ControlStructureProcessor"
+                                )
+                                ctrl_result = self._control_structure_processor.process(
+                                    node,
+                                    ttl=self._magics.global_ttl,
+                                    silent=True,
+                                    raw_cell=raw_cell,
+                                    prev_node=tree.body[i - 1] if i > 0 else None,
+                                )
                         finally:
                             self._statement_processor.end_control_log(control_log)
                         buffered_result_outputs = self._collect_ctrl_outputs(
@@ -2095,37 +2013,42 @@ class CellExecutor:
                     else:
                         _set_written_later(self, written_later[i])
                         try:
-                            buffered_result_outputs = self._process_regular_stmt(
-                                stmt_code,
-                                annotation,
-                                occ,
+                            # ``display_code`` and ``exec_source`` differ only for a
+                            # top-level ``def``/``class``: the badge withholds the
+                            # body, and the original text is executed only under an
+                            # ``# @cash:assume-safe`` waiver (``_exec_source_for_node``).
+                            metrics = yield _Step(
+                                {
+                                    "code": stmt_code,
+                                    "ttl": self._magics.global_ttl,
+                                    "silent": True,
+                                    "annotation": annotation,
+                                    "display_code": stmt_display,
+                                    "exec_source": stmt_exec_source,
+                                    "occurrence_index": occ,
+                                    # IPython echoes only the CELL's last expression;
+                                    # cash executes each statement as its own unit.
+                                    "is_last": is_last,
+                                }
+                            )
+                            buffered_result_outputs = self._handle_regular_stmt_metrics(
+                                metrics,
                                 is_last,
                                 all_metrics,
                                 buffered_result_outputs,
-                                display_code=stmt_display,
-                                exec_source=stmt_exec_source,
                             )
                         finally:
                             _set_written_later(self, frozenset())
 
                     self._magics.cancel_progress_badge()
                     t_badge = time.time()
-                    # `unified_step`, NOT `unified_step + 1`. This fires when a
-                    # statement has FINISHED; the next one has not started, and
-                    # saying it had is what put a wrong number on the badge.
-                    # Measured on a cell of three trivial assignments followed
-                    # by an eight-second one: the badge read `(2/6)` while
-                    # nothing at all was running, and on the last statement the
-                    # counter ran off the end of the cell entirely -- `(7/6)`.
-                    # Both are invisible at full speed, because the throttle
-                    # drops these renders when they arrive in a burst, and both
-                    # show up as soon as a render is slow enough to escape it.
-                    # The number now means "the furthest statement cash has
-                    # reached", which is what `arm_progress_badge` publishes
-                    # too, so the two sources agree instead of leapfrogging.
+                    # `unified_step`, NOT `unified_step + 1`: this fires when a
+                    # statement has FINISHED, and the next one has not started.
+                    # The number means "the furthest statement cash has reached",
+                    # which is what `arm_progress_badge` publishes too.
                     self._magics.maybe_progress_badge(
                         all_metrics,
-                        display_id=badge_display_id,
+                        display_id=cell.badge_display_id,
                         step=unified_step,
                         total=total_steps_unified,
                         code=None,
@@ -2133,219 +2056,15 @@ class CellExecutor:
                     badge_render_time += time.time() - t_badge
 
                 except Exception as e:  # noqa: BLE001 - intentionally broad: catches user code exceptions
-                    self._finalize_error_badge(
-                        e,
-                        raw_cell,
-                        node,
-                        all_metrics,
-                        badge_display_id,
-                        hook_start,
-                        timing_breakdown,
-                    )
+                    self._finalize_error_badge(e, cell, node)
                     raise
             finally:
                 # Cancel on EVERY exit from this statement, not just the two
-                # paths above (the explicit cancel on success, and the one
-                # inside _finalize_error_badge for a caught Exception). A
-                # BaseException that isn't an Exception -- KeyboardInterrupt,
-                # or asyncio.CancelledError from an interrupted await -- skips
-                # the `except` above entirely, and neither
-                # _execute_cell_inner nor its async twin cancels either. Left
-                # armed, that timer fires up to _BADGE_MIN_RENDER_INTERVAL
-                # after the interrupt, on whatever cell is running by then.
+                # paths above. A BaseException that isn't an Exception --
+                # KeyboardInterrupt, or asyncio.CancelledError from an interrupted
+                # await -- skips the `except` above entirely. Left armed, that
+                # timer fires later, on whatever cell is running by then.
                 # Safe to call unconditionally: a no-op once already cancelled.
-                self._magics.cancel_progress_badge()
-
-        return (all_metrics, buffered_result_outputs, badge_render_time)
-
-    async def _execute_cell_statements_async(
-        self,
-        raw_cell: str,
-        tree: ast.Module,
-        all_metrics: list[ProcessResult],
-        badge_display_id: str,
-        hook_start: float,
-        timing_breakdown: "TimingBreakdown",
-    ) -> EarlyReturn | tuple[list[ProcessResult], list, float]:
-        """Async twin of :meth:`_execute_cell_statements` for top-level-await cells.
-
-        Identical badge / occurrence / trailing-semicolon / control-structure /
-        error-badge plumbing as the sync loop — the ONLY difference is that a
-        regular (non-control) statement is executed via the awaited
-        :meth:`_process_regular_stmt_async`, so a top-level ``await`` runs on
-        IPython's live loop.  Control structures still go through the sync
-        ``ControlStructureProcessor`` (they own their own body/mutation lineage
-        and never contain top-level await).
-        """
-        buffered_result_outputs: list = []
-        badge_render_time = 0.0
-
-        upstream_step_count = len(
-            [m for m in all_metrics if m.get("is_upstream", False) and m.get("status") != "SKIPPED"]
-        )
-        total_steps_unified = upstream_step_count + len(tree.body)
-        stmt_occurrence_counts: dict[str, int] = {}
-        written_later = _written_later_in_cell(tree.body)
-        checker = getattr(self, "_upstream_checker", None)
-        try:
-            jump_runs = _jumpable_runs(tree.body, raw_cell, checker.cell_touches_rng) if checker is not None else {}
-        except Exception:  # noqa: BLE001 - no jump is the ordinary run
-            jump_runs = {}
-        #: Statements a restore of a later version made unnecessary.
-        planned: dict[int, ProcessResult] = {}
-
-        for i, node in enumerate(tree.body):
-            if i in jump_runs:
-                plan = checker.plan_cell_run(tree.body[i : jump_runs[i]], raw_cell, dict(stmt_occurrence_counts))
-                planned = {i + k: m for k, m in (plan or {}).items()}
-            try:
-                stmt_code = ast.unparse(node)
-            except (ValueError, TypeError):
-                continue
-
-            # The badge shows the user's own layout; `stmt_code` above stays the
-            # keyed and executed text. See `_statement_source`.
-            stmt_display = _statement_source(raw_cell, node)
-            stmt_exec_source = _exec_source_for_node(raw_cell, node, stmt_display)
-
-            if self.expr_has_trailing_semicolon(raw_cell, node):
-                stmt_code = stmt_code + ";"
-
-            occ = stmt_occurrence_counts.get(stmt_code, 0)
-            stmt_occurrence_counts[stmt_code] = occ + 1
-            if i in planned:
-                all_metrics.append(planned.pop(i))
-                continue
-            annotation = get_statement_annotations(raw_cell, node)
-            is_last = i == len(tree.body) - 1
-            unified_step = upstream_step_count + i + 1
-
-            t_badge_pre = time.time()
-            self._magics.arm_progress_badge(
-                all_metrics,
-                display_id=badge_display_id,
-                step=unified_step,
-                total=total_steps_unified,
-                code=stmt_code,
-            )
-            badge_render_time += time.time() - t_badge_pre
-
-            try:
-                try:
-                    if is_control_structure(node):
-                        if contains_top_level_await(node):
-                            # A control body that awaits (``for x in xs: r = await
-                            # fetch(x)``) cannot be compiled by the sync
-                            # ControlStructureProcessor — its unflagged compile()
-                            # raises ``SyntaxError: 'await' outside function``
-                            # . Run the whole structure as one awaited unit
-                            # through the PyCF_ALLOW_TOP_LEVEL_AWAIT-capable path.
-                            logger.debug("[CONTROL] Await inside control body, running as awaited single unit")
-                            control_log = self._statement_processor.begin_control_log(stmt_code)
-                            try:
-                                ctrl_result = await self._control_structure_processor.process_await_unit(
-                                    node,
-                                    ttl=self._magics.global_ttl,
-                                    silent=True,
-                                    raw_cell=raw_cell,
-                                )
-                            finally:
-                                self._statement_processor.end_control_log(control_log)
-                        else:
-                            logger.debug(
-                                "[CONTROL] Detected control structure, delegating to ControlStructureProcessor"
-                            )
-                            # ``raw_cell`` (not the annotation) is what goes down: the
-                            # structure's statements each resolve their OWN directive
-                            # against the original source, and ``ast.unparse`` has already
-                            # dropped the comments by the time they are dispatched. The
-                            # ``annotation`` computed above is the node's WHOLE-range
-                            # merge, which cannot tell a directive on the loop from one on
-                            # a single body statement — passing it would disable caching
-                            # for every sibling in the body.
-                            control_log = self._statement_processor.begin_control_log(stmt_code)
-                            try:
-                                ctrl_result = self._control_structure_processor.process(
-                                    node,
-                                    ttl=self._magics.global_ttl,
-                                    silent=True,
-                                    raw_cell=raw_cell,
-                                    prev_node=tree.body[i - 1] if i > 0 else None,
-                                )
-                            finally:
-                                self._statement_processor.end_control_log(control_log)
-                        buffered_result_outputs = self._collect_ctrl_outputs(
-                            ctrl_result,
-                            is_last,
-                            all_metrics,
-                            buffered_result_outputs,
-                        )
-                        logger.debug(
-                            "[CONTROL] Completed: %s iterations, %s cached, %s computed",
-                            ctrl_result.total_iterations,
-                            ctrl_result.cached_iterations,
-                            ctrl_result.computed_iterations,
-                        )
-                        if not ctrl_result.success:
-                            raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
-                    else:
-                        _set_written_later(self, written_later[i])
-                        try:
-                            buffered_result_outputs = await self._process_regular_stmt_async(
-                                stmt_code,
-                                annotation,
-                                occ,
-                                is_last,
-                                all_metrics,
-                                buffered_result_outputs,
-                                display_code=stmt_display,
-                                exec_source=stmt_exec_source,
-                            )
-                        finally:
-                            _set_written_later(self, frozenset())
-
-                    self._magics.cancel_progress_badge()
-                    t_badge = time.time()
-                    # `unified_step`, NOT `unified_step + 1`. This fires when a
-                    # statement has FINISHED; the next one has not started, and
-                    # saying it had is what put a wrong number on the badge.
-                    # Measured on a cell of three trivial assignments followed
-                    # by an eight-second one: the badge read `(2/6)` while
-                    # nothing at all was running, and on the last statement the
-                    # counter ran off the end of the cell entirely -- `(7/6)`.
-                    # Both are invisible at full speed, because the throttle
-                    # drops these renders when they arrive in a burst, and both
-                    # show up as soon as a render is slow enough to escape it.
-                    # The number now means "the furthest statement cash has
-                    # reached", which is what `arm_progress_badge` publishes
-                    # too, so the two sources agree instead of leapfrogging.
-                    self._magics.maybe_progress_badge(
-                        all_metrics,
-                        display_id=badge_display_id,
-                        step=unified_step,
-                        total=total_steps_unified,
-                        code=None,
-                    )
-                    badge_render_time += time.time() - t_badge
-
-                except Exception as e:  # noqa: BLE001 - intentionally broad: catches user code exceptions
-                    self._finalize_error_badge(
-                        e,
-                        raw_cell,
-                        node,
-                        all_metrics,
-                        badge_display_id,
-                        hook_start,
-                        timing_breakdown,
-                    )
-                    raise
-            finally:
-                # See the identical guard in _execute_cell_statements: a
-                # BaseException that bypasses `except Exception` (
-                # KeyboardInterrupt, or asyncio.CancelledError from an
-                # interrupted await -- the more exposed case on THIS path)
-                # must still cancel a pending timer, or it fires later on
-                # whatever cell happens to be running by then.
                 self._magics.cancel_progress_badge()
 
         return (all_metrics, buffered_result_outputs, badge_render_time)

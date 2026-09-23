@@ -104,13 +104,13 @@ top-level `await` is cached like any other cell.
 rows = await db.fetch("SELECT * FROM events")   # under %cash_on: cached like any other cell
 ```
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell_async @04912051, cash/notebook/ipython/cell_executor.py:CellExecutor._execute_cell_pipeline_async @94fd8a41, cash/notebook/statement/processor.py:StatementProcessor.process_statement_async @9e5da42a -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell_async @04912051, cash/notebook/ipython/cell_executor.py:CellExecutor._execute_cell_statements_async @acddfdda, cash/notebook/statement/processor.py:StatementProcessor.process_statement_async @9e5da42a -->
 ipykernel dispatches such a cell through `shell.run_cell_async` rather than the
 `pre_run_cell` hook that `%cash_on` patches, so cash intercepts that entry point
 too and routes the cell into `CellExecutor.execute_cell_async` →
-`StatementProcessor.process_statement_async`. That pipeline is the line-for-line
-twin of the sync one, so awaited cells get lineage tracking, upstream reset, and
-result caching alike.
+`StatementProcessor.process_statement_async`. Every step but running the
+statement is the sync pipeline's own code, so awaited cells get lineage
+tracking, upstream reset, and result caching alike.
 
 The cache-hit check runs *before* the coroutine is built, so an unchanged re-run
 skips the `await` entirely rather than re-issuing the request — which is the
