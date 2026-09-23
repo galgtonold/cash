@@ -41,7 +41,7 @@ from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .._trace import is_tracing, trace_event
 from ..cache_key import read_provenance_key
 from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
-from ._types import SimulationCacheEntry, apply_collected_mutations
+from ._types import SimulationCache, apply_collected_mutations
 from .mismatch_classifier import MismatchClassifier
 from .reexecution_planner import ReexecutionPlanner
 from .virtual_lineage import VirtualLineage, loop_derived_vars
@@ -123,6 +123,8 @@ class NotebookSimulator:
 
         # Shared state refs (same dicts as UpstreamChecker / StatementProcessor).
         self.set_tracking_state(tracking_state)
+        #: The previous simulation's per-cell snapshots, where the next one starts.
+        self.cache = SimulationCache()
 
         # Phase-1 simulator. Shares ``shell``/``cash_instance``/tracking-state
         # references with us so writes are visible on both sides.
@@ -133,6 +135,7 @@ class NotebookSimulator:
             compute_hash_fn=compute_hash_fn,
             debug=debug,
             function_tracker=function_tracker,
+            cache=self.cache,
         )
 
         # Phase-2 classifier. Shares tracking-state references and routes
@@ -292,23 +295,8 @@ class NotebookSimulator:
     def set_current_cell_id(self, cell_id: str | None) -> None:
         self.virtual_lineage.current_cell_id = cell_id
 
-    def last_index_for_cell(self, cell_id: str) -> int | None:
-        return self.virtual_lineage.cell_id_to_last_index.get(cell_id)
-
-    def record_cell_id_index(self, cell_id: str, idx: int) -> None:
-        self.virtual_lineage.cell_id_to_last_index[cell_id] = idx
-
-    def simulation_cache_entry(self, idx: int) -> SimulationCacheEntry | None:
-        cache = self.virtual_lineage.simulation_cache
-        if 0 <= idx < len(cache):
-            return cache[idx]
-        return None
-
     def record_replayed_file_deps(self, rerecorded: set[str]) -> None:
         self.virtual_lineage.record_replayed_file_deps(rerecorded)
-
-    def simulation_cache_size(self) -> int:
-        return len(self.virtual_lineage.simulation_cache)
 
     def _mark_stale_value_inputs_broken(
         self,

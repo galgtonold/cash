@@ -1,8 +1,7 @@
 """Phase 1 of the notebook simulator: forward simulation + cache probing.
 
 Extracted from ``NotebookSimulator``. Owns the simulator-internal caches
-(``simulation_cache``, ``_simulation_cell_hashes``,
-``cell_id_to_last_index``) and shares ``tracking_state`` dict references
+(:class:`SimulationCache`) and shares ``tracking_state`` dict references
 with :class:`NotebookSimulator` and :class:`MismatchClassifier`. Pure-phase
 invariants land in a later refactor.
 """
@@ -78,6 +77,7 @@ from ..statement.processor import is_control_body
 from ._types import (
     IncrementalStartResult,
     RestoreCollector,
+    SimulationCache,
     SimulationCacheEntry,
     TraceEntry,
     apply_collected_mutations,
@@ -244,6 +244,7 @@ class VirtualLineage:
         compute_hash_fn: Callable[[Any], str] | None = None,
         debug: bool = False,
         function_tracker: FunctionTracker | None = None,
+        cache: SimulationCache | None = None,
     ) -> None:
         self.shell = shell
         self.cash_instance = cash_instance
@@ -261,9 +262,7 @@ class VirtualLineage:
         # Resolved on first loop-split lookup; None means 'not yet
         # resolved', not 'no splits'. See ``_loop_split_k``.
         self._split_store = None
-        self.simulation_cache: list[SimulationCacheEntry] = []
-        self._simulation_cell_hashes: dict[int, str] = {}
-        self.cell_id_to_last_index: dict[str, int] = {}
+        self.cache = cache if cache is not None else SimulationCache()
         #: Simulated ``def``s by lineage (``VirtualCallable``). Content-
         #: addressed, so an entry never goes stale; the cap bounds memory.
         self._virtual_callables: dict[str, VirtualCallable] = {}
@@ -373,8 +372,7 @@ class VirtualLineage:
 
     def reset_caches(self) -> None:
         """Forget every cell snapshot of the previous simulation."""
-        self.simulation_cache.clear()
-        self._simulation_cell_hashes.clear()
+        self.cache.reset()
         self.__dict__.pop("_import_bindings_memo", None)
 
     def _get_metadata_only(self, cache_key: str) -> dict | None:
@@ -413,7 +411,7 @@ class VirtualLineage:
         """
         if not rerecorded:
             return
-        for entry in self.simulation_cache:
+        for entry in self.cache.entries:
             for trace_entry in entry.trace_segment:
                 for var in set(trace_entry.outputs) & rerecorded:
                     for path in self.executed_file_deps.get(var, ()):
@@ -462,10 +460,10 @@ class VirtualLineage:
         """
         first_changed_cell = 0
         cache_had_hash_mismatch = False
-        for idx in range(min(current_cell_idx, len(self.simulation_cache))):
+        for idx in range(min(current_cell_idx, len(self.cache.entries))):
             cell_code = notebook_cells[idx].replace("\r\n", "\n")
             cell_hash = hashlib.sha256(cell_code.encode("utf-8")).hexdigest()
-            cached = self.simulation_cache[idx]
+            cached = self.cache.entries[idx]
             if cached.cell_code_hash != cell_hash:
                 cache_had_hash_mismatch = True
                 if self.debug:
@@ -508,13 +506,13 @@ class VirtualLineage:
 
         Returns True if a hash mismatch was detected.
         """
-        cache_range_end = min(current_cell_idx, len(self.simulation_cache)) if self.simulation_cache else 0
+        cache_range_end = min(current_cell_idx, len(self.cache.entries)) if self.cache.entries else 0
         for idx in range(cache_range_end, current_cell_idx):
-            if idx not in self._simulation_cell_hashes:
+            if idx not in self.cache.cell_hashes:
                 continue
             cell_code = notebook_cells[idx].replace("\r\n", "\n")
             cell_hash = hashlib.sha256(cell_code.encode("utf-8")).hexdigest()
-            if self._simulation_cell_hashes[idx] != cell_hash:
+            if self.cache.cell_hashes[idx] != cell_hash:
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM_DEBUG] Hash mismatch in cell %d "
@@ -533,16 +531,16 @@ class VirtualLineage:
         Returns ``(virtual_lineage, virtual_modules, simulation_trace,
         vars_mutated_by_loops, vars_with_stale_files)``.
         """
-        cached_entry = self.simulation_cache[first_changed_cell - 1]
+        cached_entry = self.cache.entries[first_changed_cell - 1]
         virtual_lineage = dict(cached_entry.virtual_lineage)
         virtual_modules = set(cached_entry.virtual_modules)
         simulation_trace: list = []
         vars_mutated_by_loops: set[str] = set()
         vars_with_stale_files: set[str] = set()
         for ci in range(first_changed_cell):
-            simulation_trace.extend(self.simulation_cache[ci].trace_segment)
-            vars_mutated_by_loops.update(self.simulation_cache[ci].vars_mutated_by_loops)
-            vars_with_stale_files.update(self.simulation_cache[ci].vars_with_stale_files)
+            simulation_trace.extend(self.cache.entries[ci].trace_segment)
+            vars_mutated_by_loops.update(self.cache.entries[ci].vars_mutated_by_loops)
+            vars_with_stale_files.update(self.cache.entries[ci].vars_with_stale_files)
         if self.debug:
             logger.debug(
                 "[UPSTREAM_DEBUG] Incremental simulation: reusing cache for cells 0-%d, simulating from cell %d",
@@ -569,7 +567,7 @@ class VirtualLineage:
         vars_with_stale_files: set[str] = set()
 
         first_changed_cell = 0
-        had_prior_cache = bool(self.simulation_cache)
+        had_prior_cache = bool(self.cache.entries)
         cache_had_hash_mismatch = False
 
         if self.debug:
@@ -578,11 +576,11 @@ class VirtualLineage:
                 "had_prior_cache=%s, cache_size=%d, cell_hashes_size=%d",
                 current_cell_idx,
                 had_prior_cache,
-                len(self.simulation_cache) if self.simulation_cache else 0,
-                len(self._simulation_cell_hashes),
+                len(self.cache.entries) if self.cache.entries else 0,
+                len(self.cache.cell_hashes),
             )
 
-        if self.simulation_cache:
+        if self.cache.entries:
             first_changed_cell, cache_had_hash_mismatch = self._scan_main_cache_for_changes(
                 current_cell_idx, notebook_cells
             )
@@ -612,7 +610,7 @@ class VirtualLineage:
                     )
 
         # Check the lightweight hash cache for cells beyond the main cache range.
-        if not cache_had_hash_mismatch and self._simulation_cell_hashes:
+        if not cache_had_hash_mismatch and self.cache.cell_hashes:
             if self._check_lightweight_hash_cache(current_cell_idx, notebook_cells):
                 cache_had_hash_mismatch = True
 
@@ -620,7 +618,7 @@ class VirtualLineage:
         # what type of change was detected (code hash OR file dep staleness).
         # Without this, stale file deps would cause ALL cached state to be lost,
         # even for cells before the stale cell.
-        if first_changed_cell > 0 and self.simulation_cache and first_changed_cell <= len(self.simulation_cache):
+        if first_changed_cell > 0 and self.cache.entries and first_changed_cell <= len(self.cache.entries):
             (virtual_lineage, virtual_modules, simulation_trace, vars_mutated_by_loops, vars_with_stale_files) = (
                 self._restore_cached_state(first_changed_cell)
             )
@@ -635,7 +633,7 @@ class VirtualLineage:
             if live and isinstance(self.shell.user_ns.get(name), types.ModuleType):
                 virtual_lineage[name] = live
 
-        new_cache_entries = list(self.simulation_cache[:first_changed_cell]) if self.simulation_cache else []
+        new_cache_entries = list(self.cache.entries[:first_changed_cell]) if self.cache.entries else []
 
         return IncrementalStartResult(
             first_changed_cell=first_changed_cell,
@@ -1478,13 +1476,13 @@ class VirtualLineage:
         # NOTE: We only store entries for cells 0..(current_cell_idx-1).
         # Entries beyond that are discarded to avoid stale lineage data.
         # For hash change detection across intermediate cell runs, we use
-        # _simulation_cell_hashes (a separate lightweight structure).
-        self.simulation_cache = new_cache_entries
+        # cache.cell_hashes (a separate lightweight structure).
+        self.cache.entries = new_cache_entries
 
         # This persists across intermediate cell runs so that a later cell can
         # detect code changes in cells that were truncated from the main cache.
         for idx, entry in enumerate(new_cache_entries):
-            self._simulation_cell_hashes[idx] = entry.cell_code_hash
+            self.cache.cell_hashes[idx] = entry.cell_code_hash
 
         # Also record the CURRENT cell's hash so that a later cell (e.g., cell 3
         # running after cell 2 in a run_all()) sees the up-to-date hash and
@@ -1492,9 +1490,7 @@ class VirtualLineage:
         # from a previous run_all().
         if current_cell_idx < len(notebook_cells):
             current_cell_code = notebook_cells[current_cell_idx].replace("\r\n", "\n")
-            self._simulation_cell_hashes[current_cell_idx] = hashlib.sha256(
-                current_cell_code.encode("utf-8")
-            ).hexdigest()
+            self.cache.cell_hashes[current_cell_idx] = hashlib.sha256(current_cell_code.encode("utf-8")).hexdigest()
 
     def _collect_loop_mutation_info(
         self,

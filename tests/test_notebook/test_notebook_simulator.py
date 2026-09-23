@@ -44,9 +44,9 @@ class TestConstructionWithoutOrchestrator:
 
     def test_owns_its_caches(self):
         sim = _make_simulator()
-        assert sim.virtual_lineage.simulation_cache == []
-        assert sim.virtual_lineage._simulation_cell_hashes == {}
-        assert sim.virtual_lineage.cell_id_to_last_index == {}
+        assert sim.cache.entries == []
+        assert sim.cache.cell_hashes == {}
+        assert sim.cache.last_index_by_cell_id == {}
 
     def test_shares_tracking_state_refs(self):
         """Mutating the simulator's view must be visible through the original
@@ -105,8 +105,8 @@ class TestParseCached:
 class TestResetCaches:
     def test_clears_all_simulator_caches(self):
         sim = _make_simulator()
-        sim.virtual_lineage.simulation_cache.append(MagicMock())
-        sim.virtual_lineage._simulation_cell_hashes[0] = "h"
+        sim.cache.entries.append(MagicMock())
+        sim.cache.cell_hashes[0] = "h"
         sim.reset_caches()
-        assert sim.virtual_lineage.simulation_cache == []
-        assert sim.virtual_lineage._simulation_cell_hashes == {}
+        assert sim.cache.entries == []
+        assert sim.cache.cell_hashes == {}

@@ -384,13 +384,13 @@ class UpstreamChecker:
         """
         known_cell_idx: int | None = None
         if cell_id is not None:
-            known_cell_idx = self.simulator.last_index_for_cell(cell_id)
+            known_cell_idx = self.simulator.cache.last_index_by_cell_id.get(cell_id)
         if known_cell_idx is None and self.last_cell_index is not None:
             known_cell_idx = self.last_cell_index
 
         if known_cell_idx is not None and known_cell_idx > 0:
             target_idx = known_cell_idx - 1
-            if target_idx < self.simulator.simulation_cache_size():
+            if target_idx < len(self.simulator.cache):
                 return target_idx
         return None
 
@@ -436,7 +436,7 @@ class UpstreamChecker:
         Uses the simulation cache's pre-cell virtual lineage to reset any
         "ahead" lineage caused by a prior downstream execution.
         """
-        if not (required_inputs and current_cell_outputs and self.simulator.simulation_cache_size()):
+        if not (required_inputs and current_cell_outputs and len(self.simulator.cache)):
             return
 
         overlap_vars = required_inputs & current_cell_outputs
@@ -447,7 +447,7 @@ class UpstreamChecker:
         if cache_idx is None:
             return
 
-        entry = self.simulator.simulation_cache_entry(cache_idx)
+        entry = self.simulator.cache.entry(cache_idx)
         if entry is None:
             return
         self._reset_advanced_lineages(overlap_vars, entry.virtual_lineage, cache_idx)
@@ -537,7 +537,7 @@ class UpstreamChecker:
         if current_cell_idx is not None:
             self.last_cell_index = current_cell_idx
             if cell_id:
-                self.simulator.record_cell_id_index(cell_id, current_cell_idx)
+                self.simulator.cache.last_index_by_cell_id[cell_id] = current_cell_idx
 
         return notebook_cells, current_cell_idx
 
@@ -1241,7 +1241,7 @@ class UpstreamChecker:
         0..2's trace segments, so cell 2's cache entry is NOT synced for
         ``df``.
         """
-        if not self.simulator.simulation_cache_size():
+        if not len(self.simulator.cache):
             return
 
         updated = False
@@ -1253,8 +1253,8 @@ class UpstreamChecker:
         #: ``{var: (old, new)}`` synced so far; later entries' recorded inputs
         #: follow (below).
         moved: dict[str, tuple[str, str]] = {}
-        for idx in range(self.simulator.simulation_cache_size()):
-            entry = self.simulator.simulation_cache_entry(idx)
+        for idx in range(len(self.simulator.cache)):
+            entry = self.simulator.cache.entry(idx)
             if entry is None:
                 continue
             cell_trace = entry.trace_segment

@@ -389,11 +389,11 @@ class TestResetCaches:
 
     def test_clears_all_caches(self):
         checker = _make_checker()
-        checker.simulator.virtual_lineage.simulation_cache.append(MagicMock())
-        checker.simulator.virtual_lineage._simulation_cell_hashes[0] = "hash"
+        checker.simulator.cache.entries.append(MagicMock())
+        checker.simulator.cache.cell_hashes[0] = "hash"
         checker.reset_caches()
-        assert len(checker.simulator.virtual_lineage.simulation_cache) == 0
-        assert len(checker.simulator.virtual_lineage._simulation_cell_hashes) == 0
+        assert len(checker.simulator.cache.entries) == 0
+        assert len(checker.simulator.cache.cell_hashes) == 0
 
 
 # ===========================================================================
@@ -442,23 +442,23 @@ class TestResolveFallbackCacheIdx:
         """Cell at index 0 has no prior cell to fall back to."""
         checker = _make_checker()
         checker.last_cell_index = None
-        checker.simulator.virtual_lineage.cell_id_to_last_index["cell_0"] = 0
+        checker.simulator.cache.last_index_by_cell_id["cell_0"] = 0
         result = checker._resolve_fallback_cache_idx("cell_0")
         assert result is None
 
     def test_returns_previous_cache_index(self):
         checker = _make_checker()
         checker.last_cell_index = None
-        checker.simulator.virtual_lineage.cell_id_to_last_index["cell_2"] = 2
+        checker.simulator.cache.last_index_by_cell_id["cell_2"] = 2
         # Need at least 2 simulation cache entries
-        checker.simulator.virtual_lineage.simulation_cache = [MagicMock(), MagicMock(), MagicMock()]
+        checker.simulator.cache.entries = [MagicMock(), MagicMock(), MagicMock()]
         result = checker._resolve_fallback_cache_idx("cell_2")
         assert result == 1  # Previous index
 
     def test_uses_last_cell_index_without_cell_id(self):
         checker = _make_checker()
         checker.last_cell_index = 3
-        checker.simulator.virtual_lineage.simulation_cache = [MagicMock()] * 4
+        checker.simulator.cache.entries = [MagicMock()] * 4
         result = checker._resolve_fallback_cache_idx(None)
         assert result == 2
 
@@ -466,8 +466,8 @@ class TestResolveFallbackCacheIdx:
         """If simulation cache is smaller than target index, return None."""
         checker = _make_checker()
         checker.last_cell_index = None
-        checker.simulator.virtual_lineage.cell_id_to_last_index["cell_5"] = 5
-        checker.simulator.virtual_lineage.simulation_cache = [MagicMock()]  # Only 1 entry
+        checker.simulator.cache.last_index_by_cell_id["cell_5"] = 5
+        checker.simulator.cache.entries = [MagicMock()]  # Only 1 entry
         result = checker._resolve_fallback_cache_idx("cell_5")
         assert result is None
 
@@ -523,12 +523,12 @@ class TestHandleDownstreamAdvancementFallback:
 
     def test_no_op_without_overlap(self):
         checker = _make_checker()
-        checker.simulator.virtual_lineage.simulation_cache = [MagicMock()]
+        checker.simulator.cache.entries = [MagicMock()]
         checker._handle_downstream_advancement_fallback(cell_id=None, required_inputs={"a"}, current_cell_outputs={"b"})
 
     def test_no_op_with_empty_inputs(self):
         checker = _make_checker()
-        checker.simulator.virtual_lineage.simulation_cache = [MagicMock()]
+        checker.simulator.cache.entries = [MagicMock()]
         checker._handle_downstream_advancement_fallback(cell_id=None, required_inputs=set(), current_cell_outputs={"x"})
 
 
@@ -646,7 +646,7 @@ class TestUpstreamCheckerInit:
 
     def test_simulation_cache_starts_empty(self):
         checker = _make_checker()
-        assert len(checker.simulator.virtual_lineage.simulation_cache) == 0
+        assert len(checker.simulator.cache.entries) == 0
 
     def test_compute_hash_fn_stored(self):
         fn = lambda x: "custom"

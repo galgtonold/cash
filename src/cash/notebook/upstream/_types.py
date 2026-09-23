@@ -48,6 +48,32 @@ class SimulationCacheEntry(NamedTuple):
     simulated (``statement_environment_component``): empty when it reads none."""
 
 
+@dataclass
+class SimulationCache:
+    """What one simulation leaves behind for the next one to start from."""
+
+    entries: list[SimulationCacheEntry] = field(default_factory=list)
+    """One snapshot per cell above the cell last checked, in notebook order."""
+
+    cell_hashes: dict[int, str] = field(default_factory=dict)
+    """Source hash of every cell seen so far, by index. Outlives *entries*,
+    which are cut at the checked cell, so an edit below it is still noticed."""
+
+    last_index_by_cell_id: dict[str, int] = field(default_factory=dict)
+    """Where each cell id last sat in the notebook."""
+
+    def __len__(self) -> int:
+        return len(self.entries)
+
+    def entry(self, idx: int) -> SimulationCacheEntry | None:
+        return self.entries[idx] if 0 <= idx < len(self.entries) else None
+
+    def reset(self) -> None:
+        """Forget the snapshots and hashes; cell positions stay."""
+        self.entries.clear()
+        self.cell_hashes.clear()
+
+
 @dataclass(slots=True)
 class TraceEntry:
     """One statement of the simulation trace, in notebook order."""

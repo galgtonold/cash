@@ -1909,7 +1909,7 @@ try:
             _cash_magics._statement_processor.executed_input_lineages.clear()
         # Clear upstream checker's simulation cache
         if hasattr(_cash_magics, '_upstream_checker'):
-            _cash_magics._upstream_checker.simulation_cache = []
+            _cash_magics._upstream_checker.simulator.cache.reset()
         # Clear file tracker state
         if hasattr(_cash_magics, '_file_tracker') and _cash_magics._file_tracker:
             _cash_magics._file_tracker.clear()

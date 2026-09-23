@@ -189,7 +189,7 @@ class TestNotebookPathCacheInvalidation:
         # Populate the simulation cache with fake data. Caches now live on
         # the simulator (extracted from UpstreamChecker).
         simulator = magics._upstream_checker.simulator
-        simulator.virtual_lineage.simulation_cache = [
+        simulator.cache.entries = [
             SimulationCacheEntry("fake_hash", {"x": "lineage1"}, set(), [], set(), set(), {}),
             SimulationCacheEntry("fake_hash2", {"y": "lineage2"}, set(), [], set(), set(), {}),
         ]
@@ -197,7 +197,7 @@ class TestNotebookPathCacheInvalidation:
         # Enable auto-caching (this should clear the caches)
         magics.cash_on("")
 
-        assert simulator.virtual_lineage.simulation_cache == []
+        assert simulator.cache.entries == []
 
     def test_upstream_checker_reset_caches(self):
         """UpstreamChecker.reset_caches() should clear simulation and AST caches."""
@@ -209,13 +209,13 @@ class TestNotebookPathCacheInvalidation:
         checker = UpstreamChecker(shell, debug=False)
 
         # Add some data to caches
-        checker.simulator.virtual_lineage.simulation_cache.append(
+        checker.simulator.cache.entries.append(
             SimulationCacheEntry("hash1", {"var": "lin"}, set(), [], set(), set(), {})
         )
 
         checker.reset_caches()
 
-        assert checker.simulator.virtual_lineage.simulation_cache == []
+        assert checker.simulator.cache.entries == []
 
     def test_no_glob_fallback_for_notebook_discovery(self, tmp_path):
         """get_notebook_cells should NOT use glob fallback (Issue 23).
