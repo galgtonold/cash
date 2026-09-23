@@ -264,7 +264,7 @@ A list of backends ordered fastest-first. A `get` walks the list in order; on a 
 
 The policy is a two-gate filter:
 
-1. Execution time must clear a compute floor — **0.1 s** under the default `smart_persistence=True`, where the backend *factory* installs the policy. A `TieredBackend([...])` you construct by hand (as above) gets no factory policy and falls back to `TieredBackend.default_promotion_policy`, which applies the same rule with a **1.0 s** floor. Anything faster isn't worth persisting.
+1. Execution time must clear a compute floor of **0.1 s**, whether cash builds the stack or you construct a `TieredBackend([...])` by hand (as above). Anything faster isn't worth persisting.
 2. Re-executing must cost more than restoring, using the fitted cost model's predicted read+deserialize time (`cost_model.estimated_restore_time`) — not a raw bandwidth guess.
 
 So a `pd.read_csv` that takes 50 ms and produces a 10 MB frame stays in RAM; a model fit that takes 30 s and produces a 200 MB pickle goes to RAM **and** disk. See [Smart Persistence](smart-persistence.md) for the full policy and how `@cash:persist` overrides it.

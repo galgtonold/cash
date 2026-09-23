@@ -69,13 +69,13 @@ class TestPromotionPolicy:
     """Test the promotion policy that decides whether to persist to disk."""
 
     def test_default_policy_fast_no_promote(self, tiered, file_backend):
-        """Fast operations (<1s) should NOT be promoted to disk."""
-        tiered.set("fast", "data", {"execution_time": 0.5, "size": 100})
+        """Operations under the 0.1 s floor should NOT be promoted to disk."""
+        tiered.set("fast", "data", {"execution_time": 0.05, "size": 100})
         meta, val = file_backend.get("fast")
         assert val is None  # Not promoted
 
     def test_default_policy_slow_small_promote(self, tiered, file_backend):
-        """Slow operations (>1s) with small data should be promoted."""
+        """Slow operations with small data should be promoted."""
         tiered.set("slow", "data", {"execution_time": 5.0, "size": 100})
         meta, val = file_backend.get("slow")
         assert val == "data"  # Promoted!
@@ -143,7 +143,6 @@ class TestLargeFramePersistence:
 
         cfg = CashConfig(
             cache_dir=str(tmp_path / ".cash"),
-            smart_persistence=True,
             compress=False,
         )
         return build_backend_from_config(cfg), cfg

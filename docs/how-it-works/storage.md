@@ -6,7 +6,7 @@ on-disk layer, with a promotion policy that decides what's worth writing down.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend @6e864c5c, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend broad="tier ordering and read-repair are properties of the class as a whole" -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend @57ebf17c, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend broad="tier ordering and read-repair are properties of the class as a whole" -->
 The default `TieredBackend` stacks two layers, fastest first:
 
 | Tier | Backend | Speed | Survives restart? |
@@ -43,9 +43,9 @@ described below.
 
 For a notebook statement, three gates, in order:
 
-<!-- claim: cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
-1. **A compute floor.** Anything under **0.1 s** never leaves RAM — disk I/O
-   alone would cost more than rerunning it.
+<!-- claim: cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1 -->
+1. **A compute floor.** Anything under **0.1 s** never leaves RAM — it buys
+   almost nothing back and costs a file.
 <!-- claim: cash/config.py:CashConfig.min_cache_savings_pct == 0.2 -->
 2. **A savings test.** Promote only when the restore is meaningfully cheaper
    than the recompute:
@@ -115,15 +115,13 @@ file read that only discovers the entry is a skip marker.
 `persist_all=True` — bypasses the compute floor entirely. It does not escape the
 per-tier size caps below.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.__init__ @ae3a39da, cash/backends/tiered_backend.py:TieredBackend.default_promotion_policy @033b4061, cash/config.py:CashConfig.smart_persistence == True -->
-Two places the 0.1 s number quietly becomes 1.0 s. The 0.1 s floor is installed
-by the backend *factory* when `smart_persistence` is on (the default); setting
-`smart_persistence=False`, or constructing a `TieredBackend([...])` by hand,
-falls back to `default_promotion_policy` — same cost-model rule, same 20%
-savings test, but a 1.0 s floor (and the conservative `_GENERIC` family for
-entries that carry no recorded type). "Off" means "less eager", not
-"unconditional". The floor itself is not configurable in
-either case; changing it means supplying your own `promotion_policy`.
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.__init__ @d6dc57bf, cash/backends/persistence_policy.py:PersistencePolicy.decide @ab919a91 -->
+All three gates are one object, `PersistencePolicy`, and every `TieredBackend`
+has one: the stack cash builds from config and a `TieredBackend([...])` you
+build by hand apply the same 0.1 s floor. An entry that carries no recorded
+type is predicted with the conservative `_GENERIC` family. The floor is not
+configurable; to decide differently for untyped entries, give the backend a
+`promotion_policy`. `cash info` prints the policy in force.
 
 Size caps are the last word. Each persistent tier declines objects larger than a
 safe fraction of its own cap, per tier — so a 20 MB frame can land in RAM and on

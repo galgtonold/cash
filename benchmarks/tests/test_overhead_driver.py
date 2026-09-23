@@ -5,7 +5,7 @@ from benchmarks._overhead_io import CodeCell
 
 # Compute that lands between the two cost-model floors: dearer than
 # ``min_execution_time_to_cache_seconds`` (0.01s) so it is cached at all, but
-# cheaper than ``_SMART_PERSIST_COMPUTE_FLOOR_S`` (0.1s) so the cost model
+# cheaper than ``persistence_policy.COMPUTE_FLOOR_S`` (0.1s) so the cost model
 # keeps it in RAM and never writes it to disk. ~0.04s on the dev machine.
 _RAM_ONLY_CELL = "z = sum(i * i for i in range(1_000_000))\n"
 

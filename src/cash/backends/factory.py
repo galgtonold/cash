@@ -26,15 +26,14 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
-from cash import cost_model
-
 from ..exceptions import DependencyNotFoundError
 from ._base import CacheBackend
 from .adaptive_caps import resolve_disk_cap, resolve_ram_cap
 from .file_backend import FileBackend
 from .memory_backend import InMemoryBackend
+from .persistence_policy import PersistencePolicy
 from .sqlite_backend import SQLiteBackend
-from .tiered_backend import DEFAULT_MIN_PERSIST_COMPUTE_S, DEFAULT_MIN_PERSIST_SAVINGS_PCT, TieredBackend
+from .tiered_backend import TieredBackend
 
 if TYPE_CHECKING:
     from cash.config import CashConfig, TierConfig
@@ -174,95 +173,18 @@ def _build_default_tiered(config: "CashConfig") -> TieredBackend:
     return _build_tiered([ram, disk], config)
 
 
-# Compute floor for the smart-persistence stack: nothing under this many
-# seconds is promoted past RAM.
-#
-# NOT because "disk I/O costs more than rerunning" -- that was the original
-# rationale here and it is false. Measured on an NVMe volume, a small entry
-# round-trips in 0.61 ms from a cold FileBackend and 0.14 ms warm, so I/O is
-# ~3% of rerunning a 20 ms statement, not more than it.
-#
-# The floor earns its place for a different reason: statements under it are
-# cheap *by definition*, so persisting them buys almost no time and costs a
-# file each. Measured on 01_nyc_taxi_analysis, dropping this to 10 ms:
-#
-#     floor=100ms   restored  9/140   still computed 3.19 s   cache   0.2 MiB
-#     floor= 10ms   restored 15/140   still computed 3.33 s   cache  70.9 MiB
-#
-# Six more statements come back, not one second is saved, and the cache grows
-# 355x. The cost is worse than linear too: FileBackend._ensure_initialized
-# unpickles every .meta file at kernel start, so entry count is paid on every
-# start forever.
-#
-# So: the number is right, the old reason for it was not. Anyone tempted to
-# lower it on the strength of the I/O argument should re-read the table above
-# first -- and if they lower it anyway, measure the cache size and the
-# kernel-start scan, not just the restore count.
-_SMART_PERSIST_COMPUTE_FLOOR_S = 0.1
-
-
-def _config_number(config: "CashConfig", attr: str, default: float) -> float:
-    """Read a numeric config attribute, defaulting on anything non-numeric.
-
-    Guards against test doubles (``MagicMock`` auto-attributes coerce to
-    ``1.0`` under ``float()``, so an ``isinstance`` check is required rather
-    than a ``try: float(...)``)."""
-    value = getattr(config, attr, default)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return default
-    return float(value)
-
-
 def _build_tiered(backends: list[CacheBackend], config: "CashConfig") -> TieredBackend:
-    tiered = TieredBackend(backends)
-    apply_persistence_settings(tiered, config)
-    return tiered
+    return TieredBackend(backends, policy=PersistencePolicy.from_config(config))
 
 
 def apply_persistence_settings(backend: CacheBackend, config: "CashConfig") -> None:
-    """Give a `TieredBackend` the promotion policy *config* asks for.
+    """Give a running `TieredBackend` the persistence policy *config* asks for.
 
-    ``smart_persistence`` picks the serialization-aware policy with its 0.1 s
-    compute floor, and ``min_cache_savings_pct`` sets the savings it requires;
-    with ``smart_persistence`` off the backend keeps its own defaults. Called
-    when the stack is built and again by ``cash.configure`` when either
-    setting changes, so a change applies to the running backend without
-    rebuilding it (which would drop the RAM tier). Any other backend has no
-    promotion policy and is left alone.
+    For ``cash.configure``: changing the policy must not rebuild the stack,
+    which would drop the RAM tier. Any other backend has no policy.
     """
-    if not isinstance(backend, TieredBackend):
-        return
-    if config.smart_persistence:
-        backend.promotion_policy = _build_smart_persistence_policy(config)
-        backend.min_persist_compute_s = _SMART_PERSIST_COMPUTE_FLOOR_S
-        backend.min_persist_savings_pct = _config_number(config, "min_cache_savings_pct", 0.20)
-    else:
-        backend.promotion_policy = backend.default_promotion_policy
-        backend.min_persist_compute_s = DEFAULT_MIN_PERSIST_COMPUTE_S
-        backend.min_persist_savings_pct = DEFAULT_MIN_PERSIST_SAVINGS_PCT
-
-
-def _build_smart_persistence_policy(config: "CashConfig"):
-    """The 2-arg fallback policy for entries with no cost-model family.
-
-    Serialization-aware, using the fitted ``cost_model`` (same rule the
-    statement processor's Gate A applies) instead of the old raw-bandwidth
-    arithmetic that made bigger objects *less* likely to persist. Since the
-    2-arg signature carries no type, it assumes the slowest (``_GENERIC``)
-    family — a conservative floor. The set path recomputes with the real type
-    whenever ``metadata['cost_model_family']`` is present.
-    """
-    min_persist_compute_s = _SMART_PERSIST_COMPUTE_FLOOR_S
-    min_savings = _config_number(config, "min_cache_savings_pct", 0.20)
-
-    def policy(execution_time: float, size_bytes: int) -> bool:
-        if execution_time < min_persist_compute_s:
-            return False
-
-        est_restore = cost_model.estimated_restore_time("", size_bytes, "disk")
-        return execution_time - est_restore > min_savings * execution_time
-
-    return policy
+    if isinstance(backend, TieredBackend):
+        backend.policy = PersistencePolicy.from_config(config)
 
 
 # ---------------------------------------------------------------------------

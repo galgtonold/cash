@@ -17,6 +17,7 @@ from pathlib import Path
 from cash import __version__
 from cash.backends.adaptive_caps import adaptive_disk_cap_for, human_bytes, resolve_ram_cap
 from cash.backends.entry_format import ENTRY_SUFFIX, read_entry
+from cash.backends.persistence_policy import PersistencePolicy
 from cash.config import (
     SIZE_FIELDS,
     TOML_FLAT,
@@ -192,12 +193,7 @@ def cmd_info(args: argparse.Namespace) -> None:
             f"({config.max_cache_size:,} bytes) on disk, "
             f"RAM {human_bytes(resolve_ram_cap())}"
         )
-    # Report what actually decides persistence — the serialization-aware cost
-    # model — rather than a raw threshold number.
-    if config.smart_persistence:
-        print(f"  Persist:    cost model (0.1s compute floor, {config.min_cache_savings_pct:.0%} savings required)")
-    else:
-        print("  Persist:    cost model, conservative (1.0s compute floor)")
+    print(f"  Persist:    {PersistencePolicy.from_config(config).describe()}")
     if config.tiers:
         print(f"  Tiers:      {', '.join(_tier_text(t) for t in config.tiers)}")
     # Where this run looked, and what each layer set. Round 18: a nested

@@ -80,7 +80,7 @@ The check itself is in `Cash._validate_ttl`: on a lookup hit, `_validate_ttl` as
 
 ### `@cash:persist` — force it onto disk
 
-Cash's default tiered backend (`InMemoryBackend` over `FileBackend`) uses a promotion policy that only writes through to disk when the execution-time-times-savings math works out. The default cut-off is a **0.1 s** compute floor *and* re-execution slower than re-reading (a conservative 1.0 s floor applies only when smart persistence is turned off). See [Smart Persistence](smart-persistence.md) for the full policy.
+Cash's default tiered backend (`InMemoryBackend` over `FileBackend`) uses a promotion policy that only writes through to disk when the execution-time-times-savings math works out. The default cut-off is a **0.1 s** compute floor *and* re-execution slower than re-reading. See [Smart Persistence](smart-persistence.md) for the full policy.
 
 When you know better — anything that takes more than a few seconds to recompute and you can't afford to lose to a kernel crash — `@cash:persist` overrides the policy:
 

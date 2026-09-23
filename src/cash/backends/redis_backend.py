@@ -34,6 +34,7 @@ class RedisBackend(CacheBackend):
     """
 
     source_label: str = "REDIS"
+    cost_kind: str = "redis"
     # Tier-promotion hint: Redis is in-memory on the server and the
     # protocol doesn't love multi-MB transfers, so the tiered pipeline
     # skips Redis for objects past this cap. Bare-backend writes are

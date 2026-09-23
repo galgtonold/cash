@@ -94,7 +94,7 @@ This does not weaken the rule above — a seed passed as an argument is still th
 
 ## Large arrays and persistence
 
-<!-- claim: cash/backends/factory.py:_build_smart_persistence_policy @6aee8ffa, cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.pays_to_restore @e011b70e, cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1 -->
 Simulation outputs are usually arrays — and often big ones. Cash's
 smart-persistence layer decides automatically when an in-memory entry is worth
 writing to disk, and a simulation is the shape it says yes to.

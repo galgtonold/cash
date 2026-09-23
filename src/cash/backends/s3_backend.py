@@ -38,6 +38,7 @@ class S3Backend(CacheBackend):
     """
 
     source_label: str = "S3"
+    cost_kind: str = "s3"
 
     def __init__(self, bucket: str, prefix: str = "cash/", max_pool_connections: int = 10, retries: int = 3, **kwargs):
         try:

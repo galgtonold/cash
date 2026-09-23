@@ -101,7 +101,7 @@ cash = Cash(cache_dir="/tmp/scratch", debug=True)
 configure(debug=True, min_cache_savings_pct=0.30)
 ```
 
-<!-- claim: cash/config.py:CashConfig @ea84ca2c broad="the field table is a claim about every field of the dataclass" -->
+<!-- claim: cash/config.py:CashConfig @c8f40d14 broad="the field table is a claim about every field of the dataclass" -->
 ## All `CashConfig` fields
 
 Every field below is settable via every layer. The env-var column shows
@@ -162,7 +162,6 @@ cost model declined to write to disk.
 
 | Field | Env var | Default | Description |
 |---|---|---|---|
-| `smart_persistence` | `CASH_SMART_PERSISTENCE` | `true` | Use the cost-model promotion policy. If `false`, falls back to `default_promotion_policy` (same rule, 1.0 s floor). |
 | `persist_all` | `CASH_PERSIST_ALL` | `false` | Cache **every** notebook statement, bypassing the cost-aware floors (same as `%cash_persist on`). Flippable at runtime via `cash.configure(persist_all=True)`. Notebook only: it does not change what a `@cash.cache` function stores, which the other fields in this table decide. |
 | `min_execution_time_to_cache_seconds` | `CASH_MIN_EXECUTION_TIME_TO_CACHE_SECONDS` | `0.01` | **Notebook only.** "Too cheap to cache at all" floor — statements faster than this never get a cache entry. A `@cash.cache` function is cached because you decorated it: neither this floor, nor the disk-persistence floor, nor the cost model applies to it, and its result is written to disk however cheap the call was. |
 | `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | Required savings fraction for promotion — used by the notebook's Gate A and the tier promotion policy. Not consulted for a `@cash.cache` result, which is written regardless. |
@@ -373,7 +372,7 @@ configures a tool — a `tests/pyproject.toml` holding `[tool.ruff]` — does no
 so running from `tests/` still finds the repository's project and its
 `[tool.cash]`.
 
-<!-- claim: cash/__init__.py:configure @fb7ac151 -->
+<!-- claim: cash/__init__.py:configure @43a991e3 -->
 ## Runtime mutation: `cash.configure()`
 
 Change the active configuration of the default singleton at runtime
@@ -404,9 +403,9 @@ those files directly.
 verbose, persist_all, ...) from "backend-affecting" fields
 (cache_dir, compress, max_cache_size, max_memory_entries,
 flush_interval, backend, tiers, all connection details). Hot fields just update the
-dataclass. The two persistence-policy fields, `smart_persistence` and
-`min_cache_savings_pct`, are handed to the running backend's promotion
-policy in place, so they apply from the next write without a rebuild.
+dataclass. `min_cache_savings_pct` is handed to the running backend's
+persistence policy in place, so it applies from the next write without a
+rebuild.
 Backend-affecting fields drain the old backend's pending
 writes via `shutdown()`, build a fresh backend from the new config,
 and swap it in.

@@ -1,6 +1,6 @@
 # Backend internals
 
-<!-- claim: cash/backends/_base.py:CacheBackend @18103315 broad="the page documents the ABC as a whole contract" -->
+<!-- claim: cash/backends/_base.py:CacheBackend @9448a9bd broad="the page documents the ABC as a whole contract" -->
 This page is for users **writing their own backend** or contributing
 fixes to the bundled ones. End-users picking a backend should go to
 [Backends](backends.md) instead.
@@ -42,7 +42,8 @@ file cache of a few thousand entries that took 22.7 s on Windows.
 Every other method Cash calls on a backend has a default in `CacheBackend`,
 so a backend overrides only what it can do better. Set the class attribute
 `source_label` to the short name entries give as their source (`RAM`,
-`DISK`), and override `local_dir` when your entries live in a local
+`DISK`), and `cost_kind` to what the cost model should predict restores from
+it as (`"ram"`, `"disk"`, `"redis"` or `"s3"`; `"disk"` by default). Override `local_dir` when your entries live in a local
 directory: Cash keeps its per-function bookkeeping beside them, and does not
 count its own writes there as files a notebook statement wrote. If your
 backend takes a `default_ttl`, store it as `self._default_ttl`. Cash reads
@@ -116,7 +117,7 @@ Two wire-contract rules follow from this and matter to backend authors:
 | `size` | `int` | Backends that track size (`FileBackend`, `SQLite`, RAM with `max_size_bytes`) |
 | `storage` | `list[str]` | Tier labels for the entry (e.g. `["RAM", "DISK"]`) |
 | `ttl` | `int` | Set by `Cash.cache(ttl=...)`; **absent** when unset, which is how backend `default_ttl` applies |
-| `execution_time` | `float` | Set by the decorator; used by `TieredBackend`'s smart-persistence policy |
+| `execution_time` | `float` | Set by the decorator; used by `TieredBackend`'s persistence policy |
 | `outputs` | `list[str]` | Set by the notebook statement processor |
 | `lineage_hash` | `str` | Set by the notebook statement processor |
 | `source` | `str` | Per-backend identifier (e.g. `'RAM'`, `'disk'`) |

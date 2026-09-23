@@ -158,8 +158,8 @@ class CashConfig:
 
     * **Cache location & file backend** — where to store, compress
       vs raw, size cap, flush cadence.
-    * **Cost-aware policy** — the smart-persistence rules that
-      decide which results are expensive enough to write past RAM.
+    * **Cost-aware policy** — which results are expensive enough to
+      cache, and to write past RAM.
     * **Observability** — debug toggles.
     * **Backend selection (simple mode)** — pick one backend with
       connection details inline.
@@ -266,23 +266,11 @@ class CashConfig:
     seed. ``CASH_DISABLE=1 pytest`` is the run that catches that. Read per
     call, so ``cash.configure(disable=True)`` takes effect immediately."""
 
-    smart_persistence: bool = True
-    """When True (default), the tiered backend decides per-entry
-    whether to persist past RAM based on compute time vs storage
-    cost, using the serialization-aware cost model with a 0.1 s
-    compute floor.
-
-    Setting it False does **not** persist everything: it drops to
-    ``TieredBackend``'s own ``default_promotion_policy``, which applies
-    the same cost-model rule at the more conservative 1.0 s floor. So the
-    practical effect is *less* persistence for mid-cost values, not more.
-    Use ``persist_all=True`` (or ``%cash_persist on``) if you actually want
-    everything written to disk."""
-
     min_execution_time_to_cache_seconds: float = 0.01
-    """Hard floor (seconds). Compute under this duration is never
-    promoted past RAM — disk I/O alone would cost more than
-    rerunning. Default 10 ms."""
+    """Floor (seconds) a notebook statement must take to be cached at
+    all, even in RAM. Default 10 ms. Whether a cached value is also
+    written to disk is decided separately, by the cost model, which
+    persists nothing that took under 0.1 s."""
 
     call_cost_floor_seconds: float = 0.003
     """Floor (seconds) a single CALL's own execution must clear before its
@@ -301,9 +289,9 @@ class CashConfig:
     split is not worth persisting a verdict for. Default 100 ms."""
 
     min_cache_savings_pct: float = 0.20
-    """Required time-savings fraction (0.0 – 1.0) for a tier to be
-    considered worthwhile. If a cache hit only saves 20% of the
-    compute cost, the entry isn't promoted. Default 0.20."""
+    """Fraction (0.0 – 1.0) of the compute time a restore must save for
+    a value to be written past RAM: restoring has to beat recomputing
+    by this much, as the cost model predicts. Default 0.20."""
 
     min_cache_fixed_budget_seconds: float = 0.05
     """Per-call I/O budget (seconds). If the predicted serialise +

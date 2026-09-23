@@ -223,16 +223,12 @@ def _default_config(tmp_path):
 
 
 def test_default_stack_uses_the_tenth_of_a_second_compute_floor(tmp_path):
-    from cash.backends.factory import _SMART_PERSIST_COMPUTE_FLOOR_S, build_backend_from_config
+    from cash.backends.factory import build_backend_from_config
 
     backend = build_backend_from_config(_default_config(tmp_path))
-    assert _SMART_PERSIST_COMPUTE_FLOOR_S == 0.1, (
-        "the documented smart-persistence floor changed; docs/how-it-works/storage.md "
+    assert backend.policy.compute_floor_s == 0.1, (
+        "the documented persistence floor changed; docs/how-it-works/storage.md "
         "and the promotion-explorer widget quote 0.1s"
-    )
-    assert getattr(backend, "min_persist_compute_s", None) == 0.1, (
-        "the default backend no longer carries the 0.1s floor -- statements between "
-        "0.1s and 1.0s would stop persisting across a kernel restart"
     )
 
 
@@ -240,23 +236,16 @@ def test_default_stack_keeps_the_twenty_percent_savings_test(tmp_path):
     from cash.backends.factory import build_backend_from_config
 
     backend = build_backend_from_config(_default_config(tmp_path))
-    assert getattr(backend, "min_persist_savings_pct", None) == 0.20
+    assert backend.policy.min_savings_pct == 0.20
 
 
-def test_smart_persistence_off_falls_back_to_the_one_second_floor(tmp_path):
-    """`smart_persistence=False` does NOT persist everything unconditionally.
+def test_a_hand_built_stack_uses_the_same_floor(tmp_path):
+    """There is one floor: a `TieredBackend` built in code does not get a
+    stricter one than the stack cash builds from config."""
+    from cash.backends import FileBackend, InMemoryBackend, TieredBackend
 
-    It drops to `TieredBackend`'s own defaults, which still apply a cost model
-    -- just at the more conservative 1.0s floor. `CashConfig.smart_persistence`'s
-    docstring claims it "persists everything unconditionally", which is wrong in
-    the same way the storage doc was; this pins the real behaviour.
-    """
-    from cash.backends.factory import build_backend_from_config
-
-    config = _default_config(tmp_path)
-    config.smart_persistence = False
-    backend = build_backend_from_config(config)
-    assert getattr(backend, "min_persist_compute_s", None) == 1.0
+    backend = TieredBackend([InMemoryBackend(), FileBackend(str(tmp_path / "c"))])
+    assert backend.policy.compute_floor_s == 0.1
 
 
 def test_floor_decides_promotion_either_side_of_the_boundary(tmp_path):
@@ -268,9 +257,6 @@ def test_floor_decides_promotion_either_side_of_the_boundary(tmp_path):
     from cash.backends.factory import build_backend_from_config
 
     backend = build_backend_from_config(_default_config(tmp_path))
-    policy = getattr(backend, "promotion_policy", None)
-    assert policy is not None, "default stack should carry a promotion policy"
-
     size = 5 * 1024 * 1024  # 5 MB: cheap to restore, so compute time decides
-    assert policy(0.05, size) is False, "0.05s is under the floor and must stay RAM-only"
-    assert policy(0.50, size) is True, "0.50s clears the floor and should persist"
+    assert backend.policy.pays_to_restore(0.05, size) is False, "0.05s is under the floor and must stay RAM-only"
+    assert backend.policy.pays_to_restore(0.50, size) is True, "0.50s clears the floor and should persist"

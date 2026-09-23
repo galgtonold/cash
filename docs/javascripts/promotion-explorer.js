@@ -2,9 +2,8 @@
  * Progressive enhancement: replaces the static fallback table inside
  * .cash-promotion-explorer with sliders + a live promotion verdict.
  *
- * Mirrors the real decision in src/cash/backends/tiered_backend.py
- * (_cost_model_promote) with the smart-persistence settings the factory
- * installs by default (src/cash/backends/factory.py):
+ * Mirrors the real decision in src/cash/backends/persistence_policy.py
+ * (PersistencePolicy.pays_to_restore) with its default settings:
  *   execution_time < 0.1s                       -> RAM only (compute floor)
  *   time - est_restore > 0.20 * time            -> persist to disk
  *   else                                        -> RAM only
@@ -16,7 +15,7 @@
 (function () {
   "use strict";
 
-  var COMPUTE_FLOOR_S = 0.1;   // _SMART_PERSIST_COMPUTE_FLOOR_S
+  var COMPUTE_FLOOR_S = 0.1;   // persistence_policy.COMPUTE_FLOOR_S
   var MIN_SAVINGS = 0.20;      // CashConfig.min_cache_savings_pct
   var BYTES_PER_MB = 1024 * 1024;
 

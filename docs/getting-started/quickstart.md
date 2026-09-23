@@ -244,7 +244,7 @@ expensive_function(1, 2)   # first call: ~5 seconds
 expensive_function(1, 2)   # second call: instant
 ```
 
-<!-- claim: cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
+<!-- claim: cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1 -->
 Results that cost more than ~0.1s persist to disk across processes and restarts;
 cheaper ones are kept in memory for the session (see the [cost model](../cost-model.md)).
 

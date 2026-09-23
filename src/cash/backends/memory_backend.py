@@ -42,6 +42,7 @@ class InMemoryBackend(CacheBackend):
     """
 
     source_label: str = "RAM"
+    cost_kind: str = "ram"
 
     def __init__(
         self,

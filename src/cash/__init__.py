@@ -179,9 +179,9 @@ def configure(**overrides: Any) -> None:
         3. Swap it in atomically.
 
     Hot fields (debug, verbose, ...) are applied to the dataclass in place
-    and read by the next operation. ``smart_persistence`` and
-    ``min_cache_savings_pct`` are applied to the running backend's
-    promotion policy in place, so they take effect without a rebuild.
+    and read by the next operation. ``min_cache_savings_pct`` is applied
+    to the running backend's persistence policy in place, without a
+    rebuild.
 
     Stale fields (e.g. ``redis_host`` when there's no Redis tier
     currently active) are stored silently — the next switch to a Redis
@@ -250,11 +250,7 @@ def configure(**overrides: Any) -> None:
         if c.verbose:
             _enable_cash_logging(_stdlib_logging.INFO)
 
-    if (
-        not needs_rebuild
-        and {"smart_persistence", "min_cache_savings_pct"} & set(overrides)
-        and c.backend_if_built is not None
-    ):
+    if not needs_rebuild and "min_cache_savings_pct" in overrides and c.backend_if_built is not None:
         _apply_persistence_settings(c.backend_if_built, c.config)
 
     if needs_rebuild:

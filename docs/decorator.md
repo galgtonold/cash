@@ -59,20 +59,13 @@ That's it. The default `Cash()` singleton writes a tiered RAM + disk
 cache under `./.cash/`. The next call with the same `n` (this run or
 next month) returns the stored value.
 
-<!-- claim: cash/config.py:CashConfig.smart_persistence @907f59bc, cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
-!!! note "Cross-process persistence has a compute floor"
-    Only results whose computation took **longer than ~0.1 s** are promoted to
-    the disk tier. A cheaper result is still cached in RAM (so a repeat call
-    *in the same process* is instant), but it is **not** written to `./.cash/`,
-    so a fresh process — a kernel restart or a new `python script.py` run —
-    recomputes it. "Returns the stored value next month" therefore holds for the
-    genuinely expensive calls that are worth caching, but a sub-0.1 s function
-    shows no cross-process speedup. `# @cash:persist` will **not** help here --
-    it is a notebook-statement directive and the decorator never reads it, so
-    writing one in a decorated body is silently inert. To make a fast result
-    survive a restart, give this `Cash` a single-tier persistent backend
-    (`Cash(backend=FileBackend(...))` writes every entry regardless of compute
-    time), or lower `min_cache_savings_pct` toward `0`. See
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @ab919a91, cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1 -->
+!!! note "A decorated result is written to disk however cheap it was"
+    Decorating a function is the decision to cache it, so its result is not
+    judged by the 0.1 s compute floor or the cost model that decide what a
+    notebook statement leaves on disk. What still applies is each disk tier's
+    size cap: a value too big for every one of them stays in RAM, and
+    [`CACHE-VALUE-TOO-BIG`](warnings.md#cache-value-too-big) says so. See
     [cost model and smart persistence](cost-model.md).
 
 If you want a custom configuration (different backend, custom
@@ -1453,7 +1446,7 @@ keyed by path, it was 18× faster.
 
 ### Cheap results are written too
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @0d6e63b2 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @7bc0d379 -->
 A decorated result goes to disk whatever it cost to produce. A millisecond
 aggregate over rows another call already parsed is written like anything else,
 because a new process would have to parse that file again to recompute it, and

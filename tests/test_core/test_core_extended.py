@@ -19,7 +19,6 @@ class TestCashInit:
                 cache_dir=str(tmp_path / ".cash"),
                 compress=False,
                 debug=False,
-                smart_persistence=False,
                 max_memory_entries=1000,
                 max_cache_size=None,
                 flush_interval=5,
@@ -69,22 +68,23 @@ class TestCashInit:
         # Just ensure it doesn't crash
         c.shutdown()
 
-    def test_init_with_smart_persistence(self, tmp_path):
-        """Cash with smart_persistence creates TieredBackend with policy."""
+    def test_init_builds_a_tiered_backend_with_a_policy(self, tmp_path):
+        """The default config builds a TieredBackend carrying the policy."""
         with patch("cash.core.get_config") as mock_config:
             mock_config.return_value = MagicMock(
                 cache_dir=str(tmp_path / ".cash"),
                 compress=False,
                 debug=False,
-                smart_persistence=True,
+                min_cache_savings_pct=0.20,
                 max_memory_entries=1000,
                 max_cache_size=None,
                 flush_interval=5,
             )
             c = Cash(register_magic=False)
             assert isinstance(c.backend, TieredBackend)
+            assert c.backend.policy.compute_floor_s == 0.1
 
-    def test_smart_persistence_policy_persists_by_restore_vs_compute(self, tmp_path):
+    def test_the_policy_persists_by_restore_vs_compute(self, tmp_path):
         """The promotion policy promotes when recomputing costs more than the
         predicted restore — not on a size-scaled bandwidth guess.
 
@@ -99,14 +99,13 @@ class TestCashInit:
                 cache_dir=str(tmp_path / ".cash"),
                 compress=False,
                 debug=False,
-                smart_persistence=True,
                 min_cache_savings_pct=0.20,
                 max_memory_entries=1000,
                 max_cache_size=None,
                 flush_interval=5,
             )
             c = Cash(register_magic=False)
-            policy = c.backend.promotion_policy
+            policy = c.backend.policy.pays_to_restore
 
             # Sub-100 ms cells: never persist (below the compute floor — disk
             # I/O alone would cost more than rerunning).

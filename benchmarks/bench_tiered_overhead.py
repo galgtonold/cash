@@ -37,9 +37,6 @@ from pathlib import Path
 
 from cash.backends import FileBackend, InMemoryBackend, TieredBackend
 
-# The factory's smart-persistence stack lowers the compute floor to this.
-COMPUTE_FLOOR_S = 0.1
-
 
 def _meta(payload_len: int, *, promote: bool) -> dict:
     now = time.time()
@@ -65,10 +62,7 @@ def build(kind: str, root: Path):
         return InMemoryBackend(max_entries=100_000)
     if kind == "file":
         return FileBackend(str(root))
-    return TieredBackend(
-        [InMemoryBackend(max_entries=100_000), FileBackend(str(root))],
-        min_persist_compute_s=COMPUTE_FLOOR_S,
-    )
+    return TieredBackend([InMemoryBackend(max_entries=100_000), FileBackend(str(root))])
 
 
 def main() -> int:

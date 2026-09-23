@@ -38,7 +38,6 @@ class TestCashConfigStructure:
         # the old flat 1 GiB that capped every tier and thrashed.
         assert c.max_cache_size is None
         # Cost-aware policy unchanged.
-        assert c.smart_persistence is True
         assert c.min_execution_time_to_cache_seconds == 0.01
         # Backend selection — defaults to the auto-built tiered stack.
         assert c.backend == "tiered"

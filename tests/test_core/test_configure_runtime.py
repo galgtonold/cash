@@ -53,9 +53,9 @@ class TestHotFields:
 
 
 class TestPersistencePolicyFields:
-    """``smart_persistence`` and ``min_cache_savings_pct`` are read into the
-    running backend's promotion policy when it is built. Changing them has to
-    reach that policy, or the change silently does nothing."""
+    """``min_cache_savings_pct`` is read into the running backend's
+    persistence policy when it is built. Changing it has to reach that
+    policy, or the change silently does nothing."""
 
     @staticmethod
     def _persists(backend, key):
@@ -72,18 +72,6 @@ class TestPersistencePolicyFields:
         cash.configure(min_cache_savings_pct=0.999)
         assert cash._get_global_cash().backend is backend
         assert not self._persists(backend, "after")
-
-    def test_smart_persistence_off_reaches_the_running_backend(self, tmp_path):
-        import cash
-
-        cash.configure(cache_dir=str(tmp_path / ".cash"))
-        backend = cash._get_global_cash().backend
-        assert self._persists(backend, "before")
-        # Off, the backend falls back to its 1.0 s compute floor.
-        cash.configure(smart_persistence=False)
-        assert not self._persists(backend, "after")
-        cash.configure(smart_persistence=True)
-        assert self._persists(backend, "again")
 
 
 # ---------------------------------------------------------------------------

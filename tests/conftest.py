@@ -581,7 +581,7 @@ def pytest_terminal_summary(terminalreporter):
 # Persistence-floor constants for tests.
 #
 # Cross-process persistence has a ~0.1 s compute floor (see
-# ``cash.backends.factory._SMART_PERSIST_COMPUTE_FLOOR_S``): a result cheaper
+# ``cash.backends.persistence_policy.COMPUTE_FLOOR_S``): a result cheaper
 # than that is never written past RAM. A test that spawns a second process and
 # asserts something about a *cached* value therefore proves nothing unless the
 # work exceeds the floor -- the second process simply recomputes, and the

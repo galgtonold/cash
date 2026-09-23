@@ -25,7 +25,7 @@ taken out, and a call served from the cache counts at what it cost to compute.
 So a statement whose expensive call hit is still valued at that call, and the
 badge's "saved" is not inflated by cash's own bookkeeping.
 
-<!-- claim: cash/config.py:CashConfig.min_execution_time_to_cache_seconds == 0.01, cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
+<!-- claim: cash/config.py:CashConfig.min_execution_time_to_cache_seconds == 0.01, cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1 -->
 
 | Compute time | What cash does | Survives a kernel restart? |
 |---|---|---|
@@ -119,7 +119,6 @@ env var, or in a TOML file (see [Configuration](getting-started/configuration.md
 
 | Field | Env var | Default | Effect |
 |---|---|---|---|
-| `smart_persistence` | `CASH_SMART_PERSISTENCE` | `True` | When `False`, a laxer policy applies — same rule, but a **1.0 s** compute floor instead of 0.1 s. "Off" means *less eager*, not *unconditional*. |
 | `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | The predicted-savings margin restore must beat to be worth caching/promoting. Higher ⇒ stricter ⇒ more skips. |
 | `min_cache_fixed_budget_seconds` | `CASH_MIN_CACHE_FIXED_BUDGET_SECONDS` | `0.05` s | A flat restore-time budget floor so trivial cells aren't tripped by fixed overhead. |
 | `min_execution_time_to_cache_seconds` | `CASH_MIN_EXECUTION_TIME_TO_CACHE_SECONDS` | `0.01` s | The "too cheap to cache" floor. Statements faster than this never get an entry. |
@@ -310,12 +309,11 @@ the **same fitted cost model**, so the two gates agree:
 - Compute **≥ 0.1 s**, restore meaningfully cheaper than recompute → promote.
 - Compute **≥ 0.1 s**, but large and slow to restore → stay RAM-only.
 
-The 0.1 s floor is a hardcoded constant in the policy closure, not a config
-field. With `smart_persistence=False` (or a hand-built `TieredBackend`), a laxer
-default policy applies — same rule, but a 1.0 s floor. (That fallback policy is
-family-less, so it predicts with the conservative `_GENERIC` family; a notebook
-entry that carries its real type still uses it.) To change the floor, supply your
-own `promotion_policy`. `force_persist`
+The 0.1 s floor is a constant of `PersistencePolicy`, not a config field, and a
+`TieredBackend` you build by hand uses it too. An entry that carries no type
+(`cost_model_family`) is predicted with the conservative `_GENERIC` family. To
+decide differently for such entries, give the `TieredBackend` a
+`promotion_policy`. `force_persist`
 (from `# @cash:persist` or `persist_all=True`) bypasses this filter too; per-tier
 size caps still apply.
 

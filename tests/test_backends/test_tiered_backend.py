@@ -9,11 +9,10 @@ class TestTieredBackend:
         l1 = InMemoryBackend()
         l2 = FileBackend(str(tmp_path))
 
-        # Test Case 1: Fast execution -> L1 only
-        # Mock policy or rely on default? Default: > 1.0s
+        # Under the 0.1 s compute floor -> L1 only
         backend = TieredBackend([l1, l2])
 
-        backend.set("fast_key", "value", metadata={"execution_time": 0.1, "size": 100})
+        backend.set("fast_key", "value", metadata={"execution_time": 0.05, "size": 100})
 
         # Check L1
         meta, val = l1.get("fast_key")

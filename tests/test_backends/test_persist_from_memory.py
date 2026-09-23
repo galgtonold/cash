@@ -20,7 +20,7 @@ NOTEBOOK = {
 
 def _tiered(tmp_path):
     ram, disk = InMemoryBackend(), FileBackend(str(tmp_path / "cache"))
-    return TieredBackend([ram, disk], min_persist_compute_s=0.1), ram, disk
+    return TieredBackend([ram, disk]), ram, disk
 
 
 def test_a_cheap_entry_stays_in_ram_when_set(tmp_path):

@@ -87,7 +87,6 @@ def test_magics_are_registered_under_their_class_name():
         "backend",
         "cache_dir",
         "persist_all",
-        "smart_persistence",
         "remote_revalidate_max_age_seconds",
         "min_execution_time_to_cache_seconds",
     ],

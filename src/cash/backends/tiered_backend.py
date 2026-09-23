@@ -7,20 +7,15 @@ import time
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
-from cash import cost_model
-
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
 from ._base import CacheBackend, MetadataDict
 from .adaptive_caps import human_bytes
+from .persistence_policy import PersistencePolicy
 from .serialization import PickleSerializer, Serializer
-from .value_policy import WORTH_CEILING_BYTES_PER_SECOND, worth_its_bytes
+from .value_policy import WORTH_CEILING_BYTES_PER_SECOND
 
 _UNSEEN = object()
-
-#: Promotion thresholds a `TieredBackend` uses unless it is given others.
-DEFAULT_MIN_PERSIST_COMPUTE_S = 1.0
-DEFAULT_MIN_PERSIST_SAVINGS_PCT = 0.20
 
 logger = logging.getLogger(__name__)
 
@@ -47,50 +42,35 @@ def _cap_list(caps: list[int] | None) -> str:
 
 
 class TieredBackend(CacheBackend):
-    """
-    Backend that manages multiple cache tiers (e.g., Memory -> File -> S3).
-    Implements smart promotion and read-repair.
-    """
+    """Tiers ordered fastest first (e.g. RAM -> disk -> S3).
 
-    # Map a backend implementation class to the cost-model backend kind used
-    # to predict restore time. Anything unmapped is treated as disk (the
-    # cost model itself also falls back to "disk" for unknown kinds).
-    _BACKEND_KIND_BY_CLASS = {
-        "InMemoryBackend": "ram",
-        "FileBackend": "disk",
-        "SQLiteBackend": "disk",
-        "RedisBackend": "redis",
-        "S3Backend": "s3",
-    }
+    Every value goes to the first tier; `policy` decides which also go past
+    it. A read from a slower tier is copied into the faster ones.
+    """
 
     def __init__(
         self,
         backends: list[CacheBackend],
         promotion_policy: Callable[[float, int], bool] | None = None,
         *,
-        min_persist_compute_s: float = DEFAULT_MIN_PERSIST_COMPUTE_S,
-        min_persist_savings_pct: float = DEFAULT_MIN_PERSIST_SAVINGS_PCT,
+        policy: PersistencePolicy | None = None,
     ) -> None:
         """
         Args:
-            backends: List of cache backends, ordered by speed (fastest first).
-            promotion_policy: Callable taking (execution_time, size_bytes) and returning True if should promote.
-            min_persist_compute_s: Compute floor for the serialization-aware
-                decision — nothing below this is promoted past tier 0. The
-                default (1.0 s) matches the fallback ``default_promotion_policy``;
-                the factory lowers it to 0.1 s for the smart-persistence stack.
-            min_persist_savings_pct: Required fraction of compute time that a
-                cache hit must save to be worth promoting. Mirrors
-                ``CashConfig.min_cache_savings_pct`` (Gate A's threshold).
+            backends: The tiers, fastest first.
+            promotion_policy: ``(execution_time, size_bytes) -> bool``, to
+                decide instead of the cost model for an entry that carries no
+                cost-model family. Explicit requests to keep an entry and the
+                bytes-per-second ceiling still apply.
+            policy: The persistence rule; `PersistencePolicy` defaults if omitted.
         """
         self.backends = backends
         # See `_drop_ram_if_cleared`.
         self._generation: Any = _UNSEEN
         self._generation_checked_at = 0.0
         self._stamp_writes_seen = 0
-        self.promotion_policy = promotion_policy or self.default_promotion_policy
-        self.min_persist_compute_s = min_persist_compute_s
-        self.min_persist_savings_pct = min_persist_savings_pct
+        self.promotion_policy = promotion_policy
+        self.policy = policy if policy is not None else PersistencePolicy()
         # Once-per-session dedup for the oversize-refusal warning.
         self._warned_oversize = False
         #: Same, for the bytes-per-compute-second ceiling (`value_policy`).
@@ -213,48 +193,9 @@ class TieredBackend(CacheBackend):
         return total
 
     def _promotion_backend_kind(self) -> str:
-        """Cost-model backend kind of the first tier past RAM (the primary
-        persistence target). Used to predict restore cost at ``set`` time."""
-        if len(self.backends) > 1:
-            name = type(self.backends[1]).__name__
-            return self._BACKEND_KIND_BY_CLASS.get(name, "disk")
-        return "disk"
-
-    def _cost_model_promote(
-        self,
-        type_name: str,
-        size_bytes: int,
-        execution_time: float,
-        backend_kind: str,
-        *,
-        floor: bool = True,
-    ) -> bool:
-        """Serialization-aware promotion decision (the same rule Gate A uses):
-        promote only when recomputing costs more than the predicted restore.
-
-        ``promote if execution_time - est_restore_time > min_savings * execution_time``
-
-        The prediction comes from the fitted ``cost_model`` (serialize+write /
-        read+deserialize end-to-end), so — unlike the old raw-bandwidth model —
-        bigger objects are correctly *more* likely to persist when their
-        recompute cost is high.
-        """
-        if floor and execution_time < self.min_persist_compute_s:
-            return False
-
-        est_restore = cost_model.estimated_restore_time(type_name, size_bytes, backend_kind)
-        return execution_time - est_restore > self.min_persist_savings_pct * execution_time
-
-    def default_promotion_policy(self, execution_time: float, size_bytes: int) -> bool:
-        """Fallback policy used when no ``promotion_policy`` is supplied and the
-        entry's metadata carries no cost-model family (so ``set`` can't predict
-        with the real type).
-
-        Serialization-aware like the smart policy, but assumes the slowest
-        (``_GENERIC``) family since the caller gave only ``size_bytes``. Keeps
-        the 1.0 s compute floor as a designed floor for the fallback path.
-        """
-        return self._cost_model_promote("", size_bytes, execution_time, self._promotion_backend_kind())
+        """The cost-model kind of the first tier past RAM, which a persisted
+        value is restored from."""
+        return self.backends[1].cost_kind if len(self.backends) > 1 else "disk"
 
     @staticmethod
     def _serialized_size(value: Any, serializer: Serializer | None) -> int | None:
@@ -631,28 +572,16 @@ class TieredBackend(CacheBackend):
         stored_metadata, value = entry
         if any(d != "RAM" for d in stored_metadata.get("storage") or ()):
             return False  # on disk already
-        if stored_metadata.get("metadata_only") or stored_metadata.get("cost_model_family") is None:
+        decision = self.policy.decide_rebuild(
+            stored_metadata, rebuild_seconds, backend_kind=self._promotion_backend_kind()
+        )
+        if decision.skipped == "bytes":
+            self._warn_not_worth_its_bytes(key, decision.weight, rebuild_seconds, code=stored_metadata.get("code"))
+            self._drop_persisted_call_refs(stored_metadata.get("call_refs"))
+            stored_metadata["persist_skipped"] = "bytes"
+        if not decision.persist:
             return False
         size = stored_metadata.get("cost_model_size_bytes", stored_metadata.get("size", 0))
-        if not self._cost_model_promote(
-            stored_metadata.get("cost_model_type_name", ""), size, rebuild_seconds, self._promotion_backend_kind()
-        ):
-            return False
-        # The bytes-per-compute-second ceiling applies here too, and this is
-        # where it matters most: a notebook statement sets `defer_persist`, so
-        # it never reaches the promotion block in `set` -- this end-of-cell
-        # pass is how notebook values get to disk, and notebook values are what
-        # filled round 26's caches. Weighed like `set` does it, with the call
-        # results the entry refers to, and against *rebuild_seconds*: what a
-        # restore actually saves here is the whole upstream chain, not the one
-        # statement's own time.
-        if not stored_metadata.get("force_persist"):
-            weight = (stored_metadata.get("size") or size) + int(stored_metadata.get("call_ref_bytes") or 0)
-            if not worth_its_bytes(weight, rebuild_seconds):
-                self._warn_not_worth_its_bytes(key, weight, rebuild_seconds, code=stored_metadata.get("code"))
-                self._drop_persisted_call_refs(stored_metadata.get("call_refs"))
-                stored_metadata["persist_skipped"] = "bytes"
-                return False
         metadata = {
             k: v
             for k, v in stored_metadata.items()
@@ -705,131 +634,35 @@ class TieredBackend(CacheBackend):
             # call recomputes every time.
             store_errors.append(f"{type(self.backends[0]).__name__}: {type(e).__name__}: {e}")
 
-        # Check promotion for subsequent tiers. The promotion decision is
-        # made per-tier so a single set() can land in some tiers and skip
-        # others — e.g. a 20 MB DataFrame goes to RAM + DISK but skips
-        # Redis (10 MB cap).
+        decision = None
         if len(self.backends) > 1:
-            exec_time = metadata.get("execution_time", 0)
-            size = metadata.get("size", 0)
-
-            # Check if force_persist is set via @cash:persist annotation
-            force_persist = metadata.get("force_persist", False)
-
-            # Promotion decision — same rule as the statement processor's Gate A
-            # (predicted restore vs compute), applied here so the two gates can
-            # never contradict each other. When the entry carries a cost-model
-            # family (notebook-cached values), predict restore time with the
-            # real type; otherwise fall through to the 2-arg promotion_policy
-            # (injected test lambdas, the decorator path, legacy metadata).
-            family = metadata.get("cost_model_family")
-            deferred = bool(metadata.pop("defer_persist", False)) and not force_persist
+            deferred = bool(metadata.pop("defer_persist", False))
             if original_metadata is not None:
                 original_metadata.pop("defer_persist", None)
-            decorated = bool(metadata.get("decorator_entry"))
-            if force_persist:
-                past_compute_floor = True
-            elif deferred:
-                # A version the same cell replaces: the end-of-cell pass
-                # persists the final one (``persist_from_memory``).
-                past_compute_floor = False
-            elif decorated:
-                # A decorated result is persisted, full stop. No compute floor
-                # and no cost model: `@cash.cache` is the caller having already
-                # decided, and cash's job is to honour that rather than re-take
-                # the decision per call.
-                #
-                # Both gates were wrong here in their own way. The floor (0.1 s)
-                # meant a script run twice recomputed everything, which is how
-                # two of six agents attacking the decorator before round 26
-                # reported "no bugs found" -- nothing had ever reached disk. The
-                # cost model then inherited the whole decision, and it rests on
-                # a fitted intercept measured at 10.4 ms against a real small
-                # read of ~1.3 ms, so nothing under about 13 ms of body was
-                # stored however often it was called.
-                #
-                # What still applies is the per-tier size caps below: a value
-                # too large for any disk tier has nowhere to go, and says so.
-                past_compute_floor = True
-            elif family is not None:
-                past_compute_floor = self._cost_model_promote(
-                    metadata.get("cost_model_type_name", ""),
-                    metadata.get("cost_model_size_bytes", size),
-                    exec_time,
-                    self._promotion_backend_kind(),
-                )
-            else:
-                past_compute_floor = self.promotion_policy(exec_time, size)
-
-            # Size used for per-tier caps — prefer the cost-model estimate
-            # (the notebook path sets no plain 'size' key).
+            decision = self.policy.decide(
+                key,
+                metadata,
+                backend_kind=self._promotion_backend_kind(),
+                deferred=deferred,
+                override=self.promotion_policy,
+            )
+            size = metadata.get("size", 0) or 0
             cap_size = size or metadata.get("cost_model_size_bytes", 0)
-
-            # ...and worth the bytes it would occupy. Every gate above asks
-            # whether restoring beats recomputing; none of them asks what the
-            # answer COSTS. Round 26's five caches held 58 GiB for 61-360 MB of
-            # input data, and the three mechanisms behind that (see
-            # `value_policy`) are each a population version pruning cannot
-            # ration: r26s5's 1.3 GB frames at 5.0 s of compute, r26s4's 48 MiB
-            # loop iterations at 0.00 s, r26s3's spare copies. One rate, applied
-            # here, covers all three.
-            #
-            # `force_persist` and `decorator_entry` are exempt for the same
-            # reason they are exempt from the compute floor: the caller has
-            # already decided, and re-taking that decision per call is what
-            # `@cash.cache` exists to stop.
-            # A statement entry is weighed with the call results it REFERS to,
-            # not just its own bytes. A cached call's result is stored once, in
-            # a `call:` entry, and the statement that produced it holds a
-            # `CallRef` -- so the statement's own entry is a few KB while the
-            # thing it restores is hundreds of MB. r26s5's seven 1.3 GB frames
-            # are `call:` entries, and the 72 statements referencing them
-            # declare 14,293 MiB of `call_ref_bytes` between them.
-            #
-            # A `call:` entry is therefore never judged on its own: refusing it
-            # leaves the statement that points at it restoring a reference to
-            # something that is not there, so the statement "hits" and then
-            # rebuilds anyway -- a cache entry that costs disk and saves
-            # nothing. `test_superseded_versions_are_pruned` caught exactly
-            # that. The decision belongs to the statement, which is the thing
-            # whose compute is actually being saved.
-            weight = cap_size + int(metadata.get("call_ref_bytes") or 0)
-            is_call_entry = str(key).startswith("call:")
-            # ...except one not digested (`call_refs.ESTIMATED_FIELD`): only
-            # the statement it is the plain result of refers to it, so no
-            # other statement's refusal would drop it. Weighed by its
-            # estimated PICKLED size, which is what disk holds: r28s5's result
-            # is 402 MiB pickled and 1.7 GiB in memory, as 3.7 million strings.
-            if is_call_entry and metadata.get("value_bytes_estimated"):
-                weight = int(metadata.get("value_bytes") or cap_size)
-                is_call_entry = False
-            bytes_refused = False
-            if past_compute_floor and not (force_persist or decorated) and not is_call_entry:
-                if not worth_its_bytes(weight, exec_time):
-                    past_compute_floor = False
-                    bytes_refused = True
-                    # A `call:` entry is said by the statement holding its
-                    # result, which names the code the user wrote; said here
-                    # too, every refusal was printed twice, the second naming
-                    # an internal key (round 29, r29s1 and r29s3).
-                    if not str(key).startswith("call:"):
-                        self._warn_not_worth_its_bytes(key, weight, exec_time, code=metadata.get("code"))
-                    self._drop_persisted_call_refs(metadata.get("call_refs"))
-
+            if decision.skipped == "bytes":
+                exec_time = metadata.get("execution_time", 0) or 0
+                if decision.report:
+                    self._warn_not_worth_its_bytes(key, decision.weight, exec_time, code=metadata.get("code"))
+                self._drop_persisted_call_refs(metadata.get("call_refs"))
             writes = (
                 self._write_persistent_tiers(key, value, metadata, serializer, cap_size)
-                if past_compute_floor
+                if decision.persist
                 else _TierWrites([], False, cap_size, [], [])
             )
             stored_destinations.extend(writes.stored)
             store_errors.extend(writes.errors)
             size_refused = writes.size_refused
-
-            # The value was worth persisting (cleared the compute floor) but
-            # every persistent tier refused it as too big for its cap — it will
-            # live in RAM only and vanish on the next kernel restart. A clean
-            # no-op beats a treadmill, but the user should know why nothing
-            # durable was written and how to fix it.
+            # Worth persisting, but too big for every persistent tier's cap: it
+            # lives in RAM only, and the user should know why and what to do.
             if size_refused and not any(d != "RAM" for d in stored_destinations):
                 self._warn_oversize_not_persisted(key, writes.refused_size, writes.refusing_caps)
 
@@ -844,15 +677,13 @@ class TieredBackend(CacheBackend):
                 original_metadata["store_errors"] = store_errors
             # And why it went no further, so "why did the next process miss?"
             # has an answer: the compute floor / cost model, or a size cap.
-            if len(self.backends) > 1 and not any(d != "RAM" for d in stored_destinations):
-                if bytes_refused:
+            if decision is not None and not any(d != "RAM" for d in stored_destinations):
+                if decision.skipped == "bytes":
                     original_metadata["persist_skipped"] = "bytes"
                 elif size_refused:
                     original_metadata["persist_skipped"] = "size"
-                elif deferred:
-                    original_metadata["persist_skipped"] = "replaced_in_cell"
-                elif not past_compute_floor:
-                    original_metadata["persist_skipped"] = "compute"
+                elif decision.skipped is not None:
+                    original_metadata["persist_skipped"] = decision.skipped
 
         # Log visibility
         if stored_destinations:

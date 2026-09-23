@@ -187,6 +187,10 @@ class CacheBackend(ABC):
     # Tier-promotion hint. See class docstring.
     max_size_bytes: int | None = None
 
+    #: What `cost_model` predicts this backend's restore times as: ``"ram"``,
+    #: ``"disk"``, ``"redis"`` or ``"s3"``.
+    cost_kind: str = "disk"
+
     #: The ttl an entry written without one gets; None never expires. Set by
     #: backends that take a ``default_ttl``; read through :attr:`default_ttl`.
     _default_ttl: float | None = None

@@ -171,9 +171,8 @@ Print the effective merged configuration.
   (`2 GB (2,000,000,000 bytes) on disk, RAM <M>`) when `max_cache_size` is
   set. The RAM figure appears nowhere else, and a growing RSS is usually that
   cap doing its job rather than a leak.
-- `Persist` — what actually decides disk persistence: the cost model
-  (`0.1s compute floor, N% savings required`), or a conservative fallback when
-  smart persistence is off.
+- `Persist` — what decides disk persistence: the cost model
+  (`0.1s compute floor, N% savings required`).
 - `Tiers` — present when the active config declares an explicit tier
   list; lists each tier's type in order, with the options it sets —
   `memory, file (default_ttl=3600s)`.
@@ -459,7 +458,7 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 ---
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @a7574c7d -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @7620a17e -->
 ## Exit codes
 
 | Code | When |

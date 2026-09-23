@@ -6,7 +6,7 @@ between a table's separator row and its first data row and every data row is
 absorbed: the page still renders a table, with its headers, and *no content*.
 
 This is not hypothetical. `docs/cost-model.md` carried its
-`min_execution_time_to_cache_seconds` / `_SMART_PERSIST_COMPUTE_FLOOR_S`
+`min_execution_time_to_cache_seconds` / compute-floor
 anchor in exactly that position, so the three-row table naming the 10 ms and
 0.1 s floors — the whole point of the page — rendered as a header plus one
 empty row. Nothing caught it: the anchor verifier only checks that the source
