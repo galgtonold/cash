@@ -68,7 +68,7 @@ FEATURES = {
     "notebook/consumables": "consumables",
     "notebook/upstream/reexecution_planner": "reexecution",
     "notebook/upstream/mismatch_classifier": "mismatch",
-    "notebook/upstream/stateful_carriers": "stateful_carriers",
+    "notebook/stateful_carriers": "stateful_carriers",
     "notebook/carrier_history": "stateful_carriers",
     "notebook/statement/derivation_edges": "derivation_edges",
     "notebook/statement/miss_guard": "miss_guard",

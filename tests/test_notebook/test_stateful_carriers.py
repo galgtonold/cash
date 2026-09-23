@@ -2,7 +2,7 @@
 
 import pytest
 
-from cash.notebook.upstream.stateful_carriers import stateful_carrier_kind
+from cash.notebook.stateful_carriers import stateful_carrier_kind
 
 
 class TestCarriersDetected:

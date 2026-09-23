@@ -3428,7 +3428,7 @@ class StatementProcessor:
         statements before the write, can.
         """
         from ..carrier_history import FIGURE_KINDS, carrier_history_fingerprint
-        from ..upstream.stateful_carriers import stateful_carrier_kind
+        from ..stateful_carriers import stateful_carrier_kind
 
         log = self._cell_stmt_log
         end = next((k for k in range(len(log) - 1, -1, -1) if log[k][0] == code), None)

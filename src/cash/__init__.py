@@ -5,7 +5,7 @@
 - **Public stable API** (decorator caching, backends, configuration):
   Import from ``cash`` directly, e.g. ``from cash import Cash, pure``.
 
-- **Notebook/Jupyter API** (cache status, upstream checks): import from
+- **Notebook/Jupyter API** (cache status): import from
   ``cash.notebook``, e.g. ``from cash.notebook import CacheStatus``. The magics
   are in ``cash.notebook.ipython``, the statement processor in
   ``cash.notebook.statement``.

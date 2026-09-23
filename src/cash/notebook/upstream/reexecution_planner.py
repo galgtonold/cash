@@ -26,7 +26,7 @@ from .._trace import trace_event
 from ..cache_key import write_provenance_key
 from ..cache_status import CacheStatus
 from ..carrier_history import carrier_history_fingerprint
-from .stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
+from ..stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
 from .virtual_lineage import _key_lineages
 
 if TYPE_CHECKING:

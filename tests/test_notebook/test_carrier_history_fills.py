@@ -7,8 +7,8 @@ it -- the blank chart. And after a restart there is no live ``fig`` to
 classify, so the carrier has to be recognised by the code that made it.
 """
 
+from cash.notebook.stateful_carriers import carrier_kind_from_producer
 from cash.notebook.upstream.reexecution_planner import _fills_carrier, _passes_carrier_to_a_call
-from cash.notebook.upstream.stateful_carriers import carrier_kind_from_producer
 
 SIBLINGS = {"fig", "axes"}
 
