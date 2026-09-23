@@ -788,25 +788,67 @@ class _WarmKernel:
         self._ns_dirty = True
 
     def boot(self) -> None:
+        """Start the kernel, on fresh ports each attempt.
+
+        A kernel picks its ports before it binds them, so a kernel booting in
+        another worker can take one in between; this one then dies with
+        ``ZMQError: Address in use``. A new KernelManager draws new ports,
+        which is what a retry needs -- the same manager would draw the same
+        ones again.
+        """
         from jupyter_client import KernelManager
 
-        km = KernelManager(kernel_name=self.kernel_name)
-        # Throttle holds a slot through wait-for-ready (the whole startup window
-        # is where the resource pressure lives), so only _BOOT_CAP kernels boot
-        # at once across all workers.
-        with _boot_throttle():
-            km.start_kernel()
-            kc = km.client()
-            kc.start_channels()
+        last_exc: Optional[BaseException] = None
+        for _attempt in range(3):
+            km = KernelManager(kernel_name=self.kernel_name)
+            kc = None
+            # Throttle holds a slot through wait-for-ready (the whole startup
+            # window is where the resource pressure lives), so only _BOOT_CAP
+            # kernels boot at once across all workers.
+            with _boot_throttle():
+                try:
+                    km.start_kernel()
+                    kc = km.client()
+                    kc.start_channels()
 
-            async def _wait_ready():
-                await kc._async_wait_for_ready(timeout=30)
+                    async def _wait_ready(kc=kc):
+                        await kc._async_wait_for_ready(timeout=30)
 
-            self.run_async(_wait_ready())
-        self.km = km
-        self.kc = kc
-        # A just-booted kernel has nothing to clear.
-        self._ns_dirty = False
+                    self.run_async(_wait_ready())
+                except Exception as exc:  # noqa: BLE001 - retry ANY boot failure
+                    last_exc = exc
+                    try:
+                        if kc is not None:
+                            kc.stop_channels()
+                    except Exception:
+                        pass
+                    _force_kill_kernel(km)
+                    continue
+            self.km = km
+            self.kc = kc
+            # A just-booted kernel has nothing to clear.
+            self._ns_dirty = False
+            return
+        raise RuntimeError(f"kernel failed to boot after 3 attempts: {last_exc!r}") from last_exc
+
+    def reboot(self) -> None:
+        """Replace this kernel with a new one on fresh ports."""
+        try:
+            if self.kc:
+                self.kc.stop_channels()
+        except Exception:
+            pass
+        _force_kill_kernel(self.km)
+        self.km = self.kc = None
+        self._initialized = False
+        self.boot()
+        self._tests_since_boot = 0
+
+    def _is_alive(self) -> bool:
+        try:
+            return self.km is not None and self.kc is not None and bool(self.km.is_alive())
+        except Exception:
+            return False
 
     def _recycle_if_bloated(self) -> None:
         """Re-boot this kernel once it has grown too large to be safe to keep.
@@ -846,16 +888,7 @@ class _WarmKernel:
                 pass  # fall back to the count backstop
         if not over:
             return
-        try:
-            if self.kc:
-                self.kc.stop_channels()
-            _force_kill_kernel(self.km)
-        except Exception:
-            pass
-        self.km = self.kc = None
-        self._initialized = False
-        self.boot()
-        self._tests_since_boot = 0
+        self.reboot()
         # cash is not initialised here: the rest of prepare_for_test, which
         # called us, does exactly that (reset_session + %cash_on) and works the
         # same on a freshly booted kernel as on a reused one.
@@ -875,6 +908,12 @@ class _WarmKernel:
         """
         path_str = str(nb_path).replace("\\", "\\\\")
         dir_str = str(work_dir).replace("\\", "\\\\")
+        # A kernel that died since the last test -- a restart whose relaunch
+        # lost its ports to another worker's kernel -- would answer nothing,
+        # and every exec below would wait out its 120 s timeout, in this test
+        # and in each of its reruns. Replace it instead.
+        if not self._is_alive():
+            self.reboot()
         # Clear the namespace in its OWN execution. reset() rebinds user_ns to a
         # fresh dict; if we assigned __vsc_ipynb_file__ in the same cell the
         # assignment would land in the old (captured) globals dict and be
@@ -1533,12 +1572,40 @@ class NotebookTestRunner:
         afterwards ONLY if this runner was started with injection, so a
         no-path run stays a no-path run across the restart.
         """
-        self._run_async(self.client.km._async_restart_kernel(now=True))
-        self._run_async(self.client.kc._async_wait_for_ready(timeout=30))
+        try:
+            self._run_async(self.client.km._async_restart_kernel(now=True))
+            self._run_async(self.client.kc._async_wait_for_ready(timeout=30))
+        except Exception:  # noqa: BLE001 - replaced below, whatever the failure
+            self._replace_kernel()
         self._restore_working_directory()
         if self._inject_path:
             self._inject_notebook_path()
         return self
+
+    def _replace_kernel(self) -> None:
+        """Stand in a new kernel, on fresh ports, for one that did not come back.
+
+        A restart relaunches the kernel on the ports it had. Another worker's
+        kernel can take one of them while it is down, and the relaunched
+        kernel then dies with ``ZMQError: Address in use``. A new kernel is
+        what a restart gives anyway, so one started on new ports is an equal
+        stand-in.
+        """
+        if self._warm is not None:
+            self._warm.reboot()
+            self.client.km = self._warm.km
+            self.client.kc = self._warm.kc
+            return
+        try:
+            if self.client.kc is not None:
+                self.client.kc.stop_channels()
+        except Exception:
+            pass
+        _force_kill_kernel(self.client.km)
+        # Not handed back to the pool: this runner now owns a kernel of its
+        # own, which shutdown() kills.
+        self._pooled_kernel = None
+        self._start_new_kernel()
 
     def _restore_working_directory(self) -> None:
         """Re-enter ``work_dir`` after a restart.
