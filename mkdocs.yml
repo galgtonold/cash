@@ -20,6 +20,7 @@ theme:
     - search.highlight
     - content.code.copy
     - content.code.annotate
+    - content.tabs.link
   font: false  # Use system font stacks (per cash design system), not Roboto.
 
 # Working notes (specs / plans) live under docs/superpowers/ and are
