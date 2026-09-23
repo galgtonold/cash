@@ -24,7 +24,6 @@ import logging
 import os
 import pickle
 import sys
-import sysconfig
 import textwrap
 import threading
 import time
@@ -75,6 +74,7 @@ from .exceptions import (
     CashImpurityWarning,
 )
 from .graph import DependencyGraph
+from .install_paths import is_user_path
 from .lineage_tag import own_tag
 from .object_hashing import builtin_hash, builtin_hash_family, estimate_object_size, stable_key_repr
 from .purity import WRITE_METHODS
@@ -7372,22 +7372,9 @@ class Cash:
         if Cash._in_own_package(getattr(mod, "__name__", None), own_pkg):
             return True
         path = getattr(mod, "__file__", None)
-        if not path:
+        if not path or not isinstance(path, str):
             return False  # builtin / namespace package - nothing to edit
-        try:
-            p = os.path.normcase(os.path.abspath(path))
-        except (TypeError, ValueError):
-            return False
-        if "site-packages" in p or "dist-packages" in p:
-            return False
-        try:
-            for key in ("stdlib", "platstdlib"):
-                std = sysconfig.get_paths().get(key)
-                if std and p.startswith(os.path.normcase(os.path.abspath(std))):
-                    return False
-        except (KeyError, OSError):
-            pass
-        return not p.startswith(os.path.normcase(os.path.dirname(os.path.abspath(__file__))))
+        return is_user_path(path)
 
     #: Fileless modules that are NOT the user's code. Everything else without a
     #: __file__ is a notebook cell, a REPL, or exec'd source -- i.e. something

@@ -71,7 +71,7 @@ def fake_site(tmp_path, monkeypatch):
     root = os.path.normcase(str(site)).replace("\\", "/").rstrip("/") + "/"
     # raising=False: the fails-first control runs this against a tracker
     # that has neither function.
-    monkeypatch.setattr(file_tracker, "_site_roots", lambda: (root,), raising=False)
+    monkeypatch.setattr(file_tracker, "site_roots", lambda: (root,), raising=False)
     monkeypatch.setattr(file_tracker, "installed_roots", lambda: (root,), raising=False)
     monkeypatch.syspath_prepend(str(site))
     for name in ("fakelib", "fakelib_importer"):

@@ -9,13 +9,12 @@ import importlib
 import logging
 import os
 import shutil
-import site
 import sys
-import sysconfig
 import tempfile
 import types
 from typing import Any
 
+from ..install_paths import is_user_path
 from ..source_norm import callable_identity, module_identity, read_code_text
 from .module_symbols import analysis_for
 
@@ -23,77 +22,18 @@ __all__ = ["FunctionTracker", "is_local_module"]
 
 logger = logging.getLogger(__name__)
 
-# Lazily computed set of stdlib/site-packages directory prefixes
-_STDLIB_SITE_PREFIXES: set[str] | None = None
-
-
-def _get_stdlib_site_prefixes() -> set[str]:
-    """Get the set of directory prefixes for stdlib and site-packages.
-
-    These prefixes are used to distinguish local modules from installed packages.
-    Computed once and cached for the process lifetime.
-    """
-    global _STDLIB_SITE_PREFIXES
-    if _STDLIB_SITE_PREFIXES is not None:
-        return _STDLIB_SITE_PREFIXES
-
-    prefixes: set[str] = set()
-
-    # stdlib paths
-    stdlib_path = sysconfig.get_path("stdlib")
-    if stdlib_path:
-        prefixes.add(os.path.normcase(os.path.realpath(stdlib_path)))
-    platstdlib = sysconfig.get_path("platstdlib")
-    if platstdlib:
-        prefixes.add(os.path.normcase(os.path.realpath(platstdlib)))
-
-    # site-packages paths
-    for sp in site.getsitepackages() if hasattr(site, "getsitepackages") else []:
-        prefixes.add(os.path.normcase(os.path.realpath(sp)))
-    user_site = site.getusersitepackages() if hasattr(site, "getusersitepackages") else None
-    if user_site:
-        prefixes.add(os.path.normcase(os.path.realpath(user_site)))
-
-    # Also add the Python prefix itself (covers DLLs, Lib, etc.)
-    for p in (sys.prefix, sys.base_prefix, sys.exec_prefix, sys.base_exec_prefix):
-        if p:
-            norm = os.path.normcase(os.path.realpath(p))
-            prefixes.add(norm)
-
-    _STDLIB_SITE_PREFIXES = prefixes
-    return prefixes
-
 
 def is_local_module(module: types.ModuleType) -> bool:
-    """Check if a module is local (not stdlib, not site-packages).
-
-    A module is considered "local" if its source file is not under any of
-    the stdlib, site-packages, or Python installation directories.
-
-    Args:
-        module: The module to check
-
-    Returns:
-        True if the module's source file is outside stdlib/site-packages
-    """
+    """Is *module* the user's own code (`cash.install_paths.is_user_path`),
+    loaded from Python source -- not an extension module or bare bytecode?"""
     file_path = getattr(module, "__file__", None)
     if not file_path:
         return False
-
-    # Must be a .py file (not .pyd, .so, .pyc without source)
     if not file_path.endswith(".py"):
-        # Check if there's a corresponding .py for .pyc
-        if file_path.endswith((".pyc", ".pyo")):
-            py_path = file_path[:-1]  # .pyc -> .py
-            if not os.path.isfile(py_path):
-                return False
-        else:
+        # A .pyc counts when its .py sits next to it; anything else is compiled.
+        if not (file_path.endswith((".pyc", ".pyo")) and os.path.isfile(file_path[:-1])):
             return False
-
-    real_path = os.path.normcase(os.path.realpath(file_path))
-    prefixes = _get_stdlib_site_prefixes()
-
-    return all(not real_path.startswith(prefix) for prefix in prefixes)
+    return is_user_path(file_path)
 
 
 def _collect_imported_names(tree: ast.AST) -> set[str]:

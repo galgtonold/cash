@@ -56,8 +56,9 @@ import os
 import socket
 import subprocess
 import sys
-from pathlib import Path
 from typing import Any
+
+from .install_paths import is_user_path
 
 logger = logging.getLogger(__name__)
 
@@ -80,33 +81,9 @@ def _record(kind: str, detail: str) -> None:
         observer.record_effect(kind, detail)
 
 
-#: The cash package directory: its frames are never the user's line.
-_OWN_DIR = os.path.dirname(os.path.abspath(__file__)) + os.sep
-
-#: filename -> "is this library or interpreter code?", decided once per file.
-_LIBRARY_FILE: dict[str, bool] = {}
-
-
 def _is_library_file(filename: str) -> bool:
-    known = _LIBRARY_FILE.get(filename)
-    if known is not None:
-        return known
-    if filename.startswith("<"):
-        answer = True
-    else:
-        try:
-            path = os.path.abspath(filename)
-            if path.startswith(_OWN_DIR):
-                answer = True
-            else:
-                # Local: import cycle effect_observer -> config -> tracking.file_tracker -> effect_observer.
-                from .config import is_installed_path
-
-                answer = is_installed_path(Path(path).resolve())
-        except (OSError, ValueError):
-            answer = True
-    _LIBRARY_FILE[filename] = answer
-    return answer
+    """Library or interpreter code, cash's own included -- never the user's line."""
+    return not is_user_path(filename)
 
 
 def line_waived(filename: str, lineno: int) -> bool:

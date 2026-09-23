@@ -23,8 +23,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ..install_paths import installed_roots, normcase_path
 from ..purity import is_pure
-from ..tracking.file_tracker import installed_roots, normcase_path
 
 __all__ = [
     # Primary API

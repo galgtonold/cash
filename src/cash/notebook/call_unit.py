@@ -46,6 +46,7 @@ from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement, callee_source_global_mutations
 from cash.analysis.cacheability_decision import decide_cacheability, identity_coupled_reason
 from cash.backends.value_policy import worth_its_bytes
+from cash.install_paths import is_user_path
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_interception import CallSite, names_read
@@ -63,7 +64,7 @@ from cash.object_hashing import (
     is_identity_fallback_hash,
 )
 from cash.tracking.file_dep_snapshot import file_dep_is_fresh, snapshot_dependencies
-from cash.tracking.file_tracker import FileAccessTracker, active_tracker, is_user_file
+from cash.tracking.file_tracker import FileAccessTracker, active_tracker
 from cash.tracking.randomness import capture_rng_state, rng_modules_changed
 
 from ..cost_model import estimated_restore_time
@@ -788,7 +789,7 @@ def _plain_or_code(value, seen: set[int], budget: list[int]) -> bool:
 
         filename = getattr(value.__code__, "co_filename", "") or ""
         # A cell's code has a `<cash-...>` / `<ipython-...>` name: the user's.
-        if filename and not filename.startswith("<") and not is_user_file(filename):
+        if filename and not filename.startswith("<") and not is_user_path(filename):
             # A library's function is code, as its classes are. Its module
             # state is no more in a lineage key than in a content key, and
             # walking it refused: sklearn's `normalize` is a validating

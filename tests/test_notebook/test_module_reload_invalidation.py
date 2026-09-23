@@ -704,13 +704,10 @@ class TestTransitiveDependencyTracking:
         ft.track_module("metrics")
 
         # No stdlib paths should appear in dep_file_to_parents
-        from cash.tracking.function_tracker import _get_stdlib_site_prefixes
+        from cash.install_paths import is_installed_path
 
-        prefixes = _get_stdlib_site_prefixes()
         for dep_path in ft.dep_file_to_parents:
-            norm = os.path.normcase(os.path.realpath(dep_path))
-            for prefix in prefixes:
-                assert not norm.startswith(prefix), f"Stdlib path {dep_path} should not be tracked as a dependency"
+            assert not is_installed_path(dep_path), f"Stdlib path {dep_path} should not be tracked as a dependency"
 
 
 # ============================================================================

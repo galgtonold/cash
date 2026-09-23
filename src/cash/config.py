@@ -24,7 +24,6 @@ import inspect
 import logging
 import os
 import re
-import site
 import sys
 import textwrap
 import typing
@@ -34,6 +33,7 @@ from typing import Any
 
 from .diagnostics import warn_diagnostic
 from .exceptions import CashCacheIneffectiveWarning
+from .install_paths import is_installed_path
 from .tracking.file_tracker import untracked
 
 logger = logging.getLogger(__name__)
@@ -863,25 +863,6 @@ def _running_script_dir() -> Path | None:
     if is_installed_path(path):
         return None
     return path.parent
-
-
-def is_installed_path(path: Path) -> bool:
-    """Does *path* live inside the interpreter's own installation?"""
-    installed_roots = [Path(sys.prefix), Path(sys.base_prefix)]
-    installed_roots += [Path(p) for p in site.getsitepackages()] if hasattr(site, "getsitepackages") else []
-    user_site = getattr(site, "getusersitepackages", None)
-    if user_site is not None:
-        try:
-            installed_roots.append(Path(user_site()))
-        except Exception:  # noqa: BLE001 - a site module without a user site
-            pass
-    for root in installed_roots:
-        try:
-            if path.is_relative_to(root):
-                return True
-        except (OSError, ValueError):
-            continue
-    return False
 
 
 def _running_installed_module() -> bool:

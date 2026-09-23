@@ -19,10 +19,8 @@ import importlib.util
 import logging
 import os
 import pathlib
-import site
 import stat
 import sys
-import sysconfig
 import threading
 import time
 import zoneinfo
@@ -30,6 +28,7 @@ from collections.abc import Callable
 from typing import Any, Optional
 
 from cash._clock import perf_counter as _perf_counter
+from cash.install_paths import installed_roots, interpreter_roots, is_user_path, norm_dir, normcase_path, site_roots
 from cash.utils import is_remote_url, normalize_path
 
 # A remote URL handed to a reader (``pd.read_parquet("s3://bucket/key")``)
@@ -228,73 +227,6 @@ def _in_modules(module: str, names: tuple[str, ...]) -> bool:
     return any(module == n or module.startswith(n + ".") for n in names)
 
 
-def normcase_path(path: str) -> str:
-    """*path* case-folded where the OS is, with forward slashes.
-
-    ``normcase`` on Windows turns ``/`` back into ``\\``, so it has to come
-    first, or a directory prefix would never match a path under it.
-    """
-    return normalize_path(os.path.normcase(path))
-
-
-def _norm_dir(path: str) -> str:
-    return normcase_path(os.path.abspath(path)).rstrip("/") + "/"
-
-
-@functools.lru_cache(maxsize=1)
-def _interpreter_roots() -> tuple[str, ...]:
-    """The standard library, its compiled extensions and zipped stdlib."""
-
-    roots: set[str] = set()
-    paths = sysconfig.get_paths()
-    for key in ("stdlib", "platstdlib"):
-        if paths.get(key):
-            roots.add(_norm_dir(paths[key]))
-    for prefix in {sys.base_prefix, sys.base_exec_prefix}:
-        roots.add(_norm_dir(os.path.join(prefix, "DLLs")))
-    for entry in sys.path:
-        if entry and entry.lower().endswith(".zip"):
-            roots.add(_norm_dir(entry))
-    return tuple(sorted(roots))
-
-
-@functools.lru_cache(maxsize=1)
-def _site_roots() -> tuple[str, ...]:
-    """Where installed third-party packages live (site-packages).
-
-    Often INSIDE the standard library directory (``Lib/site-packages`` on
-    Windows, ``lib/python3.X/site-packages`` in conda), so the interpreter
-    test has to exclude these, or it would swallow every installed package --
-    and with it the own-package exemption.
-    """
-
-    roots: set[str] = set()
-    paths = sysconfig.get_paths()
-    for key in ("purelib", "platlib"):
-        if paths.get(key):
-            roots.add(_norm_dir(paths[key]))
-    try:
-        for entry in site.getsitepackages():
-            roots.add(_norm_dir(entry))
-    except AttributeError:  # virtualenv's old site.py
-        pass
-    try:
-        roots.add(_norm_dir(site.getusersitepackages()))
-    except (AttributeError, TypeError):
-        pass
-    # On Windows `getsitepackages()` also lists the installation prefix itself.
-    # That is the standard library's parent -- or, for a venv created as the
-    # project folder, the user's whole project -- never a package directory.
-    prefixes = {_norm_dir(p) for p in (sys.prefix, sys.exec_prefix, sys.base_prefix, sys.base_exec_prefix)}
-    return tuple(sorted(roots - prefixes))
-
-
-@functools.lru_cache(maxsize=1)
-def installed_roots() -> tuple[str, ...]:
-    """Where installed packages live: site-packages and the standard library."""
-    return tuple(sorted(set(_interpreter_roots()) | set(_site_roots())))
-
-
 def _under(path_nc: str, roots: tuple[str, ...]) -> bool:
     return any(path_nc.startswith(root) for root in roots)
 
@@ -302,7 +234,7 @@ def _under(path_nc: str, roots: tuple[str, ...]) -> bool:
 @functools.lru_cache(maxsize=1)
 def _tz_roots() -> tuple[str, ...]:
     """The system time zone database directories ``zoneinfo`` searches."""
-    return tuple(sorted({_norm_dir(p) for p in zoneinfo.TZPATH if os.path.isdir(p)}))
+    return tuple(sorted({norm_dir(p) for p in zoneinfo.TZPATH if os.path.isdir(p)}))
 
 
 def _installed_data_file(path_nc: str, own_package: str | None) -> bool:
@@ -318,7 +250,7 @@ def _installed_data_file(path_nc: str, own_package: str | None) -> bool:
     """
     if _under(path_nc, _tz_roots()):
         return True
-    for root in _site_roots():
+    for root in site_roots():
         if path_nc.startswith(root):
             top = path_nc[len(root) :].split("/", 1)[0]
             name = top.split(".", 1)[0].split("-", 1)[0]
@@ -334,11 +266,11 @@ def _module_package_dir(module_name: str) -> str | None:
     paths = getattr(top, "__path__", None)
     if paths:
         try:
-            return _norm_dir(list(paths)[0])
+            return norm_dir(list(paths)[0])
         except (TypeError, IndexError):
             return None
     file = getattr(top, "__file__", None)
-    return _norm_dir(os.path.dirname(file)) if file else None
+    return norm_dir(os.path.dirname(file)) if file else None
 
 
 #: module name -> (a metadata module?, read plumbing?, top-level name). A read
@@ -357,7 +289,7 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
     being cached -- its own files are its data, even when it is installed.
     """
     path_nc = normcase_path(path)
-    if _under(path_nc, _interpreter_roots()) and not _under(path_nc, _site_roots()):
+    if _under(path_nc, interpreter_roots()) and not _under(path_nc, site_roots()):
         return "interpreter"
     if _installed_data_file(path_nc, own_package):
         return "installed package data"
@@ -502,29 +434,6 @@ _READS_BY_CODE: dict[Any, dict[str, Any] | None] = {}
 _READS_BY_CODE_MAX = 4096
 _READS_PER_CODE_MAX = 16
 _CASH_PACKAGE_DIR = os.path.normcase(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_LIBRARY_ROOTS: tuple[str, ...] | None = None
-_FILE_IS_USER: dict[str, bool] = {}
-
-
-def is_user_file(filename: str) -> bool:
-    """Is *filename* code outside cash, the standard library and site-packages?"""
-    verdict = _FILE_IS_USER.get(filename)
-    if verdict is not None:
-        return verdict
-    global _LIBRARY_ROOTS
-    if _LIBRARY_ROOTS is None:
-        roots = {
-            os.path.normcase(os.path.abspath(p))
-            for key, p in sysconfig.get_paths().items()
-            if key in ("stdlib", "platstdlib", "purelib", "platlib") and p
-        }
-        roots.add(_CASH_PACKAGE_DIR)
-        _LIBRARY_ROOTS = tuple(sorted(roots))
-    norm = os.path.normcase(os.path.abspath(filename)) if filename and not filename.startswith("<") else ""
-    verdict = bool(norm) and not norm.startswith(_LIBRARY_ROOTS) and "site-packages" not in norm
-    if len(_FILE_IS_USER) < 8192:
-        _FILE_IS_USER[filename] = verdict
-    return verdict
 
 
 def _record_read(code: Any, abs_path: str, stat: Any) -> None:
@@ -582,7 +491,7 @@ def _frame_kind(filename: str) -> str:
             else "cash"
             if filename and os.path.normcase(filename).startswith(_CASH_PACKAGE_DIR)
             else "user"
-            if is_user_file(filename)
+            if is_user_path(filename)
             else "other"
         )
         if len(_FRAME_KIND) < 8192:

@@ -1261,7 +1261,7 @@ cache looks healthy and is silently doing nothing.
 
 ## KEY-OPAQUE-CALLABLE {#key-opaque-callable}
 
-<!-- claim: cash/core.py:Cash._is_user_code_carrier @a334d114, cash/core.py:Cash._is_user_module @ff83ba8c -->
+<!-- claim: cash/core.py:Cash._is_user_code_carrier @a334d114, cash/core.py:Cash._is_user_module @724c0594 -->
 **What happened.** A function, a class, or an object whose class carries code
 reached a cached call — as an argument you passed, or
 as a parameter default you never typed — and Cash could not fingerprint its
