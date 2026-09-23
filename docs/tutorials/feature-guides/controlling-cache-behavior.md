@@ -130,7 +130,7 @@ The warning fires once per statement per session, so a re-run of an unchanged ce
 
 ## RNG state is replayed across cache hits
 
-<!-- claim: cash/tracking/randomness/state.py:capture_object_rng_states @92a0e486, cash/tracking/randomness/state.py:restore_object_rng_states @6adfccd3 -->
+<!-- claim: cash/tracking/randomness/state.py:capture_object_rng_states @d8dd9223, cash/tracking/randomness/state.py:restore_object_rng_states @6cf484b7 -->
 A cache hit restores more than the value. If you hold your own RNG object — an
 `np.random.Generator`, an `np.random.RandomState`, or a `random.Random` —
 its internal state is captured alongside the cached statement and **replayed**
