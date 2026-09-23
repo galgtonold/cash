@@ -6,16 +6,35 @@ import enum
 
 
 class CacheStatus(enum.Enum):
-    """Status of a processed statement."""
+    """What happened to one statement, as its metric reports it.
+
+    The last three are notification rows the cell executor adds to a cell's
+    metrics (a function or module changed under the cell, an advisory); they
+    are not the outcome of running a statement. A metric may carry a member
+    or its value; :meth:`parse` reads either.
+    """
 
     COMPUTED = "COMPUTED"
     RESTORED = "RESTORED"
     SKIPPED = "SKIPPED"
     ERROR = "ERROR"
     UNKNOWN = "UNKNOWN"
+    FUNCTION_CHANGED = "FUNCTION_CHANGED"
+    MODULE_RELOADED = "MODULE_RELOADED"
+    WARNING = "WARNING"
 
     def __str__(self) -> str:  # noqa: D105
         return self.value
+
+    @classmethod
+    def parse(cls, raw: object) -> CacheStatus:
+        """The member *raw* names, case-insensitively; ``UNKNOWN`` for anything else."""
+        if isinstance(raw, cls):
+            return raw
+        try:
+            return cls(str(raw).upper())
+        except ValueError:
+            return cls.UNKNOWN
 
 
 class ExecutionResult:

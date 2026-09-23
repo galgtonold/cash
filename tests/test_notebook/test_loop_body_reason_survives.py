@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from cash.notebook.badge_renderer.renderers.text import _iteration_pseudo_row
 from cash.notebook.badge_renderer.view import BadgeStatus, IterationRow
-from cash.notebook.badge_renderer.view_builder import _iteration_row
+from cash.notebook.badge_renderer.view_builder import _iteration_row, _Metric
 
 
 def _metric(**over):
@@ -34,12 +34,12 @@ def _metric(**over):
 
 
 def test_the_builder_carries_a_miss_reason_onto_the_iteration():
-    row = _iteration_row(_metric(miss_reason="input changed: df"))
+    row = _iteration_row(_Metric.parse(_metric(miss_reason="input changed: df")))
     assert row.miss_reason == "input changed: df"
 
 
 def test_the_builder_carries_a_skipped_reason_onto_the_iteration():
-    row = _iteration_row(_metric(skipped_reason="unstable key"))
+    row = _iteration_row(_Metric.parse(_metric(skipped_reason="unstable key")))
     assert row.skipped_reason == "unstable key"
 
 
@@ -50,7 +50,7 @@ def test_a_reasonless_iteration_stays_reasonless():
     would satisfy the tests above while putting a blank attribution on every
     loop row.
     """
-    row = _iteration_row(_metric())
+    row = _iteration_row(_Metric.parse(_metric()))
     assert row.miss_reason is None
     assert row.skipped_reason is None
 

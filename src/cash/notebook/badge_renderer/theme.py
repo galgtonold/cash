@@ -12,6 +12,8 @@ kind) is the renderer's job, performed via the helpers in this module.
 
 from __future__ import annotations
 
+from .view import BadgeStatus
+
 # ---------------------------------------------------------------------------
 # Typography — system-native font stacks. Cash never ships a webfont; the
 # host (Jupyter / browser) provides the typography.
@@ -211,31 +213,21 @@ def css_custom_properties() -> str:
 # Semantic mappers
 # ---------------------------------------------------------------------------
 
-
-def kind_of(status: str) -> str:
-    """Return ``'cached' | 'exec' | 'warn'`` for any :class:`BadgeStatus` value."""
-    if status in ("restored", "skipped"):
-        return "cached"
-    if status in ("warning", "error", "function_changed", "module_reloaded"):
-        return "warn"
-    return "exec"  # computed, mixed, unknown
-
-
-# The user's vocabulary, not cash's. A notebook user "executes" a cell and a
-# result is "cached" -- those are the words Jupyter and the docs already use.
-# ``restored`` and ``computed`` are the runtime's internal names, and leaking
-# them into the badge meant the cell header said CACHED while the row under it
-# said RESTORED for the same state (CAS-272). One word per state, at every
-# level, chosen from the vocabulary the reader already has.
-_LABELS = {
-    "restored": "CACHED",
-    "computed": "EXECUTED",
-    "skipped": "SKIPPED",
-    "mixed": "MIXED",
-    "error": "ERROR",
-    "function_changed": "FUNC CHANGED",
-    "module_reloaded": "MODULE RELOADED",
-    "warning": "WARNING",
+# One row per status: its kind (``cached`` / ``exec`` / ``warn``) and the word
+# the badge shows. The words are the reader's, not cash's: a notebook user
+# "executes" a cell and a result is "cached", so ``restored`` and ``computed``
+# never reach the page, at any level.
+_STATUS_STYLE: dict[BadgeStatus, tuple[str, str]] = {
+    BadgeStatus.RESTORED: ("cached", "CACHED"),
+    BadgeStatus.SKIPPED: ("cached", "SKIPPED"),
+    BadgeStatus.COMPUTED: ("exec", "EXECUTED"),
+    BadgeStatus.MIXED: ("exec", "MIXED"),
+    BadgeStatus.RUNNING: ("exec", "RUNNING"),
+    BadgeStatus.BYPASSED: ("exec", "BYPASSED"),
+    BadgeStatus.ERROR: ("warn", "ERROR"),
+    BadgeStatus.FUNCTION_CHANGED: ("warn", "FUNC CHANGED"),
+    BadgeStatus.MODULE_RELOADED: ("warn", "MODULE RELOADED"),
+    BadgeStatus.WARNING: ("warn", "WARNING"),
 }
 
 # What an uncacheable row says instead of EXECUTED. It ran *and* it will run
@@ -243,41 +235,30 @@ _LABELS = {
 LABEL_UNCACHEABLE = "NOT CACHED"
 
 
-def label_of(status: str) -> str:
-    """User-facing word for a :class:`BadgeStatus` value."""
-    return _LABELS.get(status, status.replace("_", " ").upper())
+def kind_of(status: BadgeStatus) -> str:
+    """``'cached' | 'exec' | 'warn'`` for a status."""
+    return _STATUS_STYLE[status][0]
 
 
-def rail_color(status: str) -> str:
+def label_of(status: BadgeStatus) -> str:
+    """The word the badge shows for a status."""
+    return _STATUS_STYLE[status][1]
+
+
+def rail_color(status: BadgeStatus) -> str:
     """Color of the left rail for one row."""
-    if status == "restored" or status == "skipped":
-        return RAIL_CACHED
-    if status == "mixed":
+    if status is BadgeStatus.MIXED:
         return RAIL_MIXED
-    if status in ("warning", "error", "function_changed", "module_reloaded"):
-        return RAIL_WARN
-    return RAIL_EXEC
+    return {"cached": RAIL_CACHED, "warn": RAIL_WARN}.get(kind_of(status), RAIL_EXEC)
 
 
 def bar_color(kind: str) -> str:
-    if kind == "cached":
-        return BAR_CACHED
-    if kind == "warn":
-        return BAR_WARN
-    return BAR_EXEC
+    return {"cached": BAR_CACHED, "warn": BAR_WARN}.get(kind, BAR_EXEC)
 
 
 def chip_bg(kind: str) -> str:
-    if kind == "cached":
-        return CHIP_BG_CACHED
-    if kind == "warn":
-        return CHIP_BG_WARN
-    return CHIP_BG_EXEC
+    return {"cached": CHIP_BG_CACHED, "warn": CHIP_BG_WARN}.get(kind, CHIP_BG_EXEC)
 
 
 def chip_fg(kind: str) -> str:
-    if kind == "cached":
-        return CHIP_FG_CACHED
-    if kind == "warn":
-        return CHIP_FG_WARN
-    return CHIP_FG_EXEC
+    return {"cached": CHIP_FG_CACHED, "warn": CHIP_FG_WARN}.get(kind, CHIP_FG_EXEC)

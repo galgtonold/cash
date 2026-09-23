@@ -323,64 +323,6 @@ class SubUnitGroup:
     unstored: int = 0
 
 
-# Matches DecoratorCallGroup's condense threshold (``_CONDENSE_THRESHOLD`` in
-# view_builder.py) — both mechanisms condense a call list into one collapsed
-# summary row above the same trip count, so the two behaviours read as one
-# convention rather than two coincidentally-similar numbers.
-_CONDENSE_ABOVE = 3
-
-
-def build_sub_unit_groups(events: Any) -> list[SubUnitGroup]:
-    """Group intercepted-call events by ``(call_source, occurrence_index)``.
-
-    Only events with ``intercepted`` truthy are considered — those are the
-    ones :class:`~cash.notebook.call_unit.CallUnit` emits for an
-    intercepted sub-call (on by default; ``# @cash:no-cache-calls`` turns it
-    off). A hand-decorated ``@cash.cache`` call
-    has no call site to group by here; it stays in the flat
-    ``decorator_calls`` / :class:`DecoratorCallGroup` machinery.
-
-    Defensive against malformed/legacy event dicts (missing keys, wrong
-    types) — this feeds the badge, which must never raise into user code.
-    """
-    buckets: dict[tuple[str, int], list[dict]] = {}
-    for e in events or ():
-        if not isinstance(e, dict) or not e.get("intercepted"):
-            continue
-        try:
-            occ = int(e.get("occurrence_index", 0) or 0)
-        except (TypeError, ValueError):
-            occ = 0
-        source = str(e.get("call_source", "?"))
-        buckets.setdefault((source, occ), []).append(e)
-
-    groups: list[SubUnitGroup] = []
-    for (source, occ), evs in buckets.items():
-        calls = tuple(
-            DecoratorCall(
-                func_name=str(e.get("func_name", "?")),
-                status=BadgeStatus.RESTORED if e.get("cache_hit") else BadgeStatus.COMPUTED,
-                time_s=float((e.get("time_saved") if e.get("cache_hit") else e.get("execution_time")) or 0.0),
-            )
-            for e in evs
-        )
-        groups.append(
-            SubUnitGroup(
-                call_source=source,
-                occurrence_index=occ,
-                calls=calls,
-                condensed=len(calls) > _CONDENSE_ABOVE,
-                key_prefix=str(evs[0].get("cache_key") or "")[:13],
-                miss_reason=next((e.get("miss_reason") for e in evs if e.get("miss_reason")), None),
-                ran_plain=sum(1 for e in evs if e.get("ran_plain")),
-                unstored=sum(
-                    1 for e in evs if not e.get("cache_hit") and not e.get("ran_plain") and e.get("stored") is False
-                ),
-            )
-        )
-    return groups
-
-
 @dataclass(frozen=True)
 class OverheadEntry:
     """One line of the overhead breakdown subsection.
@@ -492,7 +434,7 @@ class BugReportLink:
 class InteractiveBadge:
     """Root node of the expandable, multi-section badge.
 
-    Produced by :func:`cash.notebook.badge_renderer.view_builder.build_view`
+    Produced by :func:`cash.notebook.badge_renderer.view_builder.build_interactive_badge`
     from a ``metrics_list``.
     """
 
@@ -519,7 +461,6 @@ __all__ = [
     "DecoratorCall",
     "DecoratorCallGroup",
     "SubUnitGroup",
-    "build_sub_unit_groups",
     "OverheadEntry",
     "OverheadBreakdown",
     "SectionItem",

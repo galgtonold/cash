@@ -25,11 +25,8 @@ from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.badge_renderer.renderers.html import render_html
 from cash.notebook.badge_renderer.renderers.text import render_text
-from cash.notebook.badge_renderer.view import (
-    SubUnitGroup,
-    build_sub_unit_groups,
-)
-from cash.notebook.badge_renderer.view_builder import build_interactive_badge
+from cash.notebook.badge_renderer.view import SubUnitGroup
+from cash.notebook.badge_renderer.view_builder import build_interactive_badge, build_sub_unit_groups
 from cash.notebook.control_structures.for_handler import (
     _stamp_call_events_body_index,
     _stamp_call_events_loop_header,
@@ -113,7 +110,7 @@ def test_non_intercepted_events_are_excluded():
     """A hand-decorated ``@cash.cache`` call has no call site to group by --
     it must not leak into sub_units even if it happens to carry call_source."""
     groups = build_sub_unit_groups([_event("compute(x)", 0, True, intercepted=False)])
-    assert groups == []
+    assert groups == ()
 
 
 def test_miss_reason_surfaces_when_present():
@@ -137,7 +134,7 @@ def test_malformed_events_do_not_raise():
             None,
         ]
     )
-    assert isinstance(groups, list)
+    assert [g.call_source for g in groups] == ["?"]
 
 
 # --------------------------------------------------------- view_builder wiring
@@ -388,7 +385,7 @@ def test_real_for_loop_renders_sub_calls_nested_under_the_loop(magics_fixture):
 
     A loop-body statement renders through ``IterationRow`` via
     ``view_builder._iteration_row()``, NOT through
-    ``_statement_row_from_metric`` -- the only function ``build_sub_unit_groups``
+    ``_statement_row`` -- the only function ``build_sub_unit_groups``
     was originally wired into. So stamping the raw events correctly (proven
     above by asserting on the metrics dicts) is necessary but NOT sufficient
     for the badge to show anything: a first version of this fix had the

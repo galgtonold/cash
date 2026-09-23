@@ -2,13 +2,17 @@
 
 This module is the single seam between the runtime (which produces raw
 metric dicts) and the renderers (which consume :class:`BadgeView` nodes).
-All status-string parsing, loop/control grouping, partitioning, and
-bug-report URL construction live here — renderers never see a raw dict.
+Each metric dict is read exactly once, into a typed :class:`_Metric`; loop
+and control grouping then works on typed drafts, which are translated into
+the frozen view nodes at the end. Renderers never see a raw dict.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import dataclasses
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from typing import Any, Union
 from urllib.parse import quote
 
 from cash.control_markers import iteration_digest, strip_markers
@@ -34,575 +38,46 @@ from .view import (
     SectionKind,
     SkippedBucket,
     StatementRow,
-    build_sub_unit_groups,
+    SubUnitGroup,
 )
 
-# Statuses that don't represent a "ran" or "restored" data operation. They
-# are surfaced as warning rows in the badge but excluded from restored /
-# computed / skipped counts and partitioned alongside restored rows for
-# the upstream-context split (they don't carry their own work, they
-# annotate other work).
-_NOTIFICATION_STATUSES = frozenset({"FUNCTION_CHANGED", "MODULE_RELOADED", "WARNING"})
+# Rows that annotate other work rather than doing any: shown as warning rows,
+# left out of the restored / computed / skipped counts.
+_NOTIFICATIONS = frozenset({CacheStatus.FUNCTION_CHANGED, CacheStatus.MODULE_RELOADED, CacheStatus.WARNING})
 
+# The one mapping from what the runtime reports to what the badge shows.
+_BADGE_STATUS = {
+    CacheStatus.RESTORED: BadgeStatus.RESTORED,
+    CacheStatus.COMPUTED: BadgeStatus.COMPUTED,
+    CacheStatus.SKIPPED: BadgeStatus.SKIPPED,
+    CacheStatus.ERROR: BadgeStatus.ERROR,
+    CacheStatus.FUNCTION_CHANGED: BadgeStatus.FUNCTION_CHANGED,
+    CacheStatus.MODULE_RELOADED: BadgeStatus.MODULE_RELOADED,
+}
 
-# ---------------------------------------------------------------------------
-# Loop / control grouping
-# ---------------------------------------------------------------------------
-
-
-def _make_loop_group(base_code: str, metrics: list[dict[str, Any]]) -> dict[str, Any]:
-    # Collect ALL loop vars present in the metrics, in order. The runtime
-    # records ``loop_vars = {outer: ..., inner: ...}`` on the innermost
-    # statement's metrics, and these are exactly the variables the
-    # per-iteration drill-down should display. The synthesised loop
-    # header (when no source ``loop_header`` is available) uses only the
-    # outermost; the iter drill-down can show all of them at once.
-    all_var_names: list[str] = []
-    var_values: dict[str, list[Any]] = {}
-    for m in metrics:
-        lv = m.get("loop_vars") or {}
-        if not isinstance(lv, dict):
-            continue
-        for k, v in lv.items():
-            if k not in var_values:
-                all_var_names.append(k)
-                var_values[k] = []
-            var_values[k].append(v)
-    # Source-faithful header from the runtime (e.g. "for cat in df['category'].unique():").
-    # Picked from the first metric that carries it — the runtime stamps every
-    # body metric of the same loop with the same header.
-    loop_header = next(
-        (str(m["loop_header"]) for m in metrics if m.get("loop_header")),
-        "",
-    )
-    # Full enclosing chain (outermost → innermost). Same across all metrics
-    # in a loop_group since they share base_code and thus position.
-    chain = next(
-        (tuple(m["loop_header_chain"]) for m in metrics if m.get("loop_header_chain")),
-        (loop_header,) if loop_header else (),
-    )
-    # Source-order position inside the enclosing for-loop's body, recorded
-    # by the runtime as ``body_index``. Used by the view-builder to sort
-    # body stmts and nested controls in source order.
-    body_index = min(
-        (int(m["body_index"]) for m in metrics if "body_index" in m),
-        default=10_000,
-    )
-    return {
-        "type": "loop_group",
-        "base_code": base_code,
-        "metrics": metrics,
-        "all_loop_var_names": all_var_names,
-        "all_loop_var_values": var_values,
-        "loop_header": loop_header,
-        "loop_header_chain": chain,
-        "body_index": body_index,
-    }
-
-
-def _group_loop_iterations(
-    metrics: list[dict[str, Any]],
-    *,
-    synthesize_intermediate_loops: bool = True,
-) -> list[dict[str, Any]]:
-    """Two-pass grouping: per-statement loop bodies, then wrap consecutive loops.
-
-    Returns intermediate dict items (``single``, ``for_loop_group``,
-    ``control_group``, ``control_group_single``) that
-    :func:`_section_item_from_grouped` translates into BadgeView nodes.
-    """
-    pass1: list[dict[str, Any]] = []
-    loop_stmt_groups: dict[str, list[dict[str, Any]]] = {}
-    control_groups: dict[str, list[dict[str, Any]]] = {}
-
-    def _flush_loops() -> None:
-        for base_code, mlist in loop_stmt_groups.items():
-            pass1.append(_make_loop_group(base_code, mlist))
-        loop_stmt_groups.clear()
-
-    def _flush_controls() -> None:
-        # Pre-merge: if the same inner control fires N times across outer
-        # loop iterations, each firing arrives with a distinct ``ctx`` hash
-        # but the same ``branch_label`` (the if/elif/else/for line). Combine
-        # those into one bucket so the renderer shows a single control with
-        # an inner for-loop body, not N sibling control_groups. Buckets
-        # without a branch_label (rare: synthetic metrics) stay keyed by ctx.
-        merged: dict[str, list[dict[str, Any]]] = {}
-        for ctx_hash, mlist in control_groups.items():
-            branch_label = next(
-                (str(m.get("branch_label")) for m in mlist if m.get("branch_label")),
-                "",
-            )
-            key = branch_label or ctx_hash
-            merged.setdefault(key, []).extend(mlist)
-        for _key, mlist in merged.items():
-            branch_label = next(
-                (str(m.get("branch_label")) for m in mlist if m.get("branch_label")),
-                "",
-            )
-            body_stmts = next(
-                (m.get("body_statements") for m in mlist if m.get("body_statements")),
-                [],
-            )
-            header = body_stmts[0] if body_stmts else branch_label
-            # Recursively group the body so nested loops or nested
-            # controls within this branch get their own grouping (not
-            # flattened into a row-per-iteration spam). Strip the
-            # control_context off the inner metrics so the recursion
-            # doesn't re-collect them at this same level.
-            inner_metrics = [{k: v for k, v in m.items() if k != "control_context"} for m in mlist]
-            # Synthesis inside a control's body is enabled iff the
-            # control's body actually CONTAINS for-loops (T10:
-            # ``if cond: for i: for j: body`` — the for-loops are in the
-            # if-body, so synthesising for-i around the for-j inside is
-            # correct). For T6 (``for c: if cond: body``) the chain's
-            # for-loops are OUTSIDE the control; synthesising them inside
-            # would duplicate the outer loops, so we disable.
-            body_haystack = "\n".join(str(s) for m in mlist for s in (m.get("body_statements") or []))
-            chain_headers = []
-            for m in mlist:
-                ch = m.get("loop_header_chain")
-                if ch:
-                    chain_headers = list(ch)
-                    break
-            synth_inside = bool(chain_headers and any(h in body_haystack for h in chain_headers))
-            sub_items = _group_loop_iterations(
-                inner_metrics,
-                synthesize_intermediate_loops=synth_inside,
-            )
-            body_idx = min(
-                (int(m["body_index"]) for m in mlist if "body_index" in m),
-                default=10_000,
-            )
-            pass1.append(
-                {
-                    "type": "control_group",
-                    "metrics": mlist,
-                    "sub_items": sub_items,
-                    "branch_label": branch_label,
-                    "header": header,
-                    "body_index": body_idx,
-                }
-            )
-        control_groups.clear()
-
-    for m in metrics:
-        code = m.get("code", "")
-        ctx = m.get("control_context")
-        has_iter = iteration_digest(code) is not None
-        if ctx:
-            # Control context wins over iteration context — a loop *inside*
-            # an if/else gets bucketed under the control, then recursively
-            # sub-grouped at flush-time so the loop still looks like a loop.
-            # BUT: if this control is itself nested inside a loop (has_iter),
-            # don't flush the outer loop's stmt_groups — otherwise the outer
-            # for-loop gets split into two halves around the control, one
-            # for iterations where the control's true-branch ran and one
-            # for iterations where it didn't.
-            if not has_iter:
-                _flush_loops()
-            control_groups.setdefault(ctx, []).append(m)
-        elif has_iter:
-            _flush_controls()
-            actual = strip_markers(code)
-            loop_stmt_groups.setdefault(actual, []).append(m)
-        else:
-            _flush_loops()
-            _flush_controls()
-            if m.get("body_statements"):
-                pass1.append({"type": "control_group_single", "metric": m})
-            else:
-                pass1.append({"type": "single", "metric": m})
-    _flush_loops()
-    _flush_controls()
-
-    # Pass 1.5: merge control_groups across the whole pass1 list that share
-    # the same branch_label. They represent the same inner control
-    # structure fired across different outer-loop iterations — each firing
-    # got flushed separately (often interleaved with sibling body
-    # statements that triggered _flush_controls), so without this pass T6
-    # ends up with N sibling if-blocks instead of one.
-    merged_pass1: list[dict[str, Any]] = []
-    by_label: dict[str, int] = {}
-    for item in pass1:
-        if item.get("type") == "control_group" and item.get("branch_label"):
-            label = str(item["branch_label"])
-            if label in by_label:
-                target = merged_pass1[by_label[label]]
-                target["metrics"].extend(item["metrics"])
-                inner = [{k: v for k, v in m.items() if k != "control_context"} for m in target["metrics"]]
-                # Synthesis is disabled for control-body re-grouping —
-                # same rationale as _flush_controls above (T6 duplication).
-                target["sub_items"] = _group_loop_iterations(
-                    inner,
-                    synthesize_intermediate_loops=False,
-                )
-                continue
-            by_label[label] = len(merged_pass1)
-        merged_pass1.append(item)
-    pass1 = merged_pass1
-
-    # Pass 2: wrap consecutive loop_group items into a single for_loop_group.
-    # When loop_groups have DIFFERENT loop_headers (e.g. nested
-    # `for cat:` body stmts vs `for win:` body stmts in T2) they belong to
-    # different for-loops and must be flushed into separate for_loop_groups
-    # so each gets its own source-faithful header.
-    pass2: list[dict[str, Any]] = []
-    pending: list[dict[str, Any]] = []
-
-    def _flush_pending() -> None:
-        if pending:
-            chain = next(
-                (p.get("loop_header_chain", ()) for p in pending if p.get("loop_header_chain")),
-                (),
-            )
-            pass2.append(
-                {
-                    "type": "for_loop_group",
-                    "stmt_groups": list(pending),
-                    "loop_header_chain": tuple(chain),
-                }
-            )
-            pending.clear()
-
-    def _pending_header() -> str:
-        return next((p.get("loop_header", "") for p in pending if p.get("loop_header")), "")
-
-    for item in pass1:
-        if item["type"] == "loop_group":
-            item_header = item.get("loop_header", "")
-            existing = _pending_header()
-            if pending and existing and item_header and existing != item_header:
-                _flush_pending()
-            pending.append(item)
-        else:
-            _flush_pending()
-            pass2.append(item)
-    _flush_pending()
-
-    # Pass 2.5: hoist for-loops that surround a control_group out of the
-    # control's sub_items. When a control_group has chain (A, B, C) and
-    # its sub_items contain a for_loop_group with the same chain, that
-    # for_loop_group is the for-C loop that SURROUNDS the if (in source,
-    # `for c in range(2): if cond: body`). Without hoisting, the renderer
-    # would draw the if first and the for-c inside it (inverted). After
-    # hoisting, the for-c is the outer wrapper with the control as its
-    # nested child and the inner stmt rows marked head-suppressed so
-    # they render as the if-body without a duplicate "for c" header.
-    #
-    # SKIP hoisting if a real for_loop_group with the same chain already
-    # exists at the top level — in T13 (`for x: stmt; if cond: stmt; stmt`)
-    # the real for-x carries the body stmts and pass 3 will nest the
-    # control under it. Synthesising a duplicate outer would split the
-    # for-x in two.
-    existing_chains = {_item_chain(s) for s in pass2 if s.get("type") == "for_loop_group" and _item_chain(s)}
-    new_pass2: list[dict[str, Any]] = []
-    for item in pass2:
-        if item.get("type") == "control_group" and _item_chain(item) in existing_chains:
-            # A real for_loop_group with this chain already exists as a
-            # sibling — pass 3 will nest the control under it. Mark any
-            # for_loop_group inside the control's sub_items with the same
-            # chain as head-suppressed so we don't draw a duplicate
-            # "for x in ...:" header inside the control body (T13).
-            ctrl_chain = _item_chain(item)
-            for sub in item.get("sub_items", []):
-                if sub.get("type") == "for_loop_group" and _item_chain(sub) == ctrl_chain:
-                    sub["_suppress_head"] = True
-            new_pass2.append(item)
-        else:
-            new_pass2.append(_hoist_outer_for_loop(item))
-    pass2 = new_pass2
-
-    # Pass 3: nest by loop_header_chain so deep loops actually sit inside
-    # their parents instead of rendering as siblings. A for_loop_group
-    # with chain (A, B, C) belongs inside the for_loop_group with chain
-    # (A, B); a control_group with chain (A, B, C) belongs inside the
-    # for_loop_group at chain (A, B, C) (its hoisted outer-for parent).
-    return _nest_by_chain(pass2, synthesize=synthesize_intermediate_loops)
-
-
-def _hoist_outer_for_loop(item: dict[str, Any]) -> dict[str, Any]:
-    """If ``item`` is a control_group whose sub_items contain a for_loop_group
-    with the same chain (= the loop that SURROUNDS this control in source),
-    swap them: the for-loop becomes the outer wrapper, this control becomes
-    its nested child, and the original inner for-loop is marked
-    ``_suppress_head`` so its iteration rows render as the control's body
-    without a duplicate for-loop header.
-
-    Heuristic to tell T6 (``for c: if cond: body``) from T10
-    (``if cond: for i: for j: body``): if the wrapper's loop_header appears
-    as a substring in the control's recorded ``body_statements``, the
-    for-loop is INSIDE the control (T10) — don't hoist. Otherwise the
-    for-loop wraps the control (T6) — hoist.
-    """
-    if item.get("type") != "control_group":
-        return item
-    ctrl_chain = _item_chain(item)
-    if not ctrl_chain:
-        return item
-    sub_items = item.get("sub_items", [])
-    wrapper_idx = next(
-        (i for i, s in enumerate(sub_items) if s.get("type") == "for_loop_group" and _item_chain(s) == ctrl_chain),
-        None,
-    )
-    if wrapper_idx is None:
-        return item
-    wrapper = sub_items[wrapper_idx]
-    wrapper_header = wrapper.get("loop_header") or (
-        wrapper["stmt_groups"][0].get("loop_header", "") if wrapper.get("stmt_groups") else ""
-    )
-    # If the wrapper's for-line appears in the control's recorded body
-    # source, the for-loop is INSIDE the control (e.g. T10) — keep it
-    # nested inside and skip hoisting.
-    if wrapper_header:
-        body_stmts = []
-        for m in item.get("metrics", []):
-            bs = m.get("body_statements") or []
-            body_stmts.extend(str(s) for s in bs)
-        haystack = "\n".join(body_stmts)
-        if wrapper_header in haystack:
-            return item
-    others = [s for i, s in enumerate(sub_items) if i != wrapper_idx]
-    inner = dict(wrapper)
-    inner["_suppress_head"] = True
-    item["sub_items"] = others + [inner]
-    # Outer wrapper carries the loop_header and chain but has no direct
-    # stmt_groups — the iteration data lives in the inner, head-suppressed
-    # copy now nested under the control.
-    return {
-        "type": "for_loop_group",
-        "stmt_groups": [],
-        "loop_header": wrapper.get("loop_header")
-        or (wrapper["stmt_groups"][0].get("loop_header", "") if wrapper.get("stmt_groups") else ""),
-        "loop_header_chain": list(ctrl_chain),
-        "nested": [item],
-        "_synthetic_outer": True,
-    }
-
-
-def _item_chain(item: dict[str, Any]) -> tuple[str, ...]:
-    if item.get("type") == "for_loop_group":
-        return tuple(item.get("loop_header_chain", ()))
-    if item.get("type") == "control_group":
-        metrics = item.get("metrics", [])
-        ch: tuple[str, ...] = ()
-        for m in metrics:
-            mch = m.get("loop_header_chain")
-            if mch:
-                ch = tuple(mch)
-                break
-        if not ch:
-            return ()
-        # If the chain's for-loops appear in the control's recorded
-        # body_statements, those for-loops are INSIDE the control's body,
-        # not the loops surrounding the control. The control then has no
-        # enclosing for-loop at the cell level — return empty chain so
-        # outer nesting/synthesis doesn't wrap it in those loops.
-        body_stmts: list[str] = []
-        for m in metrics:
-            for s in m.get("body_statements") or []:
-                body_stmts.append(str(s))
-        haystack = "\n".join(body_stmts)
-        if haystack and any(header in haystack for header in ch):
-            return ()
-        return ch
-    return ()
-
-
-def _nest_by_chain(items: list[dict[str, Any]], *, synthesize: bool = True) -> list[dict[str, Any]]:
-    """Convert a flat list of for_loop_groups + controls into a nested tree
-    using each item's enclosing-loop chain. Items with empty chain stay at
-    the top level. When the chain skips levels (e.g. T10's
-    ``if cond: for i: for j: body`` has metrics with chain (for-i, for-j)
-    but no for_loop_group for ``for-i`` because its body is only a control
-    structure), synthesize the missing intermediate for_loop_groups so
-    every level of the chain has its own header in the rendered tree.
-
-    Synthetics are inserted at the position of their first child so the
-    rendered order matches source order (the missing outer wrap doesn't
-    leap-frog earlier siblings)."""
-    # Index existing real for_loop_groups by their chain.
-    by_chain: dict[tuple[str, ...], dict[str, Any]] = {}
-    for item in items:
-        if item.get("type") == "for_loop_group":
-            ch = _item_chain(item)
-            if ch:
-                by_chain[ch] = item
-                item.setdefault("nested", [])
-
-    result: list[dict[str, Any]] = []
-    for item in items:
-        chain = _item_chain(item)
-        if not chain:
-            result.append(item)
-            continue
-        if item.get("type") == "for_loop_group":
-            parent_chain = chain[:-1]
-        else:
-            # control_group, etc. live INSIDE their innermost enclosing
-            # for-loop — same chain.
-            parent_chain = chain
-
-        # Walk up the parent chain; for each prefix without an existing
-        # for_loop_group, synthesize one (when allowed). Build the
-        # synthetic chain outermost → innermost so we can nest them
-        # correctly.
-        synth_chain: list[tuple[tuple[str, ...], dict[str, Any]]] = []
-        pc = parent_chain
-        while pc:
-            if pc in by_chain and by_chain[pc] is not item:
-                break
-            if pc in by_chain and by_chain[pc] is item:
-                pc = pc[:-1]
-                continue
-            if not synthesize:
-                break
-            synth = {
-                "type": "for_loop_group",
-                "stmt_groups": [],
-                "loop_header": pc[-1],
-                "loop_header_chain": list(pc),
-                "nested": [],
-                "_synthetic_outer": True,
-            }
-            by_chain[pc] = synth
-            synth_chain.append((pc, synth))
-            pc = pc[:-1]
-
-        # synth_chain is innermost-first; reverse to outermost-first.
-        synth_chain.reverse()
-
-        # The outermost element to attach: either the first synthetic
-        # (if any were created) or the item itself.
-        outermost = synth_chain[0][1] if synth_chain else item
-
-        # Where does the outermost attach? Walk up from outermost's
-        # parent_chain to find an existing real for-loop ancestor.
-        outermost_parent_chain = synth_chain[0][0][:-1] if synth_chain else parent_chain
-        outer_parent = None
-        ppc = outermost_parent_chain
-        while ppc:
-            if ppc in by_chain and by_chain[ppc] is not outermost:
-                outer_parent = by_chain[ppc]
-                break
-            ppc = ppc[:-1]
-
-        # Chain the synthetics: outermost.nested = [next] = ... = [innermost]
-        for i in range(len(synth_chain) - 1):
-            synth_chain[i][1]["nested"].append(synth_chain[i + 1][1])
-        # Finally attach the item to the innermost synthetic (if any).
-        if synth_chain:
-            synth_chain[-1][1]["nested"].append(item)
-
-        # Place outermost in the right spot.
-        if outer_parent is not None:
-            outer_parent["nested"].append(outermost)
-        else:
-            # If we created synthetics, the OUTERMOST takes the slot;
-            # the item itself moves into the synthetic tree.
-            result.append(outermost)
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Status mapping
-# ---------------------------------------------------------------------------
+# A body position for items that carry none: after everything that does.
+_NO_INDEX = 10_000
 
 
 def map_status(raw: Any) -> BadgeStatus:
-    """Map a runtime status (``CacheStatus`` or raw string) to a :class:`BadgeStatus`.
+    """The :class:`BadgeStatus` for a runtime status (member or string).
 
-    Total function: any unknown input collapses to :attr:`BadgeStatus.WARNING`
-    so renderers never crash on a malformed metric.
+    Total: anything unrecognised is a WARNING row, so a malformed metric
+    renders instead of raising.
     """
-    if isinstance(raw, CacheStatus):
-        raw = raw.value
-    key = str(raw or "").upper()
-    if key == "RESTORED":
-        return BadgeStatus.RESTORED
-    if key == "COMPUTED":
-        return BadgeStatus.COMPUTED
-    if key == "SKIPPED":
-        return BadgeStatus.SKIPPED
-    if key == "ERROR":
-        return BadgeStatus.ERROR
-    if key == "FUNCTION_CHANGED":
-        return BadgeStatus.FUNCTION_CHANGED
-    if key == "MODULE_RELOADED":
-        return BadgeStatus.MODULE_RELOADED
-    return BadgeStatus.WARNING
-
-
-def _header_status(status: str, restored: int, computed: int, skipped: int) -> BadgeStatus:
-    """The header's own status, honouring the caller's lifecycle signal.
-
-    ``RUNNING`` and ``BYPASSED`` describe the CELL, not its rows, and neither
-    can be derived from the counts: both arrive with no rows at all. They used
-    to be squeezed into ``WARNING``, which the summary renderer never read, so
-    a running cell rendered as a finished one.
-    """
-    if status == "RUNNING":
-        return BadgeStatus.RUNNING
-    if status == "BYPASSED":
-        return BadgeStatus.BYPASSED
-    return _summary_status(restored, computed, skipped)
-
-
-def _summary_status(restored: int, computed: int, skipped: int) -> BadgeStatus:
-    """Decide the top-level :attr:`BadgeHeader.status` from per-row counts."""
-    if computed == 0 and (restored > 0 or skipped > 0):
-        return BadgeStatus.RESTORED if restored > 0 else BadgeStatus.SKIPPED
-    if restored > 0 and computed > 0:
-        return BadgeStatus.MIXED
-    return BadgeStatus.COMPUTED
+    return _BADGE_STATUS.get(CacheStatus.parse(raw), BadgeStatus.WARNING)
 
 
 # ---------------------------------------------------------------------------
-# Cell-level statistics
+# Reading a metric dict, once
 # ---------------------------------------------------------------------------
 
 
-def _compute_stats(
-    metrics: list[dict[str, Any]],
-) -> tuple[float, float, int, int, int, int]:
-    """``(total_saved, total_exec, restored, computed, skipped, uncacheable)``.
-
-    ERROR rows are counted as computed (they consumed time and ran the
-    operation, just unsuccessfully) so the cell summary reflects that
-    something happened instead of silently dropping the failure.
-
-    ``uncacheable`` is a SUBSET of ``computed``, not a fourth bucket: those
-    rows really did run, so they belong in the exec tally. It is counted
-    separately only so the header can say that some of that work will be paid
-    for again on every future run — see ``BadgeHeader.uncacheable_count``.
-    """
-    total_saved = 0.0
-    total_exec = 0.0
-    restored = computed = skipped = uncacheable = 0
-    for m in metrics:
-        status = str(m.get("status", ""))
-        if status in _NOTIFICATION_STATUSES:
-            continue
-        if status == str(CacheStatus.RESTORED):
-            restored += 1
-            total_saved += m.get("saved_time", 0.0)
-            total_exec += m.get("total_time", 0.0)
-        elif status == str(CacheStatus.SKIPPED):
-            skipped += 1
-            total_saved += m.get("saved_time", 0.0)
-        elif m.get("is_upstream", False) or status == str(CacheStatus.COMPUTED) or status == str(CacheStatus.ERROR):
-            computed += 1
-            total_exec += m.get("total_time", 0.0)
-            # Same test the renderers use to label a row NOT CACHED, so the
-            # header count can never disagree with the rows below it.
-            if m.get("uncacheable_reasons") or m.get("skipped_reason"):
-                uncacheable += 1
-    return total_saved, total_exec, restored, computed, skipped, uncacheable
-
-
-# ---------------------------------------------------------------------------
-# Helpers — pull tuples out of dict metrics safely
-# ---------------------------------------------------------------------------
+def _float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _tup_str(seq: Any) -> tuple[str, ...]:
@@ -613,244 +88,713 @@ def _tup_str(seq: Any) -> tuple[str, ...]:
     return (str(seq),)
 
 
-# ---------------------------------------------------------------------------
-# Row builders
-# ---------------------------------------------------------------------------
+def _opt_str(value: Any) -> str | None:
+    return str(value) if value else None
 
 
-def _statement_display_time(m: dict[str, Any]) -> float:
-    """The wall-time to show for a statement row.
-
-    For a COMPUTED statement this is the pure compute (``execution_time``), NOT
-    ``total_time``: total_time also includes cash's OWN per-statement overhead
-    (hashing + serialising the result into the cache), which can dwarf the
-    compute for a large object — a DataFrame that computes in 0.01s but takes
-    0.08s to serialise showed "0.09s" here while crediting only "saved 0.01s" on
-    restore (saved == the compute you avoid, by design). Showing the compute
-    keeps the executed time consistent with the saved time; the serialisation
-    cost is attributed to the overhead section instead so the breakdown still
-    sums to the cell's wall-clock total. For a RESTORED statement execution_time
-    is 0, so this falls back to total_time — the restore/deserialise time.
-    """
-    return float(m.get("execution_time", 0.0) or m.get("total_time", 0.0))
+def _ints(seq: Any) -> tuple[int, ...]:
+    try:
+        return tuple(int(x) for x in seq or ())
+    except (TypeError, ValueError):
+        return ()
 
 
-def _upstream_output(m: dict[str, Any]) -> str:
-    """What a re-run upstream statement printed, stdout then stderr."""
+@dataclass(frozen=True)
+class _Call:
+    """One ``decorator_calls`` event: a decorated or intercepted call."""
+
+    func_name: str
+    cache_hit: bool
+    execution_time: float
+    time_saved: float
+    intercepted: bool
+    call_source: str
+    occurrence_index: int
+    cache_key: str
+    miss_reason: str | None
+    ran_plain: bool
+    #: ``False`` only when the runtime said the result was not stored.
+    not_stored: bool
+
+    @classmethod
+    def parse(cls, e: dict[str, Any]) -> _Call:
+        try:
+            occ = int(e.get("occurrence_index", 0) or 0)
+        except (TypeError, ValueError):
+            occ = 0
+        return cls(
+            func_name=str(e.get("func_name", "?")),
+            cache_hit=bool(e.get("cache_hit")),
+            execution_time=_float(e.get("execution_time")),
+            time_saved=_float(e.get("time_saved")),
+            intercepted=bool(e.get("intercepted")),
+            call_source=str(e.get("call_source", "?")),
+            occurrence_index=occ,
+            cache_key=str(e.get("cache_key") or ""),
+            miss_reason=_opt_str(e.get("miss_reason")),
+            ran_plain=bool(e.get("ran_plain")),
+            not_stored=e.get("stored") is False,
+        )
+
+    @property
+    def unstored_miss(self) -> bool:
+        """Missed, ran through the cache, and its result was not kept."""
+        return not self.cache_hit and not self.ran_plain and self.not_stored
+
+    @property
+    def status(self) -> BadgeStatus:
+        return BadgeStatus.RESTORED if self.cache_hit else BadgeStatus.COMPUTED
+
+
+@dataclass(frozen=True)
+class _Metric:
+    """The fields of one metric dict the badge reads."""
+
+    status: CacheStatus
+    #: With cash's iteration / control markers still in: grouping keys on them.
+    code: str
+    display_code: str | None
+    execution_time: float
+    total_time: float
+    saved_time: float
+    is_upstream: bool
+    storage: tuple[str, ...]
+    source: str | None
+    evaluated_vars: tuple[str, ...]
+    restored_vars: tuple[str, ...]
+    uncacheable_reasons: tuple[str, ...]
+    skipped_reason: str | None
+    guard_cause: str | None
+    printed: str
+    changed_functions: tuple[str, ...]
+    changed_modules: tuple[str, ...]
+    calls: tuple[_Call, ...]
+    body_statements: tuple[str, ...]
+    cache_key: str
+    miss_reason: str | None
+    random_effect: str | None
+    random_unseeded: bool
+    loop_vars: tuple[tuple[str, Any], ...]
+    loop_header: str
+    loop_header_chain: tuple[str, ...]
+    body_index: int | None
+    body_index_chain: tuple[int, ...]
+    control_context: str | None
+    branch_label: str
+    stale_export: bool
+    written_paths: tuple[str, ...]
+    output_names: tuple[str, ...]
+
+    @classmethod
+    def parse(cls, m: dict[str, Any]) -> _Metric:
+        loop_vars = m.get("loop_vars")
+        changed_modules = m.get("changed_modules") or {}
+        try:
+            body_index = int(m["body_index"]) if "body_index" in m else None
+        except (TypeError, ValueError):
+            body_index = None
+        return cls(
+            status=CacheStatus.parse(m.get("status")),
+            code=str(m.get("code") or ""),
+            display_code=strip_markers(str(m["display_code"])) if m.get("display_code") else None,
+            execution_time=_float(m.get("execution_time")),
+            total_time=_float(m.get("total_time")),
+            saved_time=_float(m.get("saved_time")),
+            is_upstream=bool(m.get("is_upstream", False)),
+            storage=_tup_str(m.get("storage")),
+            source=_opt_str(m.get("source")),
+            # Variable names the statement writes. Not ``outputs``: that holds
+            # display objects, whose str() is ``<RichOutput at 0x..>``.
+            evaluated_vars=tuple(x for x in _tup_str(m.get("evaluated_vars")) if not x.startswith("<")),
+            restored_vars=_tup_str(m.get("restored_vars")),
+            uncacheable_reasons=_tup_str(m.get("uncacheable_reasons")),
+            skipped_reason=_opt_str(m.get("skipped_reason")),
+            guard_cause=_opt_str(m.get("guard_cause")),
+            printed=_printed(m),
+            changed_functions=_tup_str(m.get("changed_functions")),
+            changed_modules=(
+                tuple(sorted(str(k) for k in changed_modules))
+                if isinstance(changed_modules, dict)
+                else _tup_str(changed_modules)
+            ),
+            calls=tuple(_Call.parse(e) for e in (m.get("decorator_calls") or ()) if isinstance(e, dict)),
+            body_statements=_tup_str(m.get("body_statements") or None),
+            cache_key=str(m.get("cache_key") or ""),
+            miss_reason=_opt_str(m.get("miss_reason")),
+            random_effect=_opt_str(m.get("random_effect")),
+            random_unseeded=bool(m.get("random_unseeded", False)),
+            loop_vars=tuple((str(k), v) for k, v in loop_vars.items()) if isinstance(loop_vars, dict) else (),
+            loop_header=str(m.get("loop_header") or ""),
+            loop_header_chain=tuple(str(h) for h in m.get("loop_header_chain") or ()),
+            body_index=body_index,
+            body_index_chain=_ints(m.get("body_index_chain")),
+            control_context=_opt_str(m.get("control_context")),
+            branch_label=str(m.get("branch_label") or ""),
+            stale_export=bool(m.get("stale_export")),
+            written_paths=_tup_str(m.get("written_paths") or None),
+            output_names=tuple(o for o in (m.get("outputs") or ()) if isinstance(o, str)),
+        )
+
+    @property
+    def display_time(self) -> float:
+        """The time a statement row shows.
+
+        For a COMPUTED statement the compute alone (``execution_time``), not
+        ``total_time``, which adds cash's hashing and serialising: showing that
+        made a 0.01 s compute read 0.09 s beside "saved 0.01s". The difference
+        is attributed to the overhead section instead. A RESTORED statement has
+        no execution time, so it shows its restore time.
+        """
+        return self.execution_time or self.total_time
+
+
+def _printed(m: dict[str, Any]) -> str:
+    """What a statement printed, stdout then stderr."""
     parts = [str(m.get(k) or "") for k in ("stdout", "stderr")]
     return "".join(p if p.endswith("\n") or not p else p + "\n" for p in parts).rstrip("\n")
 
 
-def _statement_row_from_metric(m: dict[str, Any]) -> StatementRow:
-    """Translate one metric dict into a :class:`StatementRow`."""
-    status = map_status(m.get("status"))
+# ---------------------------------------------------------------------------
+# Grouping drafts
+# ---------------------------------------------------------------------------
 
-    time_s = _statement_display_time(m)
-    saved_time_s = float(m.get("saved_time", 0.0) or 0.0)
 
-    # ``evaluated_vars`` is the AST-derived list of variable names this
-    # statement writes. Do NOT fall through to ``metrics['outputs']`` — that
-    # key holds rich/display objects (IPython.utils.capture.RichOutput), not
-    # variable names, and ``str()``-ing them leaks ``<RichOutput at 0x..>``
-    # into the badge's "Produced" field.
-    output_vars = tuple(x for x in _tup_str(m.get("evaluated_vars")) if not x.startswith("<"))
-    restored_vars = _tup_str(m.get("restored_vars"))
+@dataclass
+class _LoopStmt:
+    """Every iteration of one loop-body statement."""
 
-    raw_decorator = m.get("decorator_calls", []) or []
-    dec_calls = tuple(
-        DecoratorCall(
-            func_name=str(c.get("func_name", "?")),
-            status=BadgeStatus.RESTORED if c.get("cache_hit") else BadgeStatus.COMPUTED,
-            time_s=float(c.get("execution_time", 0.0)),
+    base_code: str
+    metrics: list[_Metric]
+    #: Every loop variable the metrics bind, in first-seen order.
+    var_names: tuple[str, ...]
+    header: str
+    chain: tuple[str, ...]
+    body_index: int
+
+    @classmethod
+    def of(cls, base_code: str, metrics: list[_Metric]) -> _LoopStmt:
+        names: dict[str, None] = {}
+        for m in metrics:
+            for name, _ in m.loop_vars:
+                names.setdefault(name, None)
+        header = next((m.loop_header for m in metrics if m.loop_header), "")
+        chain = next((m.loop_header_chain for m in metrics if m.loop_header_chain), (header,) if header else ())
+        return cls(
+            base_code=base_code,
+            metrics=metrics,
+            var_names=tuple(names),
+            header=header,
+            chain=chain,
+            body_index=_min_body_index(metrics),
         )
-        for c in raw_decorator
+
+
+@dataclass
+class _ForDraft:
+    """A ``for`` loop: its body statements and the loops/controls nested in it."""
+
+    stmts: list[_LoopStmt]
+    chain: tuple[str, ...]
+    header: str = ""
+    nested: list[_Draft] = field(default_factory=list)
+    #: The inner copy under a hoisted outer wrapper, which draws the header.
+    suppress_head: bool = False
+
+    @property
+    def loop_header(self) -> str:
+        return self.header or next((s.header for s in self.stmts if s.header), "")
+
+
+@dataclass
+class _ControlDraft:
+    """One taken branch of an ``if`` / ``try``, its body grouped recursively."""
+
+    metrics: list[_Metric]
+    sub_items: list[_Draft]
+    branch_label: str
+    header: str
+    body_index: int
+
+
+@dataclass
+class _SingleDraft:
+    metric: _Metric
+
+
+@dataclass
+class _ControlSingleDraft:
+    """A control structure run as one unit (``while``, ``with``, ...)."""
+
+    metric: _Metric
+
+
+_Draft = Union[_ForDraft, _ControlDraft, _SingleDraft, _ControlSingleDraft]
+
+
+def _min_body_index(metrics: Iterable[_Metric]) -> int:
+    return min((m.body_index for m in metrics if m.body_index is not None), default=_NO_INDEX)
+
+
+def _body_haystack(metrics: Iterable[_Metric]) -> str:
+    return "\n".join(s for m in metrics for s in m.body_statements)
+
+
+def _without_control(metrics: Iterable[_Metric]) -> list[_Metric]:
+    """*metrics* with their control context dropped, for regrouping a body."""
+    return [dataclasses.replace(m, control_context=None) for m in metrics]
+
+
+def _chain_of(item: _Draft | _LoopStmt) -> tuple[str, ...]:
+    """The loops enclosing *item*, outermost first; empty when none do."""
+    if isinstance(item, _ForDraft):
+        return item.chain
+    if isinstance(item, _ControlDraft):
+        chain = next((m.loop_header_chain for m in item.metrics if m.loop_header_chain), ())
+        # Loops named in the control's own body are inside it, not around it.
+        haystack = _body_haystack(item.metrics)
+        if chain and haystack and any(header in haystack for header in chain):
+            return ()
+        return chain
+    return ()
+
+
+def _group(metrics: list[_Metric], *, synthesize_intermediate_loops: bool = True) -> list[_Draft]:
+    """Group a flat metric list into loops and controls, nested by source."""
+    pass1: list[_Draft | _LoopStmt] = []
+    loop_stmts: dict[str, list[_Metric]] = {}
+    controls: dict[str, list[_Metric]] = {}
+
+    def flush_loops() -> None:
+        pass1.extend(_LoopStmt.of(base, ms) for base, ms in loop_stmts.items())
+        loop_stmts.clear()
+
+    def flush_controls() -> None:
+        # The same inner control fired across outer iterations arrives under a
+        # distinct context each time but one branch label: one bucket.
+        merged: dict[str, list[_Metric]] = {}
+        for ctx, ms in controls.items():
+            label = next((m.branch_label for m in ms if m.branch_label), "")
+            merged.setdefault(label or ctx, []).extend(ms)
+        for ms in merged.values():
+            label = next((m.branch_label for m in ms if m.branch_label), "")
+            body = next((m.body_statements for m in ms if m.body_statements), ())
+            # Loops that surround the control must not be synthesized inside
+            # it; only loops its own body contains may be.
+            chain = next((m.loop_header_chain for m in ms if m.loop_header_chain), ())
+            haystack = _body_haystack(ms)
+            synth_inside = bool(chain and any(h in haystack for h in chain))
+            pass1.append(
+                _ControlDraft(
+                    metrics=ms,
+                    sub_items=_group(_without_control(ms), synthesize_intermediate_loops=synth_inside),
+                    branch_label=label,
+                    header=body[0] if body else label,
+                    body_index=_min_body_index(ms),
+                )
+            )
+        controls.clear()
+
+    for m in metrics:
+        has_iter = iteration_digest(m.code) is not None
+        if m.control_context:
+            # A control nested in a loop must not split the loop around it.
+            if not has_iter:
+                flush_loops()
+            controls.setdefault(m.control_context, []).append(m)
+        elif has_iter:
+            flush_controls()
+            loop_stmts.setdefault(strip_markers(m.code), []).append(m)
+        else:
+            flush_loops()
+            flush_controls()
+            pass1.append(_ControlSingleDraft(m) if m.body_statements else _SingleDraft(m))
+    flush_loops()
+    flush_controls()
+
+    # Controls with one branch label, flushed apart by sibling statements, are
+    # one control fired in several outer iterations.
+    merged_pass1: list[_Draft | _LoopStmt] = []
+    by_label: dict[str, _ControlDraft] = {}
+    for item in pass1:
+        if isinstance(item, _ControlDraft) and item.branch_label:
+            target = by_label.get(item.branch_label)
+            if target is not None:
+                target.metrics.extend(item.metrics)
+                target.sub_items = _group(_without_control(target.metrics), synthesize_intermediate_loops=False)
+                continue
+            by_label[item.branch_label] = item
+        merged_pass1.append(item)
+
+    # Consecutive loop statements form one loop, split where the header changes.
+    pass2: list[_Draft] = []
+    pending: list[_LoopStmt] = []
+
+    def flush_pending() -> None:
+        if pending:
+            chain = next((p.chain for p in pending if p.chain), ())
+            pass2.append(_ForDraft(stmts=list(pending), chain=chain))
+            pending.clear()
+
+    for item in merged_pass1:
+        if isinstance(item, _LoopStmt):
+            existing = next((p.header for p in pending if p.header), "")
+            if pending and existing and item.header and existing != item.header:
+                flush_pending()
+            pending.append(item)
+        else:
+            flush_pending()
+            pass2.append(item)
+    flush_pending()
+
+    # A loop that surrounds a control is drawn around it, not inside it --
+    # unless a real loop with that chain is already a sibling, which the
+    # nesting pass puts the control under.
+    existing_chains = {c for s in pass2 if isinstance(s, _ForDraft) and (c := _chain_of(s))}
+    hoisted: list[_Draft] = []
+    for item in pass2:
+        if isinstance(item, _ControlDraft) and _chain_of(item) in existing_chains:
+            chain = _chain_of(item)
+            for sub in item.sub_items:
+                if isinstance(sub, _ForDraft) and sub.chain == chain:
+                    sub.suppress_head = True
+            hoisted.append(item)
+        else:
+            hoisted.append(_hoist_outer_for_loop(item))
+
+    return _nest_by_chain(hoisted, synthesize=synthesize_intermediate_loops)
+
+
+def _hoist_outer_for_loop(item: _Draft) -> _Draft:
+    """Swap a control and the loop that surrounds it in source.
+
+    The loop becomes the outer wrapper with the control nested in it, and its
+    iteration rows stay under the control as a head-suppressed copy. A loop
+    whose header appears in the control's own body is inside the control
+    (``if c: for i: ...``) and is left alone.
+    """
+    if not isinstance(item, _ControlDraft):
+        return item
+    chain = _chain_of(item)
+    if not chain:
+        return item
+    idx = next(
+        (i for i, s in enumerate(item.sub_items) if isinstance(s, _ForDraft) and s.chain == chain),
+        None,
     )
-    # Per-call-site grouping of the same raw events (CAS-243), for the
-    # "Sub-calls" drawer section — see SubUnitGroup for why site rather
-    # than callee. Only events with intercepted=True contribute; a
-    # hand-decorated call has no call site and stays out of this list.
-    sub_units = tuple(build_sub_unit_groups(raw_decorator))
+    if idx is None:
+        return item
+    wrapper = item.sub_items[idx]
+    assert isinstance(wrapper, _ForDraft)
+    header = wrapper.loop_header
+    if header and header in _body_haystack(item.metrics):
+        return item
+    others = [s for i, s in enumerate(item.sub_items) if i != idx]
+    item.sub_items = [*others, dataclasses.replace(wrapper, suppress_head=True)]
+    return _ForDraft(stmts=[], chain=chain, header=header, nested=[item])
 
-    changed_modules = m.get("changed_modules") or {}
-    if isinstance(changed_modules, dict):
-        changed_modules_tup = tuple(sorted(str(k) for k in changed_modules.keys()))
-    else:
-        changed_modules_tup = _tup_str(changed_modules)
 
-    # Short prefix of the statement cache key — first 8 hex chars after the
-    # ``stmt:`` prefix the runtime stamps onto cache keys. Empty for callers
-    # that don't expose the key (e.g. mock metrics in tests).
-    raw_key = str(m.get("cache_key") or "")
-    if raw_key.startswith("stmt:"):
-        raw_key = raw_key[5:]
-    cache_key_short = raw_key[:8]
+def _nest_by_chain(items: list[_Draft], *, synthesize: bool = True) -> list[_Draft]:
+    """Nest loops and controls under the loops that enclose them.
 
+    A loop with chain (A, B, C) goes inside the loop with chain (A, B); a
+    control with chain (A, B, C) inside the loop at (A, B, C). A level of the
+    chain with no loop of its own (``if c: for i: for j: ...`` records no
+    metric for ``for i``) gets a synthesized one when *synthesize* allows,
+    placed where its first child was so source order holds.
+    """
+    by_chain: dict[tuple[str, ...], _ForDraft] = {
+        item.chain: item for item in items if isinstance(item, _ForDraft) and item.chain
+    }
+
+    result: list[_Draft] = []
+    for item in items:
+        chain = _chain_of(item)
+        if not chain:
+            result.append(item)
+            continue
+        # A loop's parent encloses it; a control sits in its innermost loop.
+        parent_chain = chain[:-1] if isinstance(item, _ForDraft) else chain
+
+        synth: list[tuple[tuple[str, ...], _ForDraft]] = []
+        pc = parent_chain
+        while pc:
+            found = by_chain.get(pc)
+            if found is item:
+                pc = pc[:-1]
+                continue
+            if found is not None or not synthesize:
+                break
+            made = _ForDraft(stmts=[], chain=pc, header=pc[-1])
+            by_chain[pc] = made
+            synth.append((pc, made))
+            pc = pc[:-1]
+        synth.reverse()  # outermost first
+
+        outermost: _Draft = synth[0][1] if synth else item
+        ppc = synth[0][0][:-1] if synth else parent_chain
+        outer_parent = None
+        while ppc:
+            found = by_chain.get(ppc)
+            if found is not None and found is not outermost:
+                outer_parent = found
+                break
+            ppc = ppc[:-1]
+
+        for (_, outer), (_, inner) in zip(synth, synth[1:], strict=False):
+            outer.nested.append(inner)
+        if synth:
+            synth[-1][1].nested.append(item)
+
+        if outer_parent is not None:
+            outer_parent.nested.append(outermost)
+        else:
+            result.append(outermost)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Node builders
+# ---------------------------------------------------------------------------
+
+
+def _sub_unit_groups(calls: Iterable[_Call]) -> tuple[SubUnitGroup, ...]:
+    """Intercepted calls grouped by call SITE (``call_source``, occurrence).
+
+    A hand-decorated call has no site and stays in the flat decorator list.
+    """
+    buckets: dict[tuple[str, int], list[_Call]] = {}
+    for c in calls:
+        if c.intercepted:
+            buckets.setdefault((c.call_source, c.occurrence_index), []).append(c)
+    return tuple(
+        SubUnitGroup(
+            call_source=source,
+            occurrence_index=occ,
+            calls=tuple(
+                DecoratorCall(
+                    func_name=c.func_name,
+                    status=c.status,
+                    time_s=c.time_saved if c.cache_hit else c.execution_time,
+                )
+                for c in cs
+            ),
+            condensed=len(cs) > _CONDENSE_THRESHOLD,
+            key_prefix=cs[0].cache_key[:13],
+            miss_reason=next((c.miss_reason for c in cs if c.miss_reason), None),
+            ran_plain=sum(1 for c in cs if c.ran_plain),
+            unstored=sum(1 for c in cs if c.unstored_miss),
+        )
+        for (source, occ), cs in buckets.items()
+    )
+
+
+def build_sub_unit_groups(events: Iterable[Any]) -> tuple[SubUnitGroup, ...]:
+    """Per-site groups for raw ``decorator_calls`` events; non-dicts are skipped."""
+    return _sub_unit_groups(_Call.parse(e) for e in events or () if isinstance(e, dict))
+
+
+def _statement_row(m: _Metric) -> StatementRow:
+    status = map_status(m.status)
+    # The statement key's hash after its ``stmt:`` namespace.
+    key = m.cache_key.removeprefix("stmt:")
     return StatementRow(
         status=status,
-        code=strip_markers(str(m.get("code", ""))),
-        time_s=time_s,
-        display_code=(strip_markers(str(m["display_code"])) if m.get("display_code") else None),
-        saved_time_s=saved_time_s,
-        storage_tiers=_tup_str(m.get("storage")),
-        source=m.get("source") or None,
-        output_vars=output_vars,
-        restored_vars=restored_vars,
-        uncacheable_reasons=_tup_str(m.get("uncacheable_reasons")),
-        skipped_reason=m.get("skipped_reason") or None,
-        guard_cause=m.get("guard_cause") or None,
-        output_text=(_upstream_output(m) if m.get("is_upstream") and status is BadgeStatus.COMPUTED else ""),
-        changed_functions=_tup_str(m.get("changed_functions")),
-        changed_modules=changed_modules_tup,
-        decorator_calls=dec_calls,
-        sub_units=sub_units,
-        body_statements=_tup_str(m.get("body_statements")),
-        cache_key_short=cache_key_short,
-        miss_reason=m.get("miss_reason") or None,
-        random_effect=m.get("random_effect") or None,
-        random_unseeded=bool(m.get("random_unseeded", False)),
+        code=strip_markers(m.code),
+        time_s=m.display_time,
+        display_code=m.display_code,
+        saved_time_s=m.saved_time,
+        storage_tiers=m.storage,
+        source=m.source,
+        output_vars=m.evaluated_vars,
+        restored_vars=m.restored_vars,
+        uncacheable_reasons=m.uncacheable_reasons,
+        skipped_reason=m.skipped_reason,
+        guard_cause=m.guard_cause,
+        output_text=m.printed if m.is_upstream and status is BadgeStatus.COMPUTED else "",
+        changed_functions=m.changed_functions,
+        changed_modules=m.changed_modules,
+        decorator_calls=tuple(
+            DecoratorCall(func_name=c.func_name, status=c.status, time_s=c.execution_time) for c in m.calls
+        ),
+        sub_units=_sub_unit_groups(m.calls),
+        body_statements=m.body_statements,
+        cache_key_short=key[:8],
+        miss_reason=m.miss_reason,
+        random_effect=m.random_effect,
+        random_unseeded=m.random_unseeded,
     )
 
 
-def _iteration_row(m: dict[str, Any]) -> IterationRow:
-    loop_vars = m.get("loop_vars") or {}
-    bindings = tuple((str(k), v) for k, v in loop_vars.items()) if isinstance(loop_vars, dict) else ()
+def _iteration_row(m: _Metric) -> IterationRow:
     return IterationRow(
-        status=map_status(m.get("status")),
-        code=strip_markers(str(m.get("code", ""))),
-        time_s=float(m.get("total_time", 0.0)),
-        saved_time_s=float(m.get("saved_time", 0.0) or 0.0),
-        storage_tiers=_tup_str(m.get("storage")),
-        miss_reason=m.get("miss_reason") or None,
-        skipped_reason=m.get("skipped_reason") or None,
-        loop_bindings=bindings,
-        # Same per-call-site grouping as ``_statement_row_from_metric`` (CAS-243
-        # task 9) — a loop-body statement's intercepted sub-calls otherwise
-        # never reach the badge at all, since it renders as an IterationRow,
-        # not a StatementRow.
-        sub_units=tuple(build_sub_unit_groups(m.get("decorator_calls") or [])),
+        status=map_status(m.status),
+        code=strip_markers(m.code),
+        time_s=m.total_time,
+        saved_time_s=m.saved_time,
+        storage_tiers=m.storage,
+        miss_reason=m.miss_reason,
+        skipped_reason=m.skipped_reason,
+        loop_bindings=m.loop_vars,
+        sub_units=_sub_unit_groups(m.calls),
     )
 
 
-# ---------------------------------------------------------------------------
-# Grouped-item translation
-# ---------------------------------------------------------------------------
+def _loop_statement(s: _LoopStmt) -> LoopStatement:
+    return LoopStatement(
+        base_code=s.base_code,
+        iterations=tuple(_iteration_row(m) for m in s.metrics),
+        # Across all iterations: the HTML badge shows the statement as one row.
+        sub_units=_sub_unit_groups(c for m in s.metrics for c in m.calls),
+    )
 
 
-def _section_item_from_grouped(item: dict[str, Any]) -> SectionItem:
-    """Translate one ``group_loop_iterations`` intermediate dict into a node."""
-    kind = item["type"]
-    if kind == "single":
-        return _statement_row_from_metric(item["metric"])
-
-    if kind == "for_loop_group":
-        stmt_groups = item.get("stmt_groups", [])
-        loop_var_names = tuple(stmt_groups[0].get("all_loop_var_names", [])) if stmt_groups else ()
-        loop_header = str(item.get("loop_header", "")) or next(
-            (str(sg.get("loop_header", "")) for sg in stmt_groups if sg.get("loop_header")),
-            "",
+def _node(item: _Draft) -> SectionItem:
+    """Translate one draft into its view node."""
+    if isinstance(item, _SingleDraft):
+        return _statement_row(item.metric)
+    if isinstance(item, _ControlSingleDraft):
+        return ControlGroupSingle(row=_statement_row(item.metric))
+    if isinstance(item, _ControlDraft):
+        rows = (
+            tuple(_node(g) for g in item.sub_items)
+            if item.sub_items
+            else tuple(_statement_row(m) for m in item.metrics)
         )
-        # Sort body stmts (loop_groups) and nested children (control_groups,
-        # nested for_loop_groups) into source order. Each metric carries a
-        # ``body_index_chain`` set by the runtime; this for-loop sits at
-        # depth ``len(self_chain) - 1``, so its body items are sorted by
-        # ``chain[depth]``. Falls back to insertion order when an item has
-        # no chain (synthetic outer wrappers).
-        self_chain = tuple(item.get("loop_header_chain", []))
-        depth = max(0, len(self_chain) - 1)
+        return ControlGroup(branch_label=item.branch_label, header=item.header, rows=rows)
+    return _for_loop_group(item)
 
-        def _body_idx(sub: dict[str, Any], pos: int) -> tuple[int, int]:
-            metrics = sub.get("metrics", []) or [m for sg in sub.get("stmt_groups", []) for m in sg.get("metrics", [])]
-            for m in metrics:
-                chain = m.get("body_index_chain")
-                if chain and depth < len(chain):
-                    return (int(chain[depth]), pos)
-            if "body_index" in sub:
-                return (int(sub["body_index"]), pos)
-            return (10_000, pos)
 
-        ordered: list[tuple[tuple[int, int], str, dict[str, Any]]] = []
-        for pos, sg in enumerate(stmt_groups):
-            ordered.append((_body_idx(sg, pos), "stmt", sg))
-        for pos, child in enumerate(item.get("nested", []), start=len(stmt_groups)):
-            ordered.append((_body_idx(child, pos), "child", child))
-        ordered.sort(key=lambda t: t[0])
+def _for_loop_group(item: _ForDraft) -> ForLoopGroup:
+    # This loop sits at depth len(chain) - 1; its body items sort by the
+    # runtime's body_index_chain at that depth, in source order.
+    depth = max(0, len(item.chain) - 1)
 
-        stmts_list: list[LoopStatement] = []
-        nested_list: list[Any] = []
-        body_list: list[Any] = []
-        for _, item_kind, sub in ordered:
-            if item_kind == "stmt":
-                stmt_metrics = sub.get("metrics", [])
-                # Aggregate sub-calls across ALL iterations of this body
-                # statement (CAS-243 task 9) -- the HTML renderer shows this
-                # statement as one collapsed row, so it needs one combined
-                # view rather than per-iteration groups.
-                raw_calls_all_iters = [c for m in stmt_metrics for c in (m.get("decorator_calls") or [])]
-                ls = LoopStatement(
-                    base_code=str(sub.get("base_code", "")),
-                    iterations=tuple(_iteration_row(m) for m in stmt_metrics),
-                    sub_units=tuple(build_sub_unit_groups(raw_calls_all_iters)),
-                )
-                stmts_list.append(ls)
-                body_list.append(ls)
-            else:
-                child_item = _section_item_from_grouped(sub)
-                nested_list.append(child_item)
-                body_list.append(child_item)
-        return ForLoopGroup(
-            loop_var_names=loop_var_names,
-            stmts=tuple(stmts_list),
-            loop_header=loop_header,
-            nested=tuple(nested_list),
-            suppress_head=bool(item.get("_suppress_head", False)),
-            body=tuple(body_list),
-        )
-
-    if kind == "control_group":
-        sub_items = item.get("sub_items")
-        if sub_items:
-            # Body was recursively grouped — translate each sub-item with
-            # the same dispatch we use at the top level. Loops nested in
-            # this control body therefore render as ForLoopGroups, not as
-            # a flat list of N per-iteration StatementRows.
-            rows: tuple[Any, ...] = tuple(_section_item_from_grouped(g) for g in sub_items)
+    def position(sub: _LoopStmt | _Draft, pos: int) -> tuple[int, int]:
+        if isinstance(sub, _ForDraft):
+            metrics: list[_Metric] = [m for s in sub.stmts for m in s.metrics]
+            fallback = _NO_INDEX
+        elif isinstance(sub, _LoopStmt | _ControlDraft):
+            metrics, fallback = sub.metrics, sub.body_index
         else:
-            rows = tuple(_statement_row_from_metric(m) for m in item.get("metrics", []))
-        return ControlGroup(
-            branch_label=str(item.get("branch_label", "")),
-            header=str(item.get("header", "")),
-            rows=rows,
-        )
+            metrics, fallback = [sub.metric], _NO_INDEX
+        for m in metrics:
+            if depth < len(m.body_index_chain):
+                return (m.body_index_chain[depth], pos)
+        return (fallback, pos)
 
-    if kind == "control_group_single":
-        return ControlGroupSingle(
-            row=_statement_row_from_metric(item["metric"]),
-        )
+    ordered: list[tuple[tuple[int, int], _LoopStmt | _Draft]] = [
+        (position(s, pos), s) for pos, s in enumerate(item.stmts)
+    ]
+    ordered += [(position(c, pos), c) for pos, c in enumerate(item.nested, start=len(item.stmts))]
+    ordered.sort(key=lambda t: t[0])
 
-    raise ValueError(f"Unknown grouped-item type: {kind!r}")
-
-
-def _skipped_bucket(skipped_metrics: list[dict[str, Any]]) -> SkippedBucket | None:
-    if not skipped_metrics:
-        return None
-    stale = tuple(
-        (str(m.get("code", "")), tuple(m.get("written_paths") or ())) for m in skipped_metrics if m.get("stale_export")
+    stmts: list[LoopStatement] = []
+    nested: list[SectionItem] = []
+    body: list[Any] = []
+    for _, sub in ordered:
+        if isinstance(sub, _LoopStmt):
+            node: Any = _loop_statement(sub)
+            stmts.append(node)
+        else:
+            node = _node(sub)
+            nested.append(node)
+        body.append(node)
+    return ForLoopGroup(
+        loop_var_names=item.stmts[0].var_names if item.stmts else (),
+        stmts=tuple(stmts),
+        loop_header=item.loop_header,
+        nested=tuple(nested),
+        suppress_head=item.suppress_head,
+        body=tuple(body),
     )
-    skipped_metrics = [m for m in skipped_metrics if not m.get("stale_export")]
-    total_saved = sum(float(m.get("saved_time", 0.0)) for m in skipped_metrics)
-    grouped = _group_loop_iterations(skipped_metrics)
+
+
+def _nodes(metrics: list[_Metric]) -> list[SectionItem]:
+    return [_node(g) for g in _group(metrics)]
+
+
+def _skipped_bucket(skipped: list[_Metric]) -> SkippedBucket | None:
+    if not skipped:
+        return None
+    stale = tuple((m.code, m.written_paths) for m in skipped if m.stale_export)
+    skipped = [m for m in skipped if not m.stale_export]
     items: list[StatementRow | ForLoopGroup] = []
-    for g in grouped:
-        node = _section_item_from_grouped(g)
-        # SkippedBucket only carries StatementRow | ForLoopGroup per the IR.
-        # Control-group skipped items are rendered as their single row for the bucket.
+    for node in _nodes(skipped):
+        # The bucket holds rows and loops; a control contributes its rows.
         if isinstance(node, StatementRow | ForLoopGroup):
             items.append(node)
         elif isinstance(node, ControlGroupSingle):
             items.append(node.row)
         elif isinstance(node, ControlGroup):
             items.extend(node.rows)
-    return SkippedBucket(items=tuple(items), total_saved_time_s=total_saved, stale_exports=stale)
+    return SkippedBucket(
+        items=tuple(items),
+        total_saved_time_s=sum(m.saved_time for m in skipped),
+        stale_exports=stale,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cell-level statistics
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Stats:
+    total_saved: float = 0.0
+    total_exec: float = 0.0
+    restored: int = 0
+    computed: int = 0
+    skipped: int = 0
+    #: A subset of ``computed``: rows that ran and were not stored.
+    uncacheable: int = 0
+
+
+def _compute_stats(metrics: list[_Metric]) -> _Stats:
+    """Counts and times for the header.
+
+    ERROR rows count as computed: they ran, unsuccessfully. ``uncacheable``
+    uses the test the renderers use to label a row NOT CACHED, so the header
+    can never disagree with the rows under it.
+    """
+    total_saved = total_exec = 0.0
+    restored = computed = skipped = uncacheable = 0
+    for m in metrics:
+        if m.status in _NOTIFICATIONS:
+            continue
+        if m.status is CacheStatus.RESTORED:
+            restored += 1
+            total_saved += m.saved_time
+            total_exec += m.total_time
+        elif m.status is CacheStatus.SKIPPED:
+            skipped += 1
+            total_saved += m.saved_time
+        elif m.is_upstream or m.status in (CacheStatus.COMPUTED, CacheStatus.ERROR):
+            computed += 1
+            total_exec += m.total_time
+            if m.uncacheable_reasons or m.skipped_reason:
+                uncacheable += 1
+    return _Stats(total_saved, total_exec, restored, computed, skipped, uncacheable)
+
+
+def _header_status(status: str, stats: _Stats, errored: bool) -> BadgeStatus:
+    """The header's status.
+
+    ``RUNNING`` and ``BYPASSED`` describe the cell, not its rows, and arrive
+    with no rows at all, so the caller says so. A statement that raised makes
+    the header say ERROR rather than EXECUTED.
+    """
+    if status == "RUNNING":
+        return BadgeStatus.RUNNING
+    if status == "BYPASSED":
+        return BadgeStatus.BYPASSED
+    if errored:
+        return BadgeStatus.ERROR
+    if stats.computed == 0 and (stats.restored > 0 or stats.skipped > 0):
+        return BadgeStatus.RESTORED if stats.restored > 0 else BadgeStatus.SKIPPED
+    if stats.restored > 0 and stats.computed > 0:
+        return BadgeStatus.MIXED
+    return BadgeStatus.COMPUTED
 
 
 # ---------------------------------------------------------------------------
@@ -860,46 +804,26 @@ def _skipped_bucket(skipped_metrics: list[dict[str, Any]]) -> SkippedBucket | No
 _CONDENSE_THRESHOLD = 3
 
 
-def _decorator_groups(metrics: list[dict[str, Any]]) -> tuple[DecoratorCallGroup, ...]:
-    raw_calls: list[dict[str, Any]] = []
+def _decorator_groups(metrics: list[_Metric]) -> tuple[DecoratorCallGroup, ...]:
+    by_func: dict[str, list[_Call]] = {}
     for m in metrics:
-        # Not a call cash wrapped, found under the cost floor and did not keep:
-        # `join() [intercepted]: 0/1 cached` read as a cache that failed
-        # (round 29, r29s5). The sub-call lines count these as "not kept".
-        raw_calls.extend(
-            c
-            for c in (m.get("decorator_calls", []) or [])
-            if not (
-                c.get("intercepted") and not c.get("cache_hit") and not c.get("ran_plain") and c.get("stored") is False
-            )
+        for c in m.calls:
+            # An intercepted call found under the cost floor and not kept is
+            # not a cache that failed; the sub-call lines count it instead.
+            if c.intercepted and c.unstored_miss:
+                continue
+            by_func.setdefault(c.func_name, []).append(c)
+    return tuple(
+        DecoratorCallGroup(
+            func_name=func_name,
+            calls=tuple(DecoratorCall(func_name=func_name, status=c.status, time_s=c.execution_time) for c in calls),
+            condensed=len(calls) > _CONDENSE_THRESHOLD,
+            # Only when every call was: a name sometimes decorated by hand is
+            # not labelled as cash's doing.
+            intercepted=all(c.intercepted for c in calls),
         )
-    if not raw_calls:
-        return ()
-    by_func: dict[str, list[dict[str, Any]]] = {}
-    for c in raw_calls:
-        by_func.setdefault(c.get("func_name", "?"), []).append(c)
-    groups: list[DecoratorCallGroup] = []
-    for func_name, calls in by_func.items():
-        dc_calls = tuple(
-            DecoratorCall(
-                func_name=str(func_name),
-                status=BadgeStatus.RESTORED if c.get("cache_hit") else BadgeStatus.COMPUTED,
-                time_s=float(c.get("execution_time", 0.0)),
-            )
-            for c in calls
-        )
-        groups.append(
-            DecoratorCallGroup(
-                func_name=str(func_name),
-                calls=dc_calls,
-                condensed=len(dc_calls) > _CONDENSE_THRESHOLD,
-                # A group is intercepted only if every call in it was — a name that
-                # is sometimes hand-decorated and sometimes not should not be
-                # labelled as cash's doing.
-                intercepted=all(c.get("intercepted") for c in calls),
-            )
-        )
-    return tuple(groups)
+        for func_name, calls in by_func.items()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -929,40 +853,27 @@ _OVERHEAD_TOOLTIPS = {
 def _overhead_section(
     timing_breakdown: dict[str, float] | None,
     cell_total_time: float | None,
-    metrics: list[dict[str, Any]],
+    metrics: list[_Metric],
 ) -> Section | None:
     if not timing_breakdown or cell_total_time is None:
         return None
     # Match what the statement rows DISPLAY (compute for executed, restore time
     # for restored), so overhead = wall-clock minus shown-times absorbs cash's
     # per-statement serialisation cost and the breakdown still sums to the total.
-    statements_time = sum(_statement_display_time(m) for m in metrics)
+    statements_time = sum(m.display_time for m in metrics)
     overhead = cell_total_time - statements_time
     if overhead <= MIN_TIME_DISPLAY_MS:
         return None
 
     upstream_check = float(timing_breakdown.get("upstream_check", 0.0))
-    badge_init = float(timing_breakdown.get("badge_init", 0.0))
-    badge_progress = float(timing_breakdown.get("badge_progress", 0.0))
-    # cash's per-statement cost that ISN'T the compute/restore the row shows:
-    # hashing the inputs + serialising the result into the cache (the dominant
-    # overhead for a large object). It equals sum(total_time) - sum(displayed),
-    # i.e. exactly the extra carried by COMPUTED rows now that they show only the
-    # compute — so surfacing it here keeps that cost visible instead of hiding it
-    # inside "other". (RESTORED rows already display their full total_time, so
-    # they contribute nothing.)
-    cache_write = max(
-        0.0,
-        sum(float(m.get("total_time", 0.0)) for m in metrics) - statements_time,
-    )
-    # Network round trips asking object storage whether tracked remote data
-    # moved. It gets its own line because it is the one overhead a user cannot
-    # otherwise see or act on: it happens on the HIT path, where the badge
-    # reports a saving and nothing reports what establishing it cost.
+    badge = float(timing_breakdown.get("badge_init", 0.0)) + float(timing_breakdown.get("badge_progress", 0.0))
+    # Hashing inputs and serialising results: what COMPUTED rows carry beyond
+    # the compute they show. RESTORED rows show their full total_time.
+    cache_write = max(0.0, sum(m.total_time for m in metrics) - statements_time)
+    # Round trips asking object storage whether tracked remote data moved: the
+    # one overhead on the HIT path, where nothing else reports what it cost.
     remote_validate = float(timing_breakdown.get("remote_validate", 0.0))
     remote_count = int(timing_breakdown.get("remote_validate_count", 0))
-    # The badge's own setup + progress-render costs read as one "badge" number.
-    badge = badge_init + badge_progress
     other = overhead - (badge + upstream_check + cache_write + remote_validate)
 
     entries: list[OverheadEntry] = []
@@ -976,16 +887,10 @@ def _overhead_section(
         if value > MIN_TIME_DISPLAY_MS:
             tooltip = _OVERHEAD_TOOLTIPS[key]
             if key == "remote_validate" and remote_count:
-                # The count is the actionable half - it is what tells you when
-                # to trade N metadata requests for one prefix listing.
+                # The count tells you when to trade N metadata requests for
+                # one prefix listing.
                 tooltip = f"{tooltip} ({remote_count} {'source' if remote_count == 1 else 'sources'} checked)"
-            entries.append(
-                OverheadEntry(
-                    label=_OVERHEAD_LABELS[key],
-                    time_s=value,
-                    tooltip=tooltip,
-                )
-            )
+            entries.append(OverheadEntry(label=_OVERHEAD_LABELS[key], time_s=value, tooltip=tooltip))
     if not entries:
         return None
     return Section(
@@ -1004,7 +909,11 @@ _BUG_URL_MAX = 7800
 
 
 def build_bug_report_url(metrics: list[dict[str, Any]], context: dict | None = None) -> str:
-    """Build a pre-filled GitHub issue URL — moved verbatim from ``_badge.py``."""
+    """A pre-filled GitHub issue URL describing this cell's badge."""
+    return _bug_report_url([_Metric.parse(m) for m in metrics], context)
+
+
+def _bug_report_url(metrics: list[_Metric], context: dict | None) -> str:
     ctx = context or {}
     version = ctx.get("version", "unknown")
     python_version = ctx.get("python_version", "(unknown)")
@@ -1013,22 +922,17 @@ def build_bug_report_url(metrics: list[dict[str, Any]], context: dict | None = N
 
     badge_lines: list[str] = []
     for m in metrics:
-        if m.get("is_upstream"):
+        if m.is_upstream:
             continue
-        code = strip_markers(str(m.get("code") or "")).strip()
+        code = strip_markers(m.code).strip()
         if len(code) > 100:
             code = code[:97] + "..."
-        # The words the reporter actually SAW on their badge. This dump used
-        # the internal status names, so an issue said RESTORED about a row the
-        # user watched render as CACHED -- and the reporter is the one who has
-        # to recognise their own cell in the preview.
-        st = label_of(str(m.get("status", "")).replace("CacheStatus.", "").lower())
-        t = m.get("total_time") or m.get("execution_time") or 0.0
-        saved = m.get("saved_time") or 0.0
-        outs_raw = m.get("outputs", [])
-        outs = ", ".join(o for o in (outs_raw or []) if isinstance(o, str))
+        # The word the reporter SAW on their badge, so they recognise the row.
+        st = label_of(map_status(m.status))
+        t = m.total_time or m.execution_time
+        outs = ", ".join(m.output_names)
         outs_str = f" | {outs}" if outs else ""
-        badge_lines.append(f"  {st:>8} | {t:>6.3f}s | saved {saved:>6.3f}s | {code}{outs_str}")
+        badge_lines.append(f"  {st:>8} | {t:>6.3f}s | saved {m.saved_time:>6.3f}s | {code}{outs_str}")
     badge_text = "\n".join(badge_lines) if badge_lines else "(no metrics)"
 
     def _nb_source(max_chars: int) -> str:
@@ -1082,7 +986,7 @@ def build_bug_report_url(metrics: list[dict[str, Any]], context: dict | None = N
 
 
 # ---------------------------------------------------------------------------
-# Top-level builders
+# Top-level builder
 # ---------------------------------------------------------------------------
 
 
@@ -1105,117 +1009,69 @@ def build_interactive_badge(
     indicator's slot count; when empty the renderer falls back to the
     per-row ``storage_tiers`` data.
     """
-    metrics = metrics_list or []
+    metrics = [_Metric.parse(m) for m in metrics_list or []]
 
-    upstream_all = [
-        m for m in metrics if m.get("is_upstream", False) and str(m.get("status")) != str(CacheStatus.SKIPPED)
-    ]
-    upstream_skipped = [
-        m for m in metrics if str(m.get("status")) == str(CacheStatus.SKIPPED) and m.get("is_upstream", False)
-    ]
-    current = [m for m in metrics if not m.get("is_upstream", False)]
+    upstream = [m for m in metrics if m.is_upstream and m.status is not CacheStatus.SKIPPED]
+    upstream_skipped = [m for m in metrics if m.is_upstream and m.status is CacheStatus.SKIPPED]
+    current = [m for m in metrics if not m.is_upstream]
 
-    (total_saved, total_exec, restored, computed, skipped_count, uncacheable_count) = _compute_stats(metrics)
-    # Notification statuses (WARN / FUNCTION_CHANGED / MODULE_RELOADED / ERROR)
-    # don't count as restored/computed/skipped but should appear in the
-    # summary chip strip — otherwise a notification-only cell shows no chip.
+    stats = _compute_stats(metrics)
+    # Notification and error rows are not counted above but get the warn chip,
+    # as does unseeded randomness: its cached value is a frozen replay.
     warn_count = sum(
-        1
-        for m in metrics
-        if str(m.get("status")) in _NOTIFICATION_STATUSES
-        or str(m.get("status")) == str(CacheStatus.ERROR)
-        # Unseeded randomness is advisory but user-visible: its cached value is a
-        # frozen replay, so it belongs in the header's warning tally.
-        or bool(m.get("random_unseeded", False))
+        1 for m in metrics if m.status in _NOTIFICATIONS or m.status is CacheStatus.ERROR or m.random_unseeded
     )
-    summary_time = cell_total_time if cell_total_time is not None else total_exec
-    # Honest header saving: never advertise more than the cell's NET
-    # win. When we know the cell's wall time we subtract cash's own overhead
-    # (wall time minus the user compute that ran) from the gross saving, so the
-    # collapsed badge can't claim a 7s saving when the cell's own overhead ate
-    # into it. Floor at 0 here — the per-cell badge stays non-alarming and the
-    # negative-net story lives in the aggregate %cash_stats. With no wall time
-    # (unit renders that pass no cell_total_time) fall back to the gross value.
-    header_saved = total_saved
+    # Never advertise more than the cell's NET saving: with its wall time
+    # known, cash's own overhead (wall time minus the compute that ran) comes
+    # off the gross saving, floored at 0. Without one, the gross value.
+    header_saved = stats.total_saved
     if cell_total_time is not None:
-        cell_compute = sum(
-            float(m.get("execution_time", 0.0) or 0.0)
-            for m in metrics
-            if str(m.get("status")) == str(CacheStatus.COMPUTED)
-        )
-        cell_overhead = max(0.0, cell_total_time - cell_compute)
-        header_saved = max(0.0, total_saved - cell_overhead)
-    # A statement that raised makes the cell's header say so: "EXECUTED" above
-    # an ERROR row read like the cell had run (round 25, r25s2).
-    errored = any(str(m.get("status")) == str(CacheStatus.ERROR) for m in metrics)
+        cell_compute = sum(m.execution_time for m in metrics if m.status is CacheStatus.COMPUTED)
+        header_saved = max(0.0, stats.total_saved - max(0.0, cell_total_time - cell_compute))
+    errored = any(m.status is CacheStatus.ERROR for m in metrics)
     header = BadgeHeader(
-        status=(
-            BadgeStatus.ERROR
-            if errored and status not in ("RUNNING", "BYPASSED")
-            else _header_status(status, restored, computed, skipped_count)
-        ),
-        restored_count=restored,
-        computed_count=computed,
-        skipped_count=skipped_count,
-        uncacheable_count=uncacheable_count,
+        status=_header_status(status, stats, errored),
+        restored_count=stats.restored,
+        computed_count=stats.computed,
+        skipped_count=stats.skipped,
+        uncacheable_count=stats.uncacheable,
         warn_count=warn_count,
         total_saved_s=header_saved,
-        total_exec_s=summary_time,
+        total_exec_s=cell_total_time if cell_total_time is not None else stats.total_exec,
         current_step=current_step,
         total_steps=total_steps,
         current_code=current_code,
     )
 
     sections: list[Section] = []
-
-    if upstream_all or upstream_skipped:
-        # In the order given -- the notebook's -- not restores first: a list
-        # restores-then-runs showed a loop's cached passes above the ``= {}``
-        # that starts it (round 25, r25s1).
-        items: list[SectionItem] = []
-        for g in _group_loop_iterations(upstream_all):
-            items.append(_section_item_from_grouped(g))
+    if upstream or upstream_skipped:
+        # In the notebook's order, not restores first.
+        items: list[SectionItem] = _nodes(upstream)
         bucket = _skipped_bucket(upstream_skipped)
         if bucket is not None:
             items.append(bucket)
-        sections.append(
-            Section(
-                kind=SectionKind.UPSTREAM,
-                header="UPSTREAM HISTORY",
-                items=tuple(items),
-            )
-        )
+        sections.append(Section(kind=SectionKind.UPSTREAM, header="UPSTREAM HISTORY", items=tuple(items)))
 
-    current_items: list[SectionItem] = []
-    for g in _group_loop_iterations(current):
-        current_items.append(_section_item_from_grouped(g))
     sections.append(
         Section(
             kind=SectionKind.CURRENT,
-            header="CURRENT CELL" if (upstream_all or upstream_skipped) else "",
-            items=tuple(current_items),
+            header="CURRENT CELL" if (upstream or upstream_skipped) else "",
+            items=tuple(_nodes(current)),
         )
     )
 
     dec_groups = _decorator_groups(current)
     if dec_groups:
-        sections.append(
-            Section(
-                kind=SectionKind.DECORATORS,
-                header="DECORATOR CACHE (@cash.cache)",
-                items=dec_groups,
-            )
-        )
+        sections.append(Section(kind=SectionKind.DECORATORS, header="DECORATOR CACHE (@cash.cache)", items=dec_groups))
 
     overhead = _overhead_section(timing_breakdown, cell_total_time, metrics)
     if overhead is not None:
         sections.append(overhead)
 
-    footer = BugReportLink(url=build_bug_report_url(metrics, bug_report_context))
     return InteractiveBadge(
         header=header,
         sections=tuple(sections),
-        footer=footer,
+        footer=BugReportLink(url=_bug_report_url(metrics, bug_report_context)),
         configured_tiers=tuple(configured_tiers),
     )
 
@@ -1223,5 +1079,6 @@ def build_interactive_badge(
 __all__ = [
     "build_interactive_badge",
     "build_bug_report_url",
+    "build_sub_unit_groups",
     "map_status",
 ]
