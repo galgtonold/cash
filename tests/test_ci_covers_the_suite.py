@@ -30,7 +30,8 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# The nearest folder holding pyproject.toml, so the file can live at any depth.
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 NIGHTLY_YML = REPO_ROOT / ".github" / "workflows" / "nightly.yml"
 CORE_SET = REPO_ROOT / "tools" / "test_selection" / "core_set.txt"

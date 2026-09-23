@@ -18,7 +18,8 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# The nearest folder holding pyproject.toml, so the file can live at any depth.
+REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 
 _ID = "CAS" + "-"
 _SESSION = "r" + r"\d+" + "s" + r"\d+"
