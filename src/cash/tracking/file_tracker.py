@@ -1054,6 +1054,7 @@ class FileDependencyRegistry:
         that way one patch serves any number of concurrent trackers.
         """
 
+        @functools.wraps(original_func)
         def tracked_open(file, *args, **kwargs):
             mode = args[0] if args else kwargs.get("mode", "r")
             # `w+` and `x+` start from an empty file, so nothing the code reads
@@ -1107,6 +1108,7 @@ class FileDependencyRegistry:
         # `pd.read_csv(filepath_or_buffer=p)`, `np.load(file=p)` or
         # `pq.read_table(source=p)` raised TypeError EVERYWHERE in the process,
         # inside cached code or not. Measured while adding the pyarrow readers.
+        @functools.wraps(original_func)
         def tracked_func(*args, **kwargs):
             target = args[0] if args else next((kwargs[k] for k in _PATH_KWARGS if k in kwargs), None)
             if isinstance(target, (str, bytes, os.PathLike)):
@@ -1151,6 +1153,7 @@ class FileDependencyRegistry:
         the answer was False.
         """
 
+        @functools.wraps(original_func)
         def tracked_exists(path, *args, **kwargs):
             result = original_func(path, *args, **kwargs)
             if not result:
@@ -1186,6 +1189,7 @@ class FileDependencyRegistry:
         only thing linecache can usefully have read.
         """
 
+        @functools.wraps(original_func)
         def tracked_source_reader(filename, *args, **kwargs):
             if isinstance(filename, (str, bytes, os.PathLike)):
                 text = os.fsdecode(filename) if isinstance(filename, bytes) else str(filename)
@@ -1206,6 +1210,7 @@ class FileDependencyRegistry:
     def _create_glob_dir_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
         """Track the directory a ``glob`` pattern enumerates."""
 
+        @functools.wraps(original_func)
         def tracked_glob(pathname, *args, **kwargs):
             _tracker = active_tracker.get()
             if _tracker is not None:
@@ -1220,6 +1225,7 @@ class FileDependencyRegistry:
     def _create_listdir_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
         """Track the directory passed to ``os.listdir`` / ``os.scandir``."""
 
+        @functools.wraps(original_func)
         def tracked_listdir(path=".", *args, **kwargs):
             if isinstance(path, (str, bytes, os.PathLike)):
                 _tracker = active_tracker.get()

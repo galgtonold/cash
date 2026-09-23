@@ -50,6 +50,7 @@ code that was never run, which is a different and complementary guarantee.
 from __future__ import annotations
 
 import contextvars
+import functools
 import linecache
 import logging
 import os
@@ -111,6 +112,7 @@ def _install_patches() -> None:
     # connection -- where a signature mismatch is a hard failure a long way
     # from here. Recording is also wrapped: observing an effect must never be
     # able to break the call that performed it.
+    @functools.wraps(original_connect)
     def _tracked_connect(self, *a, **kw):
         try:
             _record("network", f"socket connect to {_describe_address(a[0] if a else None)}")
@@ -120,6 +122,7 @@ def _install_patches() -> None:
 
     original_popen_init = subprocess.Popen.__init__
 
+    @functools.wraps(original_popen_init)
     def _tracked_popen_init(self, *a, **kw):
         try:
             _record("subprocess", f"spawned {_describe_argv(a[0] if a else kw.get('args'))}")
@@ -180,6 +183,7 @@ def _hook_mock_calls() -> None:
     if real is None:
         return
 
+    @functools.wraps(real)
     def counted(self: Any, *args: Any, **kwargs: Any) -> Any:
         global _mock_calls
         _mock_calls += 1
