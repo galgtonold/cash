@@ -6,6 +6,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cash"]
+# The bundle reaches users through the shared-data mapping below. The copy
+# inside the package is only for `jupyter labextension develop` in a checkout,
+# so the wheel leaves it out instead of shipping it twice.
+exclude = ["/src/cash/labextension"]
 
 # Ships the prebuilt JupyterLab extension that sends unsaved cell edits to cash.
 # The directory name must equal the npm package name in labextension/package.json

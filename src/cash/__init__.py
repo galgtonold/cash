@@ -447,7 +447,8 @@ def _jupyter_labextension_paths():
     named here so a rebuild is picked up without reinstalling. Invoke it as
     ``cd src && jupyter labextension develop --overwrite cash`` -- from the
     repo root it would look for an importable module named after the
-    *distribution* (``cash_lib``), which does not exist.
+    *distribution* (``cash_lib``), which does not exist. The directory exists
+    only in a checkout: the wheel ships the bundle once, through shared-data.
 
     ``src`` is relative to this package's directory; ``dest`` must equal the
     npm package name in ``labextension/package.json``, because federated
