@@ -31,11 +31,11 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ...analysis.code_analyzer import CodeAnalyzer
-from ...tracking.randomness import hidden_lineage_reads
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
     callable_source_component,
     input_lineage,
+    lineage_hidden_reads,
     module_source_component,
     output_lineage,
     statement_environment_component,
@@ -129,7 +129,7 @@ class StatementLineageBuilder:
         # lineage makes the reconstruction re-run the producing fit, which mints
         # yet another model, so a consumer never agrees with the value recorded
         # beside it -- measured, it broke even the first clean run.
-        lineage_inputs = inputs | hidden_lineage_reads(code)
+        lineage_inputs = inputs | lineage_hidden_reads(code)
         # The environment it read, as its key folds it: a new value is a new
         # lineage, so what is built on an output misses too.
         environment = statement_environment_component(code, user_ns)
@@ -341,7 +341,7 @@ class StatementLineageBuilder:
         user_ns = self.shell.user_ns
         inputs, _outputs = CodeAnalyzer.analyze_code_block(code, user_ns=user_ns)
         input_lineage_hashes, _map = self._build_input_lineages(
-            tracking_state, inputs | hidden_lineage_reads(code), user_ns, code
+            tracking_state, inputs | lineage_hidden_reads(code), user_ns, code
         )
         return output_lineage(
             statement_source_hash(code),

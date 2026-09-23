@@ -24,6 +24,7 @@ from typing import Any, Callable, Iterable
 
 from ..effects import environment_component, environment_input
 from ..tracking.module_symbols import closure_digest, static_attribute_reads
+from ..tracking.randomness import hidden_lineage_reads, observed_rng_reads
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,20 @@ def output_lineage(
         f"{environment}"
     )
     return hashlib.sha256(lineage_str.encode("utf-8")).hexdigest()
+
+
+def key_hidden_reads(code: str, tracking_state: Any) -> set[str]:
+    """Hidden variables the cache key of *code* reads: the RNG state a draw
+    it spells consumes, plus any the runtime saw it draw from without
+    spelling it (``model.fit()``), so a re-seed re-keys it."""
+    return hidden_lineage_reads(code) | observed_rng_reads(tracking_state, code)
+
+
+def lineage_hidden_reads(code: str) -> set[str]:
+    """Hidden variables the output lineage of *code* reads: only the draws it
+    spells. An observed draw stays out: folding it in makes a refit mint a
+    new lineage on every run, and reconstruction then never converges."""
+    return hidden_lineage_reads(code)
 
 
 def input_lineage(

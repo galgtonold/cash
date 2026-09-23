@@ -40,10 +40,8 @@ from ...source_norm import source_identity_digest
 from ...tracking import file_dep_snapshot as _fds
 from ...tracking.file_dep_snapshot import LISTING_MIN_FILES, FreshnessMemo, snapshot_is_fresh, stats_from_listings
 from ...tracking.randomness import (
-    hidden_lineage_reads,
     hidden_lineage_writes,
     hidden_write_lineage,
-    observed_rng_reads,
 )
 from ...utils import resolve_file_dep_path
 from ...value_types import BUILTIN_NAMES
@@ -67,6 +65,8 @@ from ..control_structures import extract_target_names, get_control_structure_typ
 from ..lineage_formula import (
     callable_source_component,
     input_lineage,
+    key_hidden_reads,
+    lineage_hidden_reads,
     module_source_component,
     output_lineage,
     statement_environment_component,
@@ -265,10 +265,6 @@ class VirtualLineage:
         # must reproduce the runtime's key inputs EXACTLY, or the two disagree
         # and every affected statement looks changed.
         self.observed_rng_statement_draws = state.observed_rng_statement_draws
-
-    def _observed_rng_reads(self, code: str) -> set[str]:
-        """Delegates to the shared helper so all engines agree exactly."""
-        return observed_rng_reads(self, code)
 
     @staticmethod
     def _build_function_sources(notebook_cells: list[str]) -> dict[str, str]:
@@ -2472,15 +2468,9 @@ class VirtualLineage:
             if is_import:
                 virtual_modules.update(self._bound_modules(outputs, mutation_tree, stmt_code))
 
-            # ADR-018: RNG state is a hidden lineage variable. A draw READS it
-            # (fold into the key + the output-lineage inputs, so a re-seed both
-            # re-keys the draw and propagates to everything cached downstream); a
-            # seed PRODUCES it. Kept out of the plain ``inputs`` set that feeds the
-            # trace/cacheability. A draw only OBSERVED at runtime joins the key
-            # but not the output lineage, exactly as at runtime
-            # (``StatementLineageBuilder.capture_and_track_variables``).
-            lineage_hidden_reads = hidden_lineage_reads(stmt_code)
-            hidden_reads = lineage_hidden_reads | self._observed_rng_reads(stmt_code)
+            # RNG state is a hidden lineage variable (ADR-018): a draw reads it,
+            # a seed produces it. Kept out of the plain ``inputs``.
+            hidden_reads = key_hidden_reads(stmt_code, self)
             hidden_writes = hidden_lineage_writes(stmt_code)
 
             # A bare ``seed()`` carries no output, so it would return below before
@@ -2519,7 +2509,7 @@ class VirtualLineage:
             key_lineage_inputs = inputs | hidden_reads
 
             input_lineages_all = self._resolve_virtual_input_lineages(
-                stmt_code, inputs | lineage_hidden_reads, virtual_lineage, virtual_modules
+                stmt_code, inputs | lineage_hidden_reads(stmt_code), virtual_lineage, virtual_modules
             )
 
             # Compute cache key using the unified function

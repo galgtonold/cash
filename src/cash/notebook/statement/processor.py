@@ -536,10 +536,8 @@ from ...tracking.randomness import (
     get_drawing_rng_modules,
     get_entropy_reseed_modules,
     get_seeding_rng_modules,
-    hidden_lineage_reads,
     hidden_lineage_writes,
     hidden_write_lineage,
-    observed_rng_reads,
     publish_seed_epochs,
     rng_modules_changed,
     rng_virtual_var,
@@ -550,6 +548,7 @@ from ...tracking.randomness import (
 from ..call_interception import HELPER_NAME, CallCache, wrap_eligible_calls
 from ..call_unit import call_site_is_cacheable
 from ..compiled_source import is_cash_filename, register_cell_source
+from ..lineage_formula import key_hidden_reads
 from ..write_observer import observe_writes
 
 
@@ -2186,10 +2185,6 @@ class StatementProcessor:
             if hidden & set(self._rng_seed_epochs):
                 self._rng_draw_newly_seen = True
         ledger[digest] = known | hidden
-
-    def _observed_rng_reads(self, code: str) -> set[str]:
-        """Delegates to the shared helper so all engines agree exactly."""
-        return observed_rng_reads(self.tracking_state, code)
 
     def begin_cell_rng_observation(self) -> None:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""
@@ -4907,7 +4902,7 @@ class StatementProcessor:
         # without saying so in its AST (``model.fit()``). Without this the
         # virtual RNG variable has no reader here, so an upstream re-seed cannot
         # propagate and the statement's consumers keep hitting.
-        key_inputs = inputs | hidden_lineage_reads(code) | self._observed_rng_reads(code)
+        key_inputs = inputs | key_hidden_reads(code, self.tracking_state)
 
         try:
             cache_key, source_hash, _, _, _ = compute_cache_key(
