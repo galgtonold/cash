@@ -262,7 +262,6 @@ class TestForwardProbePopulatesState:
         checker = UpstreamChecker(
             mock_shell,
             cash_instance=mock_cash,
-            debug=False,
             tracking_state=TrackingState(),
         )
         return checker, mock_shell, mock_backend, _FORWARD_PROBE_PLACEHOLDER

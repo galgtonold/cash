@@ -17,7 +17,7 @@ class TestUpstreamSafety(unittest.TestCase):
         # the old test relied on an impossible real-kernel state (lineage without
         # a live binding) that the tracking-dict gate happened to tolerate.
         self.shell.user_ns = {"_ih": [], "x": 2}  # Mock history + live `x`
-        self.checker = UpstreamChecker(self.shell, debug=True)
+        self.checker = UpstreamChecker(self.shell)
 
         state = TrackingState()
         self.checker.set_tracking_state(state)

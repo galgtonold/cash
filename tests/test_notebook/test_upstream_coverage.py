@@ -35,13 +35,11 @@ def _make_checker(**kwargs):
     shell = MagicMock()
     shell.user_ns = kwargs.pop("user_ns", {})
     cash_instance = kwargs.pop("cash_instance", None)
-    debug = kwargs.pop("debug", False)
     tracking_state = kwargs.pop("tracking_state", None)
     compute_hash_fn = kwargs.pop("compute_hash_fn", None)
     checker = UpstreamChecker(
         shell,
         cash_instance=cash_instance,
-        debug=debug,
         compute_hash_fn=compute_hash_fn,
         tracking_state=tracking_state,
     )
@@ -74,7 +72,7 @@ class TestLineageMismatch:
 
     def test_debug_mode_no_crash(self):
         """Debug mode should produce debug output without crashing."""
-        checker = _make_checker(user_ns={"x": 1}, debug=True)
+        checker = _make_checker(user_ns={"x": 1})
         assert "x" in self._classify(checker, actual="expected123", virtual="actual456")
 
     def test_with_simulation_trace(self):
@@ -562,14 +560,6 @@ class TestModuleSourceComponent:
 
 class TestUpstreamCheckerInit:
     """Test constructor and defaults."""
-
-    def test_default_debug_false(self):
-        checker = _make_checker()
-        assert checker.debug is False
-
-    def test_debug_flag(self):
-        checker = _make_checker(debug=True)
-        assert checker.debug is True
 
     def test_default_tracking_state(self):
         checker = _make_checker()

@@ -270,14 +270,12 @@ class VirtualLineage:
         cash_instance: CashInstanceProtocol | None,
         tracking_state: TrackingState,
         compute_hash_fn: Callable[[Any], str] | None = None,
-        debug: bool = False,
         function_tracker: FunctionTracker | None = None,
         cache: SimulationCache | None = None,
     ) -> None:
         self.shell = shell
         self.cash_instance = cash_instance
         self.compute_hash_fn = compute_hash_fn
-        self.debug = debug
         #: The runtime's tracker, so the simulation hashes called functions
         #: and modules exactly as the statement processor does.
         self.function_tracker = function_tracker
@@ -465,13 +463,12 @@ class VirtualLineage:
             if resolved is None or st is None:
                 return True
             if abs(st.st_mtime - stored_mtime) > 0.01:
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM_DEBUG] File dependency changed: %s (cached mtime=%s, current=%s)",
-                        resolved,
-                        stored_mtime,
-                        st.st_mtime,
-                    )
+                logger.debug(
+                    "[UPSTREAM_DEBUG] File dependency changed: %s (cached mtime=%s, current=%s)",
+                    resolved,
+                    stored_mtime,
+                    st.st_mtime,
+                )
                 return True
         return False
 
@@ -492,13 +489,12 @@ class VirtualLineage:
             cached = self.cache.entries[idx]
             if cached.cell_code_hash != cell_hash:
                 cache_had_hash_mismatch = True
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM_DEBUG] Hash mismatch in cell %d (cached=%s, current=%s). Re-simulating from here.",
-                        idx,
-                        cached.cell_code_hash[:12],
-                        cell_hash[:12],
-                    )
+                logger.debug(
+                    "[UPSTREAM_DEBUG] Hash mismatch in cell %d (cached=%s, current=%s). Re-simulating from here.",
+                    idx,
+                    cached.cell_code_hash[:12],
+                    cell_hash[:12],
+                )
                 break
             if cached.cell_environment != self._cell_environment(cell_code):
                 # An environment variable the cell reads has another value:
@@ -539,12 +535,11 @@ class VirtualLineage:
             cell_code = notebook_cells[idx].replace("\r\n", "\n")
             cell_hash = hashlib.sha256(cell_code.encode("utf-8")).hexdigest()
             if self.cache.cell_hashes[idx] != cell_hash:
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM_DEBUG] Hash mismatch in cell %d "
-                        "(detected via lightweight hash cache, main cache truncated)",
-                        idx,
-                    )
+                logger.debug(
+                    "[UPSTREAM_DEBUG] Hash mismatch in cell %d "
+                    "(detected via lightweight hash cache, main cache truncated)",
+                    idx,
+                )
                 return True
         return False
 
@@ -559,7 +554,7 @@ class VirtualLineage:
             sim.trace.extend(self.cache.entries[ci].trace_segment)
             sim.vars_mutated_by_loops.update(self.cache.entries[ci].vars_mutated_by_loops)
             sim.vars_with_stale_files.update(self.cache.entries[ci].vars_with_stale_files)
-        if self.debug:
+        if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[UPSTREAM_DEBUG] Incremental simulation: reusing cache for cells 0-%d, simulating from cell %d",
                 first_changed_cell - 1,
@@ -583,7 +578,7 @@ class VirtualLineage:
         had_prior_cache = bool(self.cache.entries)
         cache_had_hash_mismatch = False
 
-        if self.debug:
+        if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[UPSTREAM_DEBUG] simulate_upstream: current_cell_idx=%d, "
                 "had_prior_cache=%s, cache_size=%d, cell_hashes_size=%d",
@@ -616,11 +611,10 @@ class VirtualLineage:
             reader = _first_cell_reading(notebook_cells, current_cell_idx, reloaded)
             if reader is not None and reader < first_changed_cell:
                 first_changed_cell = reader
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM_DEBUG] A tracked module was reloaded; re-simulating from cell %d, its first reader.",
-                        reader,
-                    )
+                logger.debug(
+                    "[UPSTREAM_DEBUG] A tracked module was reloaded; re-simulating from cell %d, its first reader.",
+                    reader,
+                )
 
         # Check the lightweight hash cache for cells beyond the main cache range.
         if not cache_had_hash_mismatch and self.cache.cell_hashes:
@@ -863,8 +857,7 @@ class VirtualLineage:
         virtual_modules: set[str],
     ) -> dict | None:
         """Return a metric dict for a single skipped statement, or ``None`` on error."""
-        if self.debug:
-            logger.debug("[UPSTREAM] Checking skipped stmt [%d]: %.30s...", i, stmt_code)
+        logger.debug("[UPSTREAM] Checking skipped stmt [%d]: %.30s...", i, stmt_code)
         try:
             cache_key, _, _, _, _ = compute_cache_key(
                 stmt_code,
@@ -884,13 +877,12 @@ class VirtualLineage:
             if metadata:
                 saved_time = metadata.get("execution_time", 0.0)
                 is_metadata_only = metadata.get("metadata_only", False)
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM] Skipped stmt [%d] hit cache. Saved: %ss (metadata_only=%s)",
-                        i,
-                        saved_time,
-                        is_metadata_only,
-                    )
+                logger.debug(
+                    "[UPSTREAM] Skipped stmt [%d] hit cache. Saved: %ss (metadata_only=%s)",
+                    i,
+                    saved_time,
+                    is_metadata_only,
+                )
                 entry: dict = {
                     "code": stmt_code,
                     "status": CacheStatus.SKIPPED,
@@ -903,8 +895,7 @@ class VirtualLineage:
                 if "storage" in metadata:
                     entry["storage"] = metadata["storage"]
                 return entry
-            if self.debug:
-                logger.debug("[UPSTREAM] Skipped stmt [%d] miss cache. Key: %s", i, cache_key)
+            logger.debug("[UPSTREAM] Skipped stmt [%d] miss cache. Key: %s", i, cache_key)
             return {
                 "code": stmt_code,
                 "status": CacheStatus.SKIPPED,
@@ -915,8 +906,7 @@ class VirtualLineage:
                 "has_cache": False,
             }
         except (KeyError, TypeError, OSError, ValueError) as e:
-            if self.debug:
-                logger.debug("[UPSTREAM] Error checking skipped stmt: %s", e)
+            logger.debug("[UPSTREAM] Error checking skipped stmt: %s", e)
             return None
 
     def collect_skipped_statement_metrics(
@@ -1003,12 +993,11 @@ class VirtualLineage:
         except (ValueError, TypeError):
             is_non_empty = False
         if is_non_empty:
-            if self.debug:
-                logger.debug(
-                    "[UPSTREAM] Skipping accumulator init '%.40s' - already has %d items in memory",
-                    stmt_code,
-                    len(existing_val),
-                )
+            logger.debug(
+                "[UPSTREAM] Skipping accumulator init '%.40s' - already has %d items in memory",
+                stmt_code,
+                len(existing_val),
+            )
             return True
         return False
 
@@ -1147,19 +1136,18 @@ class VirtualLineage:
             if mv not in self.executed_cell_codes:
                 continue
             exec_code = strip_markers(self.executed_cell_codes[mv]).strip()
-            if self.debug:
+            if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("[UPSTREAM_DEBUG] Checking loop trust for '%s': exec_code=%s", mv, repr(exec_code[:60]))
                 matching = [sc for sc in simulation_trace_codes if exec_code in sc or sc in exec_code]
                 logger.debug(
                     "[UPSTREAM_DEBUG]   Partial matches in simulation_trace_codes: %s", [repr(m[:60]) for m in matching]
                 )
             if exec_code and exec_code not in simulation_trace_codes:
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM_DEBUG] Loop-mutated var '%s' was produced by code "
-                        "not found on disk (unsaved edit or stale execution). Distrusting ALL loop-derived vars.",
-                        mv,
-                    )
+                logger.debug(
+                    "[UPSTREAM_DEBUG] Loop-mutated var '%s' was produced by code "
+                    "not found on disk (unsaved edit or stale execution). Distrusting ALL loop-derived vars.",
+                    mv,
+                )
                 return True
         return False
 
@@ -1526,12 +1514,11 @@ class VirtualLineage:
                 new_lineage = output_lineage(source_hash, input_hashes.values())
                 virtual_lineage[mv] = new_lineage
                 extra_outputs.add(mv)
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM_DEBUG] Loop-mutated var '%s' virtual lineage updated to %s...",
-                        mv,
-                        new_lineage[:12],
-                    )
+                logger.debug(
+                    "[UPSTREAM_DEBUG] Loop-mutated var '%s' virtual lineage updated to %s...",
+                    mv,
+                    new_lineage[:12],
+                )
         return extra_outputs
 
     def _simulate_control_structure(self, node: ast.AST, sim: SimulationResult) -> None:
@@ -1583,8 +1570,7 @@ class VirtualLineage:
             except ValueError:  # for/else -- not splittable
                 halves = ()
             if halves:
-                if self.debug:
-                    logger.debug("[UPSTREAM_DEBUG] loop split at k=%d -> simulating head and tail separately", split_k)
+                logger.debug("[UPSTREAM_DEBUG] loop split at k=%d -> simulating head and tail separately", split_k)
                 for half in halves:
                     self._simulate_one_control_unit(half, sim)
                 return
@@ -1696,7 +1682,7 @@ class VirtualLineage:
                 virtual_lineage.update(recorded[1])
                 all_outputs = all_outputs | set(recorded[1])
 
-        if self.debug:
+        if logger.isEnabledFor(logging.DEBUG):
             cs_type = get_control_structure_type(node) if node else "unknown"
             logger.debug(
                 "[UPSTREAM_DEBUG] Simulating %s as single unit: %s... Outputs: %s", cs_type, stmt_code[:60], all_outputs
@@ -1785,7 +1771,6 @@ class VirtualLineage:
     @staticmethod
     def _validate_file_freshness(
         hist_files: dict[str, Any],
-        debug: bool = False,
         memo_key: str | None = None,
     ) -> bool:
         """Return True if all historical file dependencies are still fresh.
@@ -1816,8 +1801,7 @@ class VirtualLineage:
         run = _file_state_this_run()
         fresh, stale = snapshot_is_fresh(hist_files, run["memo"] if run is not None else None)
         if not fresh:
-            if debug:
-                logger.debug("[UPSTREAM] Forward prop failed: stale file dependency (%s)", stale)
+            logger.debug("[UPSTREAM] Forward prop failed: stale file dependency (%s)", stale)
             return False
         if memo_key is not None and epoch is not None:
             memo["keys"].add(memo_key)
@@ -1844,7 +1828,7 @@ class VirtualLineage:
             )
             if lineage:
                 input_lineages_all.append(lineage)
-        if self.debug:
+        if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[LINEAGE_DEBUG] %s... inputs %s -> %s",
                 stmt_code[:50],
@@ -1880,8 +1864,7 @@ class VirtualLineage:
         in place.  Returns ``('hit', 0.0, stmt_file_deps)`` where the caller
         should substitute the real ``cache_lookup_time``.
         """
-        if self.debug:
-            print(f"[UPSTREAM] Forward propagating cached lineages for {stmt_code[:30]}...")
+        logger.debug("[UPSTREAM] Forward propagating cached lineages for %s...", stmt_code[:30])
         for var, h in output_lineages.items():
             virtual_lineage[var] = h
         # Even on a cache hit, replay the derivation-alias bump so a mutation of
@@ -1903,12 +1886,11 @@ class VirtualLineage:
                     lineage_val = output_lineages.get(out)
                     if lineage_val:
                         self.restores.record_restore(var_name=out, lineage_hash=lineage_val)
-                        if self.debug:
-                            logger.debug(
-                                "[LINEAGE_DEBUG] Propagated module '%s' lineage (from cache): %s...",
-                                out,
-                                lineage_val[:12],
-                            )
+                        logger.debug(
+                            "[LINEAGE_DEBUG] Propagated module '%s' lineage (from cache): %s...",
+                            out,
+                            lineage_val[:12],
+                        )
         # Mid-simulation drain: same reasoning as in _propagate_import_lineage.
         apply_collected_mutations(self.restores, self.tracking_state)
         stmt_file_deps = self._stat_file_deps(hist_files)
@@ -1924,7 +1906,7 @@ class VirtualLineage:
         """
         file_deps_to_check: set[str] = set(hist_files.keys())
         stmt_file_deps = self._stat_file_deps(hist_files)
-        if self.debug:
+        if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[UPSTREAM] Found historical file deps (validation failed/skipped): %s",
                 list(hist_files.keys()),
@@ -1961,8 +1943,7 @@ class VirtualLineage:
             return ("miss", cache_lookup_time, files_stale, stmt_file_deps, file_deps_to_check)
 
         try:
-            if self.debug:
-                logger.debug("[UPSTREAM] Virtual lookup Key: %s", cache_key)
+            logger.debug("[UPSTREAM] Virtual lookup Key: %s", cache_key)
 
             t_lookup = time_module.time()
             metadata = self._get_metadata_only(cache_key)
@@ -1971,9 +1952,7 @@ class VirtualLineage:
             if metadata:
                 hist_files = metadata.get("file_dependencies", {})
                 output_lineages = metadata.get("output_lineages", {})
-                files_valid = not hist_files or self._validate_file_freshness(
-                    hist_files, self.debug, memo_key=cache_key
-                )
+                files_valid = not hist_files or self._validate_file_freshness(hist_files, memo_key=cache_key)
 
                 if files_valid and output_lineages:
                     self._last_hit_bumped = set()
@@ -1994,7 +1973,7 @@ class VirtualLineage:
                 if not files_valid:
                     files_stale = True
 
-                if self.debug:
+                if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
                         "[UPSTREAM] Forward prop aborted. files_valid=%s, output_lineages keys=%s",
                         files_valid,
@@ -2006,8 +1985,7 @@ class VirtualLineage:
                     file_deps_to_check.update(extra_fdeps)
                     stmt_file_deps.update(extra_stmt_deps)
         except (KeyError, TypeError, OSError, ValueError) as e:
-            if self.debug:
-                logger.debug("[UPSTREAM] Virtual lookup failed: %s", e)
+            logger.debug("[UPSTREAM] Virtual lookup failed: %s", e)
 
         return ("miss", cache_lookup_time, files_stale, stmt_file_deps, file_deps_to_check)
 
@@ -2325,12 +2303,11 @@ class VirtualLineage:
             if held is None or held == self.propagated_imports.get(out):
                 self.restores.record_restore(var_name=out, lineage_hash=lineage_by_out[out])
                 self.propagated_imports[out] = lineage_by_out[out]
-                if self.debug:
-                    logger.debug(
-                        "[LINEAGE_DEBUG] Propagated module '%s' lineage to variable_lineage: %s...",
-                        out,
-                        lineage_by_out[out][:12],
-                    )
+                logger.debug(
+                    "[LINEAGE_DEBUG] Propagated module '%s' lineage to variable_lineage: %s...",
+                    out,
+                    lineage_by_out[out][:12],
+                )
         # Mid-simulation drain: subsequent statements' compute_cache_key reads
         # variable_lineage to include module components, so the write must be
         # visible before the next _update_virtual_lineage call.
@@ -2455,8 +2432,8 @@ class VirtualLineage:
                     virtual_lineage=virtual_lineage,
                     virtual_modules=virtual_modules,
                     compute_hash_fn=self.compute_hash_fn,
-                    debug=self.debug,
-                    debug_print_fn=print,
+                    debug=logger.isEnabledFor(logging.DEBUG),
+                    debug_print_fn=logger.debug,
                     virtual_callables=self._virtual_callables,
                 ),
                 outputs=outputs,
@@ -2511,9 +2488,7 @@ class VirtualLineage:
                 virtual_lineage,
             )
 
-            if self.debug and (
-                "sort" in stmt_code or "VolAdj" in stmt_code or "read_csv" in stmt_code or "exists" in stmt_code
-            ):
+            if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("[LINEAGE_CALC] Statement: %s...", stmt_code[:40])
                 logger.debug("[LINEAGE_CALC]   source_hash: %s...", source_hash[:16])
                 logger.debug(
@@ -2589,14 +2564,13 @@ class VirtualLineage:
                 existing = self.shell.user_ns[var]
                 try:
                     if len(existing) > 0 and len(val) == 0:
-                        if self.debug:
-                            logger.debug(
-                                "[UPSTREAM] Restore BLOCKED for '%s': cached value is empty "
-                                "but in-memory has %d items, and its lineage is unconfirmed. "
-                                "Keeping in-memory value.",
-                                var,
-                                len(existing),
-                            )
+                        logger.debug(
+                            "[UPSTREAM] Restore BLOCKED for '%s': cached value is empty "
+                            "but in-memory has %d items, and its lineage is unconfirmed. "
+                            "Keeping in-memory value.",
+                            var,
+                            len(existing),
+                        )
                         continue
                 except (TypeError, AttributeError):
                     pass
@@ -2742,8 +2716,6 @@ class VirtualLineage:
                         virtual_lineage=input_hashes,
                         virtual_modules=virtual_modules,
                         compute_hash_fn=self.compute_hash_fn,
-                        debug=False,
-                        debug_print_fn=print,
                     ),
                     outputs=outputs,
                 )
@@ -2753,7 +2725,7 @@ class VirtualLineage:
                     # Verify file deps are still valid (mtime + size, both
                     # forms — see _validate_file_freshness for rationale).
                     file_deps = metadata.get("file_dependencies", {})
-                    deps_valid = self._validate_file_freshness(file_deps, self.debug, memo_key=cache_key)
+                    deps_valid = self._validate_file_freshness(file_deps, memo_key=cache_key)
 
                     if deps_valid:
                         # Cache hit! This statement's restore will put its
@@ -2780,25 +2752,23 @@ class VirtualLineage:
                                     )
                                 if var not in self.shell.user_ns:
                                     self.shell.user_ns[var] = _FORWARD_PROBE_PLACEHOLDER
-                            if self.debug:
-                                logger.debug(
-                                    "[UPSTREAM] Forward probe: cache hit for '%s' resolves broken vars: %s",
-                                    stmt_code[:50],
-                                    produced,
-                                )
+                            logger.debug(
+                                "[UPSTREAM] Forward probe: cache hit for '%s' resolves broken vars: %s",
+                                stmt_code[:50],
+                                produced,
+                            )
 
             except (KeyError, TypeError, ValueError, OSError):
                 continue
 
         if resolved_by_cache:
             broken_vars -= resolved_by_cache
-            if self.debug:
-                logger.debug(
-                    "[UPSTREAM] Forward probe eliminated %d broken vars: %s. Remaining: %s",
-                    len(resolved_by_cache),
-                    resolved_by_cache,
-                    broken_vars,
-                )
+            logger.debug(
+                "[UPSTREAM] Forward probe eliminated %d broken vars: %s. Remaining: %s",
+                len(resolved_by_cache),
+                resolved_by_cache,
+                broken_vars,
+            )
 
     def try_virtual_restore(
         self,
@@ -2838,15 +2808,14 @@ class VirtualLineage:
                     virtual_lineage=key_lineages(input_hashes),
                     virtual_modules=virtual_modules,
                     compute_hash_fn=self.compute_hash_fn,
-                    debug=self.debug,
-                    debug_print_fn=print,
+                    debug=logger.isEnabledFor(logging.DEBUG),
+                    debug_print_fn=logger.debug,
                     virtual_callables=self._virtual_callables,
                 ),
                 outputs=outputs,
             )
 
-            if self.debug:
-                logger.debug("[UPSTREAM] Attempting virtual restore Key: %s", cache_key)
+            logger.debug("[UPSTREAM] Attempting virtual restore Key: %s", cache_key)
 
             # 2. Query Memory Backend first (fastest) - Or just generic backend
             metadata, cached_data = self.cash_instance.backend.get(cache_key)
@@ -2882,8 +2851,7 @@ class VirtualLineage:
                 return restored_vars, time_module.time() - start_time, saved_time
 
         except (KeyError, TypeError, ValueError, OSError) as e:
-            if self.debug:
-                logger.debug("[UPSTREAM] Virtual restore error: %s", e)
+            logger.debug("[UPSTREAM] Virtual restore error: %s", e)
 
         return set(), time_module.time() - start_time, 0.0
 
@@ -2995,7 +2963,7 @@ class VirtualLineage:
                 vars_tainted.update(entry.outputs - directly_mismatched_vars)
                 propagation_sources.update(entry.outputs)
 
-        if self.debug and vars_tainted:
+        if logger.isEnabledFor(logging.DEBUG) and vars_tainted:
             logger.debug(
                 "[UPSTREAM_DEBUG] Transitive mismatch propagation (unsaved edit): "
                 "root mismatches = %s, tainted dependents = %s",

@@ -19,7 +19,7 @@ from cash.notebook.upstream import NotebookSimulator
 from cash.notebook.upstream.virtual_lineage import VirtualLineage
 
 
-def _make_simulator(*, debug: bool = False) -> NotebookSimulator:
+def _make_simulator() -> NotebookSimulator:
     """Construct a NotebookSimulator with a minimal fake shell.
 
     This is the new test surface — no Cash, no backend, no UpstreamChecker.
@@ -30,7 +30,6 @@ def _make_simulator(*, debug: bool = False) -> NotebookSimulator:
         cash_instance=None,
         tracking_state=TrackingState(),
         compute_hash_fn=None,
-        debug=debug,
     )
 
 
@@ -58,7 +57,6 @@ class TestConstructionWithoutOrchestrator:
             cash_instance=None,
             tracking_state=ts,
             compute_hash_fn=None,
-            debug=False,
         )
         sim.variable_lineage["x"] = "abc"
         assert ts.variable_lineage["x"] == "abc"

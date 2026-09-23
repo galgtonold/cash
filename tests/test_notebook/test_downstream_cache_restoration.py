@@ -35,7 +35,7 @@ class TestDownstreamCacheRestoration(unittest.TestCase):
         self.mock_cash = MagicMock()
         self.mock_cash.backend = self.mock_backend
 
-        self.checker = UpstreamChecker(self.shell, cash_instance=self.mock_cash, debug=True)
+        self.checker = UpstreamChecker(self.shell, cash_instance=self.mock_cash)
         self.checker.set_tracking_state(TrackingState())
 
     def _compute_lineage(self, source_code, input_lineages=None):

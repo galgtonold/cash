@@ -259,7 +259,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._upstream_checker = UpstreamChecker(
             shell,
             cash_instance=cash_instance,
-            debug=self._debug,
             compute_hash_fn=compute_hash,
             tracking_state=self.tracking_state,
             function_tracker=self._statement_processor.function_tracker,
@@ -642,7 +641,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         # Propagate to components
         self._statement_processor.debug = self._debug
-        self._upstream_checker.debug = self._debug
         self._cash_instance.debug = self._debug
 
     @staticmethod

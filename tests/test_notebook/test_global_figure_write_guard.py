@@ -23,7 +23,7 @@ from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
 
 def _planner(user_ns: dict) -> ReexecutionPlanner:
     vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=user_ns))
-    return ReexecutionPlanner(vl, classifier=None, debug=False)
+    return ReexecutionPlanner(vl, classifier=None)
 
 
 def _entry(stmt, outputs=(), inputs=()):
@@ -150,7 +150,7 @@ class TestHealthyShapeUntouched:
             _entry("plt.savefig('x.png')", inputs=("plt",)),
         ]
         vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=None))
-        planner = ReexecutionPlanner(vl, classifier=None, debug=False)
+        planner = ReexecutionPlanner(vl, classifier=None)
         # producer [0] not scheduled -> refuse the write [1]
         with pytest.warns(CashWarning):
             remaining, _ = planner._guard_global_figure_writes([1], trace, [])

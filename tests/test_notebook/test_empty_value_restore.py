@@ -34,7 +34,7 @@ def _make_simulator(shell_ns: dict, metadata=None, variables=None):
     cash_instance.backend.get.return_value = (metadata or METADATA, {"variables": variables or {}})
     shell = MagicMock()
     shell.user_ns = shell_ns
-    checker = UpstreamChecker(shell, cash_instance, debug=False)
+    checker = UpstreamChecker(shell, cash_instance)
     checker.variable_lineage = {}
     return checker.simulator, shell
 

@@ -9,6 +9,7 @@ Issue 13/15/20: Upstream restores stale values — transitive loop-mutation prop
 
 import ast
 import json
+import logging
 import time
 from unittest.mock import patch
 
@@ -206,7 +207,7 @@ class TestNotebookPathCacheInvalidation:
         from cash.notebook.upstream import UpstreamChecker
 
         shell = MagicMock()
-        checker = UpstreamChecker(shell, debug=False)
+        checker = UpstreamChecker(shell)
 
         # Add some data to caches
         checker.simulator.cache.entries.append(
@@ -402,7 +403,7 @@ class TestTransitiveLoopMutation:
             {"variables": {"my_list": []}},  # EMPTY cached value
         )
 
-        checker = UpstreamChecker(shell, cash_instance, debug=True)
+        checker = UpstreamChecker(shell, cash_instance)
         checker.variable_lineage = {}
 
         restored = checker.simulator.restore_statement(
@@ -432,7 +433,7 @@ class TestTransitiveLoopMutation:
             {"variables": {"x": 99}},
         )
 
-        checker = UpstreamChecker(shell, cash_instance, debug=False)
+        checker = UpstreamChecker(shell, cash_instance)
         checker.variable_lineage = {}
 
         restored = checker.simulator.restore_statement(
@@ -531,7 +532,7 @@ class TestLoopTargetVarFalsePositive:
     lineage divergence in the inner mismatch check.
     """
 
-    def test_loop_target_not_false_broken(self, cash_magics, mock_shell, tmp_path):
+    def test_loop_target_not_false_broken(self, cash_magics, mock_shell, tmp_path, caplog):
         """
         Downstream cell using a loop accumulator should NOT trigger
         unnecessary upstream re-execution due to loop target var mismatch.
@@ -584,16 +585,10 @@ for item in data:
 
             # Key: re-running downstream should NOT trigger upstream re-execution
             # (the loop code hasn't changed, so total should be trusted)
-            magics._upstream_checker.debug = True
-
-            import contextlib
-            import io
-
-            f = io.StringIO()
-            with contextlib.redirect_stdout(f):
+            with caplog.at_level(logging.DEBUG, logger="cash"):
                 run_cash_cell(magics, downstream_code)
 
-            debug_output = f.getvalue()
+            debug_output = caplog.text
             # Should NOT see "Marking as broken" for total
             assert "Marking as broken" not in debug_output, f"total was incorrectly marked as broken:\n{debug_output}"
             # Result should still be correct
@@ -651,7 +646,7 @@ for item in data:
             # The simplest way: just check that simulation doesn't break downstream
             run_cash_cell(magics, downstream_code)
 
-    def test_tuple_unpacking_loop_target(self, cash_magics, mock_shell, tmp_path):
+    def test_tuple_unpacking_loop_target(self, cash_magics, mock_shell, tmp_path, caplog):
         """
         Loop target with tuple unpacking (e.g., for k, v in items)
         should also be tracked as loop_target_vars.
@@ -702,16 +697,10 @@ for k, v in pairs:
             assert shell.user_ns["summary"] == "1=a, 2=b, 3=c"
 
             # Re-run downstream - should not trigger false broken detection
-            import contextlib
-            import io
-
-            magics._upstream_checker.debug = True
-
-            f = io.StringIO()
-            with contextlib.redirect_stdout(f):
+            with caplog.at_level(logging.DEBUG, logger="cash"):
                 run_cash_cell(magics, downstream_code)
 
-            debug_output = f.getvalue()
+            debug_output = caplog.text
             assert "Marking as broken" not in debug_output, (
                 f"Loop target tuple vars incorrectly marked broken:\n{debug_output}"
             )

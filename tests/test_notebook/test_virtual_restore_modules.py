@@ -215,7 +215,6 @@ class TestModuleLineagePropagation(unittest.TestCase):
         self.checker = UpstreamChecker(
             self.shell,
             cash_instance=self.cash_instance,
-            debug=True,
         )
         self.checker.set_tracking_state(TrackingState())
 
@@ -280,7 +279,6 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         self.checker = UpstreamChecker(
             self.shell,
             cash_instance=self.cash_instance,
-            debug=True,
         )
         self.checker.set_tracking_state(TrackingState())
 

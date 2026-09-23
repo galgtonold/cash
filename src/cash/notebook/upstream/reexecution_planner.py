@@ -240,11 +240,9 @@ class ReexecutionPlanner:
         self,
         virtual_lineage: "VirtualLineage",
         classifier: "MismatchClassifier",
-        debug: bool = False,
     ) -> None:
         self.virtual_lineage = virtual_lineage
         self.classifier = classifier
-        self.debug = debug
         #: ``(trace index, paths)`` of the writers the last plan left out of date.
         self.stale_exports: list[tuple[int, list[str]]] = []
 
@@ -277,7 +275,7 @@ class ReexecutionPlanner:
         broken_vars = result.broken_vars
         virtual_lineage = sim.virtual_lineage
         virtual_modules = sim.virtual_modules
-        if self.debug:
+        if logger.isEnabledFor(logging.DEBUG):
             logger.debug("[UPSTREAM_DEBUG] Simulation trace contents:")
             for i, entry in enumerate(simulation_trace):
                 logger.debug("[UPSTREAM_DEBUG]   [%s] outputs=%s: %s...", i, entry.outputs, entry.stmt_code[:60])
@@ -398,8 +396,7 @@ class ReexecutionPlanner:
             stmt_code = simulation_trace[idx].stmt_code
             statements_to_reexecute.append(stmt_code)
             trace_event("schedule_reexec", stmt=stmt_code[:80])
-            if self.debug:
-                logger.debug("[UPSTREAM] Scheduled for execution: %s", stmt_code[:40])
+            logger.debug("[UPSTREAM] Scheduled for execution: %s", stmt_code[:40])
 
         restored_statements_info.reverse()
 
@@ -505,7 +502,7 @@ class ReexecutionPlanner:
                 continue
             if touched & consumed:
                 scheduled.add(i)
-                if self.debug:
+                if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
                         "[UPSTREAM] Consumable-chain completion: scheduling [%s] which fills/draws %s: %.60s",
                         i,
@@ -579,7 +576,7 @@ class ReexecutionPlanner:
                         if produced in wanted:
                             scheduled.add(p)
                             changed = True
-                            if self.debug:
+                            if logger.isEnabledFor(logging.DEBUG):
                                 logger.debug(
                                     "[UPSTREAM] Shadow-completion: scheduling producer [%s] of "
                                     "shadowed '%s' (produced %s; consumed %s, final %s)",
@@ -653,14 +650,13 @@ class ReexecutionPlanner:
                 for p in range(i - 1, -1, -1):
                     if v in simulation_trace[p].outputs and v in _top_level(p):
                         additions.add(p)
-                        if self.debug:
-                            logger.debug(
-                                "[UPSTREAM] Conditional-init: scheduling unconditional "
-                                "initializer [%s] of '%s' behind conditional rebind [%s]",
-                                p,
-                                v,
-                                i,
-                            )
+                        logger.debug(
+                            "[UPSTREAM] Conditional-init: scheduling unconditional "
+                            "initializer [%s] of '%s' behind conditional rebind [%s]",
+                            p,
+                            v,
+                            i,
+                        )
                         break
 
         if not additions:
@@ -929,7 +925,7 @@ class ReexecutionPlanner:
                         pending,
                         scheduled,
                     )
-                    if self.debug:
+                    if logger.isEnabledFor(logging.DEBUG):
                         logger.debug(
                             "[UPSTREAM] Carrier-history completion for '%s' (%s) consumed "
                             "by [%s]: scheduling %s so the carrier is not rebuilt from a "
@@ -1010,13 +1006,12 @@ class ReexecutionPlanner:
                 if producer in scheduled or producer in pending or producer in extra:
                     continue
                 if statement_writes_files(simulation_trace[producer].stmt_code):
-                    if self.debug:
-                        logger.debug(
-                            "[UPSTREAM] Not scheduling file-writing producer [%s] "
-                            "for '%s': re-firing it could duplicate on-disk output",
-                            producer,
-                            name,
-                        )
+                    logger.debug(
+                        "[UPSTREAM] Not scheduling file-writing producer [%s] "
+                        "for '%s': re-firing it could duplicate on-disk output",
+                        producer,
+                        name,
+                    )
                     continue
                 extra.add(producer)
                 frontier.append(producer)
@@ -1235,13 +1230,12 @@ class ReexecutionPlanner:
             "object -- fig.savefig(path) -- rather than through pyplot.",
         )
         trace_event("refuse_orphaned_figure_write", stmt=code[:80], producer=producer)
-        if self.debug:
-            logger.debug(
-                "[UPSTREAM] refusing orphaned plt.savefig at [%s] (figure producer %s not scheduled): %.60s",
-                w,
-                producer,
-                code,
-            )
+        logger.debug(
+            "[UPSTREAM] refusing orphaned plt.savefig at [%s] (figure producer %s not scheduled): %.60s",
+            w,
+            producer,
+            code,
+        )
 
     # Cheap textual pre-filter before running the full AST side-effect
     # analysis on a trace statement. Superset of the names in the write
@@ -1462,12 +1456,11 @@ class ReexecutionPlanner:
                         if prod not in scheduled:
                             scheduled.add(prod)
                             pending.append(prod)
-                            if self.debug:
-                                logger.debug(
-                                    "[UPSTREAM] Scheduling producer [%s] of writer input '%s'",
-                                    prod,
-                                    v,
-                                )
+                            logger.debug(
+                                "[UPSTREAM] Scheduling producer [%s] of writer input '%s'",
+                                prod,
+                                v,
+                            )
                         break
                 if later is not None and later not in scheduled:
                     scheduled.add(later)
@@ -1512,13 +1505,12 @@ class ReexecutionPlanner:
                 scheduled.add(i)
                 promoted.add(i)
                 promoted_outputs.update(outputs)
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM] Promoting file-reader [%s] to re-exec (writer scheduled at [%s]): %s",
-                        i,
-                        first_writer,
-                        simulation_trace[i].stmt_code[:40],
-                    )
+                logger.debug(
+                    "[UPSTREAM] Promoting file-reader [%s] to re-exec (writer scheduled at [%s]): %s",
+                    i,
+                    first_writer,
+                    simulation_trace[i].stmt_code[:40],
+                )
 
         if promoted:
             promoted_codes = {simulation_trace[i].stmt_code for i in promoted}
@@ -1572,12 +1564,11 @@ class ReexecutionPlanner:
             if verdict != REPEATABILITY_REPLACING and entry.cell not in destructive:
                 continue
             extra.append(j)
-            if self.debug:
-                logger.debug(
-                    "[UPSTREAM] Scheduling same-cell file-writer [%s] with its cell's stale writers: %s",
-                    j,
-                    code[:60],
-                )
+            logger.debug(
+                "[UPSTREAM] Scheduling same-cell file-writer [%s] with its cell's stale writers: %s",
+                j,
+                code[:60],
+            )
         return sorted(chosen | set(extra))
 
     def find_stale_file_writer_indices(
@@ -1660,11 +1651,10 @@ class ReexecutionPlanner:
                     self._note_if_stale(
                         stale_exports, i, stmt_code, inputs, virtual_lineage, runtime_lineage, simulation_trace
                     )
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM] File-writer output read by no relevant consumer; not scheduling (scope): %s",
-                        stmt_code[:60],
-                    )
+                logger.debug(
+                    "[UPSTREAM] File-writer output read by no relevant consumer; not scheduling (scope): %s",
+                    stmt_code[:60],
+                )
                 continue
             # Repeatability gate. The scope gate above keys on
             # RELEVANCE -- "does a relevant consumer read this file?" -- not on
@@ -1686,11 +1676,10 @@ class ReexecutionPlanner:
             # costs a duplicated line in an uncommon shape. Narrow is the right
             # side of that trade; see the recorded measurement.
             if statement_write_repeatability(stmt_code) == REPEATABILITY_ACCUMULATING:
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM] File-writer is a non-idempotent append; not re-firing (repeatability): %s",
-                        stmt_code[:60],
-                    )
+                logger.debug(
+                    "[UPSTREAM] File-writer is a non-idempotent append; not re-firing (repeatability): %s",
+                    stmt_code[:60],
+                )
                 continue
             changed = stmt_code not in executed_writes
             scheduled_inputs = set(inputs) & scheduled_outputs
@@ -1727,11 +1716,10 @@ class ReexecutionPlanner:
                 )
             ):
                 changed = inputs_changed = False
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM] File-writer effect already fresh on disk; not re-firing: %s",
-                        stmt_code[:60],
-                    )
+                logger.debug(
+                    "[UPSTREAM] File-writer effect already fresh on disk; not re-firing: %s",
+                    stmt_code[:60],
+                )
             trace_event(
                 "writer_decided",
                 stmt=stmt_code[:80],
@@ -1742,14 +1730,13 @@ class ReexecutionPlanner:
             )
             if changed or inputs_changed:
                 writer_indices.append(i)
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM] File-writer scheduling: [%s] %s (changed=%s, inputs_changed=%s)",
-                        i,
-                        stmt_code[:40],
-                        changed,
-                        inputs_changed,
-                    )
+                logger.debug(
+                    "[UPSTREAM] File-writer scheduling: [%s] %s (changed=%s, inputs_changed=%s)",
+                    i,
+                    stmt_code[:40],
+                    changed,
+                    inputs_changed,
+                )
         return writer_indices
 
     def _note_if_stale(
@@ -2110,8 +2097,7 @@ class ReexecutionPlanner:
                 simulation_trace,
                 scheduled_contexts,
             ):
-                if self.debug:
-                    logger.debug("[UPSTREAM] Adding loop var assignment for scheduled context: %s", stmt_code[:40])
+                logger.debug("[UPSTREAM] Adding loop var assignment for scheduled context: %s", stmt_code[:40])
                 additional_indices.append(i)
 
         return stmts_to_run_indices + additional_indices

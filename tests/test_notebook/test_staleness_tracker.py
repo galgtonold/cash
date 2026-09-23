@@ -165,7 +165,7 @@ def test_reset_caches_clears_the_staleness_verdict(tmp_path):
     from cash.notebook.upstream.checker import UpstreamChecker
 
     nb = _touch(tmp_path / "nb.ipynb")
-    checker = UpstreamChecker(MagicMock(), debug=False)
+    checker = UpstreamChecker(MagicMock())
     checker.staleness.observe(running_code="a = 2", file_code="a = 1", notebook_path=str(nb))
     assert checker.staleness.is_stale() is True
 
@@ -184,7 +184,6 @@ def test_checker_detects_a_stale_file_on_an_id_match(tmp_path, monkeypatch):
     nb.write_text("{}", encoding="utf-8")
 
     checker = UpstreamChecker.__new__(UpstreamChecker)  # no full init needed
-    checker.debug = False
     checker.staleness = StalenessTracker()
     checker._notebook_path_for_staleness = str(nb)
 
@@ -206,7 +205,6 @@ def test_checker_is_quiet_when_the_file_matches(tmp_path):
     nb.write_text("{}", encoding="utf-8")
 
     checker = UpstreamChecker.__new__(UpstreamChecker)
-    checker.debug = False
     checker.staleness = StalenessTracker()
     checker._notebook_path_for_staleness = str(nb)
 

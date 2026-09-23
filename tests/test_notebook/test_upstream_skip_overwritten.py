@@ -37,7 +37,7 @@ def upstream_checker():
     backend = InMemoryBackend()
     cash_inst = Cash(backend=backend, register_magic=False)
     shell = MockShell()
-    checker = UpstreamChecker(shell, cash_instance=cash_inst, debug=True)
+    checker = UpstreamChecker(shell, cash_instance=cash_inst)
     checker.set_tracking_state(TrackingState())
     yield checker, shell, backend
     backend.clear()

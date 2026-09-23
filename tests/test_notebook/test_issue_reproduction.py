@@ -25,7 +25,7 @@ class TestIssueReproduction(unittest.TestCase):
         self.shell = MagicMock()
         # Configure backend
         self.shell.cash_instance.backend.get.return_value = ({"output_lineages": {}}, {})
-        self.checker = UpstreamChecker(self.shell, debug=True)
+        self.checker = UpstreamChecker(self.shell)
         self.checker.set_tracking_state(TrackingState())
 
     @patch("cash.notebook.upstream.checker.get_notebook_cells")

@@ -111,7 +111,6 @@ class UpstreamChecker:
 
     Attributes:
         shell: IPython shell instance
-        debug: Enable debug output
         executed_cell_codes: Maps variable names to the statement code that defined them
         executed_cell_hashes: Maps variable names to the SET of hashes of the statement code that defined them
         variable_lineage: Maps variable names to their lineage hash (includes input dependencies)
@@ -121,15 +120,15 @@ class UpstreamChecker:
         self,
         shell: ShellProtocol,
         cash_instance: CashInstanceProtocol | None = None,
-        debug: bool = False,
         compute_hash_fn: Callable[[Any], str] | None = None,
         tracking_state: TrackingState | None = None,
         function_tracker: FunctionTracker | None = None,
     ) -> None:
         self.shell: ShellProtocol = shell
         self.cash_instance: CashInstanceProtocol | None = cash_instance
-        self.debug = debug
         self.compute_hash_fn: Callable[[Any], str] | None = compute_hash_fn
+        #: The index of the cell checked last, for a run whose own index is unknown.
+        self.last_cell_index: int | None = None
 
         # per-session ledger of already-warned broken upstream cells,
         # keyed by cell index -> cell source hash. Keeps the "cell N has a
@@ -156,7 +155,6 @@ class UpstreamChecker:
             cash_instance=cash_instance,
             tracking_state=ts,
             compute_hash_fn=compute_hash_fn,
-            debug=debug,
             function_tracker=function_tracker,
         )
 
@@ -237,14 +235,10 @@ class UpstreamChecker:
                         file_code=nb_cell_src,
                         notebook_path=self._notebook_path_for_staleness,
                     )
-                    if self.debug:
-                        logger.debug("[UPSTREAM_DEBUG] Found cell by ID match at index %s", i)
+                    logger.debug("[UPSTREAM_DEBUG] Found cell by ID match at index %s", i)
                     return i
 
-            if self.debug:
-                logger.debug(
-                    "[UPSTREAM_DEBUG] Cell ID %s not found in notebook, falling back to content match", cell_id
-                )
+            logger.debug("[UPSTREAM_DEBUG] Cell ID %s not found in notebook, falling back to content match", cell_id)
 
         # Strategies 2-4: content matching with progressive normalization
         content_matchers = [
@@ -263,11 +257,10 @@ class UpstreamChecker:
             return matches[0]
 
         # Multiple matches with no resolvable cell ID — ambiguous
-        if self.debug:
-            logger.debug(
-                "[UPSTREAM_DEBUG] Ambiguous cell content (matches=%s). Unable to safely determine upstream context.",
-                matches,
-            )
+        logger.debug(
+            "[UPSTREAM_DEBUG] Ambiguous cell content (matches=%s). Unable to safely determine upstream context.",
+            matches,
+        )
 
         raise AmbiguousCellError(
             f"Ambiguous cell execution! The current cell content appears {len(matches)} times in the notebook and no cell ID could be resolved. Please ensure cells are unique or save the notebook."
@@ -303,7 +296,7 @@ class UpstreamChecker:
         Returns:
             Tuple of (upstream_metrics, total_restore_time, total_execution_time)
         """
-        if self.debug:
+        if logger.isEnabledFor(logging.DEBUG):
             logger.debug("[UPSTREAM_DEBUG] check_and_reexecute called")
             logger.debug("[UPSTREAM_DEBUG]   cell_code: %s...", cell_code[:50])
             logger.debug("[UPSTREAM_DEBUG]   required_inputs: %s", required_inputs)
@@ -406,27 +399,25 @@ class UpstreamChecker:
         cache_idx: int,
     ) -> None:
         """Reset in-memory lineages that are "ahead" of the cached virtual lineage."""
-        if self.debug:
-            logger.debug(
-                "[UPSTREAM_DEBUG]   Downstream advancement fallback: overlap_vars=%s, cache_idx=%s, last_cell_index=%s",
-                overlap_vars,
-                cache_idx,
-                self.last_cell_index,
-            )
+        logger.debug(
+            "[UPSTREAM_DEBUG]   Downstream advancement fallback: overlap_vars=%s, cache_idx=%s, last_cell_index=%s",
+            overlap_vars,
+            cache_idx,
+            self.last_cell_index,
+        )
         for var_name in overlap_vars:
             if var_name not in cached_virtual_lineage or var_name not in self.variable_lineage:
                 continue
             virtual_hash = cached_virtual_lineage[var_name]
             actual_hash = self.variable_lineage[var_name]
             if actual_hash != virtual_hash:
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM_DEBUG]   -> Downstream advancement fallback: "
-                        "resetting '%s' lineage from %s to virtual %s",
-                        var_name,
-                        actual_hash[:8],
-                        virtual_hash[:8],
-                    )
+                logger.debug(
+                    "[UPSTREAM_DEBUG]   -> Downstream advancement fallback: "
+                    "resetting '%s' lineage from %s to virtual %s",
+                    var_name,
+                    actual_hash[:8],
+                    virtual_hash[:8],
+                )
                 self.lineage.reset_to(var_name, virtual_hash)
 
     def _handle_downstream_advancement_fallback(
@@ -472,7 +463,7 @@ class UpstreamChecker:
         ``None`` when no further action is needed (caller should return early).
         Performs side-effects (lineage reset, cache invalidation) as needed.
         """
-        if self.debug:
+        if logger.isEnabledFor(logging.DEBUG):
             logger.debug("[UPSTREAM_DEBUG] Current cell not found in notebook")
             logger.debug("[UPSTREAM_DEBUG]   Looking for: %s...", cell_code.strip()[:60])
             for i, c in enumerate(notebook_cells[:5]):
@@ -488,12 +479,11 @@ class UpstreamChecker:
                     missing_inputs.add(inp)
 
         if missing_inputs and notebook_cells:
-            if self.debug:
-                logger.debug("[UPSTREAM_DEBUG]   Unsaved cell has missing inputs: %s", missing_inputs)
-                logger.debug(
-                    "[UPSTREAM_DEBUG]   Treating all %d saved cells as upstream",
-                    len(notebook_cells),
-                )
+            logger.debug("[UPSTREAM_DEBUG]   Unsaved cell has missing inputs: %s", missing_inputs)
+            logger.debug(
+                "[UPSTREAM_DEBUG]   Treating all %d saved cells as upstream",
+                len(notebook_cells),
+            )
             return len(notebook_cells)
 
         # DOWNSTREAM ADVANCEMENT FALLBACK (unsaved cell, no missing inputs)
@@ -526,12 +516,10 @@ class UpstreamChecker:
         notebook_cells = get_notebook_cells(notebook_path)
 
         if not notebook_cells:
-            if self.debug:
-                logger.debug("[UPSTREAM_DEBUG] No notebook file found, skipping notebook check")
+            logger.debug("[UPSTREAM_DEBUG] No notebook file found, skipping notebook check")
             return None, None
 
-        if self.debug:
-            logger.debug("[UPSTREAM_DEBUG] Found %d notebook cells", len(notebook_cells))
+        logger.debug("[UPSTREAM_DEBUG] Found %d notebook cells", len(notebook_cells))
 
         cells_with_ids = get_notebook_cells_with_ids(notebook_path)
         cell_id = getattr(self, "current_cell_id", None)
@@ -635,8 +623,7 @@ class UpstreamChecker:
             for attr in dict_attrs:
                 getattr(state, attr, {}).pop(var, None)
             state.vars_with_mutation_lineage.discard(var)
-            if self.debug:
-                logger.debug("[UPSTREAM] evicted orphaned variable '%s'", var)
+            logger.debug("[UPSTREAM] evicted orphaned variable '%s'", var)
 
     @staticmethod
     def _module_level_reads(cell_code: str) -> set[str] | None:
@@ -1060,13 +1047,12 @@ class UpstreamChecker:
             return True
         normalized_code = strip_markers(producing_code).strip()
         if normalized_code not in cumulative_stmt_codes:
-            if self.debug:
-                logger.debug(
-                    "[UPSTREAM_DEBUG] Skipping sync for '%s' in cache entry %d: producing code not in cells 0..%d",
-                    var_name,
-                    idx,
-                    idx,
-                )
+            logger.debug(
+                "[UPSTREAM_DEBUG] Skipping sync for '%s' in cache entry %d: producing code not in cells 0..%d",
+                var_name,
+                idx,
+                idx,
+            )
             return False
         return True
 
@@ -1252,7 +1238,7 @@ class UpstreamChecker:
                 cached_vl[var_name] = self.variable_lineage[var_name]
                 updated = True
 
-        if updated and self.debug:
+        if updated and logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[UPSTREAM_DEBUG] Synced simulation cache lineages with runtime state (scoped to producing code)"
             )
@@ -1305,7 +1291,7 @@ class UpstreamChecker:
                     continue
                 if src not in already and src not in prepend:
                     prepend.append(src)
-            if prepend and self.debug:
+            if prepend and logger.isEnabledFor(logging.DEBUG):
                 logger.debug("[UPSTREAM] Rebuilding RNG chain (%d cells) before draw", len(prepend))
             return prepend + statements
         except (AttributeError, IndexError, TypeError, ValueError):  # pragma: no cover - defensive
@@ -1410,11 +1396,10 @@ class UpstreamChecker:
                 if stmt in rest:
                     rest.remove(stmt)
             statements = rest
-            if self.debug:
-                logger.debug(
-                    "[UPSTREAM] Re-establishing RNG chain (%d stmts) before a re-executed draw",
-                    len(prepend),
-                )
+            logger.debug(
+                "[UPSTREAM] Re-establishing RNG chain (%d stmts) before a re-executed draw",
+                len(prepend),
+            )
             return prepend + statements
         except (AttributeError, IndexError, TypeError, ValueError):  # pragma: no cover - defensive
             return statements
@@ -1688,16 +1673,13 @@ class UpstreamChecker:
         total_upstream_steps = len(statements)
 
         for stmt_idx, stmt_code in enumerate(statements):
-            # The badge's "Upstream" section is the canonical user-facing
-            # signal that upstream re-execution happened — so we stay quiet
-            # on stdout in normal use. Debug mode emits both a logger entry
-            # and a stdout line for troubleshooting and integration tests.
-            if self.debug:
-                logger.debug("[UPSTREAM] Auto-executing: %s...", stmt_code[:50])
+            # The badge's "Upstream" section is what tells the user; this line
+            # is for ``%cash_debug`` (and the integration tests that read it).
+            if logger.isEnabledFor(logging.DEBUG):
                 stmt_short = stmt_code.split("\n")[0][:40]
                 if len(stmt_code) > 40:
                     stmt_short += "..."
-                print(f"Cash: Auto-executing upstream statement: {stmt_short}")
+                logger.debug("Cash: Auto-executing upstream statement: %s", stmt_short)
 
             try:
                 # Check if this is a control structure (for/if/try/with/while).
@@ -1705,8 +1687,7 @@ class UpstreamChecker:
                 # per-iteration caching for loops instead of executing monolithically.
                 ctrl_node = self._try_parse_control_structure(stmt_code)
                 if ctrl_node is not None and control_structure_callback is not None:
-                    if self.debug:
-                        logger.debug("[UPSTREAM] Delegating control structure to per-iteration processor")
+                    logger.debug("[UPSTREAM] Delegating control structure to per-iteration processor")
                     ctrl_annotation = (annotations or {}).get(stmt_code)
                     ctrl_result = (
                         control_structure_callback(
@@ -1736,8 +1717,7 @@ class UpstreamChecker:
                         if stmt_annotation is not None
                         else process_callback(stmt_code, global_ttl, silent=True)
                     )
-                    if self.debug:
-                        logger.debug("[UPSTREAM] Callback result for '%s...': %s", stmt_code[:20], result)
+                    logger.debug("[UPSTREAM] Callback result for '%s...': %s", stmt_code[:20], result)
                     if result:
                         result["is_upstream"] = True  # Mark as upstream so badge categorizes correctly
                         executed_metrics.append(result)

@@ -19,7 +19,7 @@ from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
 
 def _planner() -> ReexecutionPlanner:
     vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns={}))
-    return ReexecutionPlanner(vl, classifier=None, debug=False)
+    return ReexecutionPlanner(vl, classifier=None)
 
 
 def _entry(stmt, outputs=(), inputs=(), consumed=None, produced=None):

@@ -112,13 +112,11 @@ class NotebookSimulator:
         cash_instance: CashInstanceProtocol | None,
         tracking_state: TrackingState,
         compute_hash_fn: Callable[[Any], str] | None = None,
-        debug: bool = False,
         function_tracker: FunctionTracker | None = None,
     ) -> None:
         self.shell = shell
         self.cash_instance = cash_instance
         self.compute_hash_fn = compute_hash_fn
-        self.debug = debug
 
         # Shared state refs (same dicts as UpstreamChecker / StatementProcessor).
         self.set_tracking_state(tracking_state)
@@ -134,7 +132,6 @@ class NotebookSimulator:
             cash_instance=cash_instance,
             tracking_state=tracking_state,
             compute_hash_fn=compute_hash_fn,
-            debug=debug,
             function_tracker=function_tracker,
             cache=self.cache,
         )
@@ -144,7 +141,6 @@ class NotebookSimulator:
         self.classifier = MismatchClassifier(
             virtual_lineage=self.virtual_lineage,
             tracking_state=tracking_state,
-            debug=debug,
         )
 
         # Phase-3 planner. Routes into VL + Classifier for helpers that
@@ -152,7 +148,6 @@ class NotebookSimulator:
         self.planner = ReexecutionPlanner(
             virtual_lineage=self.virtual_lineage,
             classifier=self.classifier,
-            debug=debug,
         )
 
     def set_tracking_state(self, state: TrackingState) -> None:
@@ -275,7 +270,7 @@ class NotebookSimulator:
             restores.record_restore(var_name=name, lineage_hash=lineage_hash, value=user_ns[name])
             adopted.append(name)
         apply_collected_mutations(restores, self.tracking_state)
-        if adopted and self.debug:
+        if adopted and logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[UPSTREAM_DEBUG] Adopted simulated lineage for names bound before %%cash_on: %s", sorted(adopted)
             )
@@ -550,15 +545,14 @@ class NotebookSimulator:
             # chain) but the live value still carries the advanced lineage: the
             # recorded/live disagreement betrays the stale value directly.
             if live_lineage != recorded:
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM_DEBUG] '%s' has a stale in-memory value "
-                        "(recorded lineage %s but value lineage %s); marking broken "
-                        "so its input version is restored before the cell re-runs.",
-                        var_name,
-                        recorded[:8],
-                        live_lineage[:8],
-                    )
+                logger.debug(
+                    "[UPSTREAM_DEBUG] '%s' has a stale in-memory value "
+                    "(recorded lineage %s but value lineage %s); marking broken "
+                    "so its input version is restored before the cell re-runs.",
+                    var_name,
+                    recorded[:8],
+                    live_lineage[:8],
+                )
                 broken_vars.add(var_name)
                 continue
             # (b) Self-modifying single statement (``df = df.iloc[1:]``): the
@@ -576,15 +570,14 @@ class NotebookSimulator:
             # ``effects.reassigned``.
             base_input = self.executed_input_lineages.get(var_name, {}).get(var_name)
             if base_input is not None and live_lineage != base_input:
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM_DEBUG] '%s' holds its own prior output on re-run "
-                        "(value lineage %s but cell-entry base %s); marking broken "
-                        "so its base is restored before the cell re-runs.",
-                        var_name,
-                        live_lineage[:8],
-                        base_input[:8],
-                    )
+                logger.debug(
+                    "[UPSTREAM_DEBUG] '%s' holds its own prior output on re-run "
+                    "(value lineage %s but cell-entry base %s); marking broken "
+                    "so its base is restored before the cell re-runs.",
+                    var_name,
+                    live_lineage[:8],
+                    base_input[:8],
+                )
                 broken_vars.add(var_name)
 
     def _mark_consumed_unrestorable_inputs_broken(
@@ -670,7 +663,7 @@ class NotebookSimulator:
                 continue
             if not diverged:
                 continue
-            if self.debug:
+            if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
                     "[UPSTREAM_DEBUG] consumed unrestorable input '%s' (%s) is already "
                     "drained on re-run (cell-entry base %r but live %r); marking broken "
@@ -725,15 +718,14 @@ class NotebookSimulator:
         if base_lineage is not None:
             current_lineage = self.variable_lineage.get(var_name)
             if current_lineage is not None and current_lineage != base_lineage:
-                if self.debug:
-                    logger.debug(
-                        "[UPSTREAM_DEBUG] no-lineage self-write '%s' holds its own prior "
-                        "output on re-run (cell-entry base lineage %s but current %s); "
-                        "marking broken so its base is restored before the cell re-runs.",
-                        var_name,
-                        base_lineage[:8],
-                        current_lineage[:8],
-                    )
+                logger.debug(
+                    "[UPSTREAM_DEBUG] no-lineage self-write '%s' holds its own prior "
+                    "output on re-run (cell-entry base lineage %s but current %s); "
+                    "marking broken so its base is restored before the cell re-runs.",
+                    var_name,
+                    base_lineage[:8],
+                    current_lineage[:8],
+                )
                 broken_vars.add(var_name)
             return
 
@@ -750,15 +742,14 @@ class NotebookSimulator:
         except (TypeError, ValueError, AttributeError, RecursionError):
             return
         if live_content != base_content:
-            if self.debug:
-                logger.debug(
-                    "[UPSTREAM_DEBUG] no-lineage in-place mutation '%s' holds its own prior "
-                    "output on re-run (cell-entry base content %s but live %s); marking "
-                    "broken so its base is restored before the cell re-runs.",
-                    var_name,
-                    base_content[:8],
-                    live_content[:8],
-                )
+            logger.debug(
+                "[UPSTREAM_DEBUG] no-lineage in-place mutation '%s' holds its own prior "
+                "output on re-run (cell-entry base content %s but live %s); marking "
+                "broken so its base is restored before the cell re-runs.",
+                var_name,
+                base_content[:8],
+                live_content[:8],
+            )
             broken_vars.add(var_name)
 
     @staticmethod
