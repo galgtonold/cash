@@ -499,9 +499,9 @@ class Cash(
         # check -- overriding is rare, and every cached call pays for this.
         self._override_hashers: dict[type, tuple[Callable[[Any], str], str]] = {}
 
-        # Dedup keys for _warn_once: (category, func_name, arg_type_name).
+        # Dedup keys for _warn_once: (category, func_name, arg_type_name, code).
         # Guarded by _decorator_call_log_lock (already exists for thread safety).
-        self._warning_keys_seen: set[tuple[type[Warning], str, str]] = set()
+        self._warning_keys_seen: set[tuple[type[Warning], str, str, str]] = set()
 
         # Functions the STATIC pass already reported on. The runtime effect
         # observer stays quiet for these: it would be a second warning about

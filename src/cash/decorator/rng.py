@@ -509,7 +509,7 @@ class RngMixin:
         # `get_params()` that precedes it, and sklearn's `get_params` walks the
         # signature -- a per-hit cost on exactly the functions people cache to
         # avoid paying for a fit. Check the same key first and leave.
-        if (CashRandomnessWarning, func_name, "_estimator_result") in self._warning_keys_seen:
+        if (CashRandomnessWarning, func_name, "_estimator_result", "RANDOM-UNSEEDED") in self._warning_keys_seen:
             return
         get_params = getattr(result, "get_params", None)
         if get_params is None or not callable(get_params):
