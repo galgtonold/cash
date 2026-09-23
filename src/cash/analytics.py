@@ -21,7 +21,7 @@ import weakref
 from pathlib import Path
 from typing import Any
 
-from .config import per_user_cache_root
+from ._location import per_user_cache_root
 from .tracking.file_tracker import register_cache_dir
 
 logger = logging.getLogger(__name__)

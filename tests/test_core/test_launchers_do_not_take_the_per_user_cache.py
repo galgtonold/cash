@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from cash import config
+from cash import _location, config
 
 pytestmark = pytest.mark.core
 
@@ -46,14 +46,14 @@ def launched_as(monkeypatch):
         monkeypatch.setattr(sys, "argv", [str(exe)])
         # A console script's __main__ is the generated launcher: no user file.
         monkeypatch.setitem(sys.modules, "__main__", types.ModuleType("__main__"))
-        monkeypatch.setattr(config, "_interactive_shell_is_running", lambda: False)
+        monkeypatch.setattr(_location, "interactive_shell_is_running", lambda: False)
         monkeypatch.delenv("CASH_CACHE_DIR", raising=False)
 
     return _launch
 
 
 def _no_project_above(path: Path) -> bool:
-    return not any((d / m).exists() for d in [path, *path.parents] for m in config._PROJECT_MARKERS)
+    return not any((d / m).exists() for d in [path, *path.parents] for m in _location.PROJECT_MARKERS)
 
 
 def _config_cache_dir() -> str:
@@ -69,7 +69,7 @@ def test_cash_itself_never_takes_the_per_user_cache(launched_as, tmp_path, monke
     monkeypatch.chdir(tmp_path)
     launched_as("cash")
 
-    assert config._installed_entry_point_cache_dir() is None
+    assert _location.installed_entry_point_cache_dir() is None
     got = _config_cache_dir()
     assert "cash" + os.sep + "cash" not in got, got
     assert got == os.path.normpath(str(tmp_path / ".cash"))
@@ -87,8 +87,8 @@ def test_a_launcher_inside_a_project_anchors_to_the_project(launched_as, tmp_pat
     monkeypatch.chdir(project / "tests")
     launched_as("pytest")
 
-    assert config._installed_entry_point_cache_dir() is None
-    assert config.project_anchor() == project
+    assert _location.installed_entry_point_cache_dir() is None
+    assert _location.project_anchor() == project
     assert _config_cache_dir() == os.path.normpath(str(project / ".cash"))
 
 
@@ -108,7 +108,7 @@ def test_a_tool_run_from_nowhere_still_gets_its_per_user_cache(launched_as, tmp_
     if not _no_project_above(tmp_path):
         pytest.skip("a project marker above the temp dir decides this case")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(config, "per_user_cache_root", lambda: tmp_path / "peruser")
+    monkeypatch.setattr(_location, "per_user_cache_root", lambda: tmp_path / "peruser")
     launched_as("reportgen")
 
     assert _config_cache_dir() == str(tmp_path / "peruser" / "reportgen")
@@ -122,6 +122,6 @@ def test_a_repl_keeps_the_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(project / "sub")
     monkeypatch.setattr(sys, "argv", [""])
     monkeypatch.setitem(sys.modules, "__main__", types.ModuleType("__main__"))
-    monkeypatch.setattr(config, "_interactive_shell_is_running", lambda: False)
+    monkeypatch.setattr(_location, "interactive_shell_is_running", lambda: False)
 
-    assert config.project_anchor() == project / "sub"
+    assert _location.project_anchor() == project / "sub"

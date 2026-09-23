@@ -86,7 +86,7 @@ slow_square(1000)      # cache hit, from ./my_app_cache
 
 ### Where the cache lives
 
-<!-- claim: cash/config.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @1a437c21 -->
+<!-- claim: cash/_location.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @1a437c21 -->
 `.cash` sits next to **your project**, not next to whoever launched the job.
 Cash finds the running script, walks up to the first directory holding a
 `pyproject.toml`, `setup.py`, `setup.cfg` or `.git`, and puts the cache there —

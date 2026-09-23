@@ -223,7 +223,7 @@ def test_an_ipython_startup_script_does_not_become_the_anchor(tmp_path, monkeypa
     """
     import types
 
-    from cash import config as cash_config
+    from cash import _location as cash_config
 
     startup = tmp_path / ".ipython" / "profile_default" / "startup"
     startup.mkdir(parents=True)
@@ -250,7 +250,7 @@ def test_a_real_script_is_still_the_anchor_without_a_shell(tmp_path, monkeypatch
     """
     import types
 
-    from cash import config as cash_config
+    from cash import _location as cash_config
 
     project = tmp_path / "proj"
     (project / "scripts").mkdir(parents=True)

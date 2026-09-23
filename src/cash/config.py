@@ -31,9 +31,14 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
+from ._location import (
+    default_project_config_path,
+    default_user_config_path,
+    installed_entry_point_cache_dir,
+    project_anchor,
+)
 from .diagnostics import warn_diagnostic
 from .exceptions import CashCacheIneffectiveWarning
-from .install_paths import is_installed_path
 from .tracking.file_tracker import untracked
 
 logger = logging.getLogger(__name__)
@@ -768,405 +773,6 @@ def _load_env_config() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Path resolution for the two TOML sources
-# ---------------------------------------------------------------------------
-
-#: Files that mean "the project starts here".
-_PROJECT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg", ".git")
-
-
-def _interactive_shell_is_running() -> bool:
-    """True inside IPython, a Jupyter kernel, or anything else hosting one.
-
-    ``__main__.__file__`` cannot be trusted there. IPython SETS it, temporarily,
-    while it executes each of the profile's startup scripts -- so a kernel that
-    imports cash from a startup file resolves an anchor inside
-    ``~/.ipython/profile_default/startup`` and writes the session's cache there.
-    Measured exactly that: a notebook whose entries went to the profile
-    directory after a kernel restart, so nothing hit.
-
-    There is no "running script" in an interactive session anyway. The cwd is
-    the right answer, and it is the one a notebook has always had.
-    """
-    try:
-        from IPython import get_ipython  # type: ignore[import-not-found]
-    except ImportError:
-        return False
-    try:
-        return get_ipython() is not None
-    except Exception:  # noqa: BLE001 - a half-initialised IPython is not one
-        return False
-
-
-def _running_cash_cli() -> bool:
-    """Is ``__main__`` cash's own command line (``python -m cash``)?
-
-    It is a tool acting on the project you are standing in, wherever its
-    source lives. From an editable checkout it looked like a local script,
-    anchored to cash's own repository, and ``python -m cash clear --all`` run
-    inside another project cleared the cash checkout's cache instead.
-    """
-    spec = getattr(sys.modules.get("__main__"), "__spec__", None)
-    return getattr(spec, "name", None) == "cash.__main__"
-
-
-def _running_script_dir() -> Path | None:
-    """The directory of the script being run, or None if that is meaningless.
-
-    None for an interactive interpreter, a notebook, ``python -c``, and for any
-    ``__main__`` that lives inside the interpreter's own installation -- an
-    installed console entry point, ``python -m pytest``, the Jupyter kernel
-    launcher. Those all report a ``__file__`` somewhere under ``sys.prefix`` or
-    site-packages, and anchoring a user's cache inside their virtualenv because
-    they ran an installed tool would be a worse answer than the cwd.
-    """
-    if _interactive_shell_is_running() or _running_cash_cli():
-        return None
-    main = sys.modules.get("__main__")
-    raw = getattr(main, "__file__", None)
-    if not raw:
-        # A spawned multiprocessing worker has no ``__main__.__file__`` and no
-        # ``__spec__`` -- but it does inherit the parent's ``sys.argv[0]``.
-        # Without this the parent anchored to its project and every pool worker
-        # fell back to the cwd, so one run wrote into two cache directories and
-        # neither side could see the other's entries. A round-16 tester
-        # measured exactly that, 3/3, and it defeats the whole point of a
-        # shared cache across a fan-out.
-        #
-        # Only a real file counts, which is what keeps the interpreter's own
-        # invocations out: ``python -c`` leaves ``-c`` here, a REPL leaves the
-        # empty string, and an installed console script is filtered below like
-        # any other path inside the interpreter's installation.
-        raw = sys.argv[0] if sys.argv else None
-        if not raw or not str(raw).endswith(".py") or not os.path.isfile(raw):
-            return None
-    try:
-        path = Path(raw).resolve()
-    except OSError:
-        return None
-    if is_installed_path(path):
-        return None
-    return path.parent
-
-
-def _running_installed_module() -> bool:
-    """``python -m <module installed in site-packages>`` -- ``python -m pytest``."""
-    main = sys.modules.get("__main__")
-    if getattr(main, "__spec__", None) is None:
-        return False
-    if _running_cash_cli():
-        return True
-    raw = getattr(main, "__file__", None)
-    if not raw:
-        return False
-    try:
-        return is_installed_path(Path(raw).resolve())
-    except OSError:
-        return False
-
-
-def _running_installed_code() -> bool:
-    """Is the program itself installed code -- a console script or ``-m`` module?
-
-    Then the code being cached is the user's project code it runs, and the
-    project the user is standing in is the best anchor there is. Not true of a
-    notebook, a REPL or ``python -c``, which keep the cwd.
-    """
-    if _interactive_shell_is_running():
-        return False
-    return _running_console_script() is not None or _running_installed_module()
-
-
-#: The tables that make a ``pyproject.toml`` a project's. A ``tests/pyproject.toml``
-#: holding only ``[tool.ruff]`` made ``tests/`` a project of its own: a second,
-#: cold cache when pytest ran from there, and the repository's ``[tool.cash]``
-#: ignored (round 19).
-_PYPROJECT_PROJECT_TABLE = re.compile(
-    r"^\s*\[\[?\s*(project|build-system|tool\.cash|tool\.poetry)\s*[\].]", re.MULTILINE
-)
-
-
-def _marks_project(directory: Path, marker: str) -> bool:
-    path = directory / marker
-    if marker != "pyproject.toml":
-        return path.exists()
-    try:
-        return bool(_PYPROJECT_PROJECT_TABLE.search(path.read_text(encoding="utf-8-sig")))
-    except (OSError, UnicodeDecodeError):
-        return False
-
-
-def _project_root_above(start: Path) -> Path | None:
-    """The first directory at or above *start* holding a project marker.
-
-    A ``pyproject.toml`` counts when it describes a project -- ``[project]``,
-    ``[build-system]``, ``[tool.poetry]`` -- or configures cash; one that only
-    configures a linter does not.
-    """
-    for d in [start, *start.parents]:
-        try:
-            if any(_marks_project(d, marker) for marker in _PROJECT_MARKERS):
-                return d
-        except OSError:
-            continue
-    return None
-
-
-def _cwd_project_root() -> Path | None:
-    """The first directory at or above the cwd holding a project marker."""
-    try:
-        here = Path.cwd()
-    except OSError:
-        return None
-    return _project_root_above(here)
-
-
-def _running_pytest() -> bool:
-    """Is this a pytest process -- the one that was typed, or an xdist worker?
-
-    A worker is started as ``python -c``, so nothing in its ``argv`` or
-    ``__main__`` says pytest; the variable xdist sets for it does, together
-    with that ``-c``. ``pytest`` must also be imported, which keeps out a
-    plain subprocess that merely inherited the variable from a test; and an
-    interactive shell is never pytest, whatever it has imported.
-    """
-    if "pytest" not in sys.modules or _interactive_shell_is_running():
-        return False
-    argv0 = sys.argv[0] if sys.argv else ""
-    if argv0 == "-c" and os.environ.get("PYTEST_XDIST_WORKER"):
-        return True
-    if _running_console_script() in ("pytest", "py.test"):
-        return True
-    spec = getattr(sys.modules.get("__main__"), "__spec__", None)
-    return getattr(spec, "name", None) in ("pytest", "pytest.__main__")
-
-
-def _calling_code_project_root() -> Path | None:
-    """The project of the nearest code on the stack that is neither cash's nor
-    installed -- under pytest, the test module being collected or run."""
-    own = Path(__file__).resolve().parent
-    frame = sys._getframe(1)
-    while frame is not None:
-        name = frame.f_code.co_filename
-        frame = frame.f_back
-        if not name or name.startswith("<"):
-            continue
-        try:
-            path = Path(name).resolve()
-            if path.is_relative_to(own) or is_installed_path(path):
-                continue
-        except (OSError, ValueError):
-            continue
-        root = _project_root_above(path.parent)
-        if root is not None:
-            return root
-    return None
-
-
-def _invocation_project_root() -> Path | None:
-    """The project an installed program -- pytest above all -- is working on.
-
-    The one the cwd is in. Failing that, under pytest, the one the tests
-    belong to: ``pytest proj/tests`` typed from the directory above used to
-    find no project, so it cached per user under ``…/cash/pytest`` and never
-    read ``proj/pyproject.toml``, while ``python -m pytest`` from the same
-    place cached in ``./.cash`` -- two caches and two configs for one command
-    (round 18).
-
-    Only a project BELOW the cwd: a test that changes into a scratch
-    directory keeps the scratch directory, as it always has.
-    """
-    root = _cwd_project_root()
-    if root is None and _running_pytest():
-        below = _calling_code_project_root()
-        try:
-            if below is not None and below.is_relative_to(Path.cwd().resolve()):
-                root = below
-        except (OSError, ValueError):
-            pass
-    return root
-
-
-def project_anchor() -> Path:
-    """The directory cash treats as "here" -- for the DEFAULT cache location
-    and for finding ``pyproject.toml``.
-
-    Both used to be resolved from ``os.getcwd()``, which made the cache a
-    property of where you were standing rather than of what you were running.
-    Run the same script from a different directory -- a cron job, a CI step, a
-    colleague -- and the entire cache was silently discarded and a second one
-    built: measured at ``6 of 6 restored`` dropping to ``0 of 6``, a fresh 232MB
-    ``.cash``, no warning, indistinguishable from a cold run. Three separate
-    round-15 projects hit it, one of them writing a ``.cash`` at the drive root
-    because the cwd
-    happened to be the drive root. The documented escape hatch --
-    ``[tool.cash] cache_dir`` in ``pyproject.toml`` -- was found the same broken
-    way, so it did not work in exactly the case that needed it.
-
-    The anchor walks up from the RUNNING SCRIPT to its project root, so
-    ``python /srv/etl/run.py`` uses the same cache from anywhere on the machine.
-    Without a script (a notebook, a REPL) or without a project marker above it,
-    the answer is the cwd or the script's own directory respectively -- both
-    stable for the case they describe.
-
-    When the program itself is INSTALLED code -- ``pytest``, ``cash``, a
-    ``python -m`` module in site-packages -- there is no script of the user's to
-    anchor to, but there is usually a project the user is standing in, and the
-    code being cached is that project's. So it walks up from the cwd instead.
-    That puts a test suite's cache beside its project whichever way ``pytest``
-    was typed and from whichever subdirectory, where round 17 found one
-    per-user cache shared by every project on the machine.
-    """
-    start = _running_script_dir()
-    if start is None:
-        # An xdist worker is ``python -c``, not installed code, and anchored
-        # to the cwd while the pytest that started it anchored to the project:
-        # one run, two caches.
-        if _running_installed_code() or _running_pytest():
-            root = _invocation_project_root()
-            if root is not None:
-                return root
-        return Path.cwd()
-    return _project_root_above(start) or start
-
-
-def _running_console_script() -> str | None:
-    """The name of the installed entry point being run, if that is what this is.
-
-    A ``[project.scripts]`` console script lives in the interpreter's own
-    ``bin`` / ``Scripts`` directory, so it has no project to anchor to and
-    ``_running_script_dir`` correctly returns None for it -- leaving it on the
-    cwd, which means a `pip install`ed tool drops a fresh ``.cash`` in every
-    directory you happen to run it from, and never reuses one. A round-16
-    tester reported that as blocking.
-
-    Detected from ``sys.argv[0]`` rather than from the absence of an anchor,
-    because that absence also covers a notebook, a REPL and ``python -c``,
-    where the cwd is the right answer and always was.
-
-    Deliberately NOT ``python -m tool``: its ``argv[0]`` is a module path
-    inside site-packages, so it looks similar, but the invocation is a
-    developer standing in a project far more often than it is an installed
-    tool -- ``python -m pytest`` most of all. That shape keeps today's
-    behaviour.
-
-    Generic on purpose: it names ANY launcher in the script directory,
-    ``pytest`` and ``cash`` included. Deciding what that means is
-    ``_installed_entry_point_cache_dir``'s job.
-    """
-    argv0 = sys.argv[0] if sys.argv else None
-    if not argv0:
-        return None
-    try:
-        path = Path(argv0).resolve()
-    except OSError:
-        return None
-    script_dirs = {Path(sys.prefix) / d for d in ("bin", "Scripts")}
-    script_dirs |= {Path(sys.base_prefix) / d for d in ("bin", "Scripts")}
-    if path.parent not in script_dirs:
-        return None
-    name = re.sub(r"[^A-Za-z0-9._-]", "-", path.stem).strip("-.")
-    return name or None
-
-
-def _running_installed_module_name() -> str | None:
-    """The top-level package of ``python -m <installed module>``, or None.
-
-    The same tool as its console script, launched the other way: cron's
-    ``python -m nightly`` from whatever directory cron picked cached in
-    ``<that directory>/.cash``, a fresh one for every place it was started
-    from, while ``nightly`` itself used the per-user cache (round 19). Inside
-    a project it anchors to the project like any installed code; this name is
-    only asked for outside one.
-    """
-    if _interactive_shell_is_running() or not _running_installed_module():
-        return None
-    spec = getattr(sys.modules.get("__main__"), "__spec__", None)
-    top = (getattr(spec, "name", "") or "").split(".", 1)[0]
-    name = re.sub(r"[^A-Za-z0-9._-]", "-", top).strip("-.")
-    return name or None
-
-
-def per_user_cache_root() -> Path:
-    """The platform's own place for caches, where a cache survives ``cd``."""
-    if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA")  # not APPDATA: caches do not roam
-        if base:
-            return Path(base) / "cash"
-        return Path.home() / "AppData" / "Local" / "cash"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "cash"
-    xdg = os.environ.get("XDG_CACHE_HOME")
-    if xdg:
-        return Path(xdg) / "cash"
-    return Path.home() / ".cache" / "cash"
-
-
-def _installed_entry_point_cache_dir() -> Path | None:
-    """Where an installed console script should cache, or None if not one.
-
-    Per tool, under the platform cache root, so two installed tools do not
-    share one directory and neither inherits the other's eviction pressure.
-
-    Only reached when nothing else claimed ``cache_dir``: an explicit setting
-    of any kind wins, and so does a project ``pyproject.toml`` found by walking
-    up from the cwd -- which is how a tool run inside a project that declares
-    ``[tool.cash] cache_dir`` still caches beside that project's code. The
-    per-user location is the answer for "nothing here claims this run", not a
-    blanket override.
-
-    Two refinements from round 17, where every tester hit the first:
-
-    * **Never for ``cash`` itself.** cash's own CLI is an installed console
-      script too, so it resolved a per-user ``…/cash/cash`` that nothing writes
-      to -- ``cash inspect`` found nothing and ``cash clear --all`` "succeeded"
-      while the real cache kept serving. The CLI resolves like the context it
-      is run in; ``--tool NAME`` reaches an installed tool's cache.
-    * **Not inside a project.** ``pytest`` is a console script as well, and
-      took every project's test suite into one shared per-user cache. Any
-      launcher run inside a project anchors to that project instead (see
-      ``project_anchor``); the per-user location is for a tool run from
-      somewhere no project claims -- a home directory, a scratch directory, a
-      drive root.
-    """
-    name = _running_console_script() or _running_installed_module_name()
-    if name is None or name.lower() == "cash":
-        return None
-    if _invocation_project_root() is not None:
-        return None
-    try:
-        return per_user_cache_root() / name
-    except (OSError, RuntimeError):  # no home directory to speak of
-        return None
-
-
-def _default_project_config_path() -> Path | None:
-    """Walk upward from the project anchor to find a ``pyproject.toml``.
-
-    The first directory containing one wins. None if we never find one (a
-    standalone script with no project structure).
-    """
-    anchor = project_anchor()
-    for d in [anchor, *anchor.parents]:
-        candidate = d / "pyproject.toml"
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def _default_user_config_path() -> Path:
-    """The XDG-spec user config location."""
-    if os.name == "nt":
-        appdata = os.environ.get("APPDATA")
-        if appdata:
-            return Path(appdata) / "cash" / "config.toml"
-    xdg = os.environ.get("XDG_CONFIG_HOME")
-    if xdg:
-        return Path(xdg) / "cash" / "config.toml"
-    return Path.home() / ".config" / "cash" / "config.toml"
-
-
-# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -1287,7 +893,7 @@ def _resolve_config(
 
     # Layer 2: user TOML
     if user_config_path is _USE_DEFAULT_PATH:
-        user_path = _default_user_config_path()
+        user_path = default_user_config_path()
     else:
         user_path = user_config_path
     if user_path is not None:
@@ -1301,7 +907,7 @@ def _resolve_config(
 
     # Layer 3: project TOML
     if project_config_path is _USE_DEFAULT_PATH:
-        project_path = _default_project_config_path()
+        project_path = default_project_config_path()
     else:
         project_path = project_config_path
     if project_path is not None:
@@ -1363,7 +969,7 @@ def _resolve_config(
             cache_dir_was_configured = True
 
     if not cache_dir_was_configured:
-        installed = _installed_entry_point_cache_dir()
+        installed = installed_entry_point_cache_dir()
         if installed is not None:
             merged["cache_dir"] = str(installed)
             cache_dir_origin = _CALLER_RELATIVE  # already absolute
@@ -1648,7 +1254,7 @@ def create_default_config(path: str | None = None, *, force: bool = False) -> st
 
     Raises ``FileExistsError`` if the file exists, unless ``force=True``.
     """
-    out_path = Path(path) if path is not None else _default_user_config_path()
+    out_path = Path(path) if path is not None else default_user_config_path()
     if out_path.exists() and not force:
         raise FileExistsError(f"{out_path} already exists; pass force=True to overwrite it")
     out_path.parent.mkdir(parents=True, exist_ok=True)

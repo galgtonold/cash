@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cash import __version__
+from cash._location import per_user_cache_root
 from cash.backends.adaptive_caps import adaptive_disk_cap_for, human_bytes, resolve_ram_cap
 from cash.backends.entry_format import ENTRY_SUFFIX, read_entry
 from cash.backends.persistence_policy import PersistencePolicy
@@ -26,7 +27,6 @@ from cash.config import (
     config_provenance,
     format_size,
     get_config,
-    per_user_cache_root,
 )
 
 logger = logging.getLogger(__name__)

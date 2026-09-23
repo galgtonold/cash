@@ -20,7 +20,7 @@ most convenient — explicit code for one-off scripts, `pyproject.toml`
 for team defaults, env vars for deployment overrides, the XDG file for
 personal cross-project defaults.
 
-<!-- claim: cash/config.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @1a437c21 -->
+<!-- claim: cash/_location.py:project_anchor @5074ba29, cash/config.py:_anchor_cache_dir @1a437c21 -->
 ### What paths are relative to
 
 Where a relative `cache_dir` points depends on who wrote it, and the rule is
@@ -302,7 +302,7 @@ type = "redis"
 host = "redis.internal"
 ```
 
-<!-- claim: cash/config.py:_default_user_config_path @c0252c47, cash/config.py:_default_project_config_path @1c9825c3 -->
+<!-- claim: cash/_location.py:default_user_config_path @5fbd345e, cash/_location.py:default_project_config_path @e3dafbf2 -->
 ### `~/.config/cash/config.toml` (user, machine-private)
 
 For personal defaults spanning all projects on a machine — e.g. your
@@ -342,7 +342,7 @@ additionally overridable element-by-element with `CASH_TIER_<N>_<FIELD>`.
 cash = Cash(config_path="./my_special_config.toml")
 ```
 
-<!-- claim: cash/config.py:_resolve_config @09078c9a -->
+<!-- claim: cash/config.py:_resolve_config @41bfeaba -->
 Loads the named TOML above the user and project files — a file named in code
 outranks the `pyproject.toml` found by walking up from wherever the process
 started — and below environment variables and constructor kwargs. That is how
@@ -356,7 +356,7 @@ anywhere else are not read, and cash says so. A relative `cache_dir` in it is re
 own directory, and a leading `~` is your home directory — so a tool that wants
 its cache outside site-packages writes `cache_dir = "~/.cache/mytool"`.
 
-<!-- claim: cash/config.py:_resolve_config @09078c9a -->
+<!-- claim: cash/config.py:_resolve_config @41bfeaba -->
 A path that does not exist is not silently skipped: cash warns
 [`CONFIG-FILE-MISSING`](../warnings.md#config-file-missing) and runs on the
 other layers. The usual cause is a wheel that did not include the file — list
@@ -370,7 +370,7 @@ cash info --config path/to/cash.toml
 On Python 3.10, reading any TOML file needs `tomli`; install
 `cash-lib[toml]` (or `[all]`) to get it.
 
-<!-- claim: cash/config.py:_marks_project @2991b315 -->
+<!-- claim: cash/_location.py:_marks_project @2991b315 -->
 A `pyproject.toml` marks a project only when it has a `[project]`,
 `[build-system]`, `[tool.poetry]` or `[tool.cash]` table. One that only
 configures a tool — a `tests/pyproject.toml` holding `[tool.ruff]` — does not,
