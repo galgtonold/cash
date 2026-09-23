@@ -10,7 +10,8 @@ re-run, so caching cannot hide it.
 """
 
 import pytest
-from conftest import CASH_TEST_PIN_THRESHOLDS
+
+from tests._nbharness.runner import CASH_TEST_PIN_THRESHOLDS
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 

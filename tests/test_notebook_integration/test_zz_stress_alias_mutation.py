@@ -21,7 +21,6 @@ import pathlib
 import shutil
 
 import pytest
-from conftest import NotebookTestRunner
 from test_eda_mutation_reconstruction import (
     _oracle,
     scen_alias_downstream_consumer,
@@ -30,6 +29,8 @@ from test_eda_mutation_reconstruction import (
     scen_multihop_inplace_reconstruction,
     scen_mutate_upstream_recompute,
 )
+
+from tests._nbharness.runner import NotebookTestRunner
 
 pytestmark = [pytest.mark.libraries, pytest.mark.stress]
 

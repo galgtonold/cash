@@ -27,7 +27,8 @@ and failed with that draft.
 """
 
 import pytest
-from conftest import shows_cached
+
+from tests._nbharness.badge import shows_cached
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 

@@ -14,7 +14,8 @@ the harness is wrong, not cash.
 from __future__ import annotations
 
 import numpy as np
-from replay_harness import Edit, scenarios_from
+
+from tests._nbharness.replay_harness import Edit, scenarios_from
 
 SETUP = "import cash\n%cash_on\n"
 

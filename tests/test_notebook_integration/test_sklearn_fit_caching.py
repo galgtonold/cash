@@ -24,7 +24,8 @@ one-repetition test came to confirm the wrong belief.
 """
 
 import pytest
-from conftest import shows_cached
+
+from tests._nbharness.badge import shows_cached
 
 pytest.importorskip("sklearn")
 

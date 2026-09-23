@@ -36,7 +36,8 @@ an entry, so it would always recompute and the test could not observe a leak.
 """
 
 import pytest
-from conftest import shows_cached, shows_executed
+
+from tests._nbharness.badge import shows_cached, shows_executed
 
 pytestmark = pytest.mark.upstream
 

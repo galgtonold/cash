@@ -40,7 +40,7 @@ UNRELATED = "unrelated = 1\n"
 # only pushes a measurement UP, so raising the ceiling cannot manufacture a
 # split that the policy would refuse on an idle machine.
 #
-# Deliberately NOT conftest's CASH_TEST_PIN_THRESHOLDS, which also zeroes
+# Deliberately NOT the harness's CASH_TEST_PIN_THRESHOLDS, which also zeroes
 # call_cost_floor_seconds. This loop's premise is that per-call caching does
 # NOT cover it (each call sits under the floor, so nothing is stored per
 # call); zero that floor and every call caches individually, the rerun

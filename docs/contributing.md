@@ -101,6 +101,7 @@ What it covers and what it doesn't is documented under
 - `tests/test_tooling/` — CI workflows, test selection, repository hygiene and the test harness
 - `tests/test_notebook_integration/` — Integration tests (real notebooks and kernels)
 - `tests/test_wheel_gate/` — Installs the built wheel in a fresh venv and drives a real kernel (skipped unless switched on; see that file)
+- `tests/_nbharness/` — The kernel runner and helpers the integration tests use
 - `tests/docs/` — Executes the documentation's examples and checks its claims
 - `benchmarks/tests/` — Tests for the benchmark tooling, run separately with
   `pytest benchmarks/tests`
@@ -188,6 +189,10 @@ def test_feature(nb_runner):
     nb_runner.run_all()
     assert "Result: 20" in nb_runner.get_output(3)
 ```
+
+The fixture is a `NotebookTestRunner` from the `tests/_nbharness/` package,
+which also holds the helpers tests import, such as
+`from tests._nbharness.badge import shows_cached`.
 
 ### Test Isolation
 

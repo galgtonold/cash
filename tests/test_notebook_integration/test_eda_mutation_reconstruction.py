@@ -22,7 +22,8 @@ Run isolated:
 """
 
 import pytest
-from conftest import NotebookTestRunner
+
+from tests._nbharness.runner import NotebookTestRunner
 
 pytestmark = pytest.mark.libraries
 

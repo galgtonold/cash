@@ -36,7 +36,18 @@ calls, so what is cached in the original notebook is cached here too.
 from __future__ import annotations
 
 import numpy as np
-from session_harness import AddFile, ClearDir, Edit, ReplaceFile, Restart, RestartAndRunAll, Run, RunAll, Session
+
+from tests._nbharness.session_harness import (
+    AddFile,
+    ClearDir,
+    Edit,
+    ReplaceFile,
+    Restart,
+    RestartAndRunAll,
+    Run,
+    RunAll,
+    Session,
+)
 
 SETUP = "import cash\n%cash_on"
 

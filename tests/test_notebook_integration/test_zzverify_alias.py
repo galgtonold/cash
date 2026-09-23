@@ -35,7 +35,7 @@ each rep with the bind cell's state so the two never get conflated.
 
 import pytest
 
-from tests.test_notebook_integration.conftest import NotebookTestRunner
+from tests._nbharness.runner import NotebookTestRunner
 
 pytestmark = [pytest.mark.upstream, pytest.mark.timeout(600)]
 

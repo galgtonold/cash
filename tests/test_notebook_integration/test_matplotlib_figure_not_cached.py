@@ -14,7 +14,8 @@ reward.  These tests pin the user-visible contract, not the implementation.
 """
 
 import pytest
-from conftest import shows_cached
+
+from tests._nbharness.badge import shows_cached
 
 pytest.importorskip("matplotlib")
 

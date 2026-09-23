@@ -33,14 +33,7 @@ import re
 
 import pytest
 
-# Mirrors conftest's CASH_TEST_PIN_THRESHOLDS. Inlined rather than imported:
-# nothing else imports it, and a relative import does not resolve here.
-PIN_THRESHOLDS = (
-    "cash.configure(call_cost_floor_seconds=0.0, "
-    "min_execution_time_to_cache_seconds=0.0, "
-    "loop_split_max_iter_seconds=1.0, "
-    "loop_split_min_remaining_seconds=0.0)\n"
-)
+from tests._nbharness.runner import CASH_TEST_PIN_THRESHOLDS
 
 #: The expensive upstream statement. Real work rather than a sleep, and the
 #: ASSIGNMENT itself is what costs -- so restoring the variable is what saves
@@ -60,7 +53,7 @@ def _upstream_rows(output: str) -> list[str]:
 def _upstream_cached(output: str) -> bool:
     """True when at least one upstream row was restored.
 
-    Strips ``NOT CACHED`` first, for the reason ``conftest.shows_cached`` gives:
+    Strips ``NOT CACHED`` first, for the reason ``tests._nbharness.badge.shows_cached`` gives:
     it contains ``CACHED`` and would otherwise read as a hit on a row that was
     never cached at all.
     """
@@ -70,7 +63,7 @@ def _upstream_cached(output: str) -> bool:
 def _build(nb_runner):
     nb_runner.create_notebook(
         [
-            "import cash\n%load_ext cash\n%cash_badge print\n" + PIN_THRESHOLDS + "%cash_on",
+            "import cash\n%load_ext cash\n%cash_badge print\n" + CASH_TEST_PIN_THRESHOLDS + "%cash_on",
             "# @cash:persist\nroot = 2",
             "# @cash:persist\n" + EXPENSIVE,
             "# @cash:persist\nleaf = mid + 1\nprint('leaf =', leaf)",

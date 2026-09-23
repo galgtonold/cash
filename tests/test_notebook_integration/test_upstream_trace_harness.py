@@ -1,4 +1,4 @@
-"""Validates the `upstream_trace` debugging harness (conftest) + cash.notebook._trace.
+"""Validates the `upstream_trace` debugging harness (tests/_nbharness/trace.py) + cash.notebook._trace.
 
 The simulation engine runs in the kernel subprocess and not all of its module
 loggers are surfaced through IOPub, so we trace decisions to a file the kernel

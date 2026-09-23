@@ -22,7 +22,8 @@ a valid cell must still cache (the ``control`` test pins that).
 """
 
 import pytest
-from conftest import shows_cached
+
+from tests._nbharness.badge import shows_cached
 
 pytestmark = [pytest.mark.upstream, pytest.mark.timeout(240)]
 

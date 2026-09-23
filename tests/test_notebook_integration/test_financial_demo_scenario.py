@@ -6,7 +6,7 @@ This mimics the financial_analysis_demo.ipynb structure exactly.
 
 import pytest
 
-from tests.test_notebook_integration.conftest import REFERENCE_NOTEBOOKS_DIR
+from tests._nbharness.runner import REFERENCE_NOTEBOOKS_DIR
 
 pytestmark = [pytest.mark.core, pytest.mark.loops]
 

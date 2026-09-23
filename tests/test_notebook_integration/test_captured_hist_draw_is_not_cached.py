@@ -17,7 +17,8 @@ so a genuine pure capture (``m = df.corr()``, DataFrame receiver) still caches.
 """
 
 import pytest
-from conftest import shows_cached
+
+from tests._nbharness.badge import shows_cached
 
 pytest.importorskip("matplotlib")
 

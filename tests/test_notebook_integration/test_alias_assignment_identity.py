@@ -31,7 +31,7 @@ test here into one that passes while proving nothing:
 
 import pytest
 
-from tests.test_notebook_integration.conftest import NotebookTestRunner
+from tests._nbharness.runner import NotebookTestRunner
 
 pytestmark = [pytest.mark.upstream, pytest.mark.timeout(300)]
 

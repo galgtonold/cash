@@ -22,6 +22,7 @@ Read these instead of relying on this file for details:
 - `docs/architecture_decisions.md`: the ADRs (not published on the docs site).
 - `pyproject.toml` (`[tool.pytest.ini_options]`) and `tests/conftest.py`,
   `tests/test_notebook_integration/conftest.py`: test settings, markers and fixtures.
+  The kernel runner behind the integration fixtures is the `tests/_nbharness/` package.
 
 ## Commit messages
 
@@ -123,8 +124,10 @@ statement's occurrence index in the cell.
 - Integration tests (`tests/test_notebook_integration/`) use `nb_runner`, which
   drives a real kernel over a real `.ipynb`: `create_notebook`, `load`,
   `start_kernel`, `run_all` / `run_cells` (1-based), `set_cell_source`,
-  `get_output`, `peek`. Assert on `get_output(n)` for what the user sees and on
-  `nb_runner.peek(expr)` for kernel state: a cache hit replays stdout, so printed
+  `get_output`, `peek` (`tests/_nbharness/runner.py`). Import helpers such as
+  `shows_cached` from `tests._nbharness`, never from a conftest. Assert on
+  `get_output(n)` for what the user sees and on `nb_runner.peek(expr)` for
+  kernel state: a cache hit replays stdout, so printed
   output can describe the value from when the entry was written.
 - Do not count executions of a cached callee with a counter it writes itself; the
   write is restored on a hit. Use `os.open`/`os.write` (not `builtins.open`, which

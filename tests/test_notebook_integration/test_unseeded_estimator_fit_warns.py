@@ -26,7 +26,8 @@ at every ``.fit()`` it sees.
 """
 
 import pytest
-from conftest import shows_cached
+
+from tests._nbharness.badge import shows_cached
 
 pytest.importorskip("sklearn")
 

@@ -14,7 +14,7 @@ rots into a no-op unnoticed. These tests drive the comparison directly.
 import os
 import sys
 
-from conftest import kernelspec_mismatch
+from tests._nbharness.kernels import kernelspec_mismatch
 
 
 def test_matching_interpreter_is_accepted():

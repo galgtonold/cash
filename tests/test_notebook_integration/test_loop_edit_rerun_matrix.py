@@ -177,7 +177,7 @@ SETUP_OFF = "import cash\nimport time"
 # break-even is not stored individually" -- not the 3ms number, so pinning the
 # threshold keeps what is under test and drops what is not: how busy the box is.
 #
-# conftest's CASH_TEST_PIN_THRESHOLDS cannot serve here: it pins the floor to
+# The harness's CASH_TEST_PIN_THRESHOLDS cannot serve here: it pins the floor to
 # 0.0 so every call clears it, the exact opposite of this test's premise.
 #
 # Measured: with the real 3ms floor the test failed 2/2 in isolation on a loaded

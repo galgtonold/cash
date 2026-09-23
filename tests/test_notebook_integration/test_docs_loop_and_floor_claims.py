@@ -20,7 +20,8 @@ Counted, never timed.
 """
 
 import pytest
-from conftest import shows_cached, shows_executed
+
+from tests._nbharness.badge import shows_cached, shows_executed
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
 

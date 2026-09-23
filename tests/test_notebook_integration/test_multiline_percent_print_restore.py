@@ -19,7 +19,8 @@ variant is a control that does byte-identical work and must also restore.
 """
 
 import pytest
-from conftest import shows_cached
+
+from tests._nbharness.badge import shows_cached
 
 pytestmark = [pytest.mark.upstream, pytest.mark.timeout(120)]
 

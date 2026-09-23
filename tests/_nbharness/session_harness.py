@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Union
 
-from replay_harness import _calls, _cell_stdout, _snapshot, _strip_cash
+from tests._nbharness.replay_harness import _calls, _cell_stdout, _snapshot, _strip_cash
 
 Content = Union[str, bytes]
 _ORACLE = Path(__file__).with_name("session_oracle.py")

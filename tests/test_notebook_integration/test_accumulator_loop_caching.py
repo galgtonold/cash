@@ -60,7 +60,8 @@ for an unrelated reason ("Input variable missing lineage").
 """
 
 import pytest
-from conftest import shows_cached
+
+from tests._nbharness.badge import shows_cached
 
 pytestmark = [pytest.mark.loops, pytest.mark.mutations, pytest.mark.timeout(120)]
 

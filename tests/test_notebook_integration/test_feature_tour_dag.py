@@ -49,7 +49,9 @@ Asserted on cache STATE per node, never on wall clock.
 """
 
 import pytest
-from conftest import CASH_TEST_PIN_THRESHOLDS, shows_cached, shows_executed
+
+from tests._nbharness.badge import shows_cached, shows_executed
+from tests._nbharness.runner import CASH_TEST_PIN_THRESHOLDS
 
 pytestmark = pytest.mark.timeout(180)
 

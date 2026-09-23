@@ -67,15 +67,13 @@ def _wrap(cls, name: str) -> None:
 
 
 def pytest_collection_finish(session):
-    # Find the runner class on the conftest pytest actually loaded; importing
-    # it by dotted name could produce a second copy of the module.
-    for plugin in session.config.pluginmanager.get_plugins():
-        runner_cls = getattr(plugin, "NotebookTestRunner", None)
-        if runner_cls is None or getattr(runner_cls, "_covctx_wrapped", False):
-            continue
-        _wrap(runner_cls, "start_kernel")
-        _wrap(runner_cls, "restart")
-        runner_cls._covctx_wrapped = True
+    from tests._nbharness.runner import NotebookTestRunner as runner_cls
+
+    if getattr(runner_cls, "_covctx_wrapped", False):
+        return
+    _wrap(runner_cls, "start_kernel")
+    _wrap(runner_cls, "restart")
+    runner_cls._covctx_wrapped = True
 
 
 def pytest_runtest_setup(item):

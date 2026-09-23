@@ -14,9 +14,9 @@ import pytest
 pytest.importorskip("matplotlib")
 pytest.importorskip("sklearn")
 
-from session_harness import Player  # noqa: E402
-from sessions_r22 import SESSIONS as R22  # noqa: E402
-from sessions_r24 import SESSIONS as R24  # noqa: E402
+from tests._nbharness.session_harness import Player  # noqa: E402
+from tests._nbharness.sessions_r22 import SESSIONS as R22  # noqa: E402
+from tests._nbharness.sessions_r24 import SESSIONS as R24  # noqa: E402
 
 SESSIONS = R22 + R24
 
