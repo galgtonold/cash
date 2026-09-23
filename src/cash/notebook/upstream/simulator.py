@@ -25,6 +25,7 @@ from typing import Any
 
 from cash.control_markers import strip_markers
 
+from ...analysis.ast_util import resolve_callee
 from ...analysis.cacheability import (
     analyze_statement,
     consumed_input_names,
@@ -1306,29 +1307,6 @@ _PURE_PATH_FUNCS = frozenset(
 )
 
 
-def _resolve_callee(func: ast.expr, user_ns: dict) -> Any:
-    """The object *func* names in *user_ns*, or ``None`` if not a plain path."""
-
-    parts: list[str] = []
-    while isinstance(func, ast.Attribute):
-        parts.append(func.attr)
-        func = func.value
-    if not isinstance(func, ast.Name):
-        return None
-    if func.id in user_ns:
-        obj = user_ns[func.id]
-    elif hasattr(builtins, func.id):
-        obj = getattr(builtins, func.id)
-    else:
-        return None
-    for attr in reversed(parts):
-        try:
-            obj = getattr(obj, attr)
-        except AttributeError:
-            return None
-    return obj
-
-
 def _binds_without_reading(code: str, user_ns: dict) -> bool:
     """True when *code* provably reads nothing outside the notebook.
 
@@ -1348,7 +1326,7 @@ def _binds_without_reading(code: str, user_ns: dict) -> bool:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        callee = _resolve_callee(node.func, user_ns)
+        callee = resolve_callee(node.func, user_ns, builtins_fallback=True)
         if callee is None:
             return False
         if isinstance(callee, type):

@@ -26,6 +26,7 @@ from typing import Any
 from ..effects import Action, EffectKind, classify_call, is_open_write_mode, writes_to_console
 from ..install_paths import installed_roots, normcase_path
 from ..purity import is_pure
+from .ast_util import resolve_callee
 
 __all__ = [
     # Primary API
@@ -573,27 +574,9 @@ def statement_calls_user_writer(
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        found = user_callee_writing_files(_resolve_callee(node.func, namespace))
+        found = user_callee_writing_files(resolve_callee(node.func, namespace))
         if found:
             return found
-    return None
-
-
-def _resolve_callee(func: "ast.expr", namespace: "Mapping[str, Any]") -> Any:
-    """The object a call's callee expression names, or None.
-
-    ``ast.Name`` resolves in *namespace*; ``ast.Attribute`` resolves its base
-    the same way and then reads the attribute, but ONLY when the base is a
-    module -- see :func:`statement_calls_user_writer` on why an arbitrary
-    object is not followed. Anything else (a subscript, a call, a literal)
-    yields None, because there is no name to look up without evaluating it.
-    """
-    if isinstance(func, ast.Name):
-        return namespace.get(func.id)
-    if isinstance(func, ast.Attribute):
-        base = _resolve_callee(func.value, namespace)
-        if isinstance(base, types.ModuleType):
-            return getattr(base, func.attr, None)
     return None
 
 

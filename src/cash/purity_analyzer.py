@@ -55,6 +55,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ._annotation_refs import annotation_referents
+from .analysis.ast_util import resolve_callee
 from .analysis.cacheability import (
     PANDAS_INPLACE_METHODS,
     get_base_name,
@@ -1252,37 +1253,6 @@ def _is_user_code(callee: Any, root_module: str | None) -> bool:
         return False
 
 
-def _resolve_callee(node: ast.AST, namespace: dict[str, Any]) -> Any | None:
-    """Resolve a ``Call`` node's function expression to a callable.
-
-    Handles bare names (``foo``) and dotted attribute chains
-    (``mod.sub.func``) by walking *namespace* - a merged view of
-    the caller's ``__globals__`` and any closure cells produced by
-    :func:`_build_namespace`. Returns ``None`` for any expression
-    we can't reduce statically (subscript, higher-order calls,
-    conditionals).
-    """
-    if isinstance(node, ast.Name):
-        return namespace.get(node.id)
-    if isinstance(node, ast.Attribute):
-        parts: list[str] = [node.attr]
-        cur: ast.AST = node.value
-        while isinstance(cur, ast.Attribute):
-            parts.append(cur.attr)
-            cur = cur.value
-        if not isinstance(cur, ast.Name):
-            return None
-        obj: Any = namespace.get(cur.id)
-        if obj is None:
-            return None
-        for attr in reversed(parts):
-            obj = getattr(obj, attr, None)
-            if obj is None:
-                return None
-        return obj
-    return None
-
-
 def local_import_map(func_def: ast.AST, func: Any) -> dict[str, tuple[str, tuple[str, ...]]]:
     """``local name -> (module, attribute prefix)`` for imports in a function body.
 
@@ -1607,7 +1577,7 @@ def _resolve_in_class_namespaces(cls: type, name: str) -> Any:
 def _build_namespace(func: Callable[..., Any]) -> dict[str, Any]:
     """Return a merged ``__globals__`` + closure-cell namespace for *func*.
 
-    Lets :func:`_resolve_callee` see helpers defined as closures
+    Lets :func:`~cash.analysis.ast_util.resolve_callee` see helpers defined as closures
     (nested function definitions) - not just module-level names.
     Without this, a ``@cash.cache``d function inside another
     function couldn't recurse into its sibling helpers, and any
@@ -2062,7 +2032,7 @@ class PurityAnalyzer:
                     on_waived = any(n in audited for n in range(start, end + 1))
                     (waived_paths if on_waived else unwaived_paths).add(site_path)
                 _queue_helper(
-                    _resolve_callee(call_node.func, namespace),
+                    resolve_callee(call_node.func, namespace, modules_only=False),
                     getattr(call_node, "lineno", 0),
                     site_path,
                 )
