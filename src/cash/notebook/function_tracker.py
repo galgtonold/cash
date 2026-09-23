@@ -63,12 +63,6 @@ def _get_stdlib_site_prefixes() -> set[str]:
     return prefixes
 
 
-def _reset_stdlib_site_prefixes() -> None:
-    """Reset the cached stdlib/site-packages prefixes (useful for testing)."""
-    global _STDLIB_SITE_PREFIXES
-    _STDLIB_SITE_PREFIXES = None
-
-
 def is_local_module(module: types.ModuleType) -> bool:
     """Check if a module is local (not stdlib, not site-packages).
 
@@ -1363,45 +1357,8 @@ class _OpaqueCallVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         self._check_getattr_dispatch(node)
         self._check_subscript_call(node)
-        # Pattern 3: Higher-order function calls with user-defined callable args
-        if isinstance(node.func, ast.Name):
-            func_name = node.func.id
-            if func_name in ("apply", "map", "filter") or func_name not in _SAFE_HOF_NAMES:
-                for arg in node.args:
-                    if isinstance(arg, ast.Name) and arg.id in self._user_ns:
-                        val = self._user_ns[arg.id]
-                        if (
-                            callable(val)
-                            and not isinstance(val, type)
-                            and hasattr(val, "__module__")
-                            and val.__module__ not in ("builtins", None)
-                            and func_name in ("apply", "map", "filter", "sorted", "reduce")
-                        ):
-                            pass  # Trackable via input variable system
         self._check_eval_exec(node)
         self.generic_visit(node)
-
-
-# Names of functions that are safe higher-order functions (their callable
-# arguments are still trackable via the input variable system)
-_SAFE_HOF_NAMES = frozenset(
-    {
-        "sorted",
-        "min",
-        "max",
-        "map",
-        "filter",
-        "reduce",
-        "functools.reduce",
-        "itertools.starmap",
-        # pandas HOFs
-        "apply",
-        "transform",
-        "agg",
-        "aggregate",
-        "pipe",
-    }
-)
 
 
 def _get_ast_base_name(node: ast.AST) -> str | None:

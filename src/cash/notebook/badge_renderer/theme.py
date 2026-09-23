@@ -24,7 +24,6 @@ FONT_MONO = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberati
 # ---------------------------------------------------------------------------
 # Display limits
 # ---------------------------------------------------------------------------
-CODE_SNIPPET_MAX_LEN = 120
 HEADER_MAX_LEN = 80
 MIN_TIME_DISPLAY_S = 0.01
 MIN_TIME_DISPLAY_MS = 0.001

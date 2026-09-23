@@ -33,7 +33,6 @@ import hashlib
 import json
 import logging
 import os
-import time
 
 from cash.utils import replace_with_retry
 
@@ -65,7 +64,6 @@ class ComputeBaselineStore:
         self._baselines: dict[str, float] = {}
         self._loaded = False
         self._dirty = False
-        self._last_write = 0.0
 
     def _ensure_loaded(self) -> None:
         if self._loaded:
@@ -134,7 +132,6 @@ class ComputeBaselineStore:
             # os.replace is DENIED while any handle holds the destination.
             replace_with_retry(tmp_path, self._path)
             self._dirty = False
-            self._last_write = time.time()
         except OSError:
             logger.debug("[BASELINES] could not persist to %s", self._path)
             with contextlib.suppress(OSError):

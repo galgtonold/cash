@@ -410,7 +410,7 @@ used to count.
 
 ### File reads are tracked automatically
 
-<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @511c9f1e, cash/notebook/file_tracker.py:FileDependencyRegistry @8e2e6255 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
+<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @027b224f, cash/notebook/file_tracker.py:FileDependencyRegistry @8e2e6255 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
 You usually don't need to declare files at all: cash intercepts file reads
 *inside* a cached function — `pd.read_csv`, `np.load`, `open()`, `joblib.load`,
 … — and folds each file's fingerprint into the entry, so changing the file on

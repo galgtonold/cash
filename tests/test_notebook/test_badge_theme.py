@@ -11,7 +11,6 @@ def test_typography_tokens_are_non_empty_strings() -> None:
 
 
 def test_display_limits_are_positive() -> None:
-    assert theme.CODE_SNIPPET_MAX_LEN > 0
     assert theme.HEADER_MAX_LEN > 0
     assert theme.MIN_TIME_DISPLAY_S > 0
     assert theme.MIN_TIME_DISPLAY_MS > 0

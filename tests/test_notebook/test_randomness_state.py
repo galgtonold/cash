@@ -2,21 +2,21 @@
 # RNG State Capture Tests
 # =============================================================================
 
-from cash.notebook.randomness import capture_rng_state, get_used_rng_modules, restore_rng_state
+from cash.notebook.randomness import capture_rng_state, get_drawing_rng_modules, restore_rng_state
 
 
 class TestRNGStateUtilities:
     """Tests for RNG state capture and restore functions."""
 
-    def test_get_used_rng_modules(self):
-        """Test detection of used RNG modules."""
+    def test_get_drawing_rng_modules(self):
+        """Test detection of drawn-from RNG modules."""
         code = """
 import random
 import numpy as np
 x = random.random()
 y = np.random.rand(10)
 """
-        modules = get_used_rng_modules(code)
+        modules = get_drawing_rng_modules(code)
         assert "random" in modules
         assert "numpy.random" in modules
 

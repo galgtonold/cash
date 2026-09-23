@@ -262,7 +262,7 @@ A subtle behavior worth knowing: `FileDataSource.__init__` snapshots the mtime *
 
 ## Escape hatch 2: registering a custom file source for auto-tracking
 
-<!-- claim: cash/core.py:Cash.register_file_handler @5731a107, cash/notebook/file_tracker.py:_install_module_patches @511c9f1e -->
+<!-- claim: cash/core.py:Cash.register_file_handler @5731a107, cash/notebook/file_tracker.py:_install_module_patches @027b224f -->
 For libraries you use across many cached functions, manually adding `file_depends_on=` to each decorator is repetitive. `Cash.register_file_handler` lets you teach the auto-tracker about a new reader once and have every subsequent call site picked up automatically:
 
 <!-- test:skip reason="illustrative — the handler wraps `my_lib`, which does not exist; executing it only proves a def parses, while shadowing the real load_features above" -->

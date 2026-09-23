@@ -38,7 +38,6 @@ __all__ = [
     "restore_rng_state",
     "capture_object_rng_states",
     "restore_object_rng_states",
-    "get_used_rng_modules",
     "get_drawing_rng_modules",
     "get_seeding_rng_modules",
     "seed_cells_not_yet_run",
@@ -1708,10 +1707,10 @@ _CONTROL_MARKER_LINE = re.compile(r"\A(?:# (?:__iteration_context__|control_cont
 
 
 @functools.lru_cache(maxsize=1024)
-def _scan_rng_modules(code: str) -> tuple[frozenset, frozenset, frozenset, frozenset]:
-    """``(drawn, seeded, entropy-reseeded, used)`` modules for *code*, parsed once.
+def _scan_rng_modules(code: str) -> tuple[frozenset, frozenset, frozenset]:
+    """``(drawn, seeded, entropy-reseeded)`` modules for *code*, parsed once.
 
-    Four helpers below each parsed and walked the same source, and a statement
+    The helpers below each parsed and walked the same source, and a statement
     asks them ten times between its key, its execution and its store: 40,414
     parses for the 3,016 statements of a loop over 1,000 files (round 23). The
     visitor reads nothing but the tree, so its answer is a function of the text.
@@ -1719,44 +1718,24 @@ def _scan_rng_modules(code: str) -> tuple[frozenset, frozenset, frozenset, froze
     try:
         tree = ast.parse(code)
     except SyntaxError:
-        return frozenset(), frozenset(), frozenset(), frozenset()
+        return frozenset(), frozenset(), frozenset()
     visitor = RandomnessVisitor()
     visitor.visit(tree)
     drawn = frozenset(call.module for call in visitor.random_calls)
     seeded = frozenset(module for module, _ in visitor.seed_calls)
     entropy = frozenset(module for module, _ in visitor.entropy_seed_calls)
-    # A draw off a carrier bound in this same source still uses the module's
-    # RNG machinery, so the module belongs in the used set.  Carriers bound in
-    # an *earlier* statement are not visible here — this scan is deliberately
-    # stateless, and the per-object channel (``capture_object_rng_states``) is
-    # what replays those.
-    carriers = frozenset(_CARRIER_MODULES.get(kind, kind) for kind, _seeded in visitor.carrier_assigns.values())
-    return drawn, seeded, entropy, drawn | seeded | carriers
+    return drawn, seeded, entropy
 
 
-def _rng_scan(code: str) -> tuple[frozenset, frozenset, frozenset, frozenset]:
+def _rng_scan(code: str) -> tuple[frozenset, frozenset, frozenset]:
     return _scan_rng_modules(_CONTROL_MARKER_LINE.sub("", code))
-
-
-def get_used_rng_modules(code: str) -> set[str]:
-    """
-    Analyze code to determine which RNG modules are used.
-
-    Args:
-        code: Python source code
-
-    Returns:
-        Set of module names that have RNG calls (e.g., {'random', 'numpy.random'})
-    """
-    return set(_rng_scan(code)[3])
 
 
 def get_drawing_rng_modules(code: str) -> set[str]:
     """Modules *code* DRAWS from, ignoring modules it merely seeds.
 
-    The narrower companion to :func:`get_used_rng_modules`, which also reports
-    the target of a bare ``np.random.seed(0)``. Only a draw's result depends on
-    the RNG state, so only a draw's cache key should.
+    Only a draw's result depends on the RNG state, so only a draw's cache key
+    should.
     """
     return set(_rng_scan(code)[0])
 

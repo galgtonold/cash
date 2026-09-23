@@ -477,9 +477,9 @@ class TestRNGStateCapture:
 
         restore_rng_state({})  # Should not crash
 
-    def test_get_used_rng_modules(self):
-        """Test identifying which RNG modules are used in code."""
-        from cash.notebook.randomness import get_used_rng_modules
+    def test_get_drawing_rng_modules(self):
+        """Test identifying which RNG modules code draws from."""
+        from cash.notebook.randomness import get_drawing_rng_modules
 
         code = """
 import random
@@ -487,34 +487,34 @@ import numpy as np
 x = random.random()
 y = np.random.rand(10)
 """
-        modules = get_used_rng_modules(code)
+        modules = get_drawing_rng_modules(code)
         assert "random" in modules
         assert "numpy.random" in modules
 
-    def test_get_used_rng_modules_syntax_error(self):
-        """Test get_used_rng_modules with invalid code."""
-        from cash.notebook.randomness import get_used_rng_modules
+    def test_get_drawing_rng_modules_syntax_error(self):
+        """Test get_drawing_rng_modules with invalid code."""
+        from cash.notebook.randomness import get_drawing_rng_modules
 
-        modules = get_used_rng_modules("not valid python !@#$")
+        modules = get_drawing_rng_modules("not valid python !@#$")
         assert modules == set()
 
-    def test_get_used_rng_modules_no_random(self):
-        """Test get_used_rng_modules with code that has no random calls."""
-        from cash.notebook.randomness import get_used_rng_modules
+    def test_get_drawing_rng_modules_no_random(self):
+        """Test get_drawing_rng_modules with code that has no random calls."""
+        from cash.notebook.randomness import get_drawing_rng_modules
 
-        modules = get_used_rng_modules("x = 1 + 2")
+        modules = get_drawing_rng_modules("x = 1 + 2")
         assert modules == set()
 
-    def test_get_used_rng_modules_with_seed(self):
-        """Test that seed calls also report the module."""
-        from cash.notebook.randomness import get_used_rng_modules
+    def test_get_seeding_rng_modules(self):
+        """A seed call reports its module as seeded, not drawn."""
+        from cash.notebook.randomness import get_drawing_rng_modules, get_seeding_rng_modules
 
         code = """
 import random
 random.seed(42)
 """
-        modules = get_used_rng_modules(code)
-        assert "random" in modules
+        assert "random" in get_seeding_rng_modules(code)
+        assert get_drawing_rng_modules(code) == set()
 
 
 class TestRandomnessDetectorAdvanced:

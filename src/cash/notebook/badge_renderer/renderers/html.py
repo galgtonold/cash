@@ -855,13 +855,6 @@ _STYLE_BLOCK = f"<style>{_CSS_MIN}</style>"
 import uuid as _uuid  # noqa: E402
 
 
-def _reset_ids() -> None:
-    # Retained for callers that used to clear the counter before rendering.
-    # With per-checkbox UUIDs there is no shared mutable state to reset,
-    # but we keep the function so the API stays stable.
-    return None
-
-
 def _uid(prefix: str = "id") -> str:
     """Return a globally-unique element id with the given prefix.
 
@@ -1599,13 +1592,11 @@ def _collect_iterations(items) -> "list[IterationRow]":
 
 def _aggregate_kind(statuses: tuple[BadgeStatus, ...]) -> str:
     """Synthesise a kind across a group of iteration / row statuses."""
-    cached = sum(1 for s in statuses if s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
-    computed = sum(1 for s in statuses if s is BadgeStatus.COMPUTED)
-    if computed == 0 and cached > 0:
-        return "cached"
-    if cached == 0 and computed > 0:
-        return "exec"
-    return "exec"  # mixed -> exec coloring; rail picks blue via rail_color('mixed') below
+    # "cached" only when nothing in the group computed and something was served;
+    # a mixed group colours as exec, and its rail picks blue via rail_color("mixed").
+    cached = any(s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED) for s in statuses)
+    computed = any(s is BadgeStatus.COMPUTED for s in statuses)
+    return "cached" if cached and not computed else "exec"
 
 
 def _for_loop_group_html(g: ForLoopGroup, max_time: float) -> str:
@@ -2289,7 +2280,6 @@ def _footer_html(footer: BugReportLink | None) -> str:
 
 def render_html(badge: InteractiveBadge) -> str:
     """Render an :class:`InteractiveBadge` to v3-design HTML."""
-    _reset_ids()
     # Publish the configured tier list for every nested ``_dots()`` call
     # in this render pass. Reset on exit so a subsequent render doesn't
     # inherit stale tiers from a previous one.
