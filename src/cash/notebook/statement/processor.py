@@ -1460,6 +1460,7 @@ class StatementProcessor:
         exec_source: str | None = None,
         occurrence_index: int = 0,
         stream_output: bool = False,
+        force_outputs: set[str] | None = None,
         is_last: bool = True,
     ) -> ProcessResult:
         """Async twin of :meth:`process_statement` for top-level-await cells.
@@ -1519,6 +1520,8 @@ class StatementProcessor:
         )
         inputs, outputs = set(effects.inputs), set(effects.outputs)
         callee_globals = set(effects.callee_globals)
+        if force_outputs:
+            outputs = outputs | force_outputs
         if callee_globals:
             outputs = outputs | callee_globals
         metrics["cache_key"] = cache_key
