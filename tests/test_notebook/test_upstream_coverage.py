@@ -1,9 +1,7 @@
 """Comprehensive unit tests for upstream.py to improve coverage from 62% to 70%+.
 
 Tests cover:
-- _compute_expected_var_lineage
 - _handle_lineage_mismatch
-- _check_lineage_based
 - _resolve_input_lineage
 - _resolve_virtual_input_lineages
 - lineage_formula.module_source_component (the simulator's module component)
@@ -48,89 +46,6 @@ def _make_checker(**kwargs):
         tracking_state=tracking_state,
     )
     return checker
-
-
-# ===========================================================================
-# _compute_expected_var_lineage
-# ===========================================================================
-
-
-class TestComputeExpectedVarLineage:
-    """Test lineage hash computation for a variable from its defining code."""
-
-    def test_simple_assignment(self):
-        """Simple 'x = 1' should produce a consistent hash."""
-        checker = _make_checker()
-        result = checker._compute_expected_var_lineage("x", "x = 1")
-        assert result is not None
-        assert len(result) == 64  # sha256 hex digest
-
-    def test_same_code_same_hash(self):
-        """Identical code should produce identical hash."""
-        checker = _make_checker()
-        h1 = checker._compute_expected_var_lineage("x", "x = 1 + 2")
-        h2 = checker._compute_expected_var_lineage("x", "x = 1 + 2")
-        assert h1 == h2
-
-    def test_different_code_different_hash(self):
-        checker = _make_checker()
-        h1 = checker._compute_expected_var_lineage("x", "x = 1")
-        h2 = checker._compute_expected_var_lineage("x", "x = 2")
-        assert h1 != h2
-
-    def test_returns_none_for_for_loop(self):
-        """Control structures should return None (handled separately)."""
-        checker = _make_checker()
-        result = checker._compute_expected_var_lineage("x", "for i in range(3): pass")
-        assert result is None
-
-    def test_returns_none_for_while_loop(self):
-        checker = _make_checker()
-        result = checker._compute_expected_var_lineage("x", "while True: break")
-        assert result is None
-
-    def test_returns_none_for_if_statement(self):
-        checker = _make_checker()
-        result = checker._compute_expected_var_lineage("x", "if True: pass")
-        assert result is None
-
-    def test_returns_none_for_self_assignment(self):
-        """When variable is both input and output, returns None."""
-        checker = _make_checker()
-        checker.variable_lineage = {"df": "abc123"}
-        result = checker._compute_expected_var_lineage("df", "df = df.sort_values()")
-        assert result is None
-
-    def test_with_input_lineage(self):
-        """Hash should incorporate input lineage hashes."""
-        checker = _make_checker()
-        checker.variable_lineage = {"a": "hash_a_123"}
-        h_with_input = checker._compute_expected_var_lineage("x", "x = a + 1")
-        checker.variable_lineage = {"a": "hash_a_456"}
-        h_with_diff_input = checker._compute_expected_var_lineage("x", "x = a + 1")
-        assert h_with_input != h_with_diff_input
-
-    def test_with_function_tracker(self):
-        """Should include function source hashes when function_tracker is set."""
-        checker = _make_checker(user_ns={"func": lambda x: x})
-        checker.variable_lineage = {"func": "func_lineage"}
-        mock_tracker = MagicMock()
-        mock_tracker.get_callable_source_hashes.return_value = {"func": "abcdef"}
-        checker.function_tracker = mock_tracker
-        result = checker._compute_expected_var_lineage("y", "y = func(1)")
-        assert result is not None
-        assert len(result) == 64
-
-    def test_syntax_error_code(self):
-        """Should handle syntax errors gracefully."""
-        checker = _make_checker()
-        # Syntax errors in code may propagate; the key behavior is defined
-        # by the caller catching SyntaxError. Just verify no internal crash.
-        try:
-            result = checker._compute_expected_var_lineage("x", "x = 1")
-            assert result is not None  # Valid code produces hash
-        except SyntaxError:
-            pass  # Expected for truly invalid code
 
 
 # ===========================================================================
@@ -203,59 +118,6 @@ class TestHandleLineageMismatch:
         checker = _make_checker()
         trace = [("x = 1", {"x"}, {}, {}, {}, {})]
         self._call_mismatch(checker, var_name="x", simulation_trace=trace)
-
-
-# ===========================================================================
-# _check_lineage_based
-# ===========================================================================
-
-
-class TestCheckLineageBased:
-    """Test the lineage-based staleness check (Phase 1).
-
-    Phase 1 is diagnostic-only: it logs mismatches but never re-executes.
-    Phase 2 (``_check_notebook_based``) owns the re-execution decision.
-    These tests verify the skip rules and that no crash occurs on edge cases.
-    """
-
-    def test_skips_builtin_names(self):
-        checker = _make_checker()
-        # Must not crash for builtins; nothing to assert beyond completion.
-        checker._check_lineage_based({"print", "len"})
-
-    def test_skips_variables_without_executed_code(self):
-        checker = _make_checker()
-        checker.variable_lineage["x"] = "some_hash"
-        checker._check_lineage_based({"x"})
-
-    def test_skips_mutated_variables(self):
-        checker = _make_checker()
-        checker.variable_lineage["x"] = "hash1"
-        checker.executed_cell_codes["x"] = "x = 1"
-        checker.vars_with_mutation_lineage.add("x")
-        checker._check_lineage_based({"x"})
-
-    def test_detects_stale_variable_does_not_crash(self):
-        """Mismatch is logged, not acted on — verifies the diagnostic path."""
-        checker = _make_checker()
-        checker.executed_cell_codes["y"] = "y = 1"
-        checker.variable_lineage["y"] = "clearly_wrong_hash_that_wont_match"
-        checker._check_lineage_based({"y"})
-
-    def test_skips_fresh_variable(self):
-        """Matching lineage produces no log; no crash."""
-        checker = _make_checker()
-        code = "y = 1"
-        checker.executed_cell_codes["y"] = code
-        expected = checker._compute_expected_var_lineage("y", code)
-        checker.variable_lineage["y"] = expected
-        checker._check_lineage_based({"y"})
-
-    def test_handles_control_structure_code(self):
-        checker = _make_checker()
-        checker.executed_cell_codes["x"] = "for i in range(10): pass"
-        checker.variable_lineage["x"] = "any_hash"
-        checker._check_lineage_based({"x"})
 
 
 # ===========================================================================

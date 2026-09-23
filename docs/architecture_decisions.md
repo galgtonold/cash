@@ -261,7 +261,7 @@ Extract the simulator's transitive method closure (76 methods reachable from `_s
 - **Locality.** The simulator's helpers (~76 methods) live next to each other and the data they touch. Future changes to simulation logic don't risk perturbing the orchestrator and vice versa.
 - **Test surface.** `NotebookSimulator` can be constructed with a `TrackingState()` and a `SimpleNamespace(user_ns={})` — no `Cash`, no backend, no IPython kernel. See `tests/test_notebook/test_notebook_simulator.py` for the new surface.
 - **AI navigability.** Searching for "simulation" now finds one file with one class, not 76 methods scattered across a 3800-line class definition.
-- **The 2-phase orchestrator stays intact.** `check_and_reexecute` still has Phase 1 (`_check_lineage_based`) and Phase 2 (`_check_notebook_based`); the 4-step pipeline inside Phase 2 is unchanged. We only split the *implementation*, not the algorithm.
+- **The 2-phase orchestrator stays intact.** `check_and_reexecute` still has Phase 1 (`_check_lineage_based`) and Phase 2 (`_check_notebook_based`); the 4-step pipeline inside Phase 2 is unchanged. We only split the *implementation*, not the algorithm. (Phase 1 was removed later: it only wrote a debug log, so Phase 2 is now the whole check.)
 
 ### Consequences
 - `UpstreamChecker` is now ~25 methods and ~840 lines (down from ~3800).

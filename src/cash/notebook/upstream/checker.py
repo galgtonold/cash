@@ -14,7 +14,6 @@ from ...exceptions import AmbiguousCellError, CashUpstreamSyntaxWarning, Forward
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
 from ..annotations import extract_annotations_for_statements, parse_annotation_line
-from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
 from ..cacheability import (
     _called_function_names,
@@ -387,16 +386,6 @@ class UpstreamChecker:
         # once per cell check.
         self._notebook_path_for_staleness = notebook_path
 
-        # Phase 1 — Lineage-based staleness check (diagnostic-only).
-        # Detects when variables are inconsistent with each other based on
-        # their recorded lineage hashes. This phase only LOGS mismatches;
-        # Phase 2 (``_check_notebook_based``) handles actual re-execution
-        # with full cell ordering context. The notebook subsystem requires
-        # a notebook file to function, so there is no "no-notebook"
-        # re-execution path here. (The decorator path — ``@cash.cache`` —
-        # does not use UpstreamChecker.)
-        self._check_lineage_based(required_inputs)
-
         # Compute current cell outputs so Phase 2 can distinguish read-only inputs
         # from variables the current cell also writes (downstream-advancement case).
         # Also compute the names the cell REASSIGNS (`name = ...`), distinct from
@@ -750,50 +739,6 @@ class UpstreamChecker:
 
         return UpstreamResult(all_metrics, total_restore_time, total_execution_time)
 
-    def _compute_expected_var_lineage(
-        self,
-        var_name: str,
-        last_executed_code: str,
-    ) -> str | None:
-        """Compute expected lineage hash for *var_name* from its defining code.
-
-        Returns ``None`` if the computation cannot be completed (e.g. the code
-        is a control structure, or CodeAnalyzer fails).
-        """
-        try:
-            tree = self.simulator.get_cached_ast(last_executed_code)
-            if (
-                tree
-                and len(tree.body) == 1
-                and isinstance(tree.body[0], (ast.For, ast.While, ast.If, ast.With, ast.Try))
-            ):
-                return None
-        except (SyntaxError, ValueError, AttributeError):
-            logger.debug("[UPSTREAM] Failed to parse AST for control-structure check: %s", var_name)
-
-        stmt_inputs, _ = CodeAnalyzer.analyze_code_block(last_executed_code)
-
-        if var_name in stmt_inputs:
-            return None
-
-        input_lineages = [self.variable_lineage[inp] for inp in stmt_inputs if inp in self.variable_lineage]
-
-        source_hash = statement_source_hash(last_executed_code)
-
-        func_lineage_component = ""
-        function_tracker = self.function_tracker if hasattr(self, "function_tracker") else None
-        if function_tracker is not None:
-            try:
-                func_source_hashes = function_tracker.get_callable_source_hashes(stmt_inputs, self.shell.user_ns)
-                if func_source_hashes:
-                    func_parts = [f"{k}:{v}" for k, v in sorted(func_source_hashes.items())]
-                    func_lineage_component = ":" + ":".join(func_parts)
-            except (AttributeError, TypeError):
-                pass
-
-        expected_lineage_str = f"{source_hash}:{':'.join(sorted(input_lineages))}{func_lineage_component}"
-        return hashlib.sha256(expected_lineage_str.encode("utf-8")).hexdigest()
-
     def _resolve_notebook_path(self) -> str | None:
         """Resolve the current notebook path once per cell's upstream check.
 
@@ -987,58 +932,6 @@ class UpstreamChecker:
                     bound = [a.id if isinstance(a, ast.Name) else None for a in call.args[1:]]
                     bindings[node.targets[0].id] = (f_name, bound)
         return bindings
-
-    def _check_lineage_based(self, required_inputs: set[str]) -> None:
-        """Phase 1 — diagnostic-only lineage staleness check.
-
-        Walks each input, recomputes its expected lineage from
-        ``executed_cell_codes`` + current input lineages, and logs when the
-        result differs from the stored value. Phase 2
-        (:meth:`_check_notebook_based`) handles the actual re-execution
-        decision with full notebook context.
-
-        Why this phase is diagnostic-only: Pass 1 uses the CURRENT lineage of
-        each input to compute expected output lineage. If an input was
-        redefined by a LATER cell (variable shadowing), its current lineage
-        reflects the later definition — not the version used when the output
-        was originally computed. Re-executing with the wrong input would
-        produce incorrect results that poison downstream computation. Phase 2's
-        simulation tracks cell ordering and input lineages per-cell, so it
-        handles both true staleness AND shadowing correctly.
-
-        File and module lineage components are omitted here (Phase 2 owns
-        those) — that may produce false-positive mismatch *logs* for vars with
-        file/module deps, which is harmless.
-        """
-        for var_name in required_inputs:
-            if var_name in _BUILTIN_NAMES:
-                continue
-            if var_name in self.vars_with_mutation_lineage:
-                # Mutation-updated lineage is not derivable from executed_cell_codes.
-                continue
-            if var_name not in self.executed_cell_codes:
-                continue
-            if var_name not in self.variable_lineage:
-                continue
-
-            last_executed_code = self.executed_cell_codes[var_name]
-            try:
-                expected_lineage = self._compute_expected_var_lineage(
-                    var_name,
-                    last_executed_code,
-                )
-                if expected_lineage is None:
-                    continue
-                current_lineage = self.variable_lineage[var_name]
-                if expected_lineage != current_lineage:
-                    logger.debug(
-                        "[UPSTREAM] Variable '%s' has lineage mismatch (expected=%s, actual=%s). Deferring to Phase 2.",
-                        var_name,
-                        expected_lineage[:8],
-                        current_lineage[:8],
-                    )
-            except (KeyError, TypeError, ValueError, SyntaxError, AttributeError):
-                logger.debug("[UPSTREAM] Error in lineage check for variable '%s'", var_name)
 
     def _resolve_fallback_cache_idx(self, cell_id: str | None) -> int | None:
         """Return the simulation cache index to use for the downstream advancement fallback.
