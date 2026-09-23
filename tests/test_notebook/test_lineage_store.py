@@ -173,21 +173,3 @@ class TestTrackingStateWiring:
         state = TrackingState()
         state.lineage.record("x", "h1")
         assert state.variable_lineage["x"] == "h1"
-
-
-class TestBackingDictCompatibility:
-    """During migration, callers that still want the raw dict (cache_key.py's
-    ``CacheKeyContext.variable_lineage`` field, persistence layer) must keep working.
-    """
-
-    def test_as_dict_exposes_live_view(self):
-        store = LineageStore()
-        store.record("x", "h1")
-        d = store.as_dict()
-        assert d == {"x": "h1"}
-
-    def test_as_dict_reflects_subsequent_writes(self):
-        store = LineageStore()
-        d = store.as_dict()
-        store.record("x", "h1")
-        assert d.get("x") == "h1"  # live view, not a snapshot

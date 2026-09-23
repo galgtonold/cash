@@ -650,12 +650,11 @@ class StatementProcessor:
         # iteration's body statements (see ``ForLoopHandler._process_one_iteration``)
         # and read by an intercepted call's key build
         # (``call_unit.call_cache_key``'s ``loop_vars``) via
-        # :meth:`current_loop_vars`. A stack rather than a single slot because
-        # loop bodies nest -- an inner loop's own push already carries the
-        # outer context forward (``build_iteration_context`` merges
-        # ``parent_context``), so ``current_loop_vars`` only ever needs the
-        # top. Empty outside any loop, which is the correct "no discriminator
-        # to add" answer for a bare statement.
+        # :meth:`current_loop_vars_for_call_key`. A stack rather than a single
+        # slot because loop bodies nest; the stack depth is the lexical nesting
+        # depth (see :meth:`_depth_keyed_loop_scope`). Empty outside any loop,
+        # which is the correct "no discriminator to add" answer for a bare
+        # statement.
         # The TTL in force for the statement currently being processed, read
         # at invoke time by the call units inside it (CAS-268). Refreshed on
         # every statement; `None` means no TTL.
@@ -683,8 +682,8 @@ class StatementProcessor:
         # live via a real-kernel repro. This stack has the scope discipline
         # ``variable_lineage`` lacks -- it is popped when an iteration's body
         # finishes, restoring whatever level was beneath it -- so
-        # :meth:`current_loop_var_digests` can never see a name's digest
-        # outlive the scope that produced it.
+        # :meth:`current_loop_var_digests_for_call_key` can never see a name's
+        # digest outlive the scope that produced it.
         self._call_unit_loop_var_digests: list[dict[str, str]] = []
 
         self.analytics_manager = AnalyticsManager(
@@ -781,12 +780,6 @@ class StatementProcessor:
             debug=debug,
         )
 
-    def get_function_tracker(self) -> FunctionTracker:
-        """Returns the function tracker instance.
-        Must be shared with UpstreamChecker for cache key stability.
-        """
-        return self.function_tracker
-
     @contextmanager
     def loop_vars_scope(
         self,
@@ -800,7 +793,8 @@ class StatementProcessor:
         body-statement loop for one iteration -- not per statement -- so a
         nested control structure (``if``/``try``) or a nested ``for`` inside
         the body still sees the enclosing iteration's vars via
-        :meth:`current_loop_vars` for every statement it eventually reaches.
+        :meth:`current_loop_vars_for_call_key` for every statement it
+        eventually reaches.
         A nested ``for`` pushes its own (already-merged, per
         ``build_iteration_context``) context on top; popping unwinds back to
         this one, so the stack always matches the current lexical nesting.
@@ -819,14 +813,8 @@ class StatementProcessor:
 
         That read side is :meth:`_depth_keyed_loop_scope` (via
         :meth:`current_loop_vars_for_call_key` /
-        :meth:`current_loop_var_digests_for_call_key`) for the ONLY
-        production consumer, ``CallCache`` -- NOT
-        :meth:`current_loop_var_digests`, which this docstring used to name
-        here. That method still exists and is still correct on its own
-        documented (bare-name) contract, but nothing wires it into a call's
-        key anymore since CAS-257 defect 1; naming it as *the* consumer here
-        would be a stale claim about which code path actually reads a
-        missing entry.
+        :meth:`current_loop_var_digests_for_call_key`), whose only consumer
+        is ``CallCache``.
         """
         self._call_unit_loop_vars.append(loop_vars)
         self._call_unit_loop_var_digests.append(loop_var_digests or {})
@@ -857,72 +845,25 @@ class StatementProcessor:
         """
         return self._call_unit_persist
 
-    def current_loop_vars(self) -> dict[str, Any]:
-        """The innermost enclosing loop's non-dunder iteration vars, or ``{}``.
-
-        Read by the intercepted (on by default) sub-call key build
-        (``call_unit.CallUnit``) as its ``loop_vars_provider``, so a call keyed
-        with no other discriminator (hidden state behind a bare ``Name``, e.g.
-        ``fetch_next(conn)``) still varies per iteration. ``{}`` outside a loop
-        -- degrading to today's behaviour, not an error.
-        """
-        return self._call_unit_loop_vars[-1] if self._call_unit_loop_vars else {}
-
-    def current_loop_var_digests(self) -> dict[str, str]:
-        """Precomputed ``{name: full_hash}`` for every loop-var name visible
-        at this point in execution, or ``{}`` outside any loop.
-
-        Unlike :meth:`current_loop_vars` (which returns only the TOP of its
-        stack, because ``for_handler.py`` already pre-merges an ancestor
-        loop's values into each push via ``build_iteration_context``), this
-        merges ACROSS ``_call_unit_loop_var_digests``'s whole stack --
-        outermost first, so an inner loop's own entry for a reused name wins.
-        Each level holds only the digests ``for_handler.py`` bound at THAT
-        specific push (deliberately not pre-merged there -- see the
-        constructor comment on ``_call_unit_loop_var_digests``), so merging
-        here is what lets a call inside a nested loop still resolve an
-        OUTER loop's variable to a real digest instead of falling through to
-        a fresh hash. The stack only ever holds CURRENTLY ACTIVE scopes
-        (a finished iteration's level is popped by ``loop_vars_scope`` before
-        control returns to whatever runs next), so nothing merged in here can
-        be stale.
-
-        Read by the intercepted (on by default) sub-call key build
-        (``call_unit.CallUnit``) as its ``loop_var_digests_provider``. ``{}``
-        is always a safe answer -- ``call_unit._loop_var_digest`` treats a
-        missing entry as "compute it fresh," never as an error.
-        """
-        merged: dict[str, str] = {}
-        for level in self._call_unit_loop_var_digests:
-            merged.update(level)
-        return merged
-
     def _depth_keyed_loop_scope(self) -> tuple[dict[str, Any], dict[str, str]]:
         """``(values, digests)`` for the call-unit key build, each entry keyed
         by ``"{depth}:{name}"`` rather than bare ``name`` (CAS-257 defect 1).
 
-        **The bug this exists to fix.** ``current_loop_vars()`` returns only
-        the TOP of ``_call_unit_loop_vars`` -- correct for a call AFTER a
-        name-reusing inner loop (the inner scope is already popped by then),
-        but wrong for a call INSIDE one: while both scopes are active, the
-        inner push's own value for a REUSED name (``build_iteration_context``
-        pre-merges the parent forward, so the inner level's dict already has
-        the outer's OTHER names too, but its OWN name entry overwrites the
-        parent's) is the only one reachable -- the outer iteration has no
-        slot in the key at all. Two different outer iterations that share
-        the same inner sequence (``for q in ['p','r']: for q in [7,8]:
-        acc.append(pull(handle))`` -- outer 'p'/'r' collapse whenever the
-        inner cycles through the same 7/8 both times) are then
-        indistinguishable: cash serves ``[1, 2, 1, 2]`` where the cash-off
-        oracle gives ``[1, 2, 3, 4]``.
-        ``current_loop_var_digests()`` already merges across the WHOLE
-        digest stack (each level holding only its OWN bound names, never
-        pre-merged), so a reused name's OUTER digest is still individually
-        present in the stack -- merging it via ``dict.update`` in name order
-        just happens to let the innermost active level win, silently
-        discarding the outer one. Both dicts need every active depth's
-        entry to survive at once, not just whichever the merge order leaves
-        standing.
+        **The bug this exists to fix.** Reading only the TOP of
+        ``_call_unit_loop_vars`` (or merging the stack by bare name) is
+        correct for a call AFTER a name-reusing inner loop (the inner scope
+        is already popped by then), but wrong for a call INSIDE one: while
+        both scopes are active, the inner push's own value for a REUSED name
+        (``build_iteration_context`` pre-merges the parent forward, so the
+        inner level's dict already has the outer's OTHER names too, but its
+        OWN name entry overwrites the parent's) is the only one reachable --
+        the outer iteration has no slot in the key at all. Two different
+        outer iterations that share the same inner sequence (``for q in
+        ['p','r']: for q in [7,8]: acc.append(pull(handle))`` -- outer
+        'p'/'r' collapse whenever the inner cycles through the same 7/8 both
+        times) are then indistinguishable: cash serves ``[1, 2, 1, 2]``
+        where the cash-off oracle gives ``[1, 2, 3, 4]``. Both dicts need
+        every active depth's entry to survive at once.
 
         **Why depth, not iteration order.** ``_call_unit_loop_vars`` /
         ``_call_unit_loop_var_digests`` are stacks whose length at any
@@ -934,11 +875,7 @@ class StatementProcessor:
         walked. A reordered outer iterable still produces the exact same
         stack depths for the exact same call site on every run, and a
         rerun of one already-cached iteration pushes to the exact same
-        depth it did originally -- see this method's callers
-        (``StatementProcessor.current_loop_vars``/``current_loop_var_digests``
-        are UNCHANGED by this method: it is a separate read path so the
-        pre-existing, test-pinned contract of those two keeps returning
-        exactly what it always has).
+        depth it did originally.
 
         **Why this doesn't need for_handler.py to push anything new.** Each
         digest level already holds only the names ``for_handler.py`` bound
@@ -993,12 +930,8 @@ class StatementProcessor:
     def current_loop_vars_for_call_key(self) -> dict[str, Any]:
         """Depth-and-name-keyed loop-var values for the call-unit key build.
 
-        Used ONLY as the ``loop_vars_provider`` wired into ``CallCache`` --
-        NOT a replacement for :meth:`current_loop_vars`, whose bare-name,
-        top-of-stack contract stays exactly as it was (other callers and
-        ``test_call_unit_loop_vars_wiring.py`` pin that behaviour directly).
-        See :meth:`_depth_keyed_loop_scope` for why this needs its own read
-        path rather than changing that one.
+        Used as the ``loop_vars_provider`` wired into ``CallCache``. See
+        :meth:`_depth_keyed_loop_scope` for why entries are keyed by depth.
         """
         values, _ = self._depth_keyed_loop_scope()
         return values
@@ -1008,7 +941,7 @@ class StatementProcessor:
 
         The digest counterpart to :meth:`current_loop_vars_for_call_key` --
         see that method and :meth:`_depth_keyed_loop_scope` for the full
-        reasoning. Not a replacement for :meth:`current_loop_var_digests`.
+        reasoning.
         """
         _, digests = self._depth_keyed_loop_scope()
         return digests
@@ -2822,13 +2755,10 @@ class StatementProcessor:
                     # by `_call_cache_owner` above), but the loop this call
                     # sits in pushes/pops its vars fresh on every iteration.
                     #
-                    # The `_for_call_key` (depth-and-name-keyed) variants, NOT
-                    # `current_loop_vars`/`current_loop_var_digests` themselves
-                    # (CAS-257 defect 1): a call INSIDE a loop that reuses an
-                    # ancestor's target name needs BOTH scopes' entries to
-                    # survive at once, not just whichever the bare-name merge
-                    # leaves standing -- see `_depth_keyed_loop_scope`'s
-                    # docstring for the full reasoning.
+                    # Depth-and-name-keyed (CAS-257 defect 1): a call INSIDE a
+                    # loop that reuses an ancestor's target name needs BOTH
+                    # scopes' entries to survive at once -- see
+                    # `_depth_keyed_loop_scope`'s docstring.
                     loop_vars_provider=self.current_loop_vars_for_call_key,
                     loop_var_digests_provider=self.current_loop_var_digests_for_call_key,
                 )

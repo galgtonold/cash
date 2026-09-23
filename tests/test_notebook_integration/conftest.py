@@ -1827,9 +1827,6 @@ try:
         _cash_magics._tracking_state.current_session_hashes.clear()
         _cash_magics._tracking_state.executed_file_deps.clear()
         _cash_magics._tracking_state.vars_with_mutation_lineage.clear()
-        # Clear cell code change tracking
-        if hasattr(_cash_magics, '_executed_cell_raw_codes'):
-            _cash_magics._executed_cell_raw_codes.clear()
         # Clear statement processor's input lineages
         if hasattr(_cash_magics, '_statement_processor'):
             _cash_magics._statement_processor.executed_input_lineages.clear()

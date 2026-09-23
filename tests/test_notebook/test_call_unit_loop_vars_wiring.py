@@ -185,36 +185,34 @@ def test_loop_vars_scope_pops_even_when_the_body_raises():
 
     Mutation that must make this fail: dropping `finally` in
     `StatementProcessor.loop_vars_scope` (a bare pop after `yield`, unreached
-    on an exception). Verified by hand: with that change this test's second
-    assertion fails (`current_loop_vars()` still returns `{'t': 1}` instead
-    of `{}` after the `with` block exits via the exception).
+    on an exception): the key-build reader then still returns `{'0:t': 1}`
+    instead of `{}` after the `with` block exits via the exception.
     """
     proc = _bare_statement_processor()
-    assert proc.current_loop_vars() == {}
+    assert proc.current_loop_vars_for_call_key() == {}
 
     with pytest.raises(ValueError):
         with proc.loop_vars_scope({"t": 1}):
-            assert proc.current_loop_vars() == {"t": 1}
+            assert proc.current_loop_vars_for_call_key() == {"0:t": 1}
             raise ValueError("body statement blew up")
 
-    assert proc.current_loop_vars() == {}, "loop_vars_scope leaked a stack entry across an exception"
+    assert proc.current_loop_vars_for_call_key() == {}, "loop_vars_scope leaked a stack entry across an exception"
 
 
-def test_loop_vars_scope_nests_innermost_wins():
-    """A nested loop's push must shadow the outer one, and popping must
-    restore the outer value exactly -- not clear it.
+def test_loop_vars_scope_nests_and_pops_back_to_the_outer_scope():
+    """A nested loop pushes a second level, and popping it must restore the
+    outer level exactly -- not clear it.
 
-    Mirrors what `build_iteration_context` already does at the VALUE level
-    (merging `parent_context` forward): the inner loop's own `loop_vars`
-    dict is expected to already carry the outer vars merged in, so this test
+    The inner loop's own `loop_vars` dict is expected to already carry the
+    outer vars merged in (`build_iteration_context` does that), so this test
     is about the STACK mechanics (LIFO push/pop), not re-testing the merge.
     """
     proc = _bare_statement_processor()
     with proc.loop_vars_scope({"outer": 1}):
-        assert proc.current_loop_vars() == {"outer": 1}
+        assert proc.current_loop_vars_for_call_key() == {"0:outer": 1}
         with proc.loop_vars_scope({"outer": 1, "inner": 2}):
-            assert proc.current_loop_vars() == {"outer": 1, "inner": 2}
-        assert proc.current_loop_vars() == {"outer": 1}, (
+            assert proc.current_loop_vars_for_call_key() == {"0:outer": 1, "1:outer": 1, "1:inner": 2}
+        assert proc.current_loop_vars_for_call_key() == {"0:outer": 1}, (
             "popping the inner loop's vars did not restore the outer loop's"
         )
 
@@ -241,74 +239,48 @@ def test_loop_var_digests_scope_pops_in_lockstep_with_loop_vars():
 
     Mutation that must make this fail: in `loop_vars_scope`'s `finally`,
     drop the `self._call_unit_loop_var_digests.pop()` line (keep the values
-    pop). Verified by hand: with that change this test's final assertion
-    fails (`current_loop_var_digests()` still returns `{'t': 'digest-A'}`
-    instead of `{}` after the exception propagates out of the `with` block).
+    pop): the digest reader then still returns `{'0:t': 'digest-A'}` instead
+    of `{}` after the exception propagates out of the `with` block.
     """
     proc = _bare_statement_processor()
-    assert proc.current_loop_var_digests() == {}
+    assert proc.current_loop_var_digests_for_call_key() == {}
 
     with pytest.raises(ValueError):
         with proc.loop_vars_scope({"t": 1}, {"t": "digest-A"}):
-            assert proc.current_loop_var_digests() == {"t": "digest-A"}
+            assert proc.current_loop_var_digests_for_call_key() == {"0:t": "digest-A"}
             raise ValueError("body statement blew up")
 
-    assert proc.current_loop_var_digests() == {}, "loop_var_digests_scope leaked a stack entry across an exception"
+    assert proc.current_loop_var_digests_for_call_key() == {}, (
+        "loop_var_digests_scope leaked a stack entry across an exception"
+    )
 
 
-def test_loop_var_digests_reused_name_resolves_to_the_current_scope():
-    """The exact stack-discipline property the real-kernel repro exercises,
-    reproduced directly against the stack (no notebook, no kernel boot): an
-    inner scope reusing the SAME name as an outer scope must not leak its
-    digest into the outer scope once popped.
-
-    Mutation that must make this fail: `current_loop_var_digests` reverted
-    to `self._call_unit_loop_var_digests[-1] if ... else {}` (top-of-stack
-    only, mirroring `current_loop_vars`'s VALUE-stack implementation) instead
-    of merging across the whole stack -- this happens to still pass THIS
-    specific test (the inner scope is already fully popped by the time of
-    the final assertion, so top-of-stack and merge agree here), which is
-    exactly why the assertion INSIDE the `with proc.loop_vars_scope(...)`
-    block below is load-bearing: swap `'t': 'inner-digest'` for a check that
-    an OUTER name (not reused by the inner scope) is still resolvable while
-    the inner scope is active, and a top-of-stack-only implementation fails
-    it.
+def test_loop_var_digests_reused_name_does_not_outlive_its_scope():
+    """An inner scope reusing the SAME name as an outer scope must not leak
+    its digest into the outer scope once popped, and while it is active the
+    outer scope's digests must still be reachable.
     """
     proc = _bare_statement_processor()
     with proc.loop_vars_scope({"t": 1, "outer_only": 99}, {"t": "outer-digest", "outer_only": "outer-only-digest"}):
-        assert proc.current_loop_var_digests() == {
-            "t": "outer-digest",
-            "outer_only": "outer-only-digest",
-        }
+        outer = {"0:t": "outer-digest", "0:outer_only": "outer-only-digest"}
+        assert proc.current_loop_var_digests_for_call_key() == outer
         with proc.loop_vars_scope({"t": 2}, {"t": "inner-digest"}):
-            # Inner scope's OWN reused name shadows the outer's.
-            assert proc.current_loop_var_digests()["t"] == "inner-digest"
-            # An OUTER-only name (not reused/re-pushed by the inner scope)
-            # must still resolve -- proves this is a MERGE across the whole
-            # stack, not a top-of-stack-only lookup that would lose it.
-            assert proc.current_loop_var_digests()["outer_only"] == "outer-only-digest"
-        # Inner scope popped -- 't' must resolve back to the OUTER's digest,
-        # not linger at the inner's.
-        assert proc.current_loop_var_digests()["t"] == "outer-digest", (
+            assert proc.current_loop_var_digests_for_call_key() == {**outer, "1:t": "inner-digest"}
+        assert proc.current_loop_var_digests_for_call_key() == outer, (
             "the inner scope's digest for a reused name leaked past its pop"
         )
-    assert proc.current_loop_vars() == {}
+    assert proc.current_loop_vars_for_call_key() == {}
 
 
 # --------------------------------------------------------- depth-keyed call-key scope (CAS-257 defect 1)
 #
-# `current_loop_vars()`/`current_loop_var_digests()` above are pinned to
-# their EXACT pre-existing contract -- top-of-stack for values, bare-name
-# merge-with-innermost-winning for digests -- and stay that way: other
-# callers (and the tests above) read them directly and must not see any
-# behaviour change. The CAS-257 fix lives in a SEPARATE read path,
-# `_depth_keyed_loop_scope` (exposed via `current_loop_vars_for_call_key` /
-# `current_loop_var_digests_for_call_key`), which `StatementProcessor` now
-# wires into `CallCache` INSTEAD of the two methods above. These tests cover
-# that path directly, at the stack level -- no notebook, no kernel -- mirroring
-# the section above; the end-to-end proof (a real nested loop, a call INSIDE
-# the reuse, a real kernel, a cash-off oracle) lives in
-# `test_call_unit_loop_vars_real_kernel.py`'s
+# The key build reads the loop stacks through `_depth_keyed_loop_scope`
+# (exposed via `current_loop_vars_for_call_key` /
+# `current_loop_var_digests_for_call_key`), which `StatementProcessor` wires
+# into `CallCache`. These tests cover that path directly, at the stack level
+# -- no notebook, no kernel -- mirroring the section above; the end-to-end
+# proof (a real nested loop, a call INSIDE the reuse, a real kernel, a
+# cash-off oracle) lives in `test_call_unit_loop_vars_real_kernel.py`'s
 # `test_call_inside_a_name_reusing_inner_loop_*` tests.
 
 
@@ -317,17 +289,13 @@ def test_depth_keyed_scope_gives_a_reused_name_two_distinct_slots():
     <call>`` -- while BOTH scopes are simultaneously active (the call sits
     INSIDE the inner loop, not after it), the outer 'q' and the inner 'q'
     must occupy two different (depth, name) slots, not collide onto one
-    bare 'q' the way `current_loop_vars()`/`current_loop_var_digests()`
-    already do (see the sections above -- that collision is exactly what
-    they are pinned to keep doing, for everything BUT this path).
+    bare 'q'.
 
-    Mutation that must make this fail: revert
-    `current_loop_vars_for_call_key`/`current_loop_var_digests_for_call_key`
-    to delegate straight to `current_loop_vars`/`current_loop_var_digests`
-    (undoing the CAS-257 fix). Verified by hand: with that reversion both
-    calls return `{'q': 7}` / `{'q': 'digest-inner'}` -- only the inner
-    scope survives -- and the assertions below fail (`'0:q'` is missing
-    entirely from either dict).
+    Mutation that must make this fail: key the entries by bare name (top of
+    the value stack, bare-name merge of the digest stack), undoing the
+    CAS-257 fix. Both calls then return `{'q': 7}` / `{'q': 'digest-inner'}`
+    -- only the inner scope survives -- and the assertions below fail
+    (`'0:q'` is missing entirely from either dict).
     """
     proc = _bare_statement_processor()
     with proc.loop_vars_scope({"q": "p"}, {"q": "digest-outer"}):

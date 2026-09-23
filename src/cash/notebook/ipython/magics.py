@@ -181,7 +181,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """
         super().__init__(shell)
         self._cash_instance = cash_instance
-        self._execution_lock = False
         # Re-entrancy guard for the run_cell_async wrapper. IPython's *sync*
         # ``run_cell`` delegates to ``run_cell_async`` internally (via the
         # pseudo-sync runner), so once we patch ``run_cell_async`` it would
@@ -205,10 +204,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         # Badge display mode: 'html' (interactive display_id badges), 'print' (text summary), 'off' (no badge)
         self._badge_mode = "html"
-
-        # Execution history tracking for fallback matching
-        self._execution_history = []  # List of cell contents executed this session
-        self._executed_cell_raw_codes = set()  # Set of raw cell codes executed this session (used in repair/reset)
 
         # Shared tracking state — single owner of all lineage/dependency dicts
         from .._protocols import TrackingState
@@ -1202,9 +1197,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         if not self._auto_cache_enabled:
             return self._original_run_cell(raw_cell, *args, **kwargs)
 
-        # Record raw cell text for bug-report history (before any processing)
-        self._execution_history.append(raw_cell)
-
         # Benchmark dispatch (one-shot)
         benchmark_config = getattr(self, "_benchmark_config", None)
         if benchmark_config and benchmark_config.get("active"):
@@ -1292,9 +1284,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             self._in_sync_cell = prev_in_sync
 
     async def _execute_cell_async_inner(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
-        # Record raw cell text for bug-report history (before any processing).
-        self._execution_history.append(raw_cell)
-
         try:
             result = await self._cell_executor.execute_cell_async(
                 raw_cell,

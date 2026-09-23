@@ -52,6 +52,13 @@ from cash.notebook.statement.miss_guard import (
 # ---------------------------------------------------------------------------
 
 
+def _is_guarded(guard: MissGuard, source_hash: str) -> bool:
+    """True once the verdict has flipped for *source_hash*, probe run or not."""
+    guard._ensure_loaded()
+    rec = guard._records.get(source_hash)
+    return rec is not None and rec.guarded
+
+
 class TestMissGuardStateMachine:
     def test_cold_run_always_serialises(self):
         """The first sighting of a source must serialise: that is the product."""
@@ -68,7 +75,7 @@ class TestMissGuardStateMachine:
             guard.observe("src", next(keys), hit=False)
             assert guard.should_serialise("src") is True, f"guarded early at churn {i + 1}"
         guard.observe("src", next(keys), hit=False)  # the Nth churn miss
-        assert guard.is_guarded("src") is True
+        assert _is_guarded(guard, "src") is True
         assert guard.should_serialise("src") is False
 
     def test_a_hit_resets_the_evidence(self):
@@ -81,7 +88,7 @@ class TestMissGuardStateMachine:
         guard.observe("src", next(keys), hit=True)
         for _ in range(N_CHURN - 1):
             guard.observe("src", next(keys), hit=False)
-        assert guard.is_guarded("src") is False
+        assert _is_guarded(guard, "src") is False
         assert guard.should_serialise("src") is True
 
     def test_repeated_key_missing_is_not_churn(self):
@@ -91,7 +98,7 @@ class TestMissGuardStateMachine:
         guard = MissGuard(None)
         for _ in range(N_CHURN * 4):
             guard.observe("src", "same-key", hit=False)
-        assert guard.is_guarded("src") is False
+        assert _is_guarded(guard, "src") is False
         assert guard.should_serialise("src") is True
 
     def test_edited_source_starts_from_zero_evidence(self):
@@ -100,14 +107,14 @@ class TestMissGuardStateMachine:
         keys = (f"key-{i}" for i in itertools.count())
         for _ in range(N_CHURN + 1):
             guard.observe("src-v1", next(keys), hit=False)
-        assert guard.is_guarded("src-v1") is True
+        assert _is_guarded(guard, "src-v1") is True
         assert guard.should_serialise("src-v2") is True
 
 
 def _drive_to_guarded(guard: MissGuard, keys) -> None:
     for _ in range(N_CHURN + 1):
         guard.observe("src", next(keys), hit=False)
-    assert guard.is_guarded("src") is True
+    assert _is_guarded(guard, "src") is True
 
 
 class TestReprobe:
@@ -156,7 +163,7 @@ class TestReprobe:
         guard.observe("src", "stable", hit=False)  # probe writes the entry
         assert guard.should_serialise("src") is True
         guard.observe("src", "stable", hit=True)  # the write now pays off
-        assert guard.is_guarded("src") is False
+        assert _is_guarded(guard, "src") is False
         assert guard.should_serialise("src") is True
 
 
@@ -167,7 +174,7 @@ class TestVerdictPersistence:
         _drive_to_guarded(guard, keys)
 
         reloaded = MissGuard(str(tmp_path))
-        assert reloaded.is_guarded("src") is True
+        assert _is_guarded(reloaded, "src") is True
         assert reloaded.should_serialise("src") is False
 
     def test_persists_only_when_the_verdict_flips_never_per_cell(self, tmp_path):
@@ -187,7 +194,7 @@ class TestVerdictPersistence:
         for _ in range(N_CHURN * 10):
             guard.observe("src", next(keys), hit=False)
 
-        assert guard.is_guarded("src") is True
+        assert _is_guarded(guard, "src") is True
         assert len(writes) == 1, (
             f"verdict store written {len(writes)}x over {N_CHURN * 10} runs; "
             "it must be written only when the verdict flips"
@@ -201,7 +208,7 @@ class TestVerdictPersistence:
 
         guard.observe("src", "stable", hit=True)
         assert json.loads((tmp_path / "_miss_guard.json").read_text())["guarded"] == []
-        assert MissGuard(str(tmp_path)).is_guarded("src") is False
+        assert _is_guarded(MissGuard(str(tmp_path)), "src") is False
 
     def test_a_clean_notebook_never_writes_a_store(self, tmp_path):
         guard = MissGuard(str(tmp_path))
@@ -215,14 +222,14 @@ class TestVerdictPersistence:
         optimisation', never 'no cache'."""
         (tmp_path / "_miss_guard.json").write_text(content)
         guard = MissGuard(str(tmp_path))
-        assert guard.is_guarded("src") is False
+        assert _is_guarded(guard, "src") is False
         assert guard.should_serialise("src") is True
 
     def test_no_cache_dir_is_session_scoped_not_a_crash(self):
         guard = MissGuard(None)
         keys = (f"key-{i}" for i in itertools.count())
         _drive_to_guarded(guard, keys)  # must not raise
-        assert MissGuard(None).is_guarded("src") is False
+        assert _is_guarded(MissGuard(None), "src") is False
 
 
 class TestResolveCacheDir:
@@ -488,7 +495,7 @@ class TestRestartSaverIsNeverGuarded:
                 sessions_serialised.append(len(s.serialised))
                 assert statuses[-1] == CacheStatus.RESTORED, f"a stable-key statement stopped hitting: {statuses}"
                 guard = s.magics._statement_processor._miss_guard
-                assert not any(guard.is_guarded(h) for h in guard._records), "a legitimate restart-saver was guarded"
+                assert not any(_is_guarded(guard, h) for h in guard._records), "a legitimate restart-saver was guarded"
             finally:
                 s.close()
 
@@ -510,6 +517,6 @@ class TestRestartSaverIsNeverGuarded:
                 s.run(f"edit-{edit}")  # upstream changed -> miss, cache it
                 assert s.run(f"edit-{edit}")["status"] == CacheStatus.RESTORED
             guard = s.magics._statement_processor._miss_guard
-            assert not any(guard.is_guarded(h) for h in guard._records)
+            assert not any(_is_guarded(guard, h) for h in guard._records)
         finally:
             s.close()

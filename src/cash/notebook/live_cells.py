@@ -97,10 +97,8 @@ def expire() -> None:
     having worked once, all stop the pushes without closing anything. Without
     expiry the last snapshot is then served for the rest of the kernel's life --
     cash checks the user's edited upstream cell against FROZEN text and finds no
-    change, and because ``"extension"`` counts as a live source in
-    ``staleness._LIVE_SOURCES`` the once-per-session "cash cannot see unsaved
-    edits here" notice is suppressed as well. Confidently wrong, and silent
-    about it: strictly worse than the staleness this feature exists to fix.
+    change. Confidently wrong, and silent about it: strictly worse than the
+    staleness this feature exists to fix.
 
     So a snapshot is valid for exactly the ONE non-silent execution it
     preceded (see the ``silent=True`` gap below). The extension flushes before

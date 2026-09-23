@@ -228,7 +228,6 @@ class TestEarlyCellIdCapture:
             m._upstream_checker = MagicMock()
             m._original_run_cell = MagicMock()
             m._global_ttl = None
-            m._execution_history = []
             m._control_structure_processor = MagicMock()
             m._cash_instance = MagicMock()
             # CellExecutor needs to exist so _execute_cell can delegate; the

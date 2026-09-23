@@ -153,7 +153,6 @@ def test_reading_the_saved_file_adds_no_row(tmp_path):
     for all five testers, in headless runs where nothing can be unsaved; none
     could act on it. Only a proven-stale file is reported."""
     t = StalenessTracker()
-    t.note_source("file")
     executor = CellExecutor.__new__(CellExecutor)
     executor._upstream_checker = types.SimpleNamespace(staleness=t)
     executor._statement_processor = types.SimpleNamespace(function_tracker=object())
@@ -163,11 +162,3 @@ def test_reading_the_saved_file_adds_no_row(tmp_path):
     all_metrics = executor._build_pre_execution_notifications("x = 1", [], [])
 
     assert not [m for m in all_metrics if m.get("status") == "WARNING"], all_metrics
-
-
-def test_a_verifiable_source_is_recorded_as_such(tmp_path):
-    """Colab and the VS Code backup both give live cells."""
-    for source in ("colab", "vscode-backup"):
-        t = StalenessTracker()
-        t.note_source(source)
-        assert t.can_verify() is True, source

@@ -29,21 +29,12 @@ class StalenessTracker:
         self._stale = False
         self._saved_at: float | None = None
         self._hint: str | None = None
-        # Which reader supplied the cells cash checked against. "file" means the
-        # saved .ipynb, i.e. cash CANNOT see unsaved edits; the live readers can.
-        self._source: str | None = None
 
-    def observe(self, *, running_code: str, file_code: str | None, notebook_path: str | None) -> bool:
+    def observe(self, *, running_code: str, file_code: str | None, notebook_path: str | None) -> None:
         """Compare what is running against what the file says, and remember.
 
-        Returns True on exactly the call that flips the verdict from fresh to
-        stale -- the transition edge, not the level. A later call, even one
-        that finds a different mismatch while already stale, returns False
-        even though `is_stale()` stays True. The one production caller
-        (`UpstreamChecker._find_current_cell_index`) does not use this value
-        -- it reads `is_stale()` after the fact instead -- so this is the
-        edge-triggered half of the tracker's surface, there for a caller (or
-        test) that wants the moment of proof rather than the polled level.
+        Read the verdict with `is_stale()`. A later mismatch while already
+        stale keeps the first verdict (its `saved_at()` and `hint()`).
         """
         mtime = _mtime(notebook_path)
         # A save is the only thing that can clear the verdict: the file has
@@ -52,18 +43,17 @@ class StalenessTracker:
             self.reset()
 
         if file_code is None or notebook_path is None or mtime is None:
-            return False  # no proof available; not the same as "fresh"
+            return  # no proof available; not the same as "fresh"
         file_code = _undo_magic_line_strip(running_code, file_code)
         if _normalise(running_code) == _normalise(file_code):
-            return False
+            return
         if self._stale:
-            return False  # already known; do not re-notify
+            return  # already known; keep the first verdict
 
         self._stale = True
         self._saved_at = mtime
         first_line = running_code.strip().splitlines()[0][:60] if running_code.strip() else None
         self._hint = _to_ascii(first_line) if first_line else None
-        return True
 
     def is_stale(self) -> bool:
         return self._stale
@@ -78,18 +68,6 @@ class StalenessTracker:
         self._stale = False
         self._saved_at = None
         self._hint = None
-        self._source = None
-
-    # Readers that see what is on screen rather than what was last saved.
-    _LIVE_SOURCES = frozenset({"colab", "vscode-backup", "extension"})
-
-    def note_source(self, source: str) -> None:
-        """Record which reader supplied the cells for this check."""
-        self._source = source
-
-    def can_verify(self) -> bool:
-        """True when the cells came from a reader that sees unsaved edits."""
-        return self._source in self._LIVE_SOURCES
 
 
 #: Matches a leading ``%%cash`` cell-magic line (optionally with args, e.g.

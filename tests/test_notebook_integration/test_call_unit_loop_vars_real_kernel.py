@@ -446,12 +446,10 @@ def test_sampled_cash_lineage_hash_on_loop_var_matches_the_no_cash_oracle(nb_run
 # popped, so only the outer scope is active and its digest resolves cleanly.
 # Here the call sits INSIDE the inner loop, so BOTH scopes are
 # simultaneously active on the stack at the moment the key is built.
-# `current_loop_vars()` returns only the stack's TOP (the inner scope's own,
-# already-pre-merged-with-parent dict -- see that method's docstring), and
-# `current_loop_var_digests()` merges the whole digest stack by BARE name,
-# innermost winning -- both means the reused name 'q' resolves to only the
-# INNER scope's value/digest; the outer iteration has no slot in the key at
-# all. Two different outer iterations that both see the same inner sequence
+# Reading only the stack's TOP (the inner scope's own, already-pre-merged-
+# with-parent dict), or merging the digest stack by BARE name with the
+# innermost winning, resolves the reused name 'q' to only the INNER scope's
+# value/digest; the outer iteration has no slot in the key at all. Two different outer iterations that both see the same inner sequence
 # are therefore indistinguishable: pre-fix, this collapsed 4 genuinely
 # distinct (outer, inner) pairs onto 2 keys.
 _NESTED_REUSE_INSIDE_LOOP = (

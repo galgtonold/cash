@@ -771,8 +771,7 @@ def last_cell_source() -> str | None:
     """Which reader supplied the most recent cell read.
 
     ``"extension"`` / ``"colab"`` / ``"vscode-backup"`` see unsaved edits;
-    ``"file"`` does not, which is what the once-per-session "cannot verify"
-    notice keys on. ``None`` means no read has happened yet this session.
+    ``"file"`` does not. ``None`` means no read has happened yet this session.
     """
     return _last_cell_source
 

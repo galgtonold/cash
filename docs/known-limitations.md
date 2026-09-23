@@ -364,7 +364,7 @@ for q in [[1], [1]]:            # two iterations, EQUAL at binding time
 
 Both iterations bind `q` to an equal value (`[1]`), so both get the same discriminator even though the body has since made them different — the second iteration is served the first's cached result instead of a fresh call.
 
-<!-- claim: cash/notebook/call_unit.py:_loop_var_digest @c26d2458 -->
+<!-- claim: cash/notebook/call_unit.py:_loop_var_digest @59a76faf -->
 This is true of a plain cached statement in the loop exactly as it is of an intercepted call: `v = pull(handle)` on its own line, with no directive at all, collapses the same way, because both channels read the same value, frozen at the same moment. Neither spelling is a special case of the other.
 
 **What to do:** the fix is not "mutate vs. rebind" — a body-local rebind is exactly as invisible as an in-place mutation:
@@ -400,7 +400,7 @@ for i, base in enumerate([[1], [1]]):
 
 > Ambiguous cell execution! The current cell content appears 2 times in the notebook and no cell ID could be resolved.
 
-<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2, cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @0e6b7d71 broad="the claim is about when this exception type exists to be raised at all" -->
+<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2, cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @9b201497 broad="the claim is about when this exception type exists to be raised at all" -->
 Raised when two cells have **byte-identical content** *and* cash cannot resolve a cell ID. Cash fails loudly here rather than guessing, because guessing wrong would silently serve one cell's result for the other.
 
 In JupyterLab and VS Code with IPython ≥ 8.3, cell IDs normally resolve and this does not occur. It shows up in environments that do not supply them.
@@ -605,7 +605,7 @@ nothing is pushed, and cash falls back to the saved `.ipynb`. Nothing breaks, an
 it is not quiet about it: the once-per-session badge notice fires, as it does for
 anyone reading the saved file.
 
-<!-- claim: cash/notebook/live_cells.py:expire @47a3dfed -->
+<!-- claim: cash/notebook/live_cells.py:expire @5f0a744b -->
 **Turning it off.** `jupyter labextension disable cash-live-cells`, then reload
 the page — **no kernel restart needed**: cash falls back to the saved file
 exactly as it does for a user who never had the extension. That works because a pushed snapshot is only good for the one
@@ -662,7 +662,7 @@ not running, there is nothing to diverge on and this never triggers.
 **What to do:** avoid editing the same notebook open in two tabs at once, or
 save (`Ctrl+S` / `Cmd+S`) before switching tabs to run a cell.
 
-<!-- claim: cash/notebook/vscode_backup.py:live_cells @b86cd33f, cash/notebook/staleness.py:StalenessTracker.can_verify @e81260f6 -->
+<!-- claim: cash/notebook/vscode_backup.py:live_cells @b86cd33f, cash/notebook/server_discovery.py:_read_notebook_code_cells @6808d937 -->
 **On VS Code, cash reads your unsaved edits directly.** VS Code keeps dirty
 editors in a backup file so it can restore after a crash, and cash reads its
 cells from there instead of the saved `.ipynb` — so editing one cell and running

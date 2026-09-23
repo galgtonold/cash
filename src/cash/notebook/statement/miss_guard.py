@@ -321,9 +321,3 @@ class MissGuard:
         if rec.churned_without_a_change:
             return "something outside its inputs changed each run (a file it reads, or the code of a function it calls)"
         return None
-
-    def is_guarded(self, source_hash: str) -> bool:
-        """True once the verdict has flipped, probe run or not."""
-        self._ensure_loaded()
-        rec = self._records.get(source_hash)
-        return rec is not None and rec.guarded

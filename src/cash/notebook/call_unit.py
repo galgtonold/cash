@@ -209,7 +209,7 @@ def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, st
     **The fallback.** A name absent from `loop_var_digests` (a loop var whose
     binding didn't go through `for_handler.py`'s own per-iteration push, or
     one bound by an ancestor loop several levels up whose own digest wasn't
-    carried this far down -- see `StatementProcessor.current_loop_var_digests`)
+    carried this far down -- see `StatementProcessor._depth_keyed_loop_scope`)
     computes `compute_hash_full(value)` directly. This MUST stay the full
     hash. Do not "simplify" it to `compute_hash` -- that would silently
     reintroduce the exact sampled-collision bug this function exists to
@@ -1769,7 +1769,7 @@ class CallUnit:
     def _current_loop_vars(self) -> dict[str, object]:
         """The live enclosing loop's non-dunder iteration vars, or ``{}``.
 
-        Wired to ``StatementProcessor.current_loop_vars`` (see that class's
+        Wired to ``StatementProcessor.current_loop_vars_for_call_key`` (see that class's
         ``_call_unit_loop_vars`` stack, pushed/popped by
         ``ForLoopHandler._process_one_iteration`` around each iteration's body)
         via ``CallCache``'s ``loop_vars_provider``. Guarded independently of
@@ -1787,7 +1787,7 @@ class CallUnit:
     def _current_loop_var_digests(self) -> Mapping[str, str]:
         """The live enclosing loop's precomputed loop-var digests, or ``{}``.
 
-        Wired to ``StatementProcessor.current_loop_var_digests`` (see that
+        Wired to ``StatementProcessor.current_loop_var_digests_for_call_key`` (see that
         class's ``_call_unit_loop_var_digests`` stack -- pushed/popped in
         lockstep with ``_call_unit_loop_vars``, by the same
         ``loop_vars_scope`` call) via ``CallCache``'s

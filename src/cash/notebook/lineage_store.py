@@ -6,8 +6,7 @@ this module extends to *lineage state*.
 Invariants
 ----------
 * All persistent lineage writes for a variable go through :meth:`record` or
-  :meth:`reset_to`. Callers that need to mutate the raw dict directly during
-  migration go through :meth:`as_dict` — that surface is transitional.
+  :meth:`reset_to`.
 * When ``record`` is given a ``value`` whose type accepts attributes, the
   dict entry and ``_cash_lineage_hash`` attribute are written together so
   they cannot drift.
@@ -47,11 +46,6 @@ class LineageStore:
 
     def __iter__(self) -> Iterator[str]:
         return iter(self._lineage)
-
-    def as_dict(self) -> dict[str, str]:
-        """Return the live backing dict. Transitional — prefer :meth:`get` /
-        :meth:`record` in new code."""
-        return self._lineage
 
     # --- write surface --------------------------------------------------
 

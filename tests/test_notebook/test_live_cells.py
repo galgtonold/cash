@@ -307,10 +307,9 @@ def test_wiring_a_reopen_falls_back_to_the_file_until_the_new_snapshot_lands(tmp
 # or the extension erroring after having worked once all stop the pushes WITHOUT
 # closing the comm, so `reset()`-on-open never runs. Before `expire`, the last
 # snapshot was then served for the rest of the kernel's life: cash compared the
-# user's edited upstream cell against frozen text, found no change -- and,
-# because "extension" is in `staleness._LIVE_SOURCES`, suppressed the notice
-# that would have said cash could not see unsaved edits. Confidently wrong AND
-# silent, which is worse than the staleness the feature exists to fix.
+# user's edited upstream cell against frozen text and found no change.
+# Confidently wrong AND silent, which is worse than the staleness the feature
+# exists to fix.
 
 
 def test_a_snapshot_does_not_outlive_the_execution_it_arrived_for():
@@ -376,38 +375,6 @@ def test_wiring_a_frontend_that_stops_pushing_falls_back_to_the_file(tmp_path):
     sd.invalidate_notebook_cells_cache()
     assert sd.get_notebook_cells(str(nb_path)) == ["from_file = True"]
     assert sd.last_cell_source() == "file"
-
-
-def test_wiring_the_unsaved_edits_notice_fires_again_once_a_snapshot_expires():
-    """The other half of the Critical, and the half a cells-only test misses.
-
-    `last_cell_source()` feeds `StalenessTracker`, and "extension" counts as a
-    live source -- so a store that kept serving a dead frontend's snapshot also
-    switched OFF the once-per-session "cash cannot see unsaved edits here"
-    notice. Being wrong is bad; being wrong with the warning suppressed is the
-    failure this feature must never produce.
-    """
-    from cash.notebook.staleness import StalenessTracker
-
-    handle_message({"seq": 1, "cells": CELLS})
-    sd.invalidate_notebook_cells_cache()
-    sd.get_notebook_cells(str(_MISSING_NOTEBOOK))
-    live = StalenessTracker()
-    live.note_source(sd.last_cell_source())
-    assert live.can_verify()
-
-    expire()
-
-    sd.invalidate_notebook_cells_cache()
-    sd.get_notebook_cells(str(_MISSING_NOTEBOOK))
-    dead = StalenessTracker()
-    dead.note_source(sd.last_cell_source())
-    assert not dead.can_verify()
-
-
-#: A path that cannot exist, so the file reader contributes nothing and the only
-#: variable in the test above is which reader answered.
-_MISSING_NOTEBOOK = "no-such-notebook-cas274.ipynb"
 
 
 # --- The hook that calls `expire` -- registration, not just the function -----
