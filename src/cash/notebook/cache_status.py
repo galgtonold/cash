@@ -22,7 +22,7 @@ class ExecutionResult:
     """Result of executing a single statement.
 
     Replaces the ad-hoc inline ``class Result`` definitions that were
-    scattered across :mod:`~cash.notebook.statement_processor`.
+    scattered across the statement processor.
 
     Parameters
     ----------

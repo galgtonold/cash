@@ -1,7 +1,7 @@
 """Renderers consume a :class:`~..view.InteractiveBadge` IR tree and emit output.
 
-Today: :mod:`.html` (the only consumer in slice 4).
-Future: :mod:`.text` (slice 6), and a React-mounting renderer.
+:mod:`.html` renders the interactive badge; :mod:`.text` renders the plain-text
+form for the ``print`` badge mode (``%cash_badge print``).
 """
 
 from .html import render_html

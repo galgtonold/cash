@@ -108,8 +108,8 @@ GUARD_SKIP_REASON = (
 def resolve_cache_dir(backend: Any) -> str | None:
     """Find the on-disk cache directory behind *backend*, or None.
 
-    Walks a backend chain (``TieredBackend`` / ``CascadingBackend`` expose
-    ``.backends``) breadth-first and returns the first real ``cache_dir``. None
+    Walks a backend chain (``TieredBackend`` exposes ``.backends``)
+    breadth-first and returns the first real ``cache_dir``. None
     means there is nowhere to persist — a pure in-memory backend, which has no
     restart to survive anyway, so the guard degrades to session-scoped.
 

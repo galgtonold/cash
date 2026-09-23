@@ -193,7 +193,7 @@ class CashAdminMagicsMixin:
         # entries that's an O(N) scan that opens every metadata file --
         # the same pathology we removed from ``_diagnose_miss`` in the
         # 2026-05-18 overhead pass. Users who want a backend-wide view
-        # can run ``%cash_admin`` (or the lower-level inspection tools).
+        # can run ``cash inspect`` from the command line.
 
         # Writes that failed and were thrown away. A silent loss: the entry is
         # absent, so that work recomputes every run, and none of the counters

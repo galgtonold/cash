@@ -1,4 +1,6 @@
-"""Persistent audit trail of cache operations for compliance and debugging."""
+"""The ``%cash_audit`` log: one entry per output variable of each statement,
+saying whether it was a cache hit, miss or skip. Kept in memory, and
+optionally appended to a file as JSON lines."""
 
 from __future__ import annotations
 
@@ -6,7 +8,7 @@ import contextlib
 import json
 import logging
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
 
@@ -20,13 +22,12 @@ class AuditEntry:
     """Single audit log entry."""
 
     timestamp: float
-    operation: str  # 'cache_hit', 'cache_miss', 'cache_store', 'cache_delete',
-    # 'cache_restore', 'cache_skip', 'cache_invalidate'
-    variable: str  # Variable name or cache key
-    code: str = ""  # Code that triggered the operation
-    status: str = ""  # 'success', 'error'
+    # 'cache_hit', 'cache_miss' or 'cache_skip'; 'cache_operation' for any
+    # other statement status.
+    operation: str
+    variable: str  # Output variable name, or a code prefix when there is none
+    code: str = ""  # The statement
     duration_ms: float = 0.0
-    details: dict[str, Any] = field(default_factory=dict)
 
     @property
     def timestamp_str(self) -> str:
@@ -42,10 +43,7 @@ class AuditEntry:
 
 
 class AuditLogger:
-    """Persistent audit logger for cache operations.
-
-    Maintains an in-memory buffer and optionally writes to a file.
-    """
+    """Buffer of :class:`AuditEntry` records, optionally mirrored to a file."""
 
     def __init__(self, file_path: str | None = None, max_entries: int = 5000):
         self._entries: list[AuditEntry] = []
@@ -83,9 +81,7 @@ class AuditLogger:
         operation: str,
         variable: str,
         code: str = "",
-        status: str = "success",
         duration_ms: float = 0.0,
-        **details: Any,
     ):
         """Record an audit entry."""
         if not self._enabled:
@@ -96,9 +92,7 @@ class AuditLogger:
             operation=operation,
             variable=variable,
             code=code[:200],  # Truncate long code
-            status=status,
             duration_ms=round(duration_ms, 2),
-            details=details,
         )
 
         self._entries.append(entry)

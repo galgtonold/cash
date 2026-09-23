@@ -1,7 +1,7 @@
 """HTML renderer for the BadgeView IR — v3 "code-first" design.
 
 Walks an :class:`InteractiveBadge` tree and emits the v3 visual language
-from ``design/notebook-badges/Badge.v3.jsx``:
+(committed examples live in ``docs/_badges/``):
 
 * code-line foreground (syntax-highlighted, monospace)
 * 5px state rail on the left of every row
@@ -1604,7 +1604,7 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float) -> str:
 
     A loop with several body statements (the common case) used to emit
     one ``for ticker in [...]:`` header per statement, which read as
-    duplicated noise. Per the v3 design (Badge.v3.jsx :: LoopBlock) the
+    duplicated noise. Per the v3 design the
     header is rendered once, aggregated across all stmts; each body
     statement gets a single body-line row underneath with its own
     inline iteration mini-histogram and a drill-down.

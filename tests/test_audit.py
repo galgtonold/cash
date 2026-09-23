@@ -15,7 +15,6 @@ class TestAuditEntry:
             operation="cache_hit",
             variable="df",
             code='df = pd.read_csv("data.csv")',
-            status="success",
             duration_ms=12.5,
         )
         assert entry.operation == "cache_hit"
@@ -204,11 +203,3 @@ class TestAuditLogger:
         logger.log("cache_hit", "x", code=long_code)
         entries = logger.get_entries()
         assert len(entries[0].code) <= 200
-
-    def test_extra_details(self):
-        logger = AuditLogger()
-        logger.enable()
-        logger.log("cache_hit", "x", cache_key="abc123", backend="FileBackend")
-        entries = logger.get_entries()
-        assert entries[0].details["cache_key"] == "abc123"
-        assert entries[0].details["backend"] == "FileBackend"

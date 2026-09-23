@@ -2,8 +2,7 @@
 
 Assertions target the stable ``c3-*`` class contract and the semantic
 ``data-kind`` / ``data-status`` attributes, not specific pixel values.
-The visual surface is documented in
-``design/notebook-badges/Badge.v3.jsx``.
+Rendered examples of the visual surface live in ``docs/_badges/``.
 """
 
 from __future__ import annotations

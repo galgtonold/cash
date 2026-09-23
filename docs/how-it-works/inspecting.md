@@ -185,10 +185,10 @@ Audit Summary:
     cache_miss: 1
 ```
 
-<!-- claim: cash/notebook/audit.py:AuditLogger.__init__ @86911f4a, cash/notebook/audit.py:AuditLogger.log @17d418d6, cash/notebook/audit.py:AuditLogger.get_entries @3fc9e021 -->
+<!-- claim: cash/notebook/audit.py:AuditLogger.__init__ @86911f4a, cash/notebook/audit.py:AuditLogger.log @e8188ae0, cash/notebook/audit.py:AuditLogger.get_entries @3fc9e021 -->
 Reach for it when a *sequence* is the question — a cell that behaves differently
-on the third run, or a session where you want a compliance-style record of what
-was served from cache versus computed. Entries live in memory unless you pass
+on the third run, or a session where you want a record of what was served from
+cache versus computed. Entries live in memory unless you pass
 `--file`, and the in-memory buffer keeps only the most recent 5,000 — a long
 session silently drops the oldest, so pass `--file` for anything you need to
 keep. `show` displays the last 50. Full flag reference in

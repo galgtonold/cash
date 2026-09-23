@@ -1822,7 +1822,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                     operation=audit_op,
                     variable=out_var,
                     code=code,
-                    status="success",
                     duration_ms=duration_ms,
                 )
 

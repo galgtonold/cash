@@ -1419,10 +1419,11 @@ class FileAccessTracker:
     single ``ContextVar.get()`` + ``is None`` check before falling
     through to the original — sub-microsecond.
 
-    **Limitation**: The heuristic does not track writes (e.g., ``to_csv``,
-    ``np.save``).  Write-side dependencies are not needed for cache invalidation
-    because the *output* of a statement is hashed directly, not the files it
-    writes.
+    **Writes are not dependencies.** A file opened for writing is never
+    recorded as an input: a statement's output is hashed directly, and keying
+    on its own output file would invalidate it on every run. ``open()`` writes
+    are reported to the active effect observer instead (see
+    ``cash.effect_observer``).
     """
 
     def __init__(self, user_ns=None, propagate_to_parent: bool = False, hash_on_read: bool = False):

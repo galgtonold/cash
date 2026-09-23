@@ -463,7 +463,8 @@ handler installed via [`%cash_debug json`](#cash_debug) (or
 ### `%cash_audit`
 <!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_audit @8658d479 -->
 
-Manage audit logging of cache operations (hits, misses, computes, restores).
+Log each statement's outcome per output variable: `cache_hit`, `cache_miss`
+or `cache_skip`, with the code and duration.
 Audit entries are kept in memory by default and optionally mirrored to a file.
 
 **Signature:** `%cash_audit [on [--file <path>]|off|show [<operation>] [--json]|summary|clear]`
