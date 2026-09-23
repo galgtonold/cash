@@ -11,7 +11,7 @@ outputs.
 **That fast path is gone.** Its cache key included the iterable's
 lineage, so appending a SINGLE item invalidated the whole unit and re-ran
 EVERY call — as expensive as no caching at all (see
-``test_accumulator_single_statement_append_incremental.py`` for that
+``test_accumulators.py`` for that
 regression guard). The shape now decomposes per-iteration like any other
 loop: ``out.append(slow(e))`` is still an in-place mutation and still
 re-executes every run, but call interception now caches ``slow(e)``

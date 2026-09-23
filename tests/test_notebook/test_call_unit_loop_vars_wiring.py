@@ -119,7 +119,7 @@ def test_hidden_state_loop_vars_still_discriminate_on_a_rerun(cash_magics, mock_
     the product was correct: the same notebook on a REAL kernel returns
     `{1: 1, 2: 2, 3: 3}` on every rerun. The cross-run contract therefore lives
     where a checker exists, in
-    `test_notebook_integration/test_callee_global_capture.py`.
+    `test_notebook_integration/calls/test_callee_global_capture.py`.
     """
     run_cash_cell(cash_magics, _DEFS_CELL.strip())
     run_cash_cell(cash_magics, _LOOP_CELL.strip())
@@ -197,7 +197,7 @@ def test_loop_vars_scope_nests_and_pops_back_to_the_outer_scope():
 # `loop_vars_scope` call -- which has the scope discipline `variable_lineage`
 # lacks. These tests cover the stack mechanics directly; the end-to-end
 # correctness proof (a real nested loop, a real hidden-state call, a real
-# kernel) lives in `test_call_unit_loop_vars_real_kernel.py`'s
+# kernel) lives in `test_notebook_integration/calls/test_call_unit_loop_vars.py`'s
 # `test_nested_loop_reusing_the_target_name_*` / `test_sibling_loops_*` tests.
 
 
@@ -249,7 +249,7 @@ def test_loop_var_digests_reused_name_does_not_outlive_its_scope():
 # into `CallCache`. These tests cover that path directly, at the stack level
 # -- no notebook, no kernel -- mirroring the section above; the end-to-end
 # proof (a real nested loop, a call INSIDE the reuse, a real kernel, a
-# cash-off oracle) lives in `test_call_unit_loop_vars_real_kernel.py`'s
+# cash-off oracle) lives in `test_notebook_integration/calls/test_call_unit_loop_vars.py`'s
 # `test_call_inside_a_name_reusing_inner_loop_*` tests.
 
 

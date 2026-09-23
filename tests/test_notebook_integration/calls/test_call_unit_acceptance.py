@@ -30,7 +30,7 @@ The brief's own proposed body, ``out.append(compute(next(it)))``, is a bare
 ``Expr(Call)`` loop body -- exactly the shape
 ``control_structures/processor.py``'s accumulator single-unit fast path
 (``cacheable_accumulator_loop``) claims, per
-``test_call_unit_loop_vars_real_kernel.py``'s own module docstring. Verified
+``test_call_unit_loop_vars.py``'s own module docstring. Verified
 directly here (mutation-tested, see the task report): with that body, the
 WHOLE loop is cached as one unit and the individual ``compute()`` calls never
 go through per-iteration ``CallUnit`` interception at all -- the badge shows

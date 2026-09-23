@@ -10,7 +10,7 @@ the recorded entry was permanently short of a key the simulation carried,
 was never adopted.
 
 The integration twin is
-``tests/test_notebook_integration/test_a_loop_reading_a_cash_on_cell_name_still_restores.py``
+``tests/test_notebook_integration/loops/test_a_loop_reading_a_cash_on_cell_name_still_restores.py``
 and carries the measurements. Here the three pieces are pinned separately:
 the fallback itself, the simulator writing the field it reads, and the
 control processor consuming it.

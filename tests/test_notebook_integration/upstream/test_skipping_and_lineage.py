@@ -113,7 +113,7 @@ class TestSkipLogic:
         so ``x`` is restored to its cell-entry base before re-execution and the
         result stays ``1`` — it does NOT accumulate to ``2``. (An earlier snapshot
         of the doubling bug asserted ``x=2``; idempotent re-run is the intended
-        semantic — see test_isolated_rerun_gaps.)
+        semantic — see test_rerunning_a_self_modifying_cell_alone.)
         """
         nb_runner.create_notebook(
             [
@@ -285,7 +285,7 @@ class TestLineageIntegrity:
         Same family as test_06 with a pure self-reassignment rather than an
         augmented assignment. Re-running cell 2 restores the cell-entry base
         ``x = 0`` first, so ``x = x + 1`` stays ``1`` rather than accumulating to
-        ``2`` — see test_isolated_rerun_gaps for the catalogue.
+        ``2`` — see test_rerunning_a_self_modifying_cell_alone for the catalogue.
         """
         nb_runner.create_notebook(
             [

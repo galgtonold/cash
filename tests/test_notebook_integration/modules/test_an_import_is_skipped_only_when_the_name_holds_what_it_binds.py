@@ -1,6 +1,6 @@
 """An import is skipped as redundant only when the name already holds what it would bind.
 
-Found in the full sweep: `test_interaction_array_typed_arrays.py` failed with a
+Found in the full sweep: `language/test_arrays_and_structs.py` failed with a
 TypeError on ``array('i', [...])`` whenever its reused kernel had run
 ``import array`` for the test before. The badge read ``SKIPPED: from array
 import array``: an import-only statement was skipped when every name it binds

@@ -13,7 +13,7 @@ both directions -- that a draw IS caught, and that ordinary receivers are NOT,
 since widening it would silently disable per-iteration loop caching.
 
 The end-to-end bug is not reproducible under ``NotebookClient`` (see
-``tests/test_notebook_integration/test_loop_draw_not_cached.py``), so the
+``tests/test_notebook_integration/randomness/test_loop_draw_not_cached.py``), so the
 mechanism is pinned here and the behaviour by the real-server reproducer.
 """
 

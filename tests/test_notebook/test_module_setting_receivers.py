@@ -1,7 +1,7 @@
 """Which bare calls count as changing a setting a module keeps.
 
 The integration arm is
-``test_notebook_integration/test_module_settings_survive_a_restart.py``.
+``test_notebook_integration/restart/test_module_settings_survive_a_restart.py``.
 """
 
 import ast

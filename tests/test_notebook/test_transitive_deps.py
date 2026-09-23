@@ -21,7 +21,7 @@ def test_three_cell_cascade():
     requires a real notebook file to read the upstream cells from, and
     ``run_cash_cell`` (used in unit tests) runs a cell with no notebook
     behind it, so there is nothing upstream to resolve.
-    See test_interaction_dependencies.py for proper integration tests.
+    See test_notebook_integration/upstream/test_edit_chains.py for proper integration tests.
     """
     pytest.xfail(
         "Transitive re-execution requires _execute_cell + notebook file, "

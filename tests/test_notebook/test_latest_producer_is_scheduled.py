@@ -9,7 +9,7 @@ schedule every statement of the cell but that one: completing
 ``sales``, though the refund write sits between them.
 
 The notebook arm is
-``tests/test_notebook_integration/test_a_rebuilt_cleaning_cell_keeps_every_column_write.py``;
+``tests/test_notebook_integration/upstream/test_a_rebuilt_cleaning_cell_keeps_every_column_write.py``;
 the original repro (3 million rows) is the one that reached this state.
 """
 

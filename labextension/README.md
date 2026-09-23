@@ -13,7 +13,7 @@ the file.
 
 It **pushes** rather than answering a request: a comm sent while a cell is
 executing is queued until that cell ends (pinned by
-`tests/test_notebook_integration/test_comm_reply_during_execution.py`), so a
+`tests/test_notebook_integration/cell_sources/test_comm_reply_during_execution.py`), so a
 request/response design could never serve a read at the moment cash needs one.
 It pushes on change (debounced 150 ms) and flushes synchronously on
 `NotebookActions.executionScheduled`.

@@ -22,7 +22,7 @@ still fails.
    actually read.
 
 The integration twin is
-``tests/test_notebook_integration/test_an_aliased_module_is_the_same_module.py``.
+``tests/test_notebook_integration/modules/test_an_aliased_module_is_the_same_module.py``.
 """
 
 import sys

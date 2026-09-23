@@ -1,7 +1,7 @@
 """The two halves of the loop-header dependency bug, at unit level.
 
 The integration twin is
-``tests/test_notebook_integration/test_a_loop_header_read_is_a_dependency.py``
+``tests/test_notebook_integration/loops/test_a_loop_header_read_is_a_dependency.py``
 and carries the full story. Here each half is pinned on its own, because
 they are in different modules and either one alone leaves the bug in place:
 

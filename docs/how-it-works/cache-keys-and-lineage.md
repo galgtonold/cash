@@ -178,7 +178,7 @@ A statement's `inputs` come from its AST, which only sees the names it mentions.
 !!! note "One known gap"
     Re-running **only** the call site after editing a callee defined below it is still
     stale, and is pinned as an expected failure
-    (`tests/test_notebook_integration/test_downward_function_dependency.py`). The edited
+    (`tests/test_notebook_integration/definitions/test_downward_function_dependency.py`). The edited
     cell never executed, so `user_ns` still holds the old function and the key legitimately
     does not move. Editing and running the notebook top-to-bottom propagates correctly.
 

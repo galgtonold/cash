@@ -22,8 +22,8 @@ answer against a no-cache run -- could not be inspected afterwards, which
 cost an hour of inference that one traceback would have settled.
 
 ``--stress N`` also runs the alias / in-place mutation scenarios N times each
-(``test_zz_stress_alias_mutation.py``), in the last chunk alongside the rest of
-it, since the wrong answer they hunt showed only under load. A repeat that
+(``mutations/test_eda_mutation_reconstruction.py``), in its chunk alongside the
+rest of the suite, since the wrong answer they hunt showed only under load. A repeat that
 disagrees with its oracle keeps its decision trace and cell outputs under
 ``<results>/stress``.
 

@@ -29,7 +29,7 @@ are pinned here so none regresses silently:
   directive (the same substring check ``_drop_audited`` itself uses) means
   the overwhelming majority of functions -- the ones with no directive to
   lose -- are completely unaffected by this function, on every path, exactly
-  as if it did not exist. See ``tests/test_notebook_integration/
+  as if it did not exist. See ``tests/test_notebook_integration/calls/
   test_callee_global_capture.py::test_a_same_session_rerun_neither_freezes_nor_accumulates``
   for the end-to-end regression this was caught by.
 * **The substring gate itself was a false-positive surface.**

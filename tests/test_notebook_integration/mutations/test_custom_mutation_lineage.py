@@ -25,7 +25,7 @@ the mutation.
 Scope is narrow on purpose -- only methods known to mutate (``MUTATING_METHODS``)
 or pandas ``inplace=True``. Custom mutators whose names are not known-mutating
 (observer ``bus.on``, stack ``s.push``) are NOT yet covered; see
-test_interaction_observer_pattern / test_interaction_iterator_protocol for that
+language/test_design_patterns.py / language/test_generators_and_iterators.py for that
 remaining family (currently sub-cost-floor, so they pass for a different reason).
 """
 

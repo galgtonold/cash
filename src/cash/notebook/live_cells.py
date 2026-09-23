@@ -7,7 +7,7 @@ component, because the kernel has no other copy of the document.
 
 It PUSHES rather than answering a request: a comm sent while a cell is executing
 is queued until that cell ends (pinned by
-tests/test_notebook_integration/test_comm_reply_during_execution.py), so a
+tests/test_notebook_integration/cell_sources/test_comm_reply_during_execution.py), so a
 request/response design could never serve a read at the moment cash needs one.
 The extension pushes on change and flushes before execution; shell messages are
 FIFO, so a push sent before an execute_request is processed first.

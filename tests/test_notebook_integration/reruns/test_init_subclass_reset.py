@@ -89,7 +89,7 @@ def test_cross_cell_class_var_accumulator_not_corrupted(nb_runner):
     run_all value — the class-def reset is suppressed by the cross-cell guard, so
     the mutation is not clobbered.
 
-    Modeled on tests/test_notebook_integration/test_class_state_rerun.py
+    Modeled on tests/test_notebook_integration/reruns/test_class_state_rerun.py
     ::test_init_increments_class_counter.
     """
     nb_runner.create_notebook(

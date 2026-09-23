@@ -221,7 +221,7 @@ def test_loop_vars_discriminate_via_precomputed_digest_when_available():
     was): that dict is flat, keyed only by name, and never popped, so a
     nested loop reusing a target name leaves a STALE entry for the rest of
     the outer iteration -- found live via a real-kernel repro, see
-    `test_call_unit_loop_vars_real_kernel.py`'s nested-loop tests. This test
+    `test_notebook_integration/calls/test_call_unit_loop_vars.py`'s nested-loop tests. This test
     exercises `call_cache_key`'s own `loop_var_digests` parameter directly,
     which is scope-correct by construction (the caller is responsible for
     supplying the right dict; `StatementProcessor`'s push/pop stack is what
@@ -299,7 +299,7 @@ def test_different_stmt_identity_gives_different_key():
     and free names agree -- must still mint different keys once their
     `stmt_identity` differs, or the second statement is served the first's
     cached values (the reported bug, reproduced end-to-end in
-    `test_notebook_integration/test_call_unit_statement_identity.py`).
+    `test_notebook_integration/calls/test_call_unit_statement_identity.py`).
 
     Mutation that must make this fail: drop the `if site.stmt_identity:
     parts.append(...)` block in `call_cache_key` (or the guard in the

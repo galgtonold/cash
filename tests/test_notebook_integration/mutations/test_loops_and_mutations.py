@@ -179,7 +179,7 @@ class TestMutationDetection:
         ``data`` is a no-lineage dict mutated in place (``data['count'] += 1``).
         Re-running cell 2 alone == running from the start, so ``data`` is restored
         to its cell-entry base ``{'count': 0}`` before re-execution and ``count``
-        stays ``1`` rather than accumulating to ``2`` — see test_isolated_rerun_gaps.
+        stays ``1`` rather than accumulating to ``2`` — see test_rerunning_a_self_modifying_cell_alone.
         """
         nb_runner.create_notebook(
             [

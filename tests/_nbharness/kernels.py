@@ -517,7 +517,7 @@ class _WarmKernel:
         # kernel. The two resets were redundant and each costs ~47ms, but only
         # ONE of them is disposable, and it is this one. Dropping the teardown
         # reset instead looked identical on paper and broke three module-reload
-        # tests (test_interaction_import_edits, test_round3_import_patterns):
+        # tests (in modules/test_import_edits.py):
         # they pass alone and fail behind any other test, so something the
         # previous test leaves in the warm kernel has to be cleared at teardown
         # and not merely before the next test runs. Turning cash off first did
@@ -588,7 +588,7 @@ class _WarmKernel:
         #
         # persist bypasses the cost floors, so the leak makes later tests cache
         # statements that are far too cheap to cache -- which is exactly what
-        # test_zzverify_persist_loop_amplification measures. One
+        # loops/test_persist_on_a_growing_loop.py measures. One
         # persist-enabling test ahead of it turned its 3 passes into 3
         # failures, reproduced in 9s.
         #
@@ -601,7 +601,7 @@ class _WarmKernel:
         # several conditions, so on a warm kernel only the FIRST test to
         # provoke a given warning sees it and every later one reads silence.
         #
-        # Measured: test_zzverify_persist_loop_amplification's three
+        # Measured: loops/test_persist_on_a_growing_loop.py's three
         # tests each provoke the same persist-amplification warning. The first
         # passed and the other two failed on "cache was bounded but the user
         # was never told why" -- the guard had worked, only the warning was

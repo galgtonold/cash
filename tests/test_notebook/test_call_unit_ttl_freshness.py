@@ -1,7 +1,7 @@
 """`CallUnit._ttl_fresh` edge semantics.
 
 The end-to-end contract is pinned in
-`tests/test_notebook_integration/test_call_unit_ttl.py`. These cover the three
+`tests/test_notebook_integration/calls/test_call_unit_ttl.py`. These cover the three
 decisions a real kernel cannot reach without sleeping or corrupting an entry,
 each of which is a place a plausible implementation goes subtly wrong.
 """

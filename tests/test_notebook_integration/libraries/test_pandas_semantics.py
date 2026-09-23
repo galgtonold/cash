@@ -29,7 +29,7 @@ pytestmark = [pytest.mark.timeout(90)]
 def _rerun_probe(nb_runner, setup, cell, expect):
     """run_all -> assert; run_all again -> assert (determinism); isolated
     re-run -> assert (idempotence).  Default persistence regime, matching
-    tests/test_notebook_integration/test_isolated_rerun_gaps.py."""
+    tests/test_notebook_integration/reruns/test_rerunning_a_self_modifying_cell_alone.py."""
     nb_runner.create_notebook([setup, cell])
     nb_runner.start_kernel()
     nb_runner.run_all()

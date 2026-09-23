@@ -25,7 +25,7 @@ the one that owes a higher duty of care.
 deliberate holdout exercising only the no-site decorator-fallback branch of
 ``resolve()`` — ``CallUnit._storable`` was a stub returning ``True`` before
 Task 6, so a call routed through a REAL ``CallSite`` had no guard at all (see
-``tests/test_notebook_integration/test_cache_calls_figure_guard.py``'s
+``tests/test_notebook_integration/calls/test_cache_calls_figure_guard.py``'s
 history for the matching, now-removed ``xfail``). Task 6 implemented the
 guard in ``CallUnit._storable`` itself, so this file now registers sites via
 ``set_sites`` like its siblings (``test_call_interception_runtime.py``) and

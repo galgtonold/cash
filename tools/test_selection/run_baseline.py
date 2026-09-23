@@ -14,7 +14,7 @@ Usage (from the repo root)::
 
     python tools/test_selection/run_baseline.py
     python tools/test_selection/run_baseline.py -- -n 8          # extra pytest args
-    python tools/test_selection/run_baseline.py --paths tests/test_notebook_integration/test_basic_flow.py
+    python tools/test_selection/run_baseline.py --paths tests/test_notebook_integration/basics/test_basic_flow.py
 
 Coverage slows the kernels down, so the per-test timeout is raised to 90 s for
 this run. Everything else (workers, reruns) comes from pyproject's addopts.

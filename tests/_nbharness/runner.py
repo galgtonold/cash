@@ -893,7 +893,7 @@ except Exception:
             # on it -- closing the shared loop, so every later test on this
             # worker dies with "RuntimeError: Event loop is closed".
             #
-            # `test_cfd_perf.py` does exactly this: a cash-on arm followed by a
+            # `calls/test_call_caching_overhead_on_a_numeric_loop.py` does exactly this: a cash-on arm followed by a
             # cash-off arm in one test, and it was the first casualty of a
             # 138-failure cascade under CASH_TEST_REUSE_KERNEL=1.
             #
@@ -909,7 +909,7 @@ except Exception:
             #
             # Measured: test_restart_persist_then_edit_upstream_recomputes does
             # exactly this, and behind it the last two tests of
-            # test_zzverify_persist_loop_amplification failed with every
+            # loops/test_persist_on_a_growing_loop.py failed with every
             # statement RESTORED from a cache they never wrote -- so the
             # amplification guard never engaged and its warning never fired.
             # The sibling test that restarts WITHOUT persist did not poison

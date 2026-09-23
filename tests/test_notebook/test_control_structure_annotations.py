@@ -13,7 +13,7 @@ granularity**: per-statement where the cache is per-statement, whole-unit where
 the cache is one unit.
 
 The real-kernel twin is
-``tests/test_notebook_integration/test_no_cache_in_control_structures_integration.py``.
+``tests/test_notebook_integration/control_flow/test_no_cache_in_control_structures.py``.
 """
 
 from __future__ import annotations

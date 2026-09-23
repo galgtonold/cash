@@ -16,7 +16,7 @@ These are unit tests because the warning is a Python ``warnings.warn`` raised on
 the statement-processing path: ``pytest.warns`` can assert on it precisely here,
 whereas under ``nb_runner`` it lands in a subprocess kernel's cell stderr and can
 only be string-matched. The real-kernel end of the contract lives in
-``tests/test_notebook_integration/test_allow_random_annotation_integration.py``.
+``tests/test_notebook_integration/randomness/test_allow_random_annotation.py``.
 """
 
 from __future__ import annotations

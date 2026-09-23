@@ -1,7 +1,7 @@
 """What ``Path.stat()`` reports about a file makes that file a dependency.
 
 The notebook arm, and the story behind it, is
-``test_notebook_integration/test_a_file_read_by_its_size_is_a_dependency.py``.
+``test_notebook_integration/files/test_a_file_read_by_its_size_is_a_dependency.py``.
 The tracker is shared, so a cached function sees it the same way.
 """
 

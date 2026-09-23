@@ -6,7 +6,7 @@ the same size, and a 4 MB value the same as a 1 MB one. GDSF keeps
 raises the clock L to each victim's H, so an entry that stops being read
 eventually ages out however valuable it was. See benchmarks/eviction_sim for
 the trace simulation behind the choice; the notebook-level case is
-tests/test_notebook_integration/test_ram_tier_keeps_loop_entries.py.
+tests/test_notebook_integration/storage/test_ram_tier_keeps_loop_entries.py.
 
 Every test uses a 10 MB cap and ~1 MB values, so the arithmetic in each
 docstring can be checked by hand.

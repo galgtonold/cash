@@ -1,7 +1,7 @@
 """Parsing and merging for the ``# @cash:no-cache-calls`` opt-out.
 
 Call-level caching is on by default now (see ``test_cache_calls_gate_wiring.py``
-and ``tests/test_notebook_integration/test_cache_calls_directive.py`` for the
+and ``tests/test_notebook_integration/calls/test_cache_calls_directive.py`` for the
 behavioural flip). This is the escape hatch: it disables interception for a
 single statement, or -- from a cell's leading comment block, alongside
 ``no-cache`` -- for every statement in the cell.

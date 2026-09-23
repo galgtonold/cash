@@ -65,7 +65,7 @@ was in the pytest process; the code was in the kernel.
 A `calls=0` result also catches the subtler failure: a mutation whose target
 was renamed silently patches a *new* attribute nobody calls. `_catalogue.py`
 declares what each mutation `replaces`, and
-`tests/test_notebook_integration/test_mutation_harness.py` asserts those
+`tests/test_notebook_integration/harness/test_mutation_harness.py` asserts those
 attributes exist — because that mistake already produced one void run here.
 
 ## Measured, 2026-08-24

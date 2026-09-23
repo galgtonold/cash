@@ -1,7 +1,7 @@
 """A call keyed on what it receives (``by_content``), and when it may be.
 
 The integration arm is
-``test_notebook_integration/test_a_call_keys_on_what_it_receives.py``; this
+``test_notebook_integration/calls/test_a_call_keys_on_what_it_receives.py``; this
 pins the key's two changes and each reason :func:`_keys_by_content` says no.
 """
 

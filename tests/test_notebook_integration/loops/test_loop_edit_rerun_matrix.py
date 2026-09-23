@@ -17,8 +17,7 @@ Instrument, not endorsement
 ``compute()`` appends one byte to an external counter file every time it
 actually runs. That file is the ONLY thing any assertion here reads to decide
 "did real work happen." This is deliberately the same technique the append
-regression guard uses (``test_accumulator_single_statement_append_incremental.
-py``), and it is a side effect the callee performs purely to serve as this
+regression guard uses (``loops/test_accumulators.py``), and it is a side effect the callee performs purely to serve as this
 suite's instrument -- a callee's own side effects are not, in general,
 something cash's caching is obliged to preserve on a cache hit. Using one here to COUNT executions is not an endorsement of that
 gap; it is the least-invasive way to get a ground truth number that survives
@@ -98,7 +97,7 @@ unrelated-edit case.)
 Unrelated-edit confound, found while calibrating this module
 -------------------------------------------------------------
 The probe for an unrelated upstream edit re-running a loop
-(``test_zzprobe_codeleads.py::test_unrelated_upstream_edit_reruns_loop``) uses
+(``upstream/test_review_driven_probes.py::test_unrelated_upstream_edit_reruns_loop``) uses
 a bare-expression loop body (``results.append(i * i)``, no function call).
 Every unrelated-edit case in this module measures 0 real calls, so none of
 them reproduces it.

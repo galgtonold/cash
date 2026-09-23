@@ -4,7 +4,7 @@ One notebook held nine ~700 MB versions of one 1.4 s feature build, another
 five to seven of each ~500 MB cleaning frame -- 10 GB for 200 MB of input,
 none of it evicted, because the byte cap is a quarter of the free disk. The
 integration arm is
-``tests/test_notebook_integration/test_superseded_versions_are_pruned.py``.
+``tests/test_notebook_integration/storage/test_superseded_versions_are_pruned.py``.
 """
 
 from __future__ import annotations
