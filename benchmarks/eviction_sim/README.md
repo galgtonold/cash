@@ -15,8 +15,6 @@ percentage.
 | `policies.py` | ~20 byte-capacity policies: models of cash's RAM and disk eviction before GDSF ranking, the classic recency/frequency family, cost-aware policies and structure-aware policies |
 | `run.py` | Sweeps policies × caps × seeds and prints the *lost savings* table |
 | `calibrate.py` | Re-derives the size/compute distributions from an overhead sweep |
-| `defect_disk_crumb_order.py` | Real `FileBackend`: hot small entries were evicted ahead of stale large ones by the pre-GDSF size split (fixed; kept as a demonstration) |
-| `defect_ram_tier.py` | Real `InMemoryBackend`: an oversized write empties the tier; host-wide pressure empties the tier |
 
 ## Running
 
@@ -66,7 +64,7 @@ Disk tier, typical workload, 5 seeds, lost savings at a cap of *n* × the live s
 - **Evicting a dead entry must not age the live ones.** With GDSF inside the dead-first rule, raising `L` on dead evictions costs 6.2% at 1× (`Supersede+GDSF`), against 1.6% without it (`-noage`).
 - **GDSF has to rank exactly; sampling does not work.** Redis-style sampled eviction evicts the lowest of *k* random entries, which would let the disk tier read *k* headers per eviction instead of all of them. It gives back most of the gain: at 1× the live set, `GDSF-s32` loses 9.5% (typical) and 21.0% (ML-heavy), against 3.9% and 4.5% for exact GDSF. ML-heavy is worse than LRU's 19.6%. GDSF's clock only ages correctly when it evicts the true minimum. Under the generation rule, sampling hurts less (2.9% vs 1.6%), but it is still a regression.
 - **Live-set GC** means removing what a run-all of the current sources would not request. It adds no hits over the generation signal: `Hybrid` scores exactly like `Supersede` in every run. Its value is disk hygiene, since an uncapped cache grows to 21–44× its live set in 40 days.
-- **The pre-GDSF crumb split was non-monotonic in the cap.** It beats LRU at ≤ 1×, where it acts as crude size-awareness. At ≥ 2× it is much worse, because the crumb threshold grows with the cap and shreds the hot working set. Default caps (8–100 GiB) put real caches in that regime. `defect_disk_crumb_order.py` is the deterministic version.
+- **The pre-GDSF crumb split was non-monotonic in the cap.** It beats LRU at ≤ 1×, where it acts as crude size-awareness. At ≥ 2× it is much worse, because the crumb threshold grows with the cap and shreds the hot working set. Default caps (8–100 GiB) put real caches in that regime.
 
 The first published sweep used an uncoupled v1 size model, whose expensive results were mostly tiny. It showed the crumb split beating LRU at every cap. The recalibration reversed that, and nothing else. The v1 parameters are in the comment on `Params`.
 
