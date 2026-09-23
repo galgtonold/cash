@@ -71,7 +71,7 @@ x = np.random.rand(10**6) # cell 2 — run this alone
 
 The **module-global** RNG channels — `np.random.*`, `random.*`, `torch.*` — are fully tracked: a draw is flagged on the badge (a `random` / `unseeded` pill), an unseeded draw's cached value is announced as a frozen replay, editing a `seed()` invalidates everything cached downstream, and a re-run reflects the position a clean top-to-bottom run would produce.
 
-<!-- claim: cash/tracking/randomness/detect.py:RNG_CARRIER_CONSTRUCTORS @cec10494, cash/tracking/randomness/state.py:capture_object_rng_states @92a0e486 -->
+<!-- claim: cash/tracking/randomness/detect.py:RNG_CARRIER_CONSTRUCTORS @620106b9, cash/tracking/randomness/state.py:capture_object_rng_states @d8dd9223 -->
 A **per-object generator** created with `np.random.default_rng()` (or `Generator(...)` / `RandomState(...)`) is a different, narrower story. Its **seed is tracked** — `rng = np.random.default_rng(SEED)` binds a variable, so editing `SEED` and re-running refreshes through the ordinary variable-lineage path, and an *unseeded* named generator (`rng = np.random.default_rng()`) drawn from by name is flagged. But three things about a per-object generator are **not** tracked:
 
 **1. Stream position across cells.** cash does not follow a generator's internal position as several cells draw from it:

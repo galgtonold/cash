@@ -208,17 +208,17 @@ MODULE_ALIASES = {
 # perfectly reproducible generators.  Sharing the kind constants is what keeps
 # the two channels from drifting into two different notions of an RNG.
 
-_KIND_NP_GENERATOR = "numpy.Generator"
-_KIND_NP_RANDOMSTATE = "numpy.RandomState"
-_KIND_PY_RANDOM = "random.Random"
+KIND_NP_GENERATOR = "numpy.Generator"
+KIND_NP_RANDOMSTATE = "numpy.RandomState"
+KIND_PY_RANDOM = "random.Random"
 
 # Constructors that MINT a carrier, keyed by the kind they produce.
 RNG_CARRIER_CONSTRUCTORS = {
-    "numpy.random.default_rng": _KIND_NP_GENERATOR,
-    "numpy.random.Generator": _KIND_NP_GENERATOR,
-    "numpy.random.RandomState": _KIND_NP_RANDOMSTATE,
-    "random.Random": _KIND_PY_RANDOM,
-    "random.SystemRandom": _KIND_PY_RANDOM,
+    "numpy.random.default_rng": KIND_NP_GENERATOR,
+    "numpy.random.Generator": KIND_NP_GENERATOR,
+    "numpy.random.RandomState": KIND_NP_RANDOMSTATE,
+    "random.Random": KIND_PY_RANDOM,
+    "random.SystemRandom": KIND_PY_RANDOM,
 }
 
 # Bare constructor names, for ``from numpy.random import default_rng`` when the
@@ -231,7 +231,7 @@ RNG_CARRIER_CONSTRUCTORS = {
 # more likely to be ``typing.Generator`` or a user's own class, and mistaking one
 # for an RNG would warn about code that has no randomness in it at all.
 _BARE_CARRIER_CONSTRUCTORS = {
-    "default_rng": _KIND_NP_GENERATOR,
+    "default_rng": KIND_NP_GENERATOR,
 }
 
 # numpy bit generators: ``Generator(PCG64(42))`` is seeded, ``Generator(PCG64())``
@@ -249,16 +249,16 @@ _NP_BIT_GENERATORS = frozenset(
 # Which draw methods each carrier kind offers.  Reusing RANDOM_FUNCTIONS keeps
 # one list of "what counts as a draw" per module rather than two.
 _CARRIER_DRAW_FUNCTIONS = {
-    _KIND_NP_GENERATOR: RANDOM_FUNCTIONS["numpy.random"],
-    _KIND_NP_RANDOMSTATE: RANDOM_FUNCTIONS["numpy.random"],
-    _KIND_PY_RANDOM: RANDOM_FUNCTIONS["random"],
+    KIND_NP_GENERATOR: RANDOM_FUNCTIONS["numpy.random"],
+    KIND_NP_RANDOMSTATE: RANDOM_FUNCTIONS["numpy.random"],
+    KIND_PY_RANDOM: RANDOM_FUNCTIONS["random"],
 }
 
 # The module each carrier kind is attributed to in the warning message.
 _CARRIER_MODULES = {
-    _KIND_NP_GENERATOR: "numpy.random",
-    _KIND_NP_RANDOMSTATE: "numpy.random",
-    _KIND_PY_RANDOM: "random",
+    KIND_NP_GENERATOR: "numpy.random",
+    KIND_NP_RANDOMSTATE: "numpy.random",
+    KIND_PY_RANDOM: "random",
 }
 
 # Any name that could be a draw off some carrier.  Used as a cheap pre-filter

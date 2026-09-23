@@ -13,7 +13,7 @@ import random
 import sys
 from typing import TYPE_CHECKING
 
-from .detect import _KIND_NP_GENERATOR, _KIND_NP_RANDOMSTATE, _KIND_PY_RANDOM
+from .detect import KIND_NP_GENERATOR, KIND_NP_RANDOMSTATE, KIND_PY_RANDOM
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -137,7 +137,7 @@ def restore_rng_state(state: dict) -> None:
 # ``isinstance`` allowlist, which bounds the cost to the handful of variables a
 # statement actually reads.
 
-# The carrier kinds (``_KIND_*``) and the source-level constructor tables live
+# The carrier kinds (``KIND_*``) and the source-level constructor tables live
 # in :mod:`.detect` — the detector needs them too, and both channels must agree
 # on what an RNG is.  See the "RNG carriers" section there.
 
@@ -156,12 +156,12 @@ def rng_carrier_kind(obj: object) -> str | None:
             import numpy as np
 
             if isinstance(obj, np.random.Generator):
-                return _KIND_NP_GENERATOR
+                return KIND_NP_GENERATOR
             if isinstance(obj, np.random.RandomState):
                 # ``np.random.*`` module functions delegate to this singleton;
                 # the global channel owns it.
                 if obj is not np.random.mtrand._rand:
-                    return _KIND_NP_RANDOMSTATE
+                    return KIND_NP_RANDOMSTATE
                 return None
         except (ImportError, AttributeError):
             pass
@@ -169,7 +169,7 @@ def rng_carrier_kind(obj: object) -> str | None:
     if isinstance(obj, random.Random):
         # ``random.*`` module functions delegate to this singleton.
         if obj is not getattr(random, "_inst", None):
-            return _KIND_PY_RANDOM
+            return KIND_PY_RANDOM
         return None
 
     return None
@@ -206,11 +206,11 @@ def capture_object_rng_states(
             kind = rng_carrier_kind(obj)
             if kind is None:
                 continue
-            if kind == _KIND_NP_GENERATOR:
+            if kind == KIND_NP_GENERATOR:
                 # Foreign / third-party bit generators may raise or hand back
                 # something unpicklable here; the except below drops them.
                 state = obj.bit_generator.state
-            elif kind == _KIND_NP_RANDOMSTATE:
+            elif kind == KIND_NP_RANDOMSTATE:
                 state = obj.get_state()
             else:
                 state = obj.getstate()
@@ -259,9 +259,9 @@ def restore_object_rng_states(
             continue
 
         try:
-            if kind == _KIND_NP_GENERATOR:
+            if kind == KIND_NP_GENERATOR:
                 obj.bit_generator.state = state
-            elif kind == _KIND_NP_RANDOMSTATE:
+            elif kind == KIND_NP_RANDOMSTATE:
                 obj.set_state(state)
             else:
                 obj.setstate(state)
