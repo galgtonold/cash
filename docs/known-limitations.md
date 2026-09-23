@@ -823,7 +823,7 @@ dependency exists only at runtime, `depends_on=` is how you tell it.
 
 ### Third-party code passed as an argument is keyed by name, not implementation
 
-<!-- claim: cash/core.py:Cash._is_user_code_object @9fc1e2b0, cash/core.py:Cash._is_user_code_module @9683036c -->
+<!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin._is_user_code_object @be90c50a, cash/decorator/code_identity.py:CodeIdentityMixin._is_user_code_module @140c665d -->
 A class or function you define is hashed by its code. One from a library is not:
 folding thousands of library methods into every key would churn on every upgrade
 for no correctness gain. Pin your dependencies if a library's behaviour is part

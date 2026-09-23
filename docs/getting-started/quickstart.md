@@ -307,7 +307,7 @@ The answer changed *and* `misses` went up: cash threw the cached result away
 because a function `pipeline` calls indirectly changed. You don't have to
 remember which entries a helper edit reaches.
 
-<!-- claim: cash/core.py:Cash._is_user_module @724c0594 -->
+<!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin._is_user_module @ae329dc7 -->
 That holds across files: a helper imported from another module of your project
 is followed the same way, with nothing to declare. What cash stops at is
 installed code — `site-packages` and the standard library. If a third-party
