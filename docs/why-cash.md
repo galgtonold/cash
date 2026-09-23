@@ -329,7 +329,7 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
 ## Try it / Go deeper
 
 <div class="cash-cta-split" markdown="0">
-  <a class="cash-cta-card primary" href="../getting-started/quickstart/">
+  <a class="cash-cta-card primary" href="../getting-started/quickstart-notebook/">
     <h3>Try it now →</h3>
     <p><code>pip install cash-lib</code>, then drop <code>%cash_on</code> in your first cell.</p>
     <p><strong>Quickstart →</strong></p>

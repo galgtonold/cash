@@ -346,7 +346,7 @@ FIXTURES: dict[str, MetricsList] = {
         },
     ],
     # Quickstart prose — first run of `df = pd.read_csv('large_dataset.csv')`.
-    # Code matches docs/getting-started/quickstart.md so the embedded badge
+    # Code matches docs/getting-started/quickstart-notebook.md so the embedded badge
     # is honest about what the reader just typed.
     "quickstart_first_run": [
         {

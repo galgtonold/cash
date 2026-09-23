@@ -4,7 +4,7 @@ This guide helps you migrate from other Python caching solutions to Cash. It
 focuses on the `@cash.cache` **decorator**, the closest analogue to the tools
 below. In a notebook you usually don't migrate function-by-function at all — you
 add `%cash_on` once and your existing cells cache themselves; see the
-[Quick Start](getting-started/quickstart.md).
+[Quick Start](getting-started/quickstart-script.md).
 
 For a capability-by-capability comparison against these tools, see the
 [matrix in Why Cash?](why-cash.md#cash-vs-the-alternatives-youve-tried).

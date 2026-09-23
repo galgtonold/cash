@@ -55,12 +55,12 @@ See [Reading the Cash badge](badges.md) for the full anatomy.
 Pick the path that matches how you write code — both ride the same engine:
 
 <div class="cash-doc-grid" markdown="0">
-  <a class="cash-cta-card primary" href="getting-started/quickstart/#in-a-notebook">
+  <a class="cash-cta-card primary" href="getting-started/quickstart-notebook/">
     <h3>In a notebook →</h3>
     <p>Add <code>%cash_on</code> and every cell caches itself — statement-level,
     with a badge above each cell's output. For interactive work in Jupyter, Colab, or VS Code.</p>
   </a>
-  <a class="cash-cta-card" href="getting-started/quickstart/#in-a-script">
+  <a class="cash-cta-card" href="getting-started/quickstart-script/">
     <h3>In a script →</h3>
     <p>Wrap a function with <code>@cash.cache</code> — it caches by its arguments and
     its own source. For modules, pipelines, and batch jobs.</p>
@@ -111,7 +111,7 @@ Optional backends: `pip install "cash-lib[redis]"`, `[s3]`, or `[all]`. See
 ## Documentation
 
 <div class="cash-doc-grid" markdown="0">
-  <a class="cash-cta-card primary" href="getting-started/quickstart/">
+  <a class="cash-cta-card primary" href="getting-started/quickstart-notebook/">
     <h3>Getting Started</h3>
     <p>Install cash and cache your first notebook.</p>
   </a>

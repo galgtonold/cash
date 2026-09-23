@@ -9,7 +9,7 @@ workflow?" case, see [Why Cash?](why-cash.md); for the vocabulary, see the
 ??? question "Do I need to change my code?"
     No. `%cash_on` caches your existing cells as-is — no decorators, no config
     file. The `@cash.cache` decorator is opt-in for plain scripts. See
-    [Quick start](getting-started/quickstart.md).
+    [Quick start](getting-started/quickstart-notebook.md).
 
 ??? question "Notebooks only, or scripts too?"
     Both. The `@cash.cache` decorator works in plain Python scripts; the

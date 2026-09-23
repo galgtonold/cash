@@ -36,7 +36,7 @@ import sys
 import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-PAGE = REPO / "docs" / "getting-started" / "quickstart.md"
+PAGE = REPO / "docs" / "getting-started" / "quickstart-script.md"
 
 _FENCE = re.compile(r"^```python\s*$(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
 

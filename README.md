@@ -159,7 +159,7 @@ Full walkthrough in [the decorator guide](https://cash-lib.readthedocs.io/en/lat
 
 ## Learn more
 
-- [Documentation home](https://cash-lib.readthedocs.io/en/latest/) · [Why Cash?](https://cash-lib.readthedocs.io/en/latest/why-cash/) · [Quick start](https://cash-lib.readthedocs.io/en/latest/getting-started/quickstart/)
+- [Documentation home](https://cash-lib.readthedocs.io/en/latest/) · [Why Cash?](https://cash-lib.readthedocs.io/en/latest/why-cash/) · [Quick start](https://cash-lib.readthedocs.io/en/latest/getting-started/quickstart-notebook/)
 - [Reading the badge](https://cash-lib.readthedocs.io/en/latest/badges/) · [Magic commands](https://cash-lib.readthedocs.io/en/latest/magics/) · [Annotations](https://cash-lib.readthedocs.io/en/latest/annotations/)
 - [The decorator](https://cash-lib.readthedocs.io/en/latest/decorator/) · [Backends](https://cash-lib.readthedocs.io/en/latest/api/backends/) · [Command-line interface](https://cash-lib.readthedocs.io/en/latest/cli/)
 - [Known limitations](https://cash-lib.readthedocs.io/en/latest/known-limitations/) · [Benchmarks](https://cash-lib.readthedocs.io/en/latest/benchmarks/) · [Versioning & compatibility](https://cash-lib.readthedocs.io/en/latest/versioning/)

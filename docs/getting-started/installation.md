@@ -61,6 +61,6 @@ import cash
 print("Cash is working!")
 ```
 
-Next: the [Quick Start](quickstart.md). If you're upgrading an existing install,
+Next: the [Quick Start](quickstart-notebook.md). If you're upgrading an existing install,
 see [Versioning & compatibility](../versioning.md) for what happens to caches
 written by an older version.

@@ -296,4 +296,4 @@ through the [invalidation](invalidation.md) and [safety](safety.md) checks that
 keep it honest, down both the [notebook](notebook-path.md) and
 [decorator](decorator-path.md) paths, into [tiered storage](storage.md) — and
 now you can watch every step of it happen. If you're ready to use it, start with
-[Quick Start](../getting-started/quickstart.md).
+[Quick Start](../getting-started/quickstart-notebook.md).

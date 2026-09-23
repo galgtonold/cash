@@ -43,7 +43,8 @@ USER_FACING = (
     "docs/faq.md",
     "docs/cli.md",
     "docs/index.md",
-    "docs/getting-started/quickstart.md",
+    "docs/getting-started/quickstart-notebook.md",
+    "docs/getting-started/quickstart-script.md",
     "docs/getting-started/installation.md",
 )
 

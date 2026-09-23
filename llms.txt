@@ -19,7 +19,7 @@ headless kernels).
 
 ## Reference
 
-- [Quick Start](docs/getting-started/quickstart.md): zero to caching.
+- [Quick Start](docs/getting-started/quickstart-notebook.md): zero to caching.
 - [Decorator (`@cash.cache`)](docs/decorator.md): caching a function; params.
 - [Annotations](docs/annotations.md): the `# @cash:` per-statement directives.
 - [Reading the badge](docs/badges.md): statuses, the randomness pills, "why did this re-run?".

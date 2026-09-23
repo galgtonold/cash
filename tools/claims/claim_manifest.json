@@ -84,8 +84,12 @@
     "anchors": 1,
     "audited": "2026-07-27"
   },
-  "docs/getting-started/quickstart.md": {
-    "anchors": 5,
+  "docs/getting-started/quickstart-notebook.md": {
+    "anchors": 1,
+    "audited": "2026-07-27"
+  },
+  "docs/getting-started/quickstart-script.md": {
+    "anchors": 4,
     "audited": "2026-07-27"
   },
   "docs/glossary.md": {
@@ -179,6 +183,10 @@
   "docs/tutorials/feature-guides/debugging-and-monitoring.md": {
     "anchors": 11,
     "audited": "2026-07-27"
+  },
+  "docs/tutorials/feature-guides/deploying.md": {
+    "audited": null,
+    "anchors": 0
   },
   "docs/tutorials/feature-guides/dynamic-dependencies.md": {
     "anchors": 4,

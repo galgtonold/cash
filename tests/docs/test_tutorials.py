@@ -591,10 +591,14 @@ _DOC_NAMESPACES: dict[str, dict] = {
         "SHA256": lambda x: "stubhash",
         "source_hash": "stubhash",
     },
-    "quickstart": {
+    "quickstart-notebook": {
         **_COMMON_NONTUT,
         "pd": _types.SimpleNamespace(read_csv=lambda p: {"stub": True}),
         "MyModel": type("MyModel", (), {"fingerprint": lambda self: "stub"}),
+    },
+    "quickstart-script": {
+        **_COMMON_NONTUT,
+        "pd": _types.SimpleNamespace(read_csv=lambda p: {"stub": True}),
     },
     "configuration": {
         **_COMMON_NONTUT,
