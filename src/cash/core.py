@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, ParamSpec, TypeVar, overload
 from . import _plain_data
 from ._annotation_refs import annotation_referents
 from ._clock import perf_counter as _perf_counter
+from ._paths import MAIN_MODULE_NAMES, normalize_path, resolve_main_module
 from .analysis.annotations import parse_annotation_line
 from .analysis.cacheability_decision import identity_coupled_reason
 from .analysis.code_analyzer import CodeAnalyzer
@@ -137,7 +138,6 @@ from .tracking.randomness import (
     seed_epoch_component,
     seed_epochs,
 )
-from .utils import MAIN_MODULE_NAMES, normalize_path, resolve_main_module
 from .value_types import (
     BUILTIN_CONTAINERS,
     CODELESS_PRIMS,

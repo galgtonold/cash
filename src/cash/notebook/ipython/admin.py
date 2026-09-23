@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from IPython.core.magic import line_magic
 
-from cash.utils import safe_text
+from cash._console import safe_text
 
 from ...backends._writes import discarded_writes
 from ._args import parse_mode, strip_inline_comment

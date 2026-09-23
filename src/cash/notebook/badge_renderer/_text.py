@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from cash.utils import safe_text
+from cash._console import safe_text
 
 from .renderers.text import render_text
 from .view_builder import build_interactive_badge

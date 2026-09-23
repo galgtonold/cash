@@ -23,7 +23,7 @@ import site
 import sys
 import sysconfig
 
-from .utils import normalize_path
+from ._paths import normalize_path
 
 __all__ = [
     "installed_roots",

@@ -27,10 +27,10 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
+from ..._paths import normalize_path
 from ...remote_source import RemoteFileDataSource
 from ...source_norm import module_identity
 from ...tracking.file_dep_snapshot import realpath_of_read_this_run
-from ...utils import normalize_path
 from ...value_types import IMMUTABLE_PRIMS
 from ..server_discovery import get_notebook_path
 

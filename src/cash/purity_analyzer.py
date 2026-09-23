@@ -55,6 +55,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ._annotation_refs import annotation_referents
+from ._paths import MAIN_MODULE_NAMES, resolve_main_module
 from .analysis.ast_util import called_names, resolve_callee
 from .analysis.file_effects import get_base_name, get_call_module, get_call_name
 from .analysis.mutations import PANDAS_INPLACE_METHODS
@@ -90,7 +91,6 @@ from .source_norm import (
     own_source,
 )
 from .tracking.function_tracker import is_local_module
-from .utils import MAIN_MODULE_NAMES, resolve_main_module
 from .value_types import BUILTIN_NAMES
 
 logger = logging.getLogger(__name__)

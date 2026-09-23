@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from cash.control_markers import iteration_digest
 
+from ..._paths import resolve_file_dep_path
 from ...analysis.ast_util import called_names
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer
@@ -27,7 +28,6 @@ from ...analysis.namespace_effects import (
 from ...diagnostics import warn_diagnostic
 from ...exceptions import CashWarning
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
-from ...utils import resolve_file_dep_path
 from .._trace import trace_event
 from ..cache_key import called_function_globals, write_provenance_key
 from ..cache_status import CacheStatus

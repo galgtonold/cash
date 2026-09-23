@@ -12,9 +12,9 @@ import os
 
 import pytest
 
+from cash._paths import normalize_path
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import realpath_this_run
-from cash.utils import normalize_path
 
 
 @pytest.fixture(autouse=True)

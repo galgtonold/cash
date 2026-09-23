@@ -2,7 +2,7 @@
 
 This module handles all I/O and HTTP calls required to locate the current
 notebook file and read its cell contents.  It is intentionally separate from
-``cash.utils`` (pure path helpers) to make the network/filesystem dependency
+``cash._paths`` (pure path helpers) to make the network/filesystem dependency
 explicit and to co-locate the code with its primary consumers in
 ``cash.notebook``.
 

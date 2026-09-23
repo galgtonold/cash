@@ -9,7 +9,7 @@ they live here once:
   leaves the store empty; every entry is validated as it is loaded and a bad
   one is dropped. An empty store must always mean "the behaviour without it".
 * **Atomic.** A write goes to a pid-suffixed temporary file and is moved into
-  place with :func:`~cash.utils.replace_with_retry`, never a bare
+  place with :func:`~cash._paths.replace_with_retry`, never a bare
   ``os.replace``: on Windows that is DENIED, not delayed, while any handle has
   the destination open, and the failure would be swallowed at debug level --
   the entry gone from disk while it stays in memory.
@@ -28,8 +28,8 @@ import os
 from collections.abc import Callable
 from typing import Any, ClassVar, Generic, TypeVar
 
+from cash._paths import replace_with_retry
 from cash.backends.file_backend import recreate_cache_dir
-from cash.utils import replace_with_retry
 
 from .statement.miss_guard import resolve_cache_dir
 

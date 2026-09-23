@@ -50,8 +50,8 @@ import time
 from collections.abc import Iterable, Mapping
 from typing import Any, NamedTuple
 
+from cash._paths import normalize_path, resolve_file_dep_path
 from cash.config import get_config
-from cash.utils import normalize_path, resolve_file_dep_path
 
 logger = logging.getLogger(__name__)
 
@@ -973,7 +973,7 @@ def dep_is_fresh(
     Looked for where THIS process would read it: this install's own copy for a
     file beside the code (:func:`dep_path_for_this_process`), otherwise the
     recorded path, and when that is gone, the moved-project fallbacks of
-    :func:`cash.utils.resolve_file_dep_path`. ``resolved`` is None when the
+    :func:`cash._paths.resolve_file_dep_path`. ``resolved`` is None when the
     file is nowhere to be found (reason ``'missing'``). A recorded value that
     is not a snapshot entry is stale (``'unrecorded'``).
     """

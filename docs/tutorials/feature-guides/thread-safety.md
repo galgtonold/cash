@@ -123,7 +123,7 @@ The standard introspection surface works:
 
 ## Across processes: Pool, ProcessPoolExecutor, joblib { #across-processes-pool-processpoolexecutor-joblib }
 
-<!-- claim: cash/utils.py:resolve_main_module @556ba406, cash/backends/_writes.py:in_multiprocessing_child @9bd4615e, cash/core.py:Cash._print_run_summary @edd281cb -->
+<!-- claim: cash/_paths.py:resolve_main_module @556ba406, cash/backends/_writes.py:in_multiprocessing_child @9bd4615e, cash/core.py:Cash._print_run_summary @edd281cb -->
 A `multiprocessing.Pool`, a `ProcessPoolExecutor` or joblib's process workers
 all use the cache directory of the process that started them, so what one
 worker computes is a hit for the others, for the parent afterwards, and for the

@@ -25,7 +25,7 @@ import textwrap
 import pytest
 
 import cash
-from cash.utils import resolve_main_module
+from cash._paths import resolve_main_module
 
 
 def _script(tmp_path, name, body):

@@ -29,9 +29,9 @@ from collections.abc import Callable
 from typing import Any, Optional
 
 from cash._clock import perf_counter as _perf_counter
+from cash._paths import is_remote_url, normalize_path
 from cash.install_paths import installed_roots, interpreter_roots, is_user_path, norm_dir, normcase_path, site_roots
 from cash.tracking import io_watch
-from cash.utils import is_remote_url, normalize_path
 
 # A remote URL handed to a reader (``pd.read_parquet("s3://bucket/key")``)
 # reaches us as the raw first argument. ``os.path.realpath`` would mangle it into

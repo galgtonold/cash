@@ -368,7 +368,7 @@ Without the relative dependency, the frozen `run_a/results.csv` realpath still e
 
 ### Paths are absolute and platform-normalized
 
-Stored paths are absolute and use forward slashes regardless of OS (`cash.utils.normalize_path`). Moving the cache directory to a different machine where the same files live at different paths invalidates everything — paths are part of the dependency key. For portable cache archives, expect a full re-compute after relocation.
+Stored paths are absolute and use forward slashes regardless of OS (`cash._paths.normalize_path`). Moving the cache directory to a different machine where the same files live at different paths invalidates everything — paths are part of the dependency key. For portable cache archives, expect a full re-compute after relocation.
 
 ### Network-mounted filesystems
 

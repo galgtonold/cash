@@ -18,8 +18,8 @@ import weakref
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
+from cash._paths import replace_with_retry
 from cash.exceptions import CacheBackendError
-from cash.utils import replace_with_retry
 
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheStoreFailedWarning
@@ -496,7 +496,7 @@ class FileBackend(CacheBackend):
 
     @staticmethod
     def _replace_with_retry(tmp_path: str, path: str) -> None:
-        """`cash.utils.replace_with_retry`, as a method so tests can stub it."""
+        """`cash._paths.replace_with_retry`, as a method so tests can stub it."""
         replace_with_retry(tmp_path, path)
 
     def _atomic_write(self, path: str, payload: bytes) -> None:

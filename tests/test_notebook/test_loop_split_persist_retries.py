@@ -32,8 +32,8 @@ from pathlib import Path
 
 import pytest
 
+from cash._paths import replace_with_retry
 from cash.notebook.loop_split import LoopSplitStore
-from cash.utils import replace_with_retry
 
 
 class _DeniesThenSucceeds:

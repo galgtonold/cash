@@ -1,29 +1,27 @@
-"""Shared utility functions for the cash library.
+"""Path helpers: portable spelling, relocation, atomic replace, script names.
 
-Pure helpers that don't depend on Jupyter or filesystem discovery.
-Notebook-specific I/O and Jupyter Server HTTP discovery live in
-``cash.notebook.server_discovery``.
+`normalize_path` and `is_remote_url` decide how a path is recorded in a key;
+`resolve_file_dep_path` finds a recorded file after the project moved;
+`replace_with_retry` is ``os.replace`` that waits out a briefly locked
+destination on Windows; `resolve_main_module` names a script's module the way
+an import would.
 """
 
 from __future__ import annotations
 
 import functools
-import logging
 import os
 import re
-import sys
 import time
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 __all__ = [
+    "MAIN_MODULE_NAMES",
     "is_remote_url",
-    "replace_with_retry",
     "normalize_path",
+    "replace_with_retry",
     "resolve_file_dep_path",
-    "safe_text",
-    "stdout_supports_unicode",
+    "resolve_main_module",
 ]
 
 # ``file://`` is excluded: it names a local path that can genuinely be stat'ed.
@@ -54,125 +52,6 @@ def normalize_path(path: str) -> str:
         normalize_path("/home/foo/bar.csv")              # → "/home/foo/bar.csv"
     """
     return path.replace(os.path.sep, "/")
-
-
-# ---------------------------------------------------------------------------
-# Console encoding helpers
-# ---------------------------------------------------------------------------
-#
-# On Windows, the default Python REPL stdout uses cp1252 which cannot encode
-# emoji code points like ✅ or ⚙️.  Printing such characters raises
-# ``UnicodeEncodeError: 'charmap' codec can't encode character ...``.
-#
-# Inside Jupyter / IPython kernels stdout is always UTF-8 (the kernel encodes
-# bytes for the front-end), so emojis render fine there.  The crash only
-# affects users who do ``import cash`` and call our magics from a plain
-# Windows ``python.exe`` shell.
-#
-# ``safe_text`` lets call sites keep the readable, emoji-rich strings while
-# silently downgrading them to ASCII fallbacks when the active stdout cannot
-# encode them.  ``stdout_supports_unicode`` is also exposed so callers can
-# branch up-front (e.g. choose a different code path entirely).
-
-_ASCII_FALLBACKS: dict[str, str] = {
-    # Status / outcome
-    "✅": "[OK]",
-    "❌": "[X]",
-    "⚠️": "[!]",
-    "⚠": "[!]",
-    "✓": "[v]",
-    "❓": "[?]",
-    "🚫": "[no-cache]",
-    # Cache lifecycle
-    "⚡": "[cached]",
-    "⚙️": "[run]",
-    "⏩": "[skip]",
-    "⏳": "[wait]",
-    "🔄": "[refresh]",
-    "♻️": "[reuse]",
-    "⬆️": "[upstream]",
-    "🔁": "[loop]",
-    # Decorations / arrows
-    "→": "->",
-    "←": "<-",
-    "↑": "^",
-    "↓": "v",
-    "↔": "<->",
-    "↻": "~>",
-    "└": "L",
-    "─": "-",
-    "│": "|",
-    "├": "+",
-    "…": "...",
-    "∈": "in",
-    # Dashboards / debug
-    "🔧": "[computed]",
-    "📦": "[restored]",
-    "📋": "[provenance]",
-    "📊": "[stats]",
-    "📈": "[trend-up]",
-    "📉": "[trend-down]",
-    "📁": "[dir]",
-    "🐛": "[bug]",
-    "🏷️": "[tag]",
-    "⏭️": "[next]",
-    "🎯": "[target]",
-}
-
-
-def stdout_supports_unicode(stream: object | None = None) -> bool:
-    """Return ``True`` if *stream* (default: ``sys.stdout``) can encode emojis.
-
-    Cheap and side-effect free.  Used by :func:`safe_text` to decide whether
-    to pass the input through unchanged or downgrade it to ASCII fallbacks.
-    """
-    if stream is None:
-        stream = sys.stdout
-    encoding = getattr(stream, "encoding", None) or "ascii"
-    encoding_lc = encoding.lower()
-    if encoding_lc.startswith("utf"):
-        return True
-    try:
-        # ✅ and ⚙️ together cover both single-codepoint emoji and the
-        # variation-selector form most likely to break under cp1252 / latin-1.
-        "✅⚙️".encode(encoding)
-        return True
-    except (UnicodeEncodeError, LookupError):
-        return False
-
-
-def safe_text(s: str, *, stream: object | None = None) -> str:
-    """Return *s* with characters un-encodable by *stream* replaced by ASCII.
-
-    Pass-through when the stream can encode everything (the common case in
-    Jupyter / on Linux / when ``PYTHONIOENCODING=utf-8``).  Otherwise replace
-    each unsupported character with an entry from :data:`_ASCII_FALLBACKS`
-    or, lacking a mapping, drop it.
-
-    The function preserves all ASCII characters as-is, so log lines stay
-    readable even on legacy Windows consoles.
-    """
-    if not s:
-        return s
-    if stream is None:
-        stream = sys.stdout
-    if stdout_supports_unicode(stream):
-        return s
-    encoding = getattr(stream, "encoding", None) or "ascii"
-    try:
-        s.encode(encoding)
-        return s  # nothing to downgrade
-    except UnicodeEncodeError:
-        pass
-    out: list[str] = []
-    for ch in s:
-        try:
-            ch.encode(encoding)
-        except UnicodeEncodeError:
-            out.append(_ASCII_FALLBACKS.get(ch, ""))
-        else:
-            out.append(ch)
-    return "".join(out)
 
 
 def _basename_candidates(stored_path: str) -> list[str]:

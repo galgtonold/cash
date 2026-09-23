@@ -283,7 +283,7 @@ class TestResolveFileDepPath:
 
     def test_existing_path_returned_as_is(self, tmp_path):
         """When the stored path exists, it is returned unchanged."""
-        from cash.utils import resolve_file_dep_path
+        from cash._paths import resolve_file_dep_path
 
         f = tmp_path / "data.csv"
         f.write_text("a,b\n1,2\n")
@@ -292,14 +292,14 @@ class TestResolveFileDepPath:
 
     def test_nonexistent_path_returns_none(self, tmp_path):
         """When the stored path doesn't exist and basename not in CWD, returns None."""
-        from cash.utils import resolve_file_dep_path
+        from cash._paths import resolve_file_dep_path
 
         result = resolve_file_dep_path("/nonexistent/dir/some_unique_file_xyz.csv")
         assert result is None
 
     def test_basename_fallback_in_cwd(self, tmp_path, monkeypatch):
         """When stored path is stale, finds file via basename in CWD."""
-        from cash.utils import resolve_file_dep_path
+        from cash._paths import resolve_file_dep_path
 
         # Create file in tmp_path (our fake CWD)
         f = tmp_path / "data.csv"
@@ -316,7 +316,7 @@ class TestResolveFileDepPath:
 
     def test_suffix_fallback_with_subdirectory(self, tmp_path, monkeypatch):
         """When stored path has subdir structure, matches via suffix relative to CWD."""
-        from cash.utils import resolve_file_dep_path
+        from cash._paths import resolve_file_dep_path
 
         # Create examples/data.csv under tmp_path
         (tmp_path / "examples").mkdir()
@@ -334,7 +334,7 @@ class TestResolveFileDepPath:
 
     def test_windows_backslash_paths(self, tmp_path, monkeypatch):
         """Handles Windows-style backslash paths in stored deps."""
-        from cash.utils import resolve_file_dep_path
+        from cash._paths import resolve_file_dep_path
 
         f = tmp_path / "report.xlsx"
         f.write_text("fake data")
@@ -354,7 +354,7 @@ class TestSafeText:
         """A UTF-8 stream returns the input unchanged, even with emojis."""
         import io
 
-        from cash.utils import safe_text
+        from cash._console import safe_text
 
         stream = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", write_through=True)
         assert safe_text("✅ Cash enabled.", stream=stream) == "✅ Cash enabled."
@@ -363,7 +363,7 @@ class TestSafeText:
         """A cp1252 stream gets emojis replaced with ASCII fallbacks."""
         import io
 
-        from cash.utils import safe_text
+        from cash._console import safe_text
 
         stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", write_through=True)
         result = safe_text("✅ Cash enabled.", stream=stream)
@@ -377,7 +377,7 @@ class TestSafeText:
         import io
         import sys
 
-        from cash.utils import safe_text
+        from cash._console import safe_text
 
         cp1252_stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", write_through=True)
         original_stdout = sys.stdout
@@ -393,7 +393,7 @@ class TestSafeText:
         """Characters without an ASCII fallback are dropped, never crash."""
         import io
 
-        from cash.utils import safe_text
+        from cash._console import safe_text
 
         stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", write_through=True)
         # 🦄 has no fallback in our table — should be dropped, not crash.
@@ -405,7 +405,7 @@ class TestSafeText:
         """Pure-ASCII input is identity, regardless of stream encoding."""
         import io
 
-        from cash.utils import safe_text
+        from cash._console import safe_text
 
         stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", write_through=True)
         assert safe_text("Cash enabled.", stream=stream) == "Cash enabled."
@@ -414,7 +414,7 @@ class TestSafeText:
         """UTF-8 streams are reported as Unicode-capable."""
         import io
 
-        from cash.utils import stdout_supports_unicode
+        from cash._console import stdout_supports_unicode
 
         stream = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", write_through=True)
         assert stdout_supports_unicode(stream) is True
@@ -423,7 +423,7 @@ class TestSafeText:
         """cp1252 streams are reported as not Unicode-capable."""
         import io
 
-        from cash.utils import stdout_supports_unicode
+        from cash._console import stdout_supports_unicode
 
         stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", write_through=True)
         assert stdout_supports_unicode(stream) is False

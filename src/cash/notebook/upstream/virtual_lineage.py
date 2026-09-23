@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from cash.control_markers import iteration_digest, strip_markers
 
+from ..._paths import resolve_file_dep_path
 from ...analysis.ast_util import called_names, parse_cached
 from ...analysis.cacheability import analyze_statement, statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
@@ -38,7 +39,6 @@ from ...tracking.randomness import (
     hidden_lineage_writes,
     hidden_write_lineage,
 )
-from ...utils import resolve_file_dep_path
 from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..cache_key import (
