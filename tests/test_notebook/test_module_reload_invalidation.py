@@ -508,6 +508,9 @@ class TestTransitiveDependencyTracking:
         metrics_file.write_text("from helpers import add_one\ndef compute(x):\n    return add_one(x) * 2\n")
 
         sys.path.insert(0, str(tmp_path))
+        # Another test in this worker may have left its own "helpers" behind.
+        for mod_name in ("helpers", "metrics"):
+            sys.modules.pop(mod_name, None)
 
         # Import so they appear in sys.modules
         import importlib

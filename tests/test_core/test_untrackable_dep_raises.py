@@ -38,6 +38,9 @@ def _load(tmp_path, body):
     finally:
         sys.path.remove(str(tmp_path))
         sys.modules.pop("m", None)
+        # The module body may have imported it; a later test that writes its
+        # own helpers.py would otherwise import this one.
+        sys.modules.pop("helpers", None)
 
 
 @pytest.mark.parametrize(
