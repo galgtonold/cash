@@ -578,6 +578,26 @@ def call_cache_key(
 _COST_FLOOR_S = 0.003
 
 
+def call_cost_floor_s(cash: Any) -> float:
+    """The bar a call's own execution must clear to be stored.
+
+    Read from *cash*'s config on every decision rather than captured, so
+    ``cash.configure(call_cost_floor_seconds=...)`` takes effect
+    immediately -- the contract ``min_execution_time_to_cache_seconds``
+    already has.
+
+    Checked with isinstance rather than ``float()`` in a try/except: a
+    MagicMock's ``__float__`` returns 1.0 instead of raising, and
+    ``cash_instance`` is a MagicMock throughout the unit suite, so the
+    exception form would silently install a 1-SECOND floor there and cache
+    nothing. ``_COST_FLOOR_S`` stays the default and the fallback.
+    """
+    value = getattr(getattr(cash, "config", None), "call_cost_floor_seconds", None)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return _COST_FLOOR_S
+
+
 class _ForwardingTee:
     """Records everything written while forwarding untouched to the real stream.
 
@@ -1074,23 +1094,8 @@ class CallUnit:
         self._refused: set[str] = set()
 
     def _cost_floor_s(self) -> float:
-        """The bar a call's own execution must clear to be stored.
-
-        Read from config on every decision rather than captured, so
-        ``cash.configure(call_cost_floor_seconds=...)`` takes effect
-        immediately -- the contract ``min_execution_time_to_cache_seconds``
-        already has.
-
-        Checked with isinstance rather than ``float()`` in a try/except: a
-        MagicMock's ``__float__`` returns 1.0 instead of raising, and
-        ``cash_instance`` is a MagicMock throughout the unit suite, so the
-        exception form would silently install a 1-SECOND floor there and cache
-        nothing. ``_COST_FLOOR_S`` stays the default and the fallback.
-        """
-        value = getattr(getattr(self._cash, "config", None), "call_cost_floor_seconds", None)
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return float(value)
-        return _COST_FLOOR_S
+        """The bar a call's own execution must clear to be stored (:func:`call_cost_floor_s`)."""
+        return call_cost_floor_s(self._cash)
 
     def begin_cell(self) -> None:
         """A new cell: the results held for references are let go."""

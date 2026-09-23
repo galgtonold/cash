@@ -819,7 +819,7 @@ class StatementProcessor:
         except (AttributeError, TypeError, RuntimeError):
             logger.debug("%s Failed to drain decorator call log", _LOG_PROCESSOR)
         decorator_calls.extend(self._calls.drain_call_unit_events())
-        self._calls.learn_call_wrapping(run.exec_code, execution.wall_time, decorator_calls)
+        self._calls.learn_call_wrapping(run.code, execution.wall_time, decorator_calls)
 
         captured = execution.captured
         metrics["stdout"] = captured.stdout

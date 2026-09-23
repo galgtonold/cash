@@ -20,7 +20,7 @@ from cash.control_markers import strip_markers
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_interception import HELPER_NAME, CallCache, wrap_eligible_calls
 from cash.notebook.call_refs import with_call_refs
-from cash.notebook.call_unit import call_site_is_cacheable
+from cash.notebook.call_unit import call_cost_floor_s, call_site_is_cacheable
 from cash.tracking.file_tracker import tracking_seconds
 
 if TYPE_CHECKING:
@@ -348,10 +348,7 @@ class CallRouting:
     def learn_call_wrapping(self, code: str, wall_time: float, calls: list) -> None:
         """Record whether *code*'s calls are worth the call cache next time."""
         try:
-            floor_of = getattr(self._call_cache, "_cost_floor_s", None)
-            floor = floor_of() if callable(floor_of) else 0.003
-            if not isinstance(floor, (int, float)):
-                floor = 0.003
+            floor = call_cost_floor_s(self._cash_instance())
             hit = any(isinstance(ev, dict) and ev.get("cache_hit") for ev in calls or ())
             key = strip_markers(code)
             if wall_time < floor and not hit:
