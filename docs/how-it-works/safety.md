@@ -381,6 +381,8 @@ side effect → always re-run; unseeded randomness → cache but say so; otherwi
       <tr><td><code>model.fit(X, y)</code></td><td>Not cached by default — opt in with <code>@cash:cache-fit</code></td></tr>
       <tr><td><code>df.to_parquet('out.pq')</code></td><td>Not cached — file-write side effect</td></tr>
       <tr><td><code>r = requests.post(url, json=payload)</code></td><td>Not cached — network side effect</td></tr>
+      <tr><td><code>r = session.post(url, json=payload)</code></td><td>Not cached — the same write through a client object</td></tr>
+      <tr><td><code>r = requests.get(url)</code></td><td>Cached — a read, like reading a file</td></tr>
     </tbody>
   </table>
 </div>

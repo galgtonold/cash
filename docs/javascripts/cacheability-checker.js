@@ -58,7 +58,19 @@
       code: "r = requests.post(url, json=payload)",
       verdict: "no",
       title: "Not cached",
-      why: "A mutating network call (POST/PUT/DELETE/PATCH) is a side effect: a cache hit would never send the request, so Cash always executes it. Read-style requests.get() calls are cacheable, like reading a file."
+      why: "A mutating network call (POST/PUT/DELETE/PATCH) is a side effect: a cache hit would never send the request, so Cash always executes it. When the POST only runs a query, put # @cash:assume-safe on the line to cache it anyway."
+    },
+    {
+      code: "r = session.post(url, json=payload)",
+      verdict: "no",
+      title: "Not cached",
+      why: "The same request through a client object is judged by its method name and refused the same way: session.post(), client.publish(), s3.upload_file(), sock.sendall(). A name cannot tell a POST that writes from one that searches; # @cash:assume-safe on the line is how you say it only reads."
+    },
+    {
+      code: "r = requests.get(url)",
+      verdict: "ok",
+      title: "Cached",
+      why: "A read-style request changes nothing on the server, so it is cached like reading a file. What the server returns later is not checked: bound how old the answer may get with # @cash:ttl=N, or use # @cash:no-cache to fetch every run."
     }
   ];
 
