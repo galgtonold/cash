@@ -1,204 +1,79 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-
-# C extensions
 *.so
 
-# Distribution / packaging
-.Python
+# Packaging
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
 wheels/
-share/python-wheels/
 *.egg-info/
-.installed.cfg
 *.egg
-MANIFEST
-
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# pyenv
-.python-version
-
-# celery beat schedule file
-celerybeat-schedule
-
-# SageMath parsed files
-*.sage.py
+.eggs/
 
 # Environments
 .env
 .venv*
 env/
 venv/
-ENV/
-env.bak/
-venv.bak/
 
-# Spyder project settings
-.spyderproject
-.spyproject
+# Tests and coverage
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+/.testsel/
 
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
+# Type checkers and linters
 .mypy_cache/
 .dmypy.json
-dmypy.json
+.ruff_cache/
 
-# Pyre type checker
-.pyre/
+# Docs build
+/site
 
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# IDE
+# Editors, OS, Jupyter
 .idea/
 .vscode/
+.ipynb_checkpoints
+.DS_Store
+Thumbs.db
 
-# Debug/reproduction artifacts
-repro_*.py
-reproduce_*.py
-verify_*.py
-inspect_*.py
-debug.log
-*.db
-.cache_test_repro/
-.cash_test/
-repro_cache/
-test_async_cache/
-test_persistence_cache/
+# Scratch work: put repro scripts, debug output and notes here
+/scratch/
 
-# Cache directories (runtime artifacts)
+# Caches and outputs written by running cash or the example notebooks
 .cash/
-examples/.cash/
-examples/async_cache/
-examples/cascading_cache/
-examples/demo_explorer_cache/
-examples/demo_ipywidgets_cache/
-examples/demo_widget_cache/
-examples/my_cache/
+*.db
+examples/*_cache/
 examples/notebook_cache_demo/
-examples/pipeline_cache/
-examples/test_reproduce_cache/
-
-# Large data files (downloaded / synthesized by example notebooks; may land
-# under examples/ or the repo root depending on the notebook's cwd).
+examples/.cash_cfd_results/
+examples/archive/
+examples/large_scale_projects/data/
+examples/large_scale_projects/examples/
 large_financial_data.csv
 /data/
-
-# Ad-hoc test outputs written to the repo root by example notebook cells
-# (file_tracking_demo and similar). Pattern is anchored at root so it
-# doesn't catch legitimate fixtures like examples/test_file_dep.csv.
 /test_data.csv
 /test_data.txt
 /test_numpy.txt
 /test_path.txt
 
-# Archived examples (development experiments)
-examples/archive/
-
-# Desloppify local state
-.desloppify/
-
-# Private planning documents
-planning/
-
-# Build artifacts
-dist/
-*.egg-info/
-
-# Editor / OS artifacts
-.DS_Store
-Thumbs.db
-
-
-
-WORKING_MEMORY.md
-
-# Temp output / IDE internals
-test_output.txt
-.claude/
-
-# Large example data files (not tracked in git)
-examples/large_scale_projects/data/
-examples/large_scale_projects/examples/
-
-/design/
-
-# Bench outputs (raw artifacts) — directory contents are gitignored, but the
-# frozen cost-model dataset is committed so the shipped constants are
-# reproducible. Note: ignoring `dir/` blocks descent, so we ignore `dir/*`
-# (everything inside) and then re-include the one file we want.
+# Benchmark outputs. The frozen cost-model dataset stays tracked so the
+# shipped constants are reproducible (ignore the contents, not the folder).
 benchmarks/results/*
 !benchmarks/results/ser_deser_matrix.frozen.csv
-
-# Bench scratch outputs (cost-model fit working files, etc.)
+benchmarks/results_*/
 benchmarks/_*scratch*
 
-# Planning / findings docs written by exploratory dev sessions — not part
-# of the published repo (matches the `docs/superpowers/` and `.github/planning/`
-# convention used elsewhere).
+# Private working notes that must never be published
+.claude/
+planning/
+/design/
+docs/superpowers/
+WORKING_MEMORY.md
 examples/large_scale_projects/FINDINGS.md
 examples/large_scale_projects/PROJECT_PLAN.md
-
-# Superpowers working docs (specs/plans/notes; not part of the public repo)
-docs/superpowers/
-
-# Integration-test analysis tooling lives in covtools/ (tracked), but its
-# generated artifacts are not version-controlled: covrun/ holds coverage runs,
-# removal lists, and keep/redundant sets; the inventory files are regenerated
-# by covtools/analyze_integration_tests.py. Run it to recreate them locally.
-covrun/
-/integration_inventory.json
-/integration_inventory.md
-
-# Re-run benchmark sweeps (multi-GB, timestamped)
-benchmarks/results_*/
-
-# Integration test selection baseline output
-/.testsel/

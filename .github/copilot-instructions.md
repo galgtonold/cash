@@ -177,6 +177,8 @@ When debugging notebook-related bugs:
 2. Use the built-in VS Code notebook tools (`edit_notebook_file`, `run_notebook_cell`, `read_notebook_cell_output`, `configure_python_notebook`) to execute cells and observe behavior. **DO NOT use the external Jupyter MCP server** — use the VS Code built-in notebook editing/execution tools only.
 3. Once the issue is reproduced, write an integration test using `nb_runner` that programmatically verifies the fix.
 
+Keep throwaway repro scripts, debug output and notes in `scratch/` at the repo root; it is gitignored.
+
 ### Interactive Notebook Testing Workflow
 When performing interactive user-testing (cell-by-cell execution with edits):
 - Use `edit_notebook_file` (with `editType: "insert"`) to add cells
