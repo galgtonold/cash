@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ..effects import Action, Effect, EffectKind, classify_call, is_open_write_mode, writes_to_console
+from ..effects import Action, EffectKind, classify_call, is_open_write_mode, writes_to_console
 from ..install_paths import installed_roots, normcase_path
 from ..purity import is_pure
 
@@ -74,7 +74,6 @@ __all__ = [
     # The notebook's answer to each kind of effect
     "NOTEBOOK_POLICY",
     "SCANNED_KINDS",
-    "notebook_effect",
 ]
 
 # ---------------------------------------------------------------------------
@@ -489,37 +488,6 @@ _NOTEBOOK_LABELS: dict[EffectKind, str] = {
     EffectKind.DISPLAY: "display",
 }
 
-#: Calls the notebook did not refuse before the two paths shared one
-#: vocabulary, although the decorator path reports them. Each group is closed
-#: on its own, with a test of the new verdict on both paths.
-_NOT_YET_REFUSED: frozenset[str] = frozenset(
-    {
-        # the network: writes through a client object
-        "post",
-        "put",
-        "patch",
-        "send",
-        "sendall",
-        "sendto",
-        "publish",
-        "upload",
-        "upload_file",
-        "upload_fileobj",
-        "put_object",
-    }
-)
-
-
-def notebook_effect(call: ast.Call, namespace: Mapping[str, Any] | None = None) -> Effect | None:
-    """The effect *call* has, as the notebook path judges it, or None.
-
-    *namespace* is passed on to :func:`cash.effects.classify_call`.
-    """
-    effect = classify_call(call, namespace)
-    if effect is None or effect.name in _NOT_YET_REFUSED:
-        return None
-    return effect
-
 
 @dataclass
 class SideEffectInfo:
@@ -826,7 +794,7 @@ def _call_repeatability(call: ast.Call, local_handles: frozenset[str] = frozense
         return REPEATABILITY_ACCUMULATING if "a" in mode.value else REPEATABILITY_REPLACING
     if isinstance(func, ast.Attribute):
         method = func.attr
-        effect = notebook_effect(call)
+        effect = classify_call(call)
         if effect is None or not effect.method or effect.kind is not EffectKind.FILE_WRITE:
             return None
         if _is_append_mode_call(call):
@@ -878,7 +846,7 @@ def statement_write_repeatability(code: str, tree: "ast.Module | None" = None) -
             verdicts.add(verdict)
         # Module-level writers (os.remove, shutil.move, ...) are recognised
         # by their full name rather than the call shapes above.
-        effect = notebook_effect(node)
+        effect = classify_call(node)
         if effect is None or effect.method or effect.kind is not EffectKind.FILE_WRITE or "." not in effect.name:
             continue
         key = effect.name
@@ -1399,7 +1367,7 @@ class _SideEffectVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         """Detect function/method calls with side effects."""
-        effect = notebook_effect(node)
+        effect = classify_call(node)
         if effect is not None and effect.kind not in SCANNED_KINDS and NOTEBOOK_POLICY[effect.kind] is Action.REFUSE:
             if effect.method:
                 base = get_base_name(node.func.value)  # type: ignore[attr-defined]
@@ -1463,7 +1431,7 @@ class StatementAnalysis:
     accumulator_mutated_vars: frozenset[str] = frozenset()
     alias_targets: frozenset[str] = frozenset()
 
-    def skip_reasons(self, outputs: set[str]) -> list[str]:
+    def skip_reasons(self, outputs: set[str], *, side_effects: bool = True) -> list[str]:
         """Render structured findings as human-readable skip reasons.
 
         Used to populate ``metrics['uncacheable_reasons']``.
@@ -1472,6 +1440,8 @@ class StatementAnalysis:
             outputs: Variable names that are *outputs* of this statement.
                      Mutations on outputs are expected and do not block
                      caching (the output itself gets a fresh lineage).
+            side_effects: False leaves the side effects out -- the statement
+                     carries ``# @cash:assume-safe``.
         """
         reasons: list[str] = []
         # An alias bind (``b = a``) is free to execute and MUST NOT be restored:
@@ -1498,8 +1468,8 @@ class StatementAnalysis:
                 reasons.append(
                     "tip: assign the result to cache it — e.g. `out = [f(e) for e in it]` instead of a for-append loop"
                 )
-        for e in self.side_effects:
-            reasons.append(f"Side effect: {e.description} ({e.kind})")
+        if side_effects:
+            reasons.extend(f"Side effect: {e.description} ({e.kind})" for e in self.side_effects)
         return reasons
 
 

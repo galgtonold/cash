@@ -31,6 +31,10 @@ class CacheAnnotation:
     allow_random: bool = False  # Suppress randomness warnings
     cache_fit: bool = False  # Opt in to caching a bare ``estimator.fit(X, y)``
     no_cache_calls: bool = False  # Opt OUT of caching CALLS inside the statement
+    # Cache the statement despite its side effects: a hit skips them. For a
+    # call that only looks like a write -- a POST that runs a query. Never
+    # spread from a cell's header (see ``leading_cell_annotation``).
+    assume_safe: bool = False
 
     def merge(self, other: CacheAnnotation) -> CacheAnnotation:
         """Merge with another annotation (other takes precedence for ttl)."""
@@ -41,6 +45,7 @@ class CacheAnnotation:
             allow_random=self.allow_random or other.allow_random,
             cache_fit=self.cache_fit or other.cache_fit,
             no_cache_calls=self.no_cache_calls or other.no_cache_calls,
+            assume_safe=self.assume_safe or other.assume_safe,
         )
 
     def has_directives(self) -> bool:
@@ -52,6 +57,7 @@ class CacheAnnotation:
             or self.allow_random
             or self.cache_fit
             or self.no_cache_calls
+            or self.assume_safe
         )
 
 
@@ -70,9 +76,8 @@ class CacheAnnotation:
 # and reject it out loud.
 ANNOTATION_PATTERN = re.compile(r"#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?")
 
-#: Every directive name Cash acts on. ``assume-safe`` is read by the purity
-#: analyser rather than here, but it is a real directive, so it must not be
-#: reported as unknown.
+#: Every directive name Cash acts on. ``assume-safe`` is also read by the
+#: purity analyser, from a decorated function's source.
 KNOWN_DIRECTIVES: tuple[str, ...] = (
     "no-cache",
     "persist",
@@ -151,6 +156,8 @@ def parse_annotation_line(line: str, lineno: int | None = None) -> CacheAnnotati
         return CacheAnnotation(cache_fit=True)
     if directive == "no-cache-calls":
         return CacheAnnotation(no_cache_calls=True)
+    if directive == "assume-safe":
+        return CacheAnnotation(assume_safe=True)
     if directive == "ttl":
         # ``isascii`` as well as ``isdigit``: the latter is True for characters
         # like the superscript two, which ``int()`` then refuses.
@@ -240,6 +247,9 @@ def leading_cell_annotation(source_lines: list[str]) -> CacheAnnotation:
       frame snapshots every intermediate width — measured at 13x cache
       amplification. They stay statement-scoped, which is also how a
       header ``persist`` above a single statement already reads.
+    * ``assume-safe`` is a WAIVER: over-applying it caches statements whose
+      side effects nobody audited, so a hit silently skips them. It stays on
+      the statement it was written for, as it does in a decorated function.
 
     Only the header block counts: scanning stops at the first line of real code,
     so a directive further down stays statement-scoped and mid-cell targeting

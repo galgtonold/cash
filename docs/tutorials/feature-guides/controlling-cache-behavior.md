@@ -11,7 +11,7 @@ The notebook layer makes a verdict on every statement: cache it, refuse to cache
 - The 200 MB model you just trained should hit disk, even though the smart-persistence policy would normally leave it in RAM.
 - The `np.random.randn` call is intentional and you don't need a warning every cell run.
 
-Four general-purpose comment annotations and a magic-level TTL cover all of those cases. Two more specialised directives are covered elsewhere: the ML-specific [`# @cash:cache-fit`](../../annotations.md#cashcache-fit), and [`# @cash:no-cache-calls`](../../annotations.md#call-level-caching-default-and-cashno-cache-calls), the opt-out for cash's default behavior of caching the *calls inside* a statement instead of just the statement itself — the fix for an accumulator loop that can never cache as a whole. They live as `# @cash:<directive>` comments on or immediately above the statement, and they're read by the same parser for every cell `%cash_on` caches.
+Four general-purpose comment annotations and a magic-level TTL cover all of those cases. Three more specialised directives are covered elsewhere: the ML-specific [`# @cash:cache-fit`](../../annotations.md#cashcache-fit); [`# @cash:no-cache-calls`](../../annotations.md#call-level-caching-default-and-cashno-cache-calls), the opt-out for cash's default behavior of caching the *calls inside* a statement instead of just the statement itself — the fix for an accumulator loop that can never cache as a whole; and [`# @cash:assume-safe`](../../annotations.md#cashassume-safe), which caches a statement whose side effect is harmless to skip, such as a POST that only runs a query. They live as `# @cash:<directive>` comments on or immediately above the statement, and they're read by the same parser for every cell `%cash_on` caches.
 
 ## Quick start
 
@@ -32,8 +32,8 @@ model = train_xgb(X, y)         # 12 min to fit — force to disk
 noise = np.random.rand(1000)    # we know it's unseeded; don't warn us
 ```
 
-<!-- claim: cash/analysis/annotations.py:parse_annotation_line @341dca2e, cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1 -->
-That's the everyday language — six directives in total, counting the two specialised ones above. Stack annotations on consecutive lines above a statement (Cash walks backwards through comment lines until it hits a blank or a non-comment).
+<!-- claim: cash/analysis/annotations.py:parse_annotation_line @5d8ea461, cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1 -->
+That's the everyday language — seven directives in total, counting the three specialised ones above. Stack annotations on consecutive lines above a statement (Cash walks backwards through comment lines until it hits a blank or a non-comment).
 
 ## The four annotations
 
@@ -53,7 +53,7 @@ api_response = requests.get("https://api.example.com/data")
 print(f"Debug: {some_value}")
 ```
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @b5ac154c -->
 The decision-merge layer short-circuits as soon as it sees this annotation — `decide_cacheability` returns `(False, ['@cash:no-cache annotation'])` before consulting anything else. The badge shows the statement as NOT CACHED with that exact reason string.
 
 <iframe class="cash-badge" src="/_badges/not_cached_explicit.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
@@ -230,7 +230,7 @@ The first source that triggers wins; later sources are not consulted.
 
 For the annotations that *don't* skip caching:
 
-<!-- claim: cash/analysis/annotations.py:CacheAnnotation.merge @150e9620 -->
+<!-- claim: cash/analysis/annotations.py:CacheAnnotation.merge @b10e0cdc -->
 - `@cash:persist` + `@cash:ttl=N` compose freely — a statement can be both forced-to-disk and time-limited. `CacheAnnotation.merge` ORs the persist flags and overrides the TTL, so stacking on consecutive lines works:
 
   ```python { .nb-cell }

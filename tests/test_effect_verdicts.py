@@ -20,6 +20,7 @@ import textwrap
 
 import pytest
 
+from cash.analysis.annotations import CacheAnnotation, get_statement_annotations
 from cash.analysis.cacheability import analyze_statement
 from cash.analysis.cacheability_decision import decide_cacheability
 from cash.analysis.code_analyzer import CodeAnalyzer
@@ -65,6 +66,13 @@ ROWS = [
     ("requests.request('GET', u)", "cache", "network_read"),
     ("requests.request('POST', u)", "refuse", "impure_call"),
     ("urllib.request.urlopen(u, b'x=1')", "refuse", "impure_call"),
+    # The same write through a client object: the notebook cached
+    # `session.post(u)` while refusing `requests.post(u)`.
+    ("session.post(u)", "refuse", "impure_call"),
+    ("sock.sendall(b'x')", "refuse", "impure_call"),
+    ("client.publish(a, b)", "refuse", "impure_call"),
+    ("s3.upload_file(a, b, 'k')", "refuse", "impure_call"),
+    ("s3.put_object(Bucket=a, Key=b)", "refuse", "impure_call"),
     # A database: a notebook cache hit skipped `cur.execute("INSERT ...")` and
     # `conn.commit()`, while `df.to_sql` ran every time (as a "file write") and
     # was silent in a decorated function. A literal SELECT is a read.
@@ -116,14 +124,16 @@ def probe_module(tmp_path_factory):
     sys.modules.pop(spec.name, None)
 
 
-def notebook_verdict(statement: str, namespace: dict) -> tuple[str, list[str]]:
+def notebook_verdict(
+    statement: str, namespace: dict, annotation: CacheAnnotation | None = None
+) -> tuple[str, list[str]]:
     tree = ast.parse(statement)
     cacheable, reasons = decide_cacheability(
         code=statement,
         tree=tree,
         inputs=set(),
         outputs={"r"},
-        annotation=None,
+        annotation=annotation,
         analysis=analyze_statement(statement, tree),
         user_ns=namespace,
         variable_lineage={},
@@ -198,3 +208,57 @@ def test_the_keyboard_is_recognised_through_an_alias():
     assert notebook_verdict("r = ask()", {"ask": getpass.getpass}) == ("refuse", ["getpass.getpass"])
     assert notebook_verdict("r = ask()", {"ask": input}) == ("refuse", ["input"])
     assert notebook_verdict("r = ask()", {"ask": len}) == ("cache", [])
+
+
+def _annotated_verdict(statement: str, namespace: dict) -> tuple[str, list[str]]:
+    """The verdict with the annotation read from the statement's own comment."""
+    tree = ast.parse(statement)
+    return notebook_verdict(statement, namespace, get_statement_annotations(statement, tree.body[0]))
+
+
+@pytest.mark.parametrize(
+    "call",
+    ["session.post(u, json={'q': 1})", "requests.post(u)", "cur.execute(sql)", "shutil.copyfile(a, b)"],
+)
+def test_assume_safe_overrides_a_side_effect_refusal(probe_module, call):
+    """A POST that only runs a query cannot be told from one that writes; the
+    user can, and says so on the line."""
+    namespace = dict(vars(probe_module))
+    assert notebook_verdict(f"r = {call}", namespace)[0] == "refuse"
+    assert _annotated_verdict(f"r = {call}  # @cash:assume-safe", namespace) == ("cache", [])
+    assert _annotated_verdict(f"# @cash:assume-safe\nr = {call}", namespace) == ("cache", [])
+
+
+@pytest.mark.parametrize("call", ["time.time()", "input()"])
+def test_assume_safe_does_not_cache_a_value_read_each_time(probe_module, call):
+    """The clock and the keyboard are not side effects a hit skips: a hit
+    would replay the first answer."""
+    verdict, _ = _annotated_verdict(f"r = {call}  # @cash:assume-safe", dict(vars(probe_module)))
+    assert verdict == "refuse"
+
+
+def test_assume_safe_does_not_waive_an_in_place_mutation(probe_module):
+    namespace = {**vars(probe_module), "rows": []}
+    statement = "rows.append(session.post(u))  # @cash:assume-safe"
+    tree = ast.parse(statement)
+    cacheable, reasons = decide_cacheability(
+        code=statement,
+        tree=tree,
+        inputs=set(),
+        outputs=set(),
+        annotation=get_statement_annotations(statement, tree.body[0]),
+        analysis=analyze_statement(statement, tree),
+        user_ns=namespace,
+        variable_lineage={},
+        is_stateful_call=lambda _name: False,
+        scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
+    )
+    assert not cacheable and reasons[0] == "In-place mutation on: rows"
+    assert not any(reason.startswith("Side effect") for reason in reasons)
+
+
+def test_assume_safe_in_a_cell_header_stays_on_its_statement(probe_module):
+    """A waiver spread over a whole cell would cache writes nobody audited."""
+    cell = "# @cash:assume-safe\n\nr = requests.post(u)\ns = session.post(u)\n"
+    tree = ast.parse(cell)
+    assert not get_statement_annotations(cell, tree.body[1]).assume_safe

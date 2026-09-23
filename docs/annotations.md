@@ -12,13 +12,12 @@ Annotations are `#`-comment directives that tweak Cash's per-statement caching d
 | `# @cash:allow-random` | no | Suppress the unseeded-randomness warning for this statement. Advisory only — see [below](#cashallow-random). |
 | `# @cash:cache-fit` | no | Opt an in-place estimator fit — `estimator.fit(X, y)`, or `X2 = estimator.fit_transform(X)` — in to caching. Off by default — see [below](#cashcache-fit). |
 | `# @cash:no-cache-calls` | no | Turn off caching the expensive **call inside** a statement. **On by default** — see [below](#call-level-caching-default-and-cashno-cache-calls). |
+| `# @cash:assume-safe` | no | Cache this statement despite its side effects — a POST that only runs a query. A hit skips them. See [below](#cashassume-safe). |
 
-!!! note "`# @cash:assume-safe` belongs to the other path"
-    Every directive above is read by the **notebook statement** processor.
-    `# @cash:assume-safe` is not one of them: it waives a decorator-path purity
-    finding for one statement inside a `@cash.cache` function, and is read by
-    the analyzer out of that function's source. In a notebook statement it
-    parses and does nothing. See
+!!! note "`# @cash:assume-safe` works on both paths"
+    The same directive waives a purity finding for one statement inside a
+    `@cash.cache` function, where the analyzer reads it out of the function's
+    source. See
     [Purity & the decorator](tutorials/feature-guides/purity-decorators.md#cashassume-safe-waive-one-statement).
 
 A minimal example:
@@ -69,7 +68,7 @@ name. A `\d+` group would simply not match the bad part — `ttl=5m` would captu
 
 A few details that bite people:
 
-<!-- claim: cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/analysis/annotations.py:parse_annotation_line @341dca2e -->
+<!-- claim: cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/analysis/annotations.py:parse_annotation_line @5d8ea461 -->
 - **`@cash:` is case-sensitive.** `# @Cash:persist` is silently ignored. Only the directive *name* after the colon is lower-cased ([`annotations.py` — `ANNOTATION_PATTERN`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py)), so `# @cash:PERSIST` works.
 - **A space after the colon is fine.** `# @cash: persist` and `# @cash:persist` both match (the pattern allows `\s*` after the colon), as does spacing around `=` — `# @cash:ttl = 60` works.
 - **Whitespace before `@cash:` is fine.** `#@cash:persist`, `# @cash:persist`, and `#   @cash:persist` all match.
@@ -91,7 +90,7 @@ Forces a statement to be cached on disk even when the cost model would normally 
 cheap_constant = compute_constants()    # would normally be skipped; now forced
 ```
 
-<!-- claim: cash/analysis/annotations.py:parse_annotation_line @341dca2e, cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd -->
+<!-- claim: cash/analysis/annotations.py:parse_annotation_line @5d8ea461, cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd -->
 Behind the scenes: the parser sets `CacheAnnotation(persist=True)` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py)), and `_parse_annotation` in the statement processor turns that into `force_persist=True` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)), which bypasses the cost-model skip logic downstream.
 
 If both `persist` and `no-cache` apply to the same statement, **`no-cache` wins** (see [Merging](#merging-multiple-annotations)).
@@ -109,7 +108,7 @@ now = datetime.utcnow()    # always fresh
 
 This is the right directive when a statement has observable side effects or produces values that must always be recomputed (timestamps, monotonic counters, "fire and forget" prints).
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @b5ac154c -->
 Behind the scenes: the cacheability decision short-circuits at [`cacheability_decision.py` — `decide_cacheability`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/cacheability_decision.py):
 
 <!-- test:skip reason="source-code excerpt: has return outside function" -->
@@ -135,7 +134,7 @@ Notes:
 - If multiple `ttl=` annotations apply to the same statement, **the last one wins** (see [Merging](#merging-multiple-annotations)).
 - TTL only governs *cache freshness*. A statement with `no-cache` won't be cached at all, so its `ttl=` is irrelevant.
 
-<!-- claim: cash/analysis/annotations.py:parse_annotation_line @341dca2e -->
+<!-- claim: cash/analysis/annotations.py:parse_annotation_line @5d8ea461 -->
 Behind the scenes: the annotation sets `CacheAnnotation.ttl` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py)), which `_parse_annotation` reads and uses as `effective_ttl` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)).
 
 ### `# @cash:allow-random`
@@ -251,6 +250,37 @@ model = train_model(X_train, y_train)
 An unseeded opted-in fit warns that the cached model is a frozen replay (the
 `.fit()`'s internal randomness is invisible to the AST scanner);
 [`# @cash:allow-random`](#cashallow-random) suppresses it.
+
+### `# @cash:assume-safe`
+
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @b5ac154c, cash/analysis/annotations.py:leading_cell_annotation @06896efb -->
+Cash runs a statement with a side effect every time, because a cache hit would
+skip it: a file write, a subprocess, a write to a database, drawing on pyplot's
+current figure, or a request that sends something — `requests.post(...)`,
+`session.post(...)`, `client.publish(...)`, `s3.upload_file(...)`. Cash judges
+these by name, and a name cannot tell a POST that creates an order from a POST
+that runs a search. You can:
+
+<!-- test:skip reason="illustrative: needs a live endpoint" -->
+```python
+hits = session.post(SEARCH_URL, json=query).json()   # @cash:assume-safe
+```
+
+With the directive the statement is judged as if it had no side effects, and a
+hit returns the stored answer without sending the request. That is the whole
+effect; it is on you that skipping it is harmless.
+
+It waives side effects and nothing else. A statement that changes an object
+in place (`rows.append(session.post(...))`) still runs every time, and so does
+one that reads the clock or asks for `input()`: those are values, and a hit
+would replay the first one. Pair it with [`# @cash:ttl=N`](#cashttln) when the
+answer can go stale.
+
+It stays on its statement. Written in a cell's leading comment block it
+applies to the first statement below it, not to the whole cell as `no-cache`
+does: a waiver spread over a cell would cache writes nobody looked at. On a
+`for` or `if` header it reaches the statements inside, like any directive
+there.
 
 ### Call-level caching (default) and `# @cash:no-cache-calls`
 
@@ -454,6 +484,7 @@ question with a per-directive answer:
 | `# @cash:persist` | Yes — the statement's persistence request governs them too |
 | Automatically tracked file reads | Yes — a call re-validates the files it read, on its own |
 | `# @cash:allow-random` | Not applicable — a call that consumes RNG refuses to cache in the first place |
+| `# @cash:assume-safe` | Yes — the call is judged by the same rule as the statement, with the statement's directives |
 
 This mattered most in the shape where the statement **cannot** cache — a callee
 that writes a global makes its statement skip-cache, leaving the call entry as
@@ -667,7 +698,7 @@ That's a perfectly valid placement. Don't overuse it — the multi-line form abo
 
 ## Merging multiple annotations
 
-<!-- claim: cash/analysis/annotations.py:CacheAnnotation.merge @150e9620 -->
+<!-- claim: cash/analysis/annotations.py:CacheAnnotation.merge @b10e0cdc -->
 When several annotations apply to a single statement (stacked above, on the line, or inside a compound body), Cash merges them with `CacheAnnotation.merge` ([`annotations.py` — `CacheAnnotation.merge`](https://github.com/galgtonold/cash/blob/main/src/cash/analysis/annotations.py)):
 
 | Field | Merge rule |
@@ -677,6 +708,7 @@ When several annotations apply to a single statement (stacked above, on the line
 | `allow_random` | logical OR |
 | `cache_fit` | logical OR |
 | `no_cache_calls` | logical OR |
+| `assume_safe` | logical OR |
 | `ttl` | "other wins if set" — order-sensitive |
 
 That means:

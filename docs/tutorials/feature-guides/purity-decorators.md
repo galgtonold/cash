@@ -213,7 +213,7 @@ Now any cell that calls `log_to_dashboard(...)` or `send_alert(...)` runs fresh 
 
 ### What it actually does
 
-<!-- claim: cash/purity.py:stateful @d2b97ef0, cash/analysis/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
+<!-- claim: cash/purity.py:stateful @d2b97ef0, cash/analysis/cacheability_decision.py:decide_cacheability @b5ac154c -->
 `@stateful` sets `_cash_stateful = True` on the wrapped function. When the statement processor walks the bare-name calls in a cell and finds one whose resolved callable has that attribute, `_check_callable_stateful` returns `True`. The caller (in `decide_cacheability`) then refuses to cache the cell and records the reason "Calls @stateful function".
 
 `_check_callable_stateful` looks only for `@stateful`, so if you ever (accidentally) stack both decorators on the same function, stateful wins. Don't rely on that — see the [caveats](#mixing-markers).
@@ -466,11 +466,11 @@ statement-scoped equivalent of `assume_safe=True` for those.
     accept a helper's side effect for one caller and not another; if you need
     that, `assume_safe=True` on the one caller is the tool.
 
-!!! note "Decorator path only"
-    The analyzer reads this out of the function's source. In a notebook
-    *statement* (`%cash_on`) the directive is parsed but has no meaning, and is
-    ignored silently — see [Annotations](../../annotations.md) for the ones
-    that do work there.
+!!! note "In a notebook statement too"
+    On a notebook *statement* (`%cash_on`) the same directive caches the
+    statement despite its side effects — a POST that only runs a query — so a
+    hit skips them. See
+    [Annotations](../../annotations.md#cashassume-safe).
 
 !!! note "Defined inside a `%cash_on` cell"
     The waiver is honoured the same way when the decorated function is

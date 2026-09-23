@@ -18,6 +18,12 @@ Reason-source order (deterministic):
 4. In-place mutations + side effects (from ``StatementAnalysis``)
 5. Input variable missing lineage
 
+``# @cash:assume-safe`` on the statement waives the side effects -- a call
+into user code that writes files (3) and the side effects of (4) -- and
+nothing else: a hit skips them, which is what the user has said is fine (a
+POST that only runs a query, say). What the clock or ``input`` return (2) is
+not a side effect but a value, and a hit would replay the first one.
+
 The function takes the runtime hooks (purity lookup, forbidden scan) as
 callables so this module does not have to import ``purity`` or
 ``analysis``.  That keeps the dependency picture in this file honest:
@@ -223,6 +229,7 @@ def decide_cacheability(
     """
     if annotation is not None and annotation.no_cache:
         return False, ["@cash:no-cache annotation"]
+    waived = annotation is not None and annotation.assume_safe
 
     try:
         forbidden = scan_forbidden(code, user_ns, tree)
@@ -235,13 +242,13 @@ def decide_cacheability(
         for name in analysis.called_names:
             if is_stateful_call(name):
                 return False, ["Calls @stateful function"]
-            writer = user_callee_writing_files(user_ns.get(name))
+            writer = None if waived else user_callee_writing_files(user_ns.get(name))
             if writer:
                 return False, [f"Calls {name}(), which writes files ({writer}): a cache hit would skip the write"]
     except (TypeError, AttributeError) as exc:
         logger.debug("Error checking function purity: %s", exc)
 
-    ast_reasons = analysis.skip_reasons(outputs)
+    ast_reasons = analysis.skip_reasons(outputs, side_effects=not waived)
     if ast_reasons:
         return False, ast_reasons
 

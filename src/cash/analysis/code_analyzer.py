@@ -20,9 +20,9 @@ from collections import ChainMap
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from ..effects import Action
+from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from .cacheability import NOTEBOOK_POLICY, SCANNED_KINDS, callee_mutated_globals_for_tree, notebook_effect
+from .cacheability import NOTEBOOK_POLICY, SCANNED_KINDS, callee_mutated_globals_for_tree
 
 __all__ = ["CodeAnalyzer"]
 
@@ -442,7 +442,7 @@ def _forbidden_call(node: ast.Call, namespace: Mapping[str, Any]) -> str | None:
         root = root.value
     if not isinstance(root, ast.Name) or not (root.id in namespace or hasattr(builtins, root.id)):
         return None
-    effect = notebook_effect(node, namespace)
+    effect = classify_call(node, namespace)
     if effect is None or effect.kind not in SCANNED_KINDS or NOTEBOOK_POLICY[effect.kind] is not Action.REFUSE:
         return None
     return ".".join(effect.name.split(".")[-2:])

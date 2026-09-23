@@ -22,7 +22,7 @@ data = [1, 2, 3]      # cached snapshot: [1, 2, 3]
 data.append(4)        # data is now [1, 2, 3, 4] — but the snapshot still says [1, 2, 3]
 ```
 
-<!-- claim: cash/analysis/cacheability.py:_MutationVisitor @c41cea02, cash/analysis/cacheability.py:StatementAnalysis.skip_reasons @843e903a broad="the claim is about the visitor's whole set of visit_* patterns, not one of them" -->
+<!-- claim: cash/analysis/cacheability.py:_MutationVisitor @c41cea02, cash/analysis/cacheability.py:StatementAnalysis.skip_reasons @2a71487a broad="the claim is about the visitor's whole set of visit_* patterns, not one of them" -->
 Cash answers two questions about every statement, in that order:
 
 1. **Does it mutate something?** — a pure-AST scan (`analyze_statement`), plus
@@ -190,14 +190,14 @@ Replaying them from cache would skip the action (a file never gets written, a
 request never gets sent). Cash's side-effect analysis flags these statements as
 **uncacheable** so they always run:
 
-<!-- claim: cash/effects.py:MODULE_CALLS @c6f9471b, cash/analysis/cacheability.py:NOTEBOOK_POLICY @86811d37, cash/analysis/cacheability.py:_SideEffectVisitor @490e81ae broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
+<!-- claim: cash/effects.py:MODULE_CALLS @c6f9471b, cash/analysis/cacheability.py:NOTEBOOK_POLICY @86811d37, cash/analysis/cacheability.py:_SideEffectVisitor @ab719d0c broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
 | Pattern | Examples | Why it's unsafe to replay |
 |---------|----------|---------------------------|
 | File writes | `open('f', 'w')`, `df.to_csv()`, `df.to_parquet()`, `Path(p).write_text()` | The file wouldn't be written on a cache hit |
 | Serializing writers | `json.dump()`, `pickle.dump()`, `np.save()`, `fig.savefig()` | The artifact wouldn't be produced |
 | Filesystem changes | `os.remove()`, `shutil.move()`, `shutil.copyfile()`, `os.symlink()`, `os.chmod()`, `Path(p).mkdir()`, `Path(p).touch()`, `Path(p).unlink()` | The change to disk wouldn't happen |
 | System calls | `os.system()`, `os.popen()`, `subprocess.run()` | The process wouldn't run |
-| Network writes | `requests.post()`, `requests.put()`, `requests.delete()`, `requests.patch()`, `requests.request("POST", ...)`, `urlopen(url, data)` | The request wouldn't be sent |
+| Network writes | `requests.post()`, `requests.put()`, `requests.delete()`, `requests.patch()`, `requests.request("POST", ...)`, `urlopen(url, data)`, and the same verbs on a client object: `session.post()`, `sock.sendall()`, `client.publish()`, `s3.upload_file()`, `s3.put_object()` | The request wouldn't be sent |
 | Database writes | `df.to_sql()`, `cur.execute(sql)`, `cur.executemany(...)`, `conn.commit()` | The rows wouldn't reach the database |
 
 Read-style calls are deliberately **not** treated as side effects:
@@ -212,7 +212,7 @@ Writing to the console is output, not a file: `os.write(2, ...)`, `sys.stderr.wr
 and `sys.stdout.write(...)` count as a `print` does, so a step marker in a helper does
 not make every statement that calls it a file writer.
 
-<!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @c6776836, cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511 -->
+<!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @8d78391d, cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511 -->
 A statement that reads the clock or makes a fresh id runs every time too:
 `time.time()`, `time.perf_counter()`, `datetime.now()`, `date.today()`,
 `uuid.uuid4()`, `pd.Timestamp.now()`, `pd.to_datetime("today")`, and
@@ -243,7 +243,14 @@ are on it: every type that has one writes to a filesystem, and an
 folder missing. The same list is what a `@cash.cache` function is checked
 against, so a call that runs every time in a notebook is reported there too.
 
-<!-- claim: cash/analysis/cacheability.py:statement_write_repeatability @3790def9, cash/analysis/cacheability.py:_REPLACING_WRITE_METHODS @b3158e08, cash/analysis/cacheability.py:_is_append_mode_call @d7aef5f5 -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @b5ac154c -->
+A name cannot tell a POST that creates an order from one that runs a search.
+When a statement's side effect is harmless to skip, put
+[`# @cash:assume-safe`](../annotations.md#cashassume-safe) on it: the statement
+is cached, and a hit skips the call. It waives side effects only — an in-place
+change, the clock and `input()` still make the statement run every time.
+
+<!-- claim: cash/analysis/cacheability.py:statement_write_repeatability @98ad7972, cash/analysis/cacheability.py:_REPLACING_WRITE_METHODS @b3158e08, cash/analysis/cacheability.py:_is_append_mode_call @d7aef5f5 -->
 Being uncacheable is not the end of the story for a writer. Because a file
 write has no variable edge, nothing in the lineage graph would ever re-run one,
 so Cash separately records which statements wrote which paths and re-fires a
@@ -309,7 +316,7 @@ Cash checks the live estimator and warns through the same channel.
 
 ## From watching to deciding
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @e9c27ac0 -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @b5ac154c -->
 The findings above are merged into a single verdict per statement by
 `decide_cacheability`. It has five reason-sources and the first one that
 triggers wins:
