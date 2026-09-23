@@ -40,7 +40,7 @@ jobs:
       #
       # So the default is now "run everything" and each exclusion has to justify
       # itself here:
-      #   test_notebook_integration/  793 kernel-spinning files, ~16 min. The
+      #   test_notebook_integration/  starts real kernels, too slow per push. The
       #                               headline features are covered by the smoke
       #                               subset below; run the rest locally.
       #   test_wheel_gate/            builds a wheel and starts a real Jupyter
@@ -71,7 +71,7 @@ jobs:
       # Curated subset of the notebook integration suite — the headline-feature
       # tests (basic flow, restore-after-restart, file invalidation, decorator
       # bridge, badge rendering, forward-probe skip, file-dep path fallback).
-      # The full suite (~3.4k kernel-spinning tests) is too slow for per-push
+      # The full suite is too slow for per-push
       # CI; run it locally with `pytest tests/test_notebook_integration/`.
       - name: Run notebook integration smoke subset
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'

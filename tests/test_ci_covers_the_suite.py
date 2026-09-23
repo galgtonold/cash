@@ -33,7 +33,7 @@ TESTS_DIR = REPO_ROOT / "tests"
 # entry here is a deliberate act that shows up in review; forgetting to add one
 # makes test_every_test_directory_is_accounted_for fail.
 EXPECTED_EXCLUSIONS = {
-    "test_notebook_integration",  # ~793 kernel-spinning files; smoke subset covers headlines
+    "test_notebook_integration",  # starts real kernels; the smoke subset covers the headlines
     "test_wheel_gate",  # builds a wheel + real Jupyter server; release gate
     "docs",  # dedicated docs-parity job (needs docs-test extras)
 }

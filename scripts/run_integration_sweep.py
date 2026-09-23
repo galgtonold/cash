@@ -1,7 +1,7 @@
 """Run the notebook integration suite in chunks, keeping failure output.
 
-The suite is ~840 files of real kernels executing real notebooks. Running it
-in one pytest invocation HANGS at roughly 175 files under ``-n 16`` -- a
+The suite drives real kernels through real notebooks. Running it in one
+pytest invocation HANGS at roughly 175 files under ``-n 16`` -- a
 worker-death cascade -- while every sub-group of <=120 passes. So it is run
 in chunks, and the chunk size is the point of this script rather than a
 detail of it.

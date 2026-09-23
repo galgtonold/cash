@@ -283,7 +283,7 @@ asyncio_mode = "auto"
 # is news: either a bug got fixed and its ticket should close, or a test stopped
 # testing what it claims. With the default (false) that event is invisible --
 # CAS-179 was fixed by unrelated work and sat as a silent XPASS through two full
-# 832-file sweeps, found only by reading a summary line by hand. The previous
+# full sweeps, found only by reading a summary line by hand. The previous
 # mitigation was "remember to run `pytest --runxfail` over the xfail set after
 # lineage/cache work", which is exactly the kind of discipline that gets skipped.
 #
