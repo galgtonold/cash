@@ -47,6 +47,7 @@ from .mutations import (
     is_pandas_plot_call,
     module_setting_receivers,
     selfref_inplace_write_vars,
+    selfref_reassignment_targets,
     standalone_method_call_inner_methods,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
@@ -63,6 +64,7 @@ __all__ = [
     "StatementEffects",
     "cell_effects",
     "classify_receivers",
+    "control_structure_mutations",
     "drawn_on_arguments",
     "is_module_name",
     "live_function_source",
@@ -321,6 +323,57 @@ def nocache_written_vars(cell_code: str) -> frozenset[str]:
         except (SyntaxError, ValueError):
             continue
     return frozenset(written)
+
+
+#: The statements whose branches are walked for :func:`control_structure_mutations`.
+_COMPOUND = (ast.For, ast.While, ast.If, ast.With, ast.Try)
+
+
+def _branches(node: ast.AST) -> list[ast.stmt]:
+    """Every statement directly inside *node*: body, ``else``, handlers, ``finally``."""
+    stmts = [*getattr(node, "body", []), *getattr(node, "orelse", [])]
+    for handler in getattr(node, "handlers", []):
+        stmts.extend(handler.body)
+    stmts.extend(getattr(node, "finalbody", []))
+    return stmts
+
+
+def _loop_targets(node: ast.AST) -> set[str]:
+    if not isinstance(node, ast.For):
+        return set()
+    return {n.id for n in ast.walk(node.target) if isinstance(n, ast.Name)}
+
+
+def control_structure_mutations(node: ast.AST, is_builtin: Callable[[str], bool]) -> set[str]:
+    """Names a control structure changes in place or accumulates into.
+
+    Every branch counts, nested ones too (a loop's ``else`` included): each
+    leaf statement's in-place mutations (``.append()``, ``d[k] = v``,
+    ``obj.attr = v``) and self-referential reassignments (``total += b``,
+    ``total = total + b``), which leave no in-place trace but carry the
+    loop's result the same way. A loop target is a rebinding, not a
+    mutation, so a loop's targets are left out within its body, and so are
+    names *is_builtin* says are builtins.
+
+    The runtime (``update_lineage_after_execution``) and the simulation
+    (``VirtualLineage``) both call this, each with its own builtin rule over
+    the same lineage, so a loop bumps the same lineages on both sides.
+    """
+    return _branch_mutations(_branches(node), _loop_targets(node), is_builtin)
+
+
+def _branch_mutations(stmts: list[ast.stmt], targets: set[str], is_builtin: Callable[[str], bool]) -> set[str]:
+    mutated: set[str] = set()
+    for stmt in stmts:
+        if isinstance(stmt, _COMPOUND):
+            mutated |= _branch_mutations(_branches(stmt), targets | _loop_targets(stmt), is_builtin)
+            continue
+        try:
+            mutated.update(analyze_statement(ast.unparse(stmt), None).all_mutated_vars)
+        except (SyntaxError, ValueError, AttributeError, TypeError):
+            pass  # nothing the analysis can see; the reassignment rule below still applies
+        mutated.update(selfref_reassignment_targets(stmt))
+    return {v for v in mutated if not is_builtin(v)} - targets
 
 
 def _is_live_ndarray(val: Any) -> bool:

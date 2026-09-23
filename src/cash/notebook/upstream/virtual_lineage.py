@@ -27,10 +27,14 @@ from cash.control_markers import iteration_digest, strip_markers
 
 from ..._paths import resolve_file_dep_path
 from ...analysis.ast_util import called_names, parse_cached
-from ...analysis.cacheability import analyze_statement, statement_writes_files
+from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
-from ...analysis.mutation_effects import classify_receivers, live_function_source, statement_effects
-from ...analysis.mutations import selfref_reassignment_targets
+from ...analysis.mutation_effects import (
+    classify_receivers,
+    control_structure_mutations,
+    live_function_source,
+    statement_effects,
+)
 from ...analysis.namespace_effects import bare_call_argument_names, bare_call_arguments
 from ...source_norm import source_identity_digest
 from ...tracking import file_dep_snapshot as _fds
@@ -1475,23 +1479,12 @@ class VirtualLineage:
         Treated like a loop mutation so it is trusted in memory and its lineage is
         bumped, matching the runtime's ``update_lineage_after_execution``.
         """
-        mutated_vars: set[str] = set()
         if isinstance(node, ast.For):
-            target_names = extract_target_names(node.target)
-            loop_target_vars.update(target_names)
-            mutated_vars = self._find_loop_mutated_vars(node.body, set(target_names))
-            vars_mutated_by_loops.update(mutated_vars)
-        elif isinstance(node, ast.While):
-            mutated_vars = self._find_loop_mutated_vars(node.body, set())
-            vars_mutated_by_loops.update(mutated_vars)
-        elif isinstance(node, (ast.If, ast.With, ast.AsyncWith, ast.Try)):
-            direct_body: list = []
-            for attr in ("body", "orelse", "finalbody"):
-                direct_body.extend(getattr(node, attr, []) or [])
-            for handler in getattr(node, "handlers", []) or []:
-                direct_body.extend(handler.body)
-            mutated_vars = self._find_loop_mutated_vars(direct_body, set())
-            vars_mutated_by_loops.update(mutated_vars)
+            loop_target_vars.update(extract_target_names(node.target))
+        if not isinstance(node, (ast.For, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try)):
+            return set()
+        mutated_vars = control_structure_mutations(node, self._unbound_builtin)
+        vars_mutated_by_loops.update(mutated_vars)
         return mutated_vars
 
     def _apply_loop_mutation_lineages(
@@ -3072,69 +3065,6 @@ class VirtualLineage:
                 yield child
                 if is_control_structure(child):
                     yield from VirtualLineage._iter_body_nodes(child)
-
-    def _recurse_control_structure_mutations(self, body_node: ast.AST, loop_targets: set[str]) -> set[str]:
-        """Recurse into a nested control structure and return its mutated vars."""
-        if isinstance(body_node, ast.For):
-            nested_targets = extract_target_names(body_node.target)
-            return self._find_loop_mutated_vars(body_node.body, loop_targets | set(nested_targets))
-        if isinstance(body_node, ast.While):
-            return self._find_loop_mutated_vars(body_node.body, loop_targets)
-        if isinstance(body_node, ast.If):
-            result = self._find_loop_mutated_vars(body_node.body, loop_targets)
-            if body_node.orelse:
-                result |= self._find_loop_mutated_vars(body_node.orelse, loop_targets)
-            return result
-        if isinstance(body_node, ast.With):
-            return self._find_loop_mutated_vars(body_node.body, loop_targets)
-        if isinstance(body_node, ast.Try):
-            result = self._find_loop_mutated_vars(body_node.body, loop_targets)
-            for handler in body_node.handlers:
-                result |= self._find_loop_mutated_vars(handler.body, loop_targets)
-            if body_node.orelse:
-                result |= self._find_loop_mutated_vars(body_node.orelse, loop_targets)
-            if body_node.finalbody:
-                result |= self._find_loop_mutated_vars(body_node.finalbody, loop_targets)
-            return result
-        return set()
-
-    def _find_loop_mutated_vars(self, body_nodes: list, loop_targets: set[str]) -> set[str]:
-        """
-        Find variables that are *actually* mutated inside loop body.
-
-        Uses ``MutationDetector`` for precise detection of in-place mutations
-        (subscript assignment, method calls like ``.append()``, augmented
-        assigns, attribute assignments).  This avoids false positives from the
-        old ``inputs - outputs`` heuristic, which incorrectly marked
-        read-only variables (e.g. ``df`` in ``ticker_data = df[...]``) as
-        mutated.
-
-        Excludes loop target variables and built-ins.
-        """
-
-        mutated_vars: set[str] = set()
-
-        for body_node in body_nodes:
-            if is_control_structure(body_node):
-                # Recurse into nested control structures
-                mutated_vars.update(self._recurse_control_structure_mutations(body_node, loop_targets))
-            else:
-                # Use analyze_statement for precise in-place mutation detection.
-                # This catches: .append(), .update(), [key]=val, +=, obj.attr=val
-                try:
-                    stmt_code = ast.unparse(body_node)
-                    detected = analyze_statement(stmt_code, None).all_mutated_vars
-                    mutated_vars.update(detected)
-                except (SyntaxError, ValueError, TypeError):
-                    logger.debug("analyze_statement failed for AST node in loop body")
-                # Self-referential reassignment accumulators (``total = total + b``,
-                # ``total += b``) leave no in-place-mutation trace, so
-                # all_mutated_vars misses them and the loop is wrongly re-executed,
-                # re-draining one-shot iterables. Trust them like append.
-                mutated_vars.update(selfref_reassignment_targets(body_node))
-
-        # Filter out built-ins and loop targets
-        return {v for v in mutated_vars if not self._unbound_builtin(v)} - loop_targets
 
     def _unbound_builtin(self, name: str, bound: Mapping[str, str] | None = None) -> bool:
         """Is *name* a builtin here: one of `BUILTIN_NAMES` that neither the

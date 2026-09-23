@@ -25,12 +25,12 @@ from ...analysis.annotations import (
     get_statement_annotations,
     parse_annotations_in_range,
 )
-from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import CodeAnalyzer
-from ...analysis.mutations import selfref_reassignment_targets
+from ...analysis.mutation_effects import control_structure_mutations
+from ...value_types import BUILTIN_NAMES
 from ..cache_status import CacheStatus
 from ..compiled_source import is_cash_filename
-from .common import extract_target_names, is_control_structure
+from .common import extract_target_names
 
 logger = logging.getLogger(__name__)
 
@@ -271,12 +271,8 @@ def update_lineage_after_execution(
     if not body_nodes:
         return
 
-    mutated_vars = find_potentially_mutated_variables(body_nodes)
-
-    # Exclude loop target variables — they are not mutations
-    if isinstance(node, ast.For):
-        target_names = set(extract_target_names(node.target))
-        mutated_vars -= target_names
+    lineage = statement_processor.tracking_state.variable_lineage
+    mutated_vars = control_structure_mutations(node, lambda name: name in BUILTIN_NAMES and name not in lineage)
 
     if mutated_vars:
         inherit_body_file_deps(shell, statement_processor, body_nodes, mutated_vars, body_files)
@@ -421,69 +417,6 @@ def get_iterable_lineage(shell, statement_processor, iter_node: ast.AST) -> str 
     else:
         return get_expression_iterable_lineage(shell, statement_processor, iter_node)
     return None
-
-
-def find_potentially_mutated_variables(body_nodes: list) -> set[str]:
-    """
-    Find variables that are mutated inside the control structure body.
-
-    Uses ``MutationDetector`` for precise detection of in-place mutations
-    (subscript assignment, method calls like ``.append()``, augmented
-    assigns, attribute assignments).
-    """
-
-    mutated_vars: set = set()
-    for body_node in body_nodes:
-        if is_control_structure(body_node):
-            nested_body = get_body_nodes(body_node)
-            mutated_vars.update(find_potentially_mutated_variables(nested_body))
-        else:
-            stmt_code = ast.unparse(body_node)
-            try:
-                detected = analyze_statement(stmt_code, None).all_mutated_vars
-                mutated_vars.update(detected)
-            except (SyntaxError, ValueError, AttributeError, TypeError) as exc:
-                logger.debug("[CONTROL] Failed to detect mutations in: %s: %s", stmt_code[:60], exc)
-            # Self-referential reassignment accumulators (``total = total + b``,
-            # ``total += b``) leave no in-place-mutation trace, so all_mutated_vars
-            # misses them and the loop is wrongly re-executed on every downstream
-            # read, re-draining one-shot iterables. Trust them like append.
-            # Kept byte-identical with the simulation collector
-            # (VirtualLineage._find_loop_mutated_vars) per the unified-key rule.
-            #
-            mutated_vars.update(selfref_reassignment_targets(body_node))
-
-    # Filter out built-ins
-    built_ins = {
-        "print",
-        "len",
-        "range",
-        "enumerate",
-        "zip",
-        "map",
-        "filter",
-        "sum",
-        "min",
-        "max",
-        "sorted",
-        "reversed",
-        "list",
-        "dict",
-        "set",
-        "str",
-        "int",
-        "float",
-        "bool",
-        "type",
-        "isinstance",
-        "hasattr",
-        "getattr",
-        "setattr",
-        "open",
-        "get_ipython",
-        "__builtins__",
-    }
-    return mutated_vars - built_ins
 
 
 def update_mutated_variable_lineages(

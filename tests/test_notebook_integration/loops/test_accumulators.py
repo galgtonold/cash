@@ -259,8 +259,8 @@ print(f"z = {z}")""",
 # not just scheduled_iteration_outputs.
 #
 # Root cause: CodeAnalyzer.analyze_code_block('a.append(x)') returns outputs=set(),
-# so 'a' never appears in scheduled_iteration_outputs. But MutationDetector correctly
-# detects 'a' as mutated, and _find_loop_mutated_vars adds it to vars_mutated_by_loops.
+# so 'a' never appears in scheduled_iteration_outputs. But the mutation analysis correctly
+# detects 'a' as mutated, and control_structure_mutations adds it to vars_mutated_by_loops.
 #
 # NOTE: Mutation-only accumulator inits are now preserved across upstream
 # modifications that change loop code (the fix extends the skip logic to

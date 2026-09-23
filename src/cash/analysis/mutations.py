@@ -1194,11 +1194,8 @@ def selfref_reassignment_targets(node: ast.AST) -> frozenset[str]:
     ``x`` would be served stale).  Tuple / multi-target / attribute / subscript
     targets are excluded for the same reason.
 
-    Both the runtime loop-mutation collector
-    (``control_structures.helpers.find_potentially_mutated_variables``) and the
-    simulation collector (``VirtualLineage._find_loop_mutated_vars``) call this
-    on each leaf body statement, so the two classify identically (unified-key
-    rule).
+    ``mutation_effects.control_structure_mutations``, which the runtime and
+    the simulation share, calls this on each leaf body statement.
     """
     if isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
         return frozenset({node.target.id})
