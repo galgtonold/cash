@@ -10,14 +10,15 @@ re-run, so caching cannot hide it.
 """
 
 import pytest
+from conftest import CASH_TEST_PIN_THRESHOLDS
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
 
-def _nb(nb_runner, producer):
+def _nb(nb_runner, producer, setup=""):
     nb_runner.create_notebook(
         [
-            "import cash\n%cash_on\n%cash_badge print",
+            "import cash\n%cash_on\n%cash_badge print\n" + setup,
             "with open('probe_lines.txt', 'w') as f:\n    f.write('a\\nb\\nc\\n')\n" + producer,
             "# @cash:no-cache\nlines = [l.strip() for l in fh]\nprint('R', lines)",
         ]
@@ -51,3 +52,17 @@ def test_re_running_only_the_reader_reads_the_data_again(nb_runner):
     nb_runner.run_all()
     nb_runner.run_cell(3)
     assert "R ['a', 'b', 'c']" in nb_runner.get_output(3), nb_runner.get_raw_output(3)
+
+
+def test_a_slow_open_is_not_served_to_the_next_run(nb_runner):
+    """With the cost floors at zero every call is worth storing, as ``open``
+    was on a loaded machine: the first run stored the handle as an
+    intercepted call and the second Run All served it, drained, to the reader.
+    """
+    _nb(nb_runner, "fh = open('probe_lines.txt')", setup=CASH_TEST_PIN_THRESHOLDS)
+    nb_runner.run_all()
+    assert "R ['a', 'b', 'c']" in nb_runner.get_output(3), nb_runner.get_raw_output(3)
+    nb_runner.run_all()
+    assert "R ['a', 'b', 'c']" in nb_runner.get_output(3), (
+        "a stored file handle was served to the reader:\n" + nb_runner.get_raw_output(2) + nb_runner.get_raw_output(3)
+    )

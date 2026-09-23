@@ -83,3 +83,17 @@ def test_every_installed_shim_is_passed_through(call_cache):
         for shim in shims:
             call_cache.set_sites([_site_for(shim)])
             assert call_cache.resolve(shim) is shim, f"{getattr(shim, '__qualname__', shim)} would be intercepted"
+
+
+def test_ipythons_open_is_passed_through(call_cache):
+    """The kernel binds ``user_ns['open']`` to IPython's own wrapper of
+    ``io.open``, a plain function. Intercepted, a bare ``open(p)`` that took
+    longer than the 3 ms cost floor (any open on a loaded machine) stored its
+    handle, and the next Run All handed a reader the handle it had drained.
+    """
+    from IPython.core import interactiveshell
+
+    ipython_open = interactiveshell._modified_open
+    call_cache.set_sites([_site_for(ipython_open)])
+    assert call_cache.resolve(ipython_open) is ipython_open
+    assert call_cache.drain_call_log() == []

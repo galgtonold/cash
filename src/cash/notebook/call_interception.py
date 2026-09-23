@@ -51,7 +51,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..analysis.cacheability_decision import identity_coupled_reason
-from .cache_key import CacheKeyContext
+from .cache_key import CacheKeyContext, is_cash_instrumentation
 
 __all__ = [
     "eligible_call_nodes",
@@ -188,14 +188,19 @@ def interceptable(fn) -> bool:
     the entry the first had just written. Nor cash's own instrumentation:
     ``file_tracker`` replaces ``open``, ``pd.read_csv`` and friends with
     tracking wrappers, which are plain functions; wrapping one means trying to
-    cache a file handle (CAS-246). The sentinel is the one ``cache_key.py``
-    already reads (CAS-214), and every install site sets it.
+    cache a file handle (CAS-246). Nor IPython's ``open``: the kernel binds
+    ``user_ns['open']`` to a plain-function wrapper of ``io.open``, so a bare
+    ``open(p)`` in a cell was intercepted like a user function. Its 3 ms cost
+    floor kept it uncached on an idle machine; under load the call crossed it,
+    the handle was stored, and the next run was handed the one a reader had
+    already drained. ``is_cash_instrumentation`` is the test the key already
+    applies to both.
     """
     return (
         isinstance(fn, types.FunctionType)
         and not getattr(fn, "_cash_cached", False)
         and not getattr(fn, "_cash_stateful", False)
-        and not getattr(fn, "_is_file_tracker_patch", False)
+        and not is_cash_instrumentation(fn)
     )
 
 
