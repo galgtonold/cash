@@ -164,3 +164,24 @@ def test_the_summary_names_a_few_and_counts_the_rest():
     assert "df_0 = transform(df_0)" in summary and "df_2 = transform(df_2)" in summary
     assert "df_3 = transform(df_3)" not in summary
     assert "and 4 more" in summary, out
+
+
+def test_a_guarded_statement_in_a_loop_is_summarised_once():
+    """Loop iterations are leaves like any row: a guarded loop-body statement
+    gets the once-per-cell explanation, counted once for all its passes."""
+    from cash.control_markers import mark_iteration
+
+    metrics = [
+        {
+            "status": "COMPUTED",
+            "code": mark_iteration("y = transform(x)", f"{i:016x}"),
+            "total_time": 0.1,
+            "skipped_reason": GUARD_SKIP_REASON,
+            "loop_vars": {"x": i},
+        }
+        for i in range(3)
+    ]
+    out = render_text(build_interactive_badge(metrics))
+
+    assert out.count("stopped caching") == 1, out
+    assert "1 statement stopped caching" in out

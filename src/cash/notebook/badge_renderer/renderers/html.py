@@ -49,12 +49,13 @@ from ..view import (
     LoopStatement,
     OverheadBreakdown,
     OverheadEntry,
+    Rollup,
     SectionItem,
     SectionKind,
     SkippedBucket,
     StatementRow,
     SubUnitGroup,
-    iter_iterations,
+    rollup_of,
 )
 from ._cssmin import minify_css
 from ._pytoken import highlight_python
@@ -263,24 +264,15 @@ def _max_time(badge: InteractiveBadge) -> float:
             if isinstance(item, OverheadBreakdown):
                 max_t = max(max_t, *(e.time_s for e in item.entries), 0.0)
             else:
-                max_t = max(max_t, _item_total_time(item))
+                max_t = max(max_t, rollup_of(item).time_s)
     return max(max_t, 0.001)
 
 
-def _item_total_time(item: SectionItem) -> float:
-    if isinstance(item, StatementRow):
-        return item.time_s
-    if isinstance(item, ForLoopGroup):
-        return sum(it.time_s for it in iter_iterations(item))
-    if isinstance(item, ControlGroup):
-        # Body rows can themselves be nested ControlGroups / ForLoopGroups
-        # after the recursive view-builder grouping; sum recursively.
-        return sum(_item_total_time(r) for r in item.rows)
-    if isinstance(item, ControlGroupSingle):
-        return item.row.time_s
-    if isinstance(item, SkippedBucket):
-        return item.total_saved_time_s
-    return 0.0
+def _rail_for(r: Rollup) -> str:
+    """Rail colour for a group: cached, executed, or blue for a mix."""
+    if r.mixed:
+        return theme.RAIL_MIXED
+    return theme.RAIL_CACHED if r.kind == "cached" else theme.RAIL_EXEC
 
 
 # ---------------------------------------------------------------------------
@@ -357,14 +349,14 @@ def _rowtip_html(row: StatementRow, rp: _RenderPass) -> str:
     ``c3-rt-code-label`` caption exists only to name what this block is, so
     the difference is legible rather than alarming.
     """
-    kind = theme.kind_of(row.status.value)
+    kind = theme.kind_of(row.status)
     # Same word the text renderer uses for this row, and the same word the cell
     # header uses for the whole-cell case (CAS-272) -- this pill used to render
     # the raw enum value, so an HTML row read RESTORED under a CACHED header.
     label = (
         theme.LABEL_UNCACHEABLE
         if row.status is BadgeStatus.COMPUTED and (row.uncacheable_reasons or row.skipped_reason)
-        else theme.label_of(row.status.value)
+        else theme.label_of(row.status)
     )
     status_pill = (
         f'<span class="c3-rt-status" '
@@ -508,8 +500,8 @@ def _row_code_html(row: StatementRow) -> str:
 
 def _statement_row_html(row: StatementRow, rp: _RenderPass) -> str:
     status = row.status
-    kind = theme.kind_of(status.value)
-    rail = theme.rail_color(status.value)
+    kind = theme.kind_of(status)
+    rail = theme.rail_color(status)
 
     # Notification rows (WARNING / FUNCTION_CHANGED / MODULE_RELOADED / ERROR)
     # get a text pill in the time chip and skip the timing bar. The row code
@@ -601,7 +593,7 @@ def _iter_histogram_html(iterations: tuple[IterationRow, ...]) -> str:
     bars = []
     for it in iterations:
         h = max(3, int((it.time_s / max_t) * 16))
-        kind = theme.kind_of(it.status.value)
+        kind = theme.kind_of(it.status)
         bar_color = theme.bar_color(kind)
         bindings = ", ".join(f"{name}={value!r}" for name, value in it.loop_bindings)
         title = f"{bindings} · {it.status.value} · {it.time_s:.3f}s"
@@ -659,9 +651,9 @@ def _iter_drilldown_html(
     omitted = total - len(visible)
     rows = []
     for it in visible:
-        kind = theme.kind_of(it.status.value)
+        kind = theme.kind_of(it.status)
         bar_color = theme.bar_color(kind)
-        rail = theme.rail_color(it.status.value)
+        rail = theme.rail_color(it.status)
         pct = max(1.0, (it.time_s / max_t) * 100)
         vals = [f"<b>{_esc(_fmt_iter_value(v))}</b>" for _, v in it.loop_bindings]
         value_str = f"({', '.join(vals)})" if is_tuple else (vals[0] if vals else "—")
@@ -778,55 +770,6 @@ def _loop_tip_html(
     )
 
 
-def _item_saved_time(item) -> float:
-    """Aggregate saved-time the same way _item_total_time aggregates time."""
-    if isinstance(item, StatementRow):
-        return item.saved_time_s
-    if isinstance(item, ForLoopGroup):
-        return sum(it.saved_time_s for it in iter_iterations(item))
-    if isinstance(item, ControlGroup):
-        return sum(_item_saved_time(r) for r in item.rows)
-    if isinstance(item, ControlGroupSingle):
-        return item.row.saved_time_s
-    if isinstance(item, SkippedBucket):
-        return item.total_saved_time_s
-    return 0.0
-
-
-def _walk_statuses(items) -> "list[BadgeStatus]":
-    """Flatten the leaf statuses of any nested SectionItem tree."""
-    out: list[BadgeStatus] = []
-    for item in items:
-        if isinstance(item, StatementRow):
-            out.append(item.status)
-        elif isinstance(item, ForLoopGroup):
-            out.extend(it.status for it in iter_iterations(item))
-        elif isinstance(item, ControlGroup):
-            out.extend(_walk_statuses(item.rows))
-        elif isinstance(item, ControlGroupSingle):
-            out.append(item.row.status)
-        # OverheadBreakdown / DecoratorCallGroup don't contribute statuses
-        # at the cell-summary level — skip.
-    return out
-
-
-def _collect_iterations(items) -> "list[IterationRow]":
-    """All IterationRows under a forest of SectionItems — list-input
-    convenience over :func:`view.iter_iterations`. Used by the synthetic
-    -outer for_loop_group head row to count iterations from nested data
-    when it has no direct stmts."""
-    return [it for item in items for it in iter_iterations(item)]
-
-
-def _aggregate_kind(statuses: tuple[BadgeStatus, ...]) -> str:
-    """Synthesise a kind across a group of iteration / row statuses."""
-    # "cached" only when nothing in the group computed and something was served;
-    # a mixed group colours as exec, and its rail picks blue via rail_color("mixed").
-    cached = any(s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED) for s in statuses)
-    computed = any(s is BadgeStatus.COMPUTED for s in statuses)
-    return "cached" if cached and not computed else "exec"
-
-
 def _for_loop_group_html(g: ForLoopGroup, rp: _RenderPass) -> str:
     """Render one ForLoopGroup as **one** for-header row + N body-line rows.
 
@@ -840,25 +783,14 @@ def _for_loop_group_html(g: ForLoopGroup, rp: _RenderPass) -> str:
     if not g.stmts and not g.nested:
         return ""
 
-    # ---- aggregate across every iteration of every body statement -----
-    all_iters = [it for stmt in g.stmts for it in stmt.iterations]
-    # Synthetic outer wrappers carry no direct stmts (the iteration data
-    # lives under a head-suppressed inner inside a hoisted control). Walk
-    # nested items to gather statuses for the head row.
-    if not all_iters and g.nested:
-        all_iters = list(_collect_iterations(g.nested))
-    statuses = tuple(it.status for it in all_iters)
-    cached = sum(1 for s in statuses if s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
-    total = len(all_iters)
-    head_kind = _aggregate_kind(statuses)
-    if cached > 0 and (total - cached) > 0:
-        head_rail = theme.RAIL_MIXED
-    elif head_kind == "cached":
-        head_rail = theme.RAIL_CACHED
-    else:
-        head_rail = theme.RAIL_EXEC
-    head_total_time = sum(it.time_s for it in all_iters)
-    head_total_saved = sum(it.saved_time_s for it in all_iters)
+    # The head sums the whole loop: its own statements and everything nested.
+    head = g.rollup
+    cached = head.cached
+    total = head.leaves
+    head_kind = head.kind
+    head_rail = _rail_for(head)
+    head_total_time = head.time_s
+    head_total_saved = head.saved_s
 
     # Iterations-per-stmt — the loop's actual trip count.
     iters_per_stmt = len(g.stmts[0].iterations) if g.stmts else total
@@ -950,18 +882,11 @@ def _for_loop_group_html(g: ForLoopGroup, rp: _RenderPass) -> str:
             iters = item.iterations
             if not iters:
                 continue
-            stmt_statuses = tuple(it.status for it in iters)
-            stmt_cached = sum(1 for s in stmt_statuses if s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
-            stmt_total = len(iters)
-            stmt_time = sum(it.time_s for it in iters)
-            stmt_saved = sum(it.saved_time_s for it in iters)
-            stmt_kind = _aggregate_kind(stmt_statuses)
-            if stmt_cached > 0 and (stmt_total - stmt_cached) > 0:
-                stmt_rail = theme.RAIL_MIXED
-            elif stmt_kind == "cached":
-                stmt_rail = theme.RAIL_CACHED
-            else:
-                stmt_rail = theme.RAIL_EXEC
+            stmt_total = item.rollup.leaves
+            stmt_time = item.rollup.time_s
+            stmt_saved = item.rollup.saved_s
+            stmt_kind = item.rollup.kind
+            stmt_rail = _rail_for(item.rollup)
             # Show every iteration when the count fits comfortably in a
             # cell; cap to the first N + a "… +M more" row beyond that.
             cap = 0 if stmt_total <= _ITER_INLINE_LIMIT else _ITER_INLINE_LIMIT
@@ -996,21 +921,10 @@ def _for_loop_group_html(g: ForLoopGroup, rp: _RenderPass) -> str:
 
 
 def _control_group_html(cg: ControlGroup, rp: _RenderPass) -> str:
-    # Walk nested items to gather every status — body rows may include
-    # ForLoopGroups, ControlGroupSingles, etc. that don't carry .status
-    # directly. We only need a kind for the aggregate visual treatment.
-    statuses = tuple(_walk_statuses(cg.rows))
-    kind = _aggregate_kind(statuses)
-    # Rail tracks the body's aggregate kind: if every body row is cached,
-    # the if-block reads as cached (green), not exec — otherwise the
-    # control would look "computed" purely because of the if's bookkeeping
-    # while its actual body did no work.
-    if kind == "cached":
-        rail = theme.RAIL_CACHED
-    elif kind == "warn":
-        rail = theme.RAIL_WARN
-    else:
-        rail = theme.RAIL_EXEC
+    # The header reads as its body did: a branch whose rows all came from
+    # the cache is cached, not executed because of the if's bookkeeping.
+    kind = cg.rollup.kind
+    rail = theme.RAIL_CACHED if kind == "cached" else theme.RAIL_EXEC
     # The view-builder often puts the same string in both branch_label and
     # header (the metric's body_statements[0] is the if/for/while line
     # itself). Just show the header — the branch keyword is already in it.
@@ -1020,8 +934,8 @@ def _control_group_html(cg: ControlGroup, rp: _RenderPass) -> str:
         head_code = f"{cg.branch_label}: {cg.header}"
     else:
         head_code = cg.header or cg.branch_label
-    total_time = sum(_item_total_time(r) for r in cg.rows)
-    total_saved = sum(_item_saved_time(r) for r in cg.rows)
+    total_time = cg.rollup.time_s
+    total_saved = cg.rollup.saved_s
 
     # Control body rows render INLINE as siblings of the head — same way
     # the source code reads (if line then body, both visible). No click-
@@ -1067,8 +981,8 @@ def _static_statement_row_html(
     whole nested block reads at a single Python-like step inward."""
     del indented  # margin-left on the wrapper supplies the indent
     status = row.status
-    kind = theme.kind_of(status.value)
-    rail = theme.rail_color(status.value)
+    kind = theme.kind_of(status)
+    rail = theme.rail_color(status)
     code_html = f'<pre class="c3-code">{_code_html(row.code)}</pre>'
     dots = _dots(
         status=status,
@@ -1111,8 +1025,8 @@ def _multiline_control_html(row: StatementRow, rp: _RenderPass) -> str:
     head_line = row.body_statements[0]
     body_lines = row.body_statements[1:]
     status = row.status
-    kind = theme.kind_of(status.value)
-    rail = theme.rail_color(status.value)
+    kind = theme.kind_of(status)
+    rail = theme.rail_color(status)
     head = (
         f'<div class="c3-row c3-loop-head" data-kind="{kind}">'
         f'<span class="c3-rail" style="background:{rail};"></span>'
@@ -1191,8 +1105,8 @@ def _cache_tag_html(intercepted: bool) -> str:
 
 
 def _decorator_call_row_html(c: DecoratorCall, rp: _RenderPass, *, intercepted: bool = False) -> str:
-    kind = theme.kind_of(c.status.value)
-    rail = theme.rail_color(c.status.value)
+    kind = theme.kind_of(c.status)
+    rail = theme.rail_color(c.status)
     short_name = c.func_name.split(".")[-1] if "." in c.func_name else c.func_name
     status_text = "HIT" if c.status is BadgeStatus.RESTORED else "MISS"
     code = (
@@ -1422,16 +1336,13 @@ def _sparkline_html(badge: InteractiveBadge) -> str:
         return ""
     times: list[tuple[float, str]] = []
     for item in current.items:
-        t = _item_total_time(item)
-        if isinstance(item, ForLoopGroup):
-            statuses = tuple(it.status for ls in item.stmts for it in ls.iterations)
-            kind = _aggregate_kind(statuses)
+        t = rollup_of(item).time_s
+        if isinstance(item, ForLoopGroup | ControlGroup):
+            kind = item.rollup.kind
         elif isinstance(item, StatementRow):
-            kind = theme.kind_of(item.status.value)
-        elif isinstance(item, ControlGroup):
-            kind = _aggregate_kind(tuple(_walk_statuses(item.rows)))
+            kind = theme.kind_of(item.status)
         elif isinstance(item, ControlGroupSingle):
-            kind = theme.kind_of(item.row.status.value)
+            kind = theme.kind_of(item.row.status)
         else:
             continue
         if t == 0 and kind == "warn":
@@ -1518,23 +1429,12 @@ def render_html(badge: InteractiveBadge) -> str:
     if upstream is not None and upstream.items:
         rows = "".join(_render_section_item(i, rp) for i in upstream.items)
         n = sum(1 for i in upstream.items if not isinstance(i, SkippedBucket))
-        up_saved = sum(_item_saved_time(i) for i in upstream.items)
-        up_exec = sum(_item_total_time(i) for i in upstream.items)
-        # Derive the aggregate kind from the actual item statuses so the
-        # head row's rail / bar / chip match what's underneath — all
-        # restored → cached (green), all computed → exec (ocker), mixed
-        # → exec for bar but the rail picks blue via 'mixed' separately.
-        statuses = tuple(_walk_statuses(upstream.items))
-        up_kind = _aggregate_kind(statuses) if statuses else "cached"
-        # Rail color: mirrors the per-row rail logic — if everything was
-        # restored we use the cached rail, if anything was computed we
-        # surface that on the rail too.
-        if statuses and all(s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED) for s in statuses):
-            rail_col = theme.RAIL_CACHED
-        elif statuses and all(s is BadgeStatus.COMPUTED for s in statuses):
-            rail_col = theme.RAIL_EXEC
-        else:
-            rail_col = theme.RAIL_MIXED if statuses else theme.RAIL_CACHED
+        # The head row's rail, bar and chip match the steps under it.
+        up = Rollup.of(upstream.items)
+        up_saved = up.saved_s
+        up_exec = up.time_s
+        up_kind = up.kind if up.leaves else "cached"
+        rail_col = _rail_for(up) if up.leaves else theme.RAIL_CACHED
         # Scale the bar against the larger of saved or any badge-wide exec
         # time, so a big saving reads as a near-full bar even when the
         # restore overhead itself is invisibly small.

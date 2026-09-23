@@ -20,8 +20,8 @@ Design rules:
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from dataclasses import dataclass
+from collections.abc import Iterable, Iterator
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Union
 
@@ -71,6 +71,66 @@ class SectionKind(str, Enum):
     CURRENT = "current"
     DECORATORS = "decorators"
     OVERHEAD = "overhead"
+
+
+@dataclass(frozen=True)
+class Rollup:
+    """Totals over every leaf row under a node, computed once as it is built.
+
+    A leaf is a :class:`StatementRow` or an :class:`IterationRow`. Each
+    container sums its children's rollups, so a loop head, a control header,
+    the upstream head, the sparkline and the bar scale read the same numbers.
+    """
+
+    time_s: float = 0.0
+    saved_s: float = 0.0
+    leaves: int = 0
+    cached: int = 0  # RESTORED or SKIPPED
+    computed: int = 0
+
+    @classmethod
+    def of_leaf(cls, status: BadgeStatus, time_s: float, saved_s: float) -> Rollup:
+        return cls(
+            time_s=time_s,
+            saved_s=saved_s,
+            leaves=1,
+            cached=int(status in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED)),
+            computed=int(status is BadgeStatus.COMPUTED),
+        )
+
+    @classmethod
+    def of(cls, items: Iterable[Any]) -> Rollup:
+        """The sum over *items*; a node without leaf rows contributes nothing."""
+        time_s = saved_s = 0.0
+        leaves = cached = computed = 0
+        for item in items:
+            r = getattr(item, "rollup", None)
+            if r is None:
+                continue
+            time_s += r.time_s
+            saved_s += r.saved_s
+            leaves += r.leaves
+            cached += r.cached
+            computed += r.computed
+        return cls(time_s, saved_s, leaves, cached, computed)
+
+    @property
+    def kind(self) -> str:
+        """``cached`` when something was served and nothing computed, else ``exec``."""
+        return "cached" if self.cached and not self.computed else "exec"
+
+    @property
+    def mixed(self) -> bool:
+        """Some leaves came from the cache and some did not."""
+        return 0 < self.cached < self.leaves
+
+
+def _rollup_field() -> Any:
+    return field(init=False, repr=False, compare=False)
+
+
+def _set_rollup(node: Any, rollup: Rollup) -> None:
+    object.__setattr__(node, "rollup", rollup)
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +211,10 @@ class StatementRow:
     # in particular, which is fine for the "@cache: N/M hits" summary but
     # wrong for debugging — see :class:`SubUnitGroup` for why site matters.
     sub_units: tuple["SubUnitGroup", ...] = ()
+    rollup: Rollup = _rollup_field()
+
+    def __post_init__(self) -> None:
+        _set_rollup(self, Rollup.of_leaf(self.status, self.time_s, self.saved_time_s))
 
 
 @dataclass(frozen=True)
@@ -183,6 +247,10 @@ class IterationRow:
     # its own copy of this field or a sub-call made inside a loop body is
     # silently dropped rather than merely misplaced.
     sub_units: tuple["SubUnitGroup", ...] = ()
+    rollup: Rollup = _rollup_field()
+
+    def __post_init__(self) -> None:
+        _set_rollup(self, Rollup.of_leaf(self.status, self.time_s, self.saved_time_s))
 
 
 @dataclass(frozen=True)
@@ -198,6 +266,10 @@ class LoopStatement:
     # loop-body row) show this instead of per-iteration ``IterationRow.sub_units``,
     # which stay available for renderers (text) that keep iterations separate.
     sub_units: tuple["SubUnitGroup", ...] = ()
+    rollup: Rollup = _rollup_field()
+
+    def __post_init__(self) -> None:
+        _set_rollup(self, Rollup.of(children(self)))
 
 
 @dataclass(frozen=True)
@@ -230,6 +302,10 @@ class ForLoopGroup:
     # above stay because aggregation passes (timing sums, status roll-up)
     # walk only one type at a time.
     body: tuple[Any, ...] = ()
+    rollup: Rollup = _rollup_field()
+
+    def __post_init__(self) -> None:
+        _set_rollup(self, Rollup.of(children(self)))
 
 
 @dataclass(frozen=True)
@@ -246,6 +322,10 @@ class ControlGroup:
     branch_label: str
     header: str
     rows: tuple[Any, ...]
+    rollup: Rollup = _rollup_field()
+
+    def __post_init__(self) -> None:
+        _set_rollup(self, Rollup.of(children(self)))
 
 
 @dataclass(frozen=True)
@@ -253,6 +333,10 @@ class ControlGroupSingle:
     """A single-statement control structure (e.g. standalone ``if`` with no body grouping)."""
 
     row: StatementRow
+    rollup: Rollup = _rollup_field()
+
+    def __post_init__(self) -> None:
+        _set_rollup(self, Rollup.of(children(self)))
 
 
 @dataclass(frozen=True)
@@ -267,6 +351,10 @@ class SkippedBucket:
     #: ``(code, paths)`` of file writers left out of the repair although what
     #: they write changed: their file on disk is out of date (round 28).
     stale_exports: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    rollup: Rollup = _rollup_field()
+
+    def __post_init__(self) -> None:
+        _set_rollup(self, Rollup.of(children(self)))
 
 
 @dataclass(frozen=True)
@@ -363,26 +451,37 @@ SectionItem = Union[
 ]
 
 
-def iter_iterations(item: SectionItem) -> Iterator[IterationRow]:
-    """Every :class:`IterationRow` reachable under ``item``.
+def children(item: Any) -> tuple[Any, ...]:
+    """The child edges of the badge tree, defined once.
 
-    Defines the loop tree's iteration child-edges **once**: a
-    :class:`ForLoopGroup` contributes its direct-statement iterations
-    (``stmts``) *and* the iterations of any loops/controls nested in its
-    body (``nested``); a :class:`ControlGroup` contributes whatever its
-    branch ``rows`` hold. Aggregation passes — total time, saved time,
-    status roll-up, iteration count — all walk this one traversal so they
-    cannot disagree about which iterations a loop contains. Nodes that
-    hold no iterations yield nothing.
+    Every rollup is the sum over these edges, and :func:`iter_leaves` walks
+    them, so no two passes can disagree about what a node contains.
     """
+    if isinstance(item, LoopStatement):
+        return item.iterations
     if isinstance(item, ForLoopGroup):
-        for stmt in item.stmts:
-            yield from stmt.iterations
-        for child in item.nested:
-            yield from iter_iterations(child)
-    elif isinstance(item, ControlGroup):
-        for child in item.rows:
-            yield from iter_iterations(child)
+        return (*item.stmts, *item.nested)
+    if isinstance(item, ControlGroup):
+        return item.rows
+    if isinstance(item, ControlGroupSingle):
+        return (item.row,)
+    if isinstance(item, SkippedBucket):
+        return item.items
+    return ()
+
+
+def iter_leaves(item: Any) -> Iterator[StatementRow | IterationRow]:
+    """Every leaf row under *item*, in tree order."""
+    if isinstance(item, StatementRow | IterationRow):
+        yield item
+        return
+    for child in children(item):
+        yield from iter_leaves(child)
+
+
+def rollup_of(item: Any) -> Rollup:
+    """*item*'s rollup; a node with no leaf rows under it has an empty one."""
+    return getattr(item, "rollup", None) or Rollup()
 
 
 @dataclass(frozen=True)
@@ -464,7 +563,10 @@ __all__ = [
     "OverheadEntry",
     "OverheadBreakdown",
     "SectionItem",
-    "iter_iterations",
+    "Rollup",
+    "children",
+    "iter_leaves",
+    "rollup_of",
     "Section",
     "BadgeHeader",
     "BugReportLink",

@@ -29,6 +29,7 @@ from ..view import (
     SectionKind,
     SkippedBucket,
     StatementRow,
+    iter_leaves,
 )
 
 # This renderer is ASCII-ONLY, deliberately. ``%cash_badge print`` exists for
@@ -104,7 +105,7 @@ def _status_icon(status: BadgeStatus) -> str:
 def _status_label(status: BadgeStatus, row: StatementRow) -> str:
     if status is BadgeStatus.COMPUTED and (row.uncacheable_reasons or row.skipped_reason):
         return theme.LABEL_UNCACHEABLE
-    return theme.label_of(status.value)
+    return theme.label_of(status)
 
 
 def _rng_suffix(row: StatementRow) -> str:
@@ -411,41 +412,18 @@ def _decorator_lines(sections: tuple[Section, ...]) -> list[str]:
     return lines
 
 
-def _iter_rows(item: SectionItem):
-    """Yield every StatementRow reachable under *item*.
-
-    Recurses through nested groups: ``ControlGroup.rows`` may hold further
-    groups rather than bare ``StatementRow``s, and the callers below read
-    ``.skipped_reason`` off whatever this yields.
-    """
-    if isinstance(item, StatementRow):
-        yield item
-    elif isinstance(item, ControlGroup):
-        for r in item.rows:
-            yield from _iter_rows(r)
-    elif isinstance(item, ControlGroupSingle):
-        yield item.row
-    elif isinstance(item, SkippedBucket):
-        for sub in item.items:
-            yield from _iter_rows(sub)
-    elif isinstance(item, ForLoopGroup):
-        # A loop's own body statements are IterationRows, which carry no
-        # skipped_reason — but a control nested in the body does hold real
-        # StatementRows, so descend into the non-LoopStatement children only.
-        for sub in _loop_body(item):
-            if not isinstance(sub, LoopStatement):
-                yield from _iter_rows(sub)
-
-
 def _guard_summary_lines(badge: InteractiveBadge) -> list[str]:
     """The guard's explanation, once per cell rather than once per statement."""
-    codes = [
-        row.code or ""
-        for section in badge.sections
-        for item in section.items
-        for row in _iter_rows(item)
-        if is_guard_reason(row.skipped_reason)
-    ]
+    # One entry per statement: a loop's iterations share their code.
+    codes = list(
+        dict.fromkeys(
+            row.code or ""
+            for section in badge.sections
+            for item in section.items
+            for row in iter_leaves(item)
+            if is_guard_reason(row.skipped_reason)
+        )
+    )
     line = guard_summary_line(len(codes), codes)
     return [line] if line else []
 

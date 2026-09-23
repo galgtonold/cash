@@ -1,33 +1,26 @@
 """Aggregation contract for nested loop trees.
 
 A ``ForLoopGroup`` can carry inner loops/controls in its ``.nested`` edge
-(set when the runtime records an enclosing-loop chain). The renderer's
-aggregation passes — total time, saved time, status roll-up, iteration
-count — must all descend through the *same* child-edges, or the head-row
-summary disagrees with the body it summarises.
-
-These tests pin that every aggregation includes a populated ``.nested``.
-Before the ``view.iter_iterations`` seam, ``_item_total_time``,
-``_item_saved_time`` and ``_walk_statuses`` walked ``ForLoopGroup.stmts``
-only and silently dropped nested savings, while ``_collect_iterations``
-and the body renderer descended into ``.nested`` — a drift bug.
+(set when the runtime records an enclosing-loop chain). Every aggregate a
+renderer shows -- total time, saved time, status roll-up, leaf count --
+comes from the node's ``rollup``, which sums over the same child edges
+(``view.children``), so a head row can never disagree with the body it
+summarises.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from cash.notebook.badge_renderer.renderers.html import (
-    _collect_iterations,
-    _item_saved_time,
-    _item_total_time,
-    _walk_statuses,
-)
 from cash.notebook.badge_renderer.view import (
     BadgeStatus,
+    ControlGroup,
     ForLoopGroup,
     IterationRow,
     LoopStatement,
+    SkippedBucket,
+    StatementRow,
+    iter_leaves,
 )
 
 
@@ -55,30 +48,47 @@ def _outer_with_nested() -> ForLoopGroup:
 def test_total_time_includes_nested_loop_time() -> None:
     outer = _outer_with_nested()
     # outer stmt 0.02 + nested inner 0.01
-    assert _item_total_time(outer) == pytest.approx(0.03)
+    assert outer.rollup.time_s == pytest.approx(0.03)
 
 
 def test_saved_time_includes_nested_loop_savings() -> None:
     outer = _outer_with_nested()
     # outer stmt 0.50 + nested inner 0.30
-    assert _item_saved_time(outer) == pytest.approx(0.80)
+    assert outer.rollup.saved_s == pytest.approx(0.80)
 
 
 def test_status_rollup_includes_nested_loop_statuses() -> None:
     outer = _outer_with_nested()
-    statuses = _walk_statuses((outer,))
     # The outer's COMPUTED stmt and the nested inner's RESTORED stmt.
-    assert BadgeStatus.COMPUTED in statuses
-    assert BadgeStatus.RESTORED in statuses
-    assert len(statuses) == 2
+    assert (outer.rollup.leaves, outer.rollup.cached, outer.rollup.computed) == (2, 1, 1)
+    assert outer.rollup.mixed
 
 
-def test_collect_iterations_already_descends_into_nested() -> None:
-    """Characterises the one fold that was already correct, so the seam
-    extraction can't regress it."""
+def test_leaf_walk_and_rollup_see_the_same_rows() -> None:
     outer = _outer_with_nested()
-    iters = _collect_iterations((outer,))
-    assert len(iters) == 2
+    leaves = list(iter_leaves(outer))
+    assert len(leaves) == outer.rollup.leaves == 2
+
+
+def test_a_statement_in_a_control_nested_in_a_loop_is_counted() -> None:
+    """The loop's time used to count only iterations, so a plain statement in
+    an ``if`` inside the loop was in the control's total but not the loop's."""
+    row = StatementRow(status=BadgeStatus.COMPUTED, code="z = h()", time_s=0.4)
+    loop = ForLoopGroup(
+        loop_var_names=("i",),
+        stmts=(_loop("x = g(i)", time_s=0.1, saved_s=0.0, status=BadgeStatus.COMPUTED),),
+        nested=(ControlGroup(branch_label="if c", header="if c:", rows=(row,)),),
+    )
+    assert loop.rollup.time_s == pytest.approx(0.5)
+
+
+def test_a_skipped_bucket_counts_what_was_saved_not_as_time_spent() -> None:
+    """Steps that were not re-run cost no time; they only saved it."""
+    skipped = StatementRow(status=BadgeStatus.SKIPPED, code="a = 1", time_s=0.0, saved_time_s=2.0)
+    bucket = SkippedBucket(items=(skipped,), total_saved_time_s=2.0)
+    assert bucket.rollup.time_s == 0.0
+    assert bucket.rollup.saved_s == pytest.approx(2.0)
+    assert bucket.rollup.kind == "cached"
 
 
 def test_the_loop_tip_counts_trips_not_statement_runs() -> None:
