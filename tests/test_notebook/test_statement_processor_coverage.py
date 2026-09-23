@@ -13,40 +13,8 @@ import time
 from unittest.mock import MagicMock, patch
 
 import pytest
-from traitlets.config.configurable import Configurable
 
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
 from cash.notebook.statement.run import error_result
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-
-
-@pytest.fixture
-def processor_fixture():
-    """Provide StatementProcessor instance for testing."""
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    processor = magics._statement_processor
-    yield processor, shell, backend
-    backend.clear()
-    shell.user_ns.clear()
-
 
 # ============================================================================
 # _check_cache - stale format, TTL, file dependencies
@@ -56,45 +24,45 @@ def processor_fixture():
 class TestCheckCache:
     """Test _check_cache method edge cases."""
 
-    def test_cache_miss_returns_none(self, processor_fixture):
-        processor, _, _ = processor_fixture
-        metadata, cached_data, time_taken = processor._freshness.check_cache(
-            processor.tracking_state, "nonexistent_key", None
+    def test_cache_miss_returns_none(self, statement_processor):
+        metadata, cached_data, time_taken = statement_processor._freshness.check_cache(
+            statement_processor.tracking_state, "nonexistent_key", None
         )
         assert cached_data is None
 
-    def test_ttl_expiration(self, processor_fixture):
+    def test_ttl_expiration(self, statement_processor, clean_backend):
         """Cache entries past TTL should be invalidated."""
-        processor, _, backend = processor_fixture
         cache_key = "test_ttl_key"
         metadata = {
             "timestamp": time.time() - 100,  # 100 seconds ago
             "output_lineages": {"x": "abc123"},
         }
         cached_data = {"variables": {"x": 42}}
-        backend.set(cache_key, cached_data, metadata)
+        clean_backend.set(cache_key, cached_data, metadata)
 
         # TTL of 10 seconds - entry should be expired
-        result_meta, result_data, _ = processor._freshness.check_cache(processor.tracking_state, cache_key, 10)
+        result_meta, result_data, _ = statement_processor._freshness.check_cache(
+            statement_processor.tracking_state, cache_key, 10
+        )
         assert result_data is None
 
-    def test_ttl_not_expired(self, processor_fixture):
+    def test_ttl_not_expired(self, statement_processor, clean_backend):
         """Cache entries within TTL should be valid."""
-        processor, _, backend = processor_fixture
         cache_key = "test_ttl_valid"
         metadata = {
             "timestamp": time.time(),
             "output_lineages": {"x": "abc123"},
         }
         cached_data = {"variables": {"x": 42}}
-        backend.set(cache_key, cached_data, metadata)
+        clean_backend.set(cache_key, cached_data, metadata)
 
-        result_meta, result_data, _ = processor._freshness.check_cache(processor.tracking_state, cache_key, 3600)
+        result_meta, result_data, _ = statement_processor._freshness.check_cache(
+            statement_processor.tracking_state, cache_key, 3600
+        )
         assert result_data is not None
 
-    def test_file_dep_missing_file(self, processor_fixture):
+    def test_file_dep_missing_file(self, statement_processor, clean_backend):
         """Cache with file dep pointing to missing file should be invalidated."""
-        processor, _, backend = processor_fixture
         cache_key = "test_file_dep_missing"
         metadata = {
             "timestamp": time.time(),
@@ -102,14 +70,15 @@ class TestCheckCache:
             "file_dependencies": {"/nonexistent/file.csv": {"mtime": time.time()}},
         }
         cached_data = {"variables": {"x": 42}}
-        backend.set(cache_key, cached_data, metadata)
+        clean_backend.set(cache_key, cached_data, metadata)
 
-        result_meta, result_data, _ = processor._freshness.check_cache(processor.tracking_state, cache_key, None)
+        result_meta, result_data, _ = statement_processor._freshness.check_cache(
+            statement_processor.tracking_state, cache_key, None
+        )
         assert result_data is None
 
-    def test_file_dep_changed_mtime(self, processor_fixture, tmp_path):
+    def test_file_dep_changed_mtime(self, statement_processor, clean_backend, tmp_path):
         """Cache with changed file mtime should be invalidated."""
-        processor, _, backend = processor_fixture
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2\n")
         from cash.tracking.file_dep_snapshot import snapshot_file_deps
@@ -124,14 +93,15 @@ class TestCheckCache:
             "file_dependencies": snapshot,
         }
         cached_data = {"variables": {"x": 42}}
-        backend.set(cache_key, cached_data, metadata)
+        clean_backend.set(cache_key, cached_data, metadata)
 
-        result_meta, result_data, _ = processor._freshness.check_cache(processor.tracking_state, cache_key, None)
+        result_meta, result_data, _ = statement_processor._freshness.check_cache(
+            statement_processor.tracking_state, cache_key, None
+        )
         assert result_data is None
 
-    def test_file_dep_unchanged(self, processor_fixture, tmp_path):
+    def test_file_dep_unchanged(self, statement_processor, clean_backend, tmp_path):
         """Cache with unchanged file should be valid."""
-        processor, _, backend = processor_fixture
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2\n")
         from cash.tracking.file_dep_snapshot import snapshot_file_deps
@@ -143,21 +113,22 @@ class TestCheckCache:
             "file_dependencies": snapshot_file_deps({str(test_file)}),
         }
         cached_data = {"variables": {"x": 42}}
-        backend.set(cache_key, cached_data, metadata)
+        clean_backend.set(cache_key, cached_data, metadata)
 
-        result_meta, result_data, _ = processor._freshness.check_cache(processor.tracking_state, cache_key, None)
+        result_meta, result_data, _ = statement_processor._freshness.check_cache(
+            statement_processor.tracking_state, cache_key, None
+        )
         assert result_data is not None
 
-    def test_input_file_dep_invalidation(self, processor_fixture, tmp_path):
+    def test_input_file_dep_invalidation(self, statement_processor, clean_backend, tmp_path):
         """Cache should invalidate when an input variable's file dep changed."""
-        processor, shell, backend = processor_fixture
         test_file = tmp_path / "source.csv"
         test_file.write_text("a,b\n1,2\n")
         current_mtime = os.path.getmtime(str(test_file))
 
         # Set up input var's file dependencies — mutate the shared TrackingState
         # dict so the freshness checker (which reads it per-call) sees the update.
-        processor.tracking_state.executed_file_deps["df"] = {str(test_file)}
+        statement_processor.tracking_state.executed_file_deps["df"] = {str(test_file)}
 
         # Store source cache entry for the input variable with OLD mtime
         source_key = "source_cache_key"
@@ -166,8 +137,8 @@ class TestCheckCache:
             "output_lineages": {"df": "def456"},
             "file_dependencies": {str(test_file): {"mtime": current_mtime - 100}},  # Old mtime
         }
-        backend.set(source_key, {"variables": {"df": "data"}}, source_meta)
-        processor.tracking_state.variable_sources["df"] = source_key
+        clean_backend.set(source_key, {"variables": {"df": "data"}}, source_meta)
+        statement_processor.tracking_state.variable_sources["df"] = source_key
 
         # Now store the dependent cache entry (no direct file deps)
         cache_key = "test_input_dep"
@@ -176,10 +147,10 @@ class TestCheckCache:
             "output_lineages": {"result": "ghi789"},
         }
         cached_data = {"variables": {"result": 100}}
-        backend.set(cache_key, cached_data, metadata)
+        clean_backend.set(cache_key, cached_data, metadata)
 
-        result_meta, result_data, _ = processor._freshness.check_cache(
-            processor.tracking_state, cache_key, None, inputs={"df"}
+        result_meta, result_data, _ = statement_processor._freshness.check_cache(
+            statement_processor.tracking_state, cache_key, None, inputs={"df"}
         )
         assert result_data is None
 
@@ -228,8 +199,7 @@ class TestIsLineageExempt:
 class TestCreateErrorResult:
     """Test the error_result helper."""
 
-    def test_basic_error_result(self, processor_fixture):
-        processor, shell, _ = processor_fixture
+    def test_basic_error_result(self):
         # Test error_result directly
         try:
             raise ValueError("test error")
@@ -240,8 +210,7 @@ class TestCreateErrorResult:
             assert "test error" in str(result.error)
             assert isinstance(result.tb_string, str)
 
-    def test_error_result_with_nested_frames(self, processor_fixture):
-        processor, _, _ = processor_fixture
+    def test_error_result_with_nested_frames(self):
 
         def inner():
             raise RuntimeError("inner error")
@@ -262,26 +231,23 @@ class TestCreateErrorResult:
 class TestHandleExecutionError:
     """Test _handle_execution_error method."""
 
-    def test_non_silent_raises(self, processor_fixture):
-        processor, _, _ = processor_fixture
+    def test_non_silent_raises(self, statement_processor):
         result = MagicMock()
         result.error = ValueError("boom")
         with pytest.raises(ValueError, match="boom"):
-            processor._handle_execution_error(result, silent=False)
+            statement_processor._handle_execution_error(result, silent=False)
 
-    def test_silent_returns_false(self, processor_fixture):
-        processor, _, _ = processor_fixture
+    def test_silent_returns_false(self, statement_processor):
         result = MagicMock()
         result.error = ValueError("boom")
-        ret = processor._handle_execution_error(result, silent=True)
+        ret = statement_processor._handle_execution_error(result, silent=True)
         assert ret is False
 
-    def test_silent_debug_output(self, processor_fixture, caplog):
-        processor, _, _ = processor_fixture
+    def test_silent_debug_output(self, statement_processor, caplog):
         caplog.set_level("DEBUG", logger="cash")
         result = MagicMock()
         result.error = ValueError("debug error")
-        ret = processor._handle_execution_error(result, silent=True)
+        ret = statement_processor._handle_execution_error(result, silent=True)
         assert ret is False
         assert "debug error" in caplog.text
 
@@ -294,25 +260,23 @@ class TestHandleExecutionError:
 class TestForbiddenFunctionScan:
     """Test forbidden function scan error handling."""
 
-    def test_forbidden_function_disables_cache(self, processor_fixture):
+    def test_forbidden_function_disables_cache(self, statement_processor, mock_shell):
         """time.time() should be detected as forbidden."""
-        processor, shell, _ = processor_fixture
         import time as time_mod
 
-        shell.user_ns["time"] = time_mod
-        processor.process_statement("t = time.time()")
+        mock_shell.user_ns["time"] = time_mod
+        statement_processor.process_statement("t = time.time()")
         # Should execute but mark as uncacheable
-        assert shell.user_ns.get("t") is not None
+        assert mock_shell.user_ns.get("t") is not None
 
-    def test_scan_error_handled_gracefully(self, processor_fixture):
+    def test_scan_error_handled_gracefully(self, statement_processor, mock_shell):
         """If forbidden scan raises, execution should still proceed."""
-        processor, shell, _ = processor_fixture
         # Patch the scan to raise
         with patch(
             "cash.analysis.code_analyzer.CodeAnalyzer.scan_for_forbidden_functions", side_effect=TypeError("scan error")
         ):
-            processor.process_statement("x = 42")
-        assert shell.user_ns.get("x") == 42
+            statement_processor.process_statement("x = 42")
+        assert mock_shell.user_ns.get("x") == 42
 
 
 # ============================================================================
@@ -323,9 +287,8 @@ class TestForbiddenFunctionScan:
 class TestFileDependencyPropagation:
     """Test file dep propagation from inputs to outputs."""
 
-    def test_scalar_output_no_file_dep_propagation(self, processor_fixture, tmp_path):
+    def test_scalar_output_no_file_dep_propagation(self, statement_processor, mock_shell, tmp_path):
         """Scalar outputs should NOT inherit file deps from inputs."""
-        processor, shell, _ = processor_fixture
 
         # First, create a variable with file deps
         test_file = tmp_path / "data.csv"
@@ -333,38 +296,37 @@ class TestFileDependencyPropagation:
 
         # Simulate that 'df' has file deps — mutate the shared dicts so
         # sibling sub-components (StatementFileDeps) see the update too.
-        processor.tracking_state.executed_file_deps["df"] = {str(test_file)}
+        statement_processor.tracking_state.executed_file_deps["df"] = {str(test_file)}
 
         # Set up 'df' in namespace (as a list to avoid pandas dependency)
-        shell.user_ns["df"] = [1, 2, 3]
-        processor.tracking_state.lineage.record("df", "df_lineage")
+        mock_shell.user_ns["df"] = [1, 2, 3]
+        statement_processor.tracking_state.lineage.record("df", "df_lineage")
 
         # Now compute a scalar from df
-        processor.process_statement("n = len(df)")
+        statement_processor.process_statement("n = len(df)")
 
         # 'n' is an int (scalar) - should NOT inherit file deps
-        assert shell.user_ns.get("n") == 3
-        file_deps = processor.tracking_state.executed_file_deps.get("n", set())
+        assert mock_shell.user_ns.get("n") == 3
+        file_deps = statement_processor.tracking_state.executed_file_deps.get("n", set())
         assert len(file_deps) == 0
 
-    def test_non_scalar_output_inherits_file_deps(self, processor_fixture, tmp_path):
+    def test_non_scalar_output_inherits_file_deps(self, statement_processor, mock_shell, tmp_path):
         """Non-scalar outputs SHOULD inherit file deps from inputs."""
-        processor, shell, _ = processor_fixture
 
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2\n")
 
         # Mutate the shared dicts so StatementFileDeps sees the update too.
-        processor.tracking_state.executed_file_deps["data"] = {str(test_file)}
+        statement_processor.tracking_state.executed_file_deps["data"] = {str(test_file)}
 
-        shell.user_ns["data"] = [1, 2, 3]
-        processor.tracking_state.lineage.record("data", "data_lineage")
+        mock_shell.user_ns["data"] = [1, 2, 3]
+        statement_processor.tracking_state.lineage.record("data", "data_lineage")
 
         # Create a non-scalar output from data
-        processor.process_statement("result = list(data)")
+        statement_processor.process_statement("result = list(data)")
 
-        assert shell.user_ns.get("result") == [1, 2, 3]
-        file_deps = processor.tracking_state.executed_file_deps.get("result", set())
+        assert mock_shell.user_ns.get("result") == [1, 2, 3]
+        file_deps = statement_processor.tracking_state.executed_file_deps.get("result", set())
         assert str(test_file) in file_deps
 
 
@@ -376,14 +338,13 @@ class TestFileDependencyPropagation:
 class TestModuleLineage:
     """Test module lineage component in _capture_variables."""
 
-    def test_module_import_creates_lineage(self, processor_fixture):
+    def test_module_import_creates_lineage(self, statement_processor, mock_shell):
         """Importing a module should create a lineage entry."""
-        processor, shell, _ = processor_fixture
-        processor.process_statement("import json")
+        statement_processor.process_statement("import json")
         # json should be in user_ns but not cached (modules are skipped)
-        assert "json" in shell.user_ns
+        assert "json" in mock_shell.user_ns
         # Module gets lineage tracking
-        assert "json" in processor.tracking_state.variable_lineage
+        assert "json" in statement_processor.tracking_state.variable_lineage
 
 
 # ============================================================================
@@ -394,38 +355,36 @@ class TestModuleLineage:
 class TestPurityChecks:
     """Test purity check branches in process()."""
 
-    def test_stateful_function_skips_cache(self, processor_fixture):
+    def test_stateful_function_skips_cache(self, statement_processor, mock_shell):
         """@stateful functions should skip cache."""
-        processor, shell, _ = processor_fixture
         from cash.purity import stateful
 
         @stateful
         def get_data():
             return [1, 2, 3]
 
-        shell.user_ns["get_data"] = get_data
-        metrics = processor.process_statement("result = get_data()")
-        assert shell.user_ns.get("result") == [1, 2, 3]
+        mock_shell.user_ns["get_data"] = get_data
+        metrics = statement_processor.process_statement("result = get_data()")
+        assert mock_shell.user_ns.get("result") == [1, 2, 3]
         # Should be COMPUTED (not cacheable)
         assert metrics["status"] == CacheStatus.COMPUTED
         assert any("stateful" in r.lower() for r in metrics.get("uncacheable_reasons", []))
 
-    def test_pure_function_is_cacheable(self, processor_fixture):
+    def test_pure_function_is_cacheable(self, statement_processor, mock_shell):
         """@pure functions should be cacheable."""
-        processor, shell, _ = processor_fixture
         from cash.purity import pure
 
         @pure
         def add(a, b):
             return a + b
 
-        shell.user_ns["add"] = add
-        shell.user_ns["x"] = 5
-        shell.user_ns["y"] = 3
-        processor.tracking_state.lineage.record("x", "x_lin")
-        processor.tracking_state.lineage.record("y", "y_lin")
+        mock_shell.user_ns["add"] = add
+        mock_shell.user_ns["x"] = 5
+        mock_shell.user_ns["y"] = 3
+        statement_processor.tracking_state.lineage.record("x", "x_lin")
+        statement_processor.tracking_state.lineage.record("y", "y_lin")
 
-        metrics = processor.process_statement("result = add(x, y)")
-        assert shell.user_ns.get("result") == 8
+        metrics = statement_processor.process_statement("result = add(x, y)")
+        assert mock_shell.user_ns.get("result") == 8
         # Should NOT have stateful uncacheable reason
         assert not any("stateful" in r.lower() for r in metrics.get("uncacheable_reasons", []))

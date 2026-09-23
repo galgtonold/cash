@@ -19,40 +19,9 @@ import hashlib
 from unittest.mock import MagicMock, patch
 
 import pytest
-from traitlets.config.configurable import Configurable
 
 from cash.analysis.mutation_effects import CellEffects
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
 from cash.notebook.upstream._types import SimulationCacheEntry
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-
-
-@pytest.fixture
-def magics_fixture():
-    """Provide CashMagics instance for testing."""
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    processor = magics._statement_processor
-    yield magics, shell, backend, processor
-    backend.clear()
-    shell.user_ns.clear()
 
 
 def _compute_lineage(code: str, input_lineages: list) -> str:
@@ -69,14 +38,13 @@ class TestDownstreamAdvancementFallback:
     """
 
     @pytest.mark.xfail(reason="Known failure: downstream advancement fallback lineage reset")
-    def test_lineage_reset_when_cell_not_found(self, magics_fixture):
+    def test_lineage_reset_when_cell_not_found(self, cash_magics):
         """
         When the current cell is not found in the notebook file but there's a
         simulation cache from a previous run, variables that are both inputs
         and outputs should have their lineage reset to the virtual (pre-cell) state.
         """
-        magics, shell, backend, processor = magics_fixture
-        upstream = magics._upstream_checker
+        upstream = cash_magics._upstream_checker
         upstream.debug = True
 
         # Simulate the state after a successful first run:
@@ -140,14 +108,13 @@ class TestDownstreamAdvancementFallback:
             f"but got {upstream.variable_lineage['df'][:8]}..."
         )
 
-    def test_no_reset_when_variable_only_input(self, magics_fixture):
+    def test_no_reset_when_variable_only_input(self, cash_magics):
         """
         Variables that are inputs but NOT outputs should NOT have their lineage reset.
         The downstream advancement fallback only applies to variables that are both
         inputs and outputs of the current cell.
         """
-        magics, shell, backend, processor = magics_fixture
-        upstream = magics._upstream_checker
+        upstream = cash_magics._upstream_checker
 
         virtual_lineage_x = "aaaa1111" * 8
         actual_lineage_x = "bbbb2222" * 8
@@ -180,13 +147,12 @@ class TestDownstreamAdvancementFallback:
         # x should NOT be reset — it's only an input, not an output
         assert upstream.variable_lineage["x"] == actual_lineage_x
 
-    def test_no_reset_without_simulation_cache(self, magics_fixture):
+    def test_no_reset_without_simulation_cache(self, cash_magics):
         """
         If there's no simulation cache (first run, cell not found), no reset should happen.
         This is the case when the cell has never been successfully found in the notebook.
         """
-        magics, shell, backend, processor = magics_fixture
-        upstream = magics._upstream_checker
+        upstream = cash_magics._upstream_checker
 
         actual_lineage_df = "bbbb2222" * 8
         upstream.tracking_state.lineage.record("df", actual_lineage_df)
@@ -211,13 +177,12 @@ class TestDownstreamAdvancementFallback:
         # No cache → no reset
         assert upstream.variable_lineage["df"] == actual_lineage_df
 
-    def test_no_reset_when_lineages_already_match(self, magics_fixture):
+    def test_no_reset_when_lineages_already_match(self, cash_magics):
         """
         If the variable's lineage already matches the virtual lineage,
         no reset is needed (and no debug output should mention it).
         """
-        magics, shell, backend, processor = magics_fixture
-        upstream = magics._upstream_checker
+        upstream = cash_magics._upstream_checker
 
         same_lineage = "aaaa1111" * 8
         upstream.tracking_state.lineage.record("df", same_lineage)
@@ -246,13 +211,12 @@ class TestDownstreamAdvancementFallback:
         assert upstream.variable_lineage["df"] == same_lineage
 
     @pytest.mark.xfail(reason="Known failure: downstream advancement fallback multi-var reset")
-    def test_multiple_overlap_vars_reset(self, magics_fixture):
+    def test_multiple_overlap_vars_reset(self, cash_magics):
         """
         When multiple variables are both inputs and outputs, all should be reset.
         E.g., a cell that reads df1 and df2 and modifies both.
         """
-        magics, shell, backend, processor = magics_fixture
-        upstream = magics._upstream_checker
+        upstream = cash_magics._upstream_checker
 
         virtual_df1 = "aaaa1111" * 8
         virtual_df2 = "cccc3333" * 8
@@ -285,28 +249,27 @@ class TestDownstreamAdvancementFallback:
         assert upstream.variable_lineage["df1"] == virtual_df1
         assert upstream.variable_lineage["df2"] == virtual_df2
 
-    def test_end_to_end_partial_cell_caching_after_edit(self, magics_fixture):
+    def test_end_to_end_partial_cell_caching_after_edit(self, cash_magics, mock_shell, statement_processor):
         """
         End-to-end test: Run a cell with two statements that both modify df.
         Then "edit" the cell (change second statement) and re-run.
         The first statement should be RESTORED even when cell is not found in notebook.
         """
-        magics, shell, backend, processor = magics_fixture
-        upstream = magics._upstream_checker
+        upstream = cash_magics._upstream_checker
 
         # Step 1: Set up df in user namespace
         import pandas as pd
 
-        shell.user_ns["pd"] = pd
-        shell.user_ns["df"] = pd.DataFrame({"Close": [100.0, 200.0, 300.0], "Volume": [10, 20, 30]})
+        mock_shell.user_ns["pd"] = pd
+        mock_shell.user_ns["df"] = pd.DataFrame({"Close": [100.0, 200.0, 300.0], "Volume": [10, 20, 30]})
 
         # Step 2: Process first statement (computes VolAdj)
-        metrics1 = processor.process_statement("df['VolAdj'] = df['Close'] * df['Volume']")
+        metrics1 = statement_processor.process_statement("df['VolAdj'] = df['Close'] * df['Volume']")
         assert metrics1["status"] == CacheStatus.COMPUTED
-        assert "VolAdj" in shell.user_ns["df"].columns
+        assert "VolAdj" in mock_shell.user_ns["df"].columns
 
         # Step 3: Process second statement (computes SMA_60)
-        metrics2 = processor.process_statement("df['SMA_60'] = df['Close'].rolling(2).mean()")
+        metrics2 = statement_processor.process_statement("df['SMA_60'] = df['Close'].rolling(2).mean()")
         assert metrics2["status"] == CacheStatus.COMPUTED
 
         # Record the lineage state after both statements ran

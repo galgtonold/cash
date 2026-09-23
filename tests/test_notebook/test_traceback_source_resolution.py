@@ -13,44 +13,14 @@ name whose source is registered in linecache.
 import inspect
 import linecache
 import traceback
-from unittest.mock import MagicMock
 
 import pytest
-from traitlets.config import Configurable
 
-from cash import Cash
-from cash.backends import InMemoryBackend
 from cash.notebook.compiled_source import (
     is_cash_filename,
     register_cell_source,
 )
-from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
-
-
-class MockShell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-
-
-@pytest.fixture
-def magics_fixture():
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    yield magics, shell
-    backend.clear()
-    shell.user_ns.clear()
-
 
 # --------------------------------------------------------------------------
 # the helper itself
@@ -93,12 +63,11 @@ def test_is_cash_filename(name, expected):
 # --------------------------------------------------------------------------
 
 
-def test_traceback_shows_source_of_cell_defined_function(magics_fixture):
+def test_traceback_shows_source_of_cell_defined_function(cash_magics, mock_shell):
     """The failing line appears in the traceback, not a bare '<cash>' frame."""
-    magics, shell = magics_fixture
-    run_cash_cell(magics, "def compute_ratio(a, b):\n    scaled = a * 100\n    return scaled / b")
+    run_cash_cell(cash_magics, "def compute_ratio(a, b):\n    scaled = a * 100\n    return scaled / b")
 
-    fn = shell.user_ns["compute_ratio"]
+    fn = mock_shell.user_ns["compute_ratio"]
     assert is_cash_filename(fn.__code__.co_filename)
 
     try:
@@ -113,11 +82,10 @@ def test_traceback_shows_source_of_cell_defined_function(magics_fixture):
     assert "compute_ratio" in tb
 
 
-def test_inspect_getsource_works_on_cell_defined_function(magics_fixture):
+def test_inspect_getsource_works_on_cell_defined_function(cash_magics, mock_shell):
     """``inspect.getsource`` no longer raises "could not get source code"."""
-    magics, shell = magics_fixture
-    run_cash_cell(magics, "def greet(name):\n    return f'hi {name}'")
+    run_cash_cell(cash_magics, "def greet(name):\n    return f'hi {name}'")
 
-    src = inspect.getsource(shell.user_ns["greet"])
+    src = inspect.getsource(mock_shell.user_ns["greet"])
     assert "def greet(name):" in src
     assert "return f'hi {name}'" in src

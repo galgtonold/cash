@@ -1,5 +1,3 @@
-from cash.notebook.cache_status import CacheStatus
-
 """
 Integration test for file dependency invalidation with display-only cells.
 
@@ -11,54 +9,24 @@ This test reproduces the exact scenario from financial_analysis_demo.ipynb:
 When the CSV file changes, Cell 3 should be invalidated because its input 'df'
 was ultimately derived from the file.
 """
+
 import os
-import sys
 import tempfile
 import time
-from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
-from traitlets.config.configurable import Configurable
 
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
+from cash.notebook.cache_status import CacheStatus
 
 
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {"pd": pd}  # Pre-load pandas
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
+@pytest.fixture(autouse=True)
+def _pandas_already_imported(mock_shell):
+    """An earlier cell ran ``import pandas as pd``."""
+    mock_shell.user_ns["pd"] = pd
 
 
-@pytest.fixture
-def processor_with_pandas():
-    """Provide StatementProcessor with pandas in namespace."""
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-
-    magics = CashMagics(shell, cash)
-    processor = magics._statement_processor
-
-    yield processor, shell, backend
-
-    backend.clear()
-    shell.user_ns.clear()
-
-
-def test_display_cell_invalidation_on_file_change(processor_with_pandas):
+def test_display_cell_invalidation_on_file_change(statement_processor, mock_shell):
     """
     Test that a display-only cell is invalidated when the source file changes.
 
@@ -69,7 +37,6 @@ def test_display_cell_invalidation_on_file_change(processor_with_pandas):
 
     When the CSV file is modified, Cell 3 should be re-computed, not cached.
     """
-    processor, shell, backend = processor_with_pandas
 
     # Create temp CSV file
     temp_path = tempfile.mktemp(suffix=".csv").replace(os.sep, "/")
@@ -98,31 +65,31 @@ def test_display_cell_invalidation_on_file_change(processor_with_pandas):
         print("\n=== FIRST RUN ===")
 
         print("\n--- Cell 1: Read CSV ---")
-        metrics1 = processor.process_statement(code_read)
+        metrics1 = statement_processor.process_statement(code_read)
         print(f"Status: {metrics1['status']}")
         assert metrics1["status"] == CacheStatus.COMPUTED
-        print(f"df loaded: {len(shell.user_ns['df'])} rows")
+        print(f"df loaded: {len(mock_shell.user_ns['df'])} rows")
 
         print("\n--- Cell 2: Process data ---")
-        metrics2 = processor.process_statement(code_process)
+        metrics2 = statement_processor.process_statement(code_process)
         print(f"Status: {metrics2['status']}")
         assert metrics2["status"] == CacheStatus.COMPUTED
 
         print("\n--- Cell 3: Display df ---")
-        metrics3 = processor.process_statement(code_display)
+        metrics3 = statement_processor.process_statement(code_display)
         print(f"Status: {metrics3['status']}")
         assert metrics3["status"] == CacheStatus.COMPUTED
 
         # Check file dependencies are tracked
         print("\n--- Checking file dependencies ---")
-        print(f"executed_file_deps: {processor.tracking_state.executed_file_deps}")
-        print(f"variable_sources: {processor.tracking_state.variable_sources}")
+        print(f"executed_file_deps: {statement_processor.tracking_state.executed_file_deps}")
+        print(f"variable_sources: {statement_processor.tracking_state.variable_sources}")
 
         # === SECOND RUN: Re-run display cell (should be cached) ===
         print("\n=== SECOND RUN (no file change) ===")
 
         print("\n--- Cell 3: Display df (should RESTORE) ---")
-        metrics4 = processor.process_statement(code_display)
+        metrics4 = statement_processor.process_statement(code_display)
         print(f"Status: {metrics4['status']}")
         assert metrics4["status"] == CacheStatus.RESTORED, f"Expected RESTORED, got {metrics4['status']}"
 
@@ -145,7 +112,7 @@ def test_display_cell_invalidation_on_file_change(processor_with_pandas):
         print("\n=== THIRD RUN (after file change) ===")
 
         print("\n--- Cell 3: Display df (should COMPUTE due to file change) ---")
-        metrics5 = processor.process_statement(code_display)
+        metrics5 = statement_processor.process_statement(code_display)
         print(f"Status: {metrics5['status']}")
 
         # This is the critical assertion!
@@ -159,7 +126,7 @@ def test_display_cell_invalidation_on_file_change(processor_with_pandas):
             os.remove(temp_path)
 
 
-def test_display_cell_with_intermediate_processing(processor_with_pandas):
+def test_display_cell_with_intermediate_processing(statement_processor):
     """
     Test with more processing steps between file read and display.
 
@@ -168,7 +135,6 @@ def test_display_cell_with_intermediate_processing(processor_with_pandas):
     3. Cell 3: summary = df.describe()
     4. Cell 4: df  (display)
     """
-    processor, shell, backend = processor_with_pandas
 
     # Create temp CSV file
     temp_path = tempfile.mktemp(suffix=".csv").replace(os.sep, "/")
@@ -190,15 +156,15 @@ def test_display_cell_with_intermediate_processing(processor_with_pandas):
 
         # First run
         print("\n=== FIRST RUN ===")
-        processor.process_statement(code_read)
-        processor.process_statement(code_transform)
-        processor.process_statement(code_summary)
-        metrics_display1 = processor.process_statement(code_display)
+        statement_processor.process_statement(code_read)
+        statement_processor.process_statement(code_transform)
+        statement_processor.process_statement(code_summary)
+        metrics_display1 = statement_processor.process_statement(code_display)
         assert metrics_display1["status"] == CacheStatus.COMPUTED
 
         # Second run - should cache
         print("\n=== SECOND RUN (no change) ===")
-        metrics_display2 = processor.process_statement(code_display)
+        metrics_display2 = statement_processor.process_statement(code_display)
         assert metrics_display2["status"] == CacheStatus.RESTORED
 
         # Modify file
@@ -209,7 +175,7 @@ def test_display_cell_with_intermediate_processing(processor_with_pandas):
 
         # Third run - should invalidate
         print("\n=== THIRD RUN (after file change) ===")
-        metrics_display3 = processor.process_statement(code_display)
+        metrics_display3 = statement_processor.process_statement(code_display)
 
         assert metrics_display3["status"] == CacheStatus.COMPUTED, (
             f"Expected COMPUTED but got {metrics_display3['status']}. "

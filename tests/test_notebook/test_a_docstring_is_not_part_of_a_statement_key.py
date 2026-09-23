@@ -11,44 +11,12 @@ A bare string statement in a cell is NOT a docstring: it is the cell's
 displayed value, and editing it must still count.
 """
 
-from unittest.mock import MagicMock
-
-import pytest
-from traitlets.config.configurable import Configurable
-
 from cash.analysis.annotations import CacheAnnotation
-from cash.backends import InMemoryBackend
-from cash.core import Cash
 from cash.notebook.cache_key import statement_source_hash
 from cash.notebook.cache_status import CacheStatus
-from cash.notebook.ipython.magics import CashMagics
 
 # Force caching regardless of the 10 ms min-execution-time floor.
 _PERSIST = CacheAnnotation(persist=True)
-
-
-class MockShell(Configurable):
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-
-
-@pytest.fixture
-def magics_fixture():
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    processor = magics._statement_processor
-    yield magics, shell, backend, processor
-    backend.clear()
-    shell.user_ns.clear()
 
 
 DOUBLE = 'def double(n):\n    """Double n."""\n    return n * 2'
@@ -66,35 +34,31 @@ def _run_call(processor, definition, call="y = double(21)"):
 
 
 class TestTheCallerIsServedFromCache:
-    def test_after_rewording_the_docstring(self, magics_fixture):
-        _, shell, _, processor = magics_fixture
-        assert _run_call(processor, DOUBLE)["status"] == CacheStatus.COMPUTED
-        metrics = _run_call(processor, REWORDED)
+    def test_after_rewording_the_docstring(self, mock_shell, statement_processor):
+        assert _run_call(statement_processor, DOUBLE)["status"] == CacheStatus.COMPUTED
+        metrics = _run_call(statement_processor, REWORDED)
         assert metrics["status"] == CacheStatus.RESTORED, (
             "only the docstring of `double` changed, and its caller re-ran"
         )
-        assert shell.user_ns["y"] == 42
+        assert mock_shell.user_ns["y"] == 42
 
-    def test_after_removing_the_docstring(self, magics_fixture):
-        _, _, _, processor = magics_fixture
-        _run_call(processor, DOUBLE)
-        assert _run_call(processor, UNDOCUMENTED)["status"] == CacheStatus.RESTORED
+    def test_after_removing_the_docstring(self, statement_processor):
+        _run_call(statement_processor, DOUBLE)
+        assert _run_call(statement_processor, UNDOCUMENTED)["status"] == CacheStatus.RESTORED
 
-    def test_after_rewording_a_class_and_its_methods(self, magics_fixture):
-        _, shell, _, processor = magics_fixture
+    def test_after_rewording_a_class_and_its_methods(self, mock_shell, statement_processor):
         call = "z = Box().size()"
-        assert _run_call(processor, CLASS, call)["status"] == CacheStatus.COMPUTED
-        assert _run_call(processor, CLASS_REWORDED, call)["status"] == CacheStatus.RESTORED
-        assert shell.user_ns["z"] == 3
+        assert _run_call(statement_processor, CLASS, call)["status"] == CacheStatus.COMPUTED
+        assert _run_call(statement_processor, CLASS_REWORDED, call)["status"] == CacheStatus.RESTORED
+        assert mock_shell.user_ns["z"] == 3
 
 
-def test_a_real_edit_still_re_runs_the_caller(magics_fixture):
+def test_a_real_edit_still_re_runs_the_caller(mock_shell, statement_processor):
     """The control. Without it the tests above could pass on a cache that
     never invalidates at all."""
-    _, shell, _, processor = magics_fixture
-    _run_call(processor, DOUBLE)
-    assert _run_call(processor, TRIPLE)["status"] == CacheStatus.COMPUTED
-    assert shell.user_ns["y"] == 63
+    _run_call(statement_processor, DOUBLE)
+    assert _run_call(statement_processor, TRIPLE)["status"] == CacheStatus.COMPUTED
+    assert mock_shell.user_ns["y"] == 63
 
 
 class TestTheStatementDigest:

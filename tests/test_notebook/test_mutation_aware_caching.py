@@ -9,45 +9,12 @@ the cache should be skipped because the mutated state can't be captured
 by lineage alone.
 """
 
-from unittest.mock import MagicMock
-
-import pytest
-from traitlets.config.configurable import Configurable
 
 from cash.analysis.cacheability import analyze_statement
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
 
 # Force caching regardless of the 10 ms min-execution-time floor, so tests
 # that exercise cache mechanics (restore-after-write) aren't skipped.
 _PERSIST = CacheAnnotation(persist=True)
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-
-
-@pytest.fixture
-def processor_fixture():
-    """Provide StatementProcessor via CashMagics for testing."""
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    processor = magics._statement_processor
-    yield processor, shell, backend
-    backend.clear()
-    shell.user_ns.clear()
 
 
 # --- Tests for analyze_statement(...).top_level_mutated_vars ---
@@ -148,28 +115,26 @@ async def update(state):
 class TestMutationAwareCaching:
     """Tests that mutation-aware caching works correctly in statement processing."""
 
-    def test_pure_mutation_skips_cache(self, processor_fixture):
+    def test_pure_mutation_skips_cache(self, statement_processor, mock_shell):
         """Statement that only mutates an existing variable should skip cache."""
-        processor, shell, backend = processor_fixture
 
         # Set up existing list in namespace
-        shell.user_ns["data"] = [1, 2, 3]
+        mock_shell.user_ns["data"] = [1, 2, 3]
 
         code = "data.append(4)"
-        metrics = processor.process_statement(code)
+        metrics = statement_processor.process_statement(code)
         assert metrics["status"] == CacheStatus.COMPUTED
 
         # Run again — should still be COMPUTED (not RESTORED) because it's uncacheable
-        metrics2 = processor.process_statement(code)
+        metrics2 = statement_processor.process_statement(code)
         assert metrics2["status"] == CacheStatus.COMPUTED
         # Check that uncacheable reason is recorded
         assert any("mutation" in r.lower() or "In-place" in r for r in metrics2.get("uncacheable_reasons", []))
 
-    def test_class_definition_still_cacheable(self, processor_fixture):
+    def test_class_definition_still_cacheable(self, statement_processor, mock_shell):
         """Class definitions with internal self.x=y should still be cacheable.
         _PERSIST overrides the 10 ms min-execution-time floor so the class
         definition (which runs instantly) is actually stored in cache."""
-        processor, shell, backend = processor_fixture
 
         code = """
 class Point:
@@ -179,53 +144,50 @@ class Point:
 
 p = Point(3, 4)
 """
-        metrics = processor.process_statement(code, annotation=_PERSIST)
+        metrics = statement_processor.process_statement(code, annotation=_PERSIST)
         assert metrics["status"] == CacheStatus.COMPUTED
 
         # Clear and re-run — should be RESTORED from cache
-        shell.user_ns.pop("Point", None)
-        shell.user_ns.pop("p", None)
+        mock_shell.user_ns.pop("Point", None)
+        mock_shell.user_ns.pop("p", None)
 
-        metrics2 = processor.process_statement(code, annotation=_PERSIST)
+        metrics2 = statement_processor.process_statement(code, annotation=_PERSIST)
         assert metrics2["status"] == CacheStatus.RESTORED
 
-    def test_augmented_assign_as_output(self, processor_fixture):
+    def test_augmented_assign_as_output(self, statement_processor, mock_shell):
         """Augmented assignment on output variable (x += 1 where x is output) is cacheable."""
-        processor, shell, backend = processor_fixture
 
         code = "x = 10\nx += 5"
-        metrics = processor.process_statement(code)
+        metrics = statement_processor.process_statement(code)
         assert metrics["status"] == CacheStatus.COMPUTED
-        assert shell.user_ns.get("x") == 15
+        assert mock_shell.user_ns.get("x") == 15
 
-    def test_dict_update_mutation_detected(self, processor_fixture):
+    def test_dict_update_mutation_detected(self, statement_processor, mock_shell):
         """Dict update mutation on non-output var should skip cache."""
-        processor, shell, backend = processor_fixture
 
-        shell.user_ns["config"] = {"a": 1}
+        mock_shell.user_ns["config"] = {"a": 1}
         code = "config.update({'b': 2})"
 
-        metrics = processor.process_statement(code)
+        metrics = statement_processor.process_statement(code)
         assert metrics["status"] == CacheStatus.COMPUTED
 
         # Run again — should be COMPUTED, not RESTORED
-        metrics2 = processor.process_statement(code)
+        metrics2 = statement_processor.process_statement(code)
         assert metrics2["status"] == CacheStatus.COMPUTED
 
-    def test_function_def_with_mutation_cacheable(self, processor_fixture):
+    def test_function_def_with_mutation_cacheable(self, statement_processor, mock_shell):
         """Function that internally mutates args should still be cacheable as a definition.
         _PERSIST overrides the 10 ms min-execution-time floor so the function
         definition (which runs instantly) is actually stored in cache."""
-        processor, shell, backend = processor_fixture
 
         code = """
 def transform(lst):
     lst.sort()
     return lst[0]
 """
-        metrics = processor.process_statement(code, annotation=_PERSIST)
+        metrics = statement_processor.process_statement(code, annotation=_PERSIST)
         assert metrics["status"] == CacheStatus.COMPUTED
 
-        shell.user_ns.pop("transform", None)
-        metrics2 = processor.process_statement(code, annotation=_PERSIST)
+        mock_shell.user_ns.pop("transform", None)
+        metrics2 = statement_processor.process_statement(code, annotation=_PERSIST)
         assert metrics2["status"] == CacheStatus.RESTORED

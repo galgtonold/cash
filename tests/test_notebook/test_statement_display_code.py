@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-from traitlets.config import Configurable
 
-from cash import Cash
 from cash.analysis.annotations import CacheAnnotation
-from cash.backends import InMemoryBackend
 from cash.notebook.cache_status import CacheStatus
-from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
 
 pytest.importorskip("IPython")
@@ -21,38 +17,10 @@ pytest.importorskip("IPython")
 _PERSIST = CacheAnnotation(persist=True)
 
 
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
+def test_display_code_is_recorded_when_supplied(statement_processor, mock_shell):
+    mock_shell.user_ns["a"] = 1
 
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-
-
-@pytest.fixture
-def processor_fixture():
-    """Provide StatementProcessor instance for testing."""
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    processor = magics._statement_processor
-    yield processor, shell, backend, magics
-    backend.clear()
-    shell.user_ns.clear()
-
-
-def test_display_code_is_recorded_when_supplied(processor_fixture):
-    processor, shell, backend, magics = processor_fixture
-    shell.user_ns["a"] = 1
-
-    metrics = processor.process_statement(
+    metrics = statement_processor.process_statement(
         "x = a + 1",
         display_code="x = (\n    a + 1\n)",
     )
@@ -61,17 +29,16 @@ def test_display_code_is_recorded_when_supplied(processor_fixture):
     assert metrics["code"] == "x = a + 1", "the keyed text must not change"
 
 
-def test_display_code_defaults_to_none(processor_fixture):
+def test_display_code_defaults_to_none(statement_processor, mock_shell):
     """An older caller that does not pass it must behave exactly as before."""
-    processor, shell, backend, magics = processor_fixture
-    shell.user_ns["a"] = 1
+    mock_shell.user_ns["a"] = 1
 
-    metrics = processor.process_statement("x = a + 1")
+    metrics = statement_processor.process_statement("x = a + 1")
 
     assert metrics.get("display_code") is None
 
 
-def test_display_code_does_not_change_the_cache_key(processor_fixture):
+def test_display_code_does_not_change_the_cache_key(statement_processor):
     """The whole point: it is display-only.
 
     Same code, different display text -- the second call must still hit.
@@ -85,11 +52,10 @@ def test_display_code_does_not_change_the_cache_key(processor_fixture):
     And ``x = a + 1`` runs in well under a millisecond, under the 10ms
     "too cheap to cache" floor -- so both calls force persistence.
     """
-    processor, shell, backend, magics = processor_fixture
-    processor.process_statement("a = 1")
+    statement_processor.process_statement("a = 1")
 
-    first = processor.process_statement("x = a + 1", display_code="x = a + 1", annotation=_PERSIST)
-    second = processor.process_statement(
+    first = statement_processor.process_statement("x = a + 1", display_code="x = a + 1", annotation=_PERSIST)
+    second = statement_processor.process_statement(
         "x = a + 1",
         display_code="x = (\n    a + 1\n)",
         annotation=_PERSIST,
@@ -101,7 +67,7 @@ def test_display_code_does_not_change_the_cache_key(processor_fixture):
     )
 
 
-def test_a_control_body_statement_has_no_display_code(processor_fixture):
+def test_a_control_body_statement_has_no_display_code(mock_shell, cash_magics):
     """Capture is top-level only, by design.
 
     A control body, a loop-split iteration and a statement cash rewrote all
@@ -131,19 +97,18 @@ def test_a_control_body_statement_has_no_display_code(processor_fixture):
     applies to all three, but this test does not itself exercise ``if``/
     ``try`` bodies.
     """
-    processor, shell, backend, magics = processor_fixture
-    magics.badges.mode = "html"
-    shell.user_ns["xs"] = [1, 2, 3]
+    cash_magics.badges.mode = "html"
+    mock_shell.user_ns["xs"] = [1, 2, 3]
     cell = "for i in xs:\n    y = i + 1\nz = 99\n"
 
-    with patch.object(magics.badges, "render") as mock_badge:
-        run_cash_cell(magics, cell)
+    with patch.object(cash_magics.badges, "render") as mock_badge:
+        run_cash_cell(cash_magics, cell)
 
     # Premises: both the loop body and the sibling statement actually ran,
     # so a false pass can't hide behind a cell that silently did nothing.
     # `y` is overwritten each iteration, so it holds the LAST one (i=3).
-    assert shell.user_ns.get("y") == 4
-    assert shell.user_ns.get("z") == 99
+    assert mock_shell.user_ns.get("y") == 4
+    assert mock_shell.user_ns.get("z") == 99
 
     all_metrics = mock_badge.call_args_list[-1][0][0]
     loop_rows = [m for m in all_metrics if "loop_vars" in m]
