@@ -1,14 +1,12 @@
 """Persistent-kernel notebook driver, backed by a REAL Jupyter server.
 
-This is the CAS-190 wheel-gate driver: a parametrized copy of the proven
-`C:/Temp/cashut/driver_reference.py` (the harness the manual gate rounds used).
+This is the CAS-190 wheel-gate driver.
 cash's notebook mode needs a live Jupyter server (it maps kernel_id -> notebook
 path via the server's /api/sessions), so plain nbclient can't drive it. This
 spins up `jupyter server`, opens a session bound to work.ipynb, and talks ZMQ to
 that server's kernel -- i.e. exactly what JupyterLab does, minus the browser.
 
-Differences from driver_reference.py (all env-driven, behaviour identical when
-the env is unset):
+Configuration (all optional environment variables):
   * CASH_WORK_DIR   -- the work dir (inbox/outbox/runtime/work.ipynb live here).
                        Defaults to this file's own directory.
   * CASH_KERNEL_NAME-- the kernelspec name to bind the session to. Defaults to

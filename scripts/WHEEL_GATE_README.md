@@ -15,7 +15,7 @@ CAS-202, the packaging P0):
    restart-path bug is invisible: CAS-196's restart re-fire and CAS-202's
    restart-retrain both shipped green.
 2. **Wheel-venv install layout.** The suite runs the **editable dev install**
-   against `C:\Python314`; testers run a **fresh wheel venv**. `importlib.metadata`
+   against the developer's own Python; testers run a **fresh wheel venv**. `importlib.metadata`
    phantom file-dep probes (81 in a venv vs 0 in dev) only exist in the venv.
    Every install-layout bug is invisible. The dev env doesn't even have
    `jupyter_server` installed — so whatever the CAS-171 36-config sweep drove, it
@@ -31,19 +31,18 @@ restored on a cache hit and so cannot witness a silent re-run.
 ## What it does
 
 1. Builds a wheel from the current tree (`python -m build --wheel`) into its own
-   `C:\Temp\wheelgate\dist` — **not** the repo `dist/`, so it can't disturb
+   `<gate root>/dist` (the system temp dir, or `CASH_WHEELGATE_ROOT`) — **not** the repo `dist/`, so it can't disturb
    release hygiene — or accepts `--wheel <path>`.
-2. Creates a **fresh venv on a short path** (`C:\Temp\wheelgate\venv`; deep repo
+2. Creates a **fresh venv on a short path** (`<gate root>/venv`; deep repo
    paths blow MAX_PATH 260 and yield bogus `ModuleNotFoundError`) and installs
    `<wheel>[all]` + `pandas numpy scikit-learn jupyter-server jupyter-client
-   nbformat ipykernel`. **Never** installs into `C:\Python314`.
+   nbformat ipykernel`. **Never** installs into the developer's Python.
 3. Registers a **unique `wheelgate` kernelspec into the venv**
    (`ipykernel install --sys-prefix`, never `--user`) so the kernel can only
    resolve to the venv interpreter — and a **guard cell asserts `sys.prefix` is
    the venv**, so the install-layout is genuinely exercised.
 4. Drives a **real `jupyter server` + `BlockingKernelClient`** via
-   `wheel_gate_driver.py` (a parametrized copy of the proven
-   `C:/Temp/cashut/driver_reference.py`), with a real kernel `restart` between
+   `wheel_gate_driver.py`, with a real kernel `restart` between
    run phases. `PYTHONUTF8=1` in the server env so cash's emoji badges can't
    crash the harness on cp1252 (CAS-192).
 5. Cleans up: `quit` + tree-kill the server (idempotent, rerun-safe; leftover
@@ -177,8 +176,7 @@ catches it.
 
 - `scripts/wheel_gate.py` — the orchestrator (build → venv → scenarios → matrix).
 - `scripts/wheel_gate_driver.py` — the persistent-kernel driver (real Jupyter
-  server + `BlockingKernelClient`; env-parametrized copy of the gate's
-  `driver_reference.py`).
+  server + `BlockingKernelClient`).
 - `tests/test_wheel_gate/` — opt-in pytest shim + local `wheel_gate` marker.
 
 Only `src/` is off-limits — this is the harness, not the fix. The CAS-202 /

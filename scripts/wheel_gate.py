@@ -15,7 +15,7 @@ CAS-202, the packaging P0):
      still real: a faithful in-suite reproduction passed even against the
      UNFIXED source, while this harness reproduced it deterministically.
   2. WHEEL-VENV install layout. The suite runs the EDITABLE dev install against
-     C:\Python314; testers run a FRESH WHEEL VENV. `importlib.metadata` phantom
+     the developer's own Python; testers run a FRESH WHEEL VENV. `importlib.metadata` phantom
      file-dep probes (81 in a venv vs 0 in dev) only exist in the venv. Every
      install-layout bug is invisible. (The dev env has no `jupyter_server`
      installed at all -- so whatever the CAS-171 sweep drove, it was not a real
@@ -29,9 +29,9 @@ with one command.
 WHAT IT DOES
 ------------
   1. Builds a wheel from the current tree (or accepts `--wheel <path>`).
-  2. Creates a FRESH venv on a SHORT path (C:\Temp\wheelgate\venv -- MAX_PATH!)
+  2. Creates a FRESH venv on a SHORT path (<gate root>/venv -- MAX_PATH!)
      and installs `<wheel>[all]` + pandas numpy scikit-learn jupyter-server
-     jupyter-client nbformat ipykernel. NEVER installs into C:\Python314.
+     jupyter-client nbformat ipykernel. NEVER installs into the developer's Python.
   3. Registers a UNIQUE `wheelgate` kernelspec INTO the venv
      (`ipykernel install --sys-prefix`, never `--user`) so the kernel can only
      resolve to the venv interpreter -- and a guard cell asserts `sys.prefix`
@@ -92,6 +92,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 import uuid
@@ -102,8 +103,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DRIVER_SRC = Path(__file__).resolve().parent / "wheel_gate_driver.py"
 
 # SHORT paths only: a venv under the deep repo path blows MAX_PATH (260) and
-# yields bogus ModuleNotFoundErrors. C:\Temp\wheelgate keeps every path short.
-GATE_ROOT = Path(os.environ.get("CASH_WHEELGATE_ROOT", r"C:\Temp\wheelgate"))
+# yields bogus ModuleNotFoundErrors. Set CASH_WHEELGATE_ROOT to a short path if
+# the system temp dir is deep.
+GATE_ROOT = Path(os.environ.get("CASH_WHEELGATE_ROOT") or Path(tempfile.gettempdir()) / "wheelgate")
 VENV_DIR = GATE_ROOT / "venv"
 DIST_DIR = GATE_ROOT / "dist"
 WORK_ROOT = GATE_ROOT / "work"
