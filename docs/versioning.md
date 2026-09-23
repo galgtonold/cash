@@ -1,47 +1,36 @@
 # Versioning & compatibility
 
-Cash follows [semantic versioning](https://semver.org/), with the usual `0.x`
-caveat: **while cash is in `0.x`, a minor version bump (`0.1` → `0.2`) may make
-breaking changes.** Patch releases (`0.1.1` → `0.1.2`) are for fixes and are
-safe to take.
+!!! info "Applies to: both paths"
+    Anyone pinning or upgrading cash.
 
-## What "the public API" means
+cash uses [semantic versioning](https://semver.org/) with the usual `0.x`
+rule: **a minor release (a change in the second number) can remove or change
+public APIs outright**, with no deprecation period. Each removal is listed in the
+[CHANGELOG](https://github.com/galgtonold/cash/blob/main/CHANGELOG.md). Patch
+releases (a change in the third number) only fix bugs.
 
-The supported surface is what's documented in the [API reference](api/index.md):
-the `cash` top-level names, the `@cash.cache` decorator, the magics (`%cash_on`,
-`%cash_stats`, …), the annotations (`# @cash:...`), and the public backend
-classes. Anything under a leading underscore, or not shown in the API reference,
-is internal and may change at any time.
+## The public API
 
-## The cache format is *not* covered by the API guarantee
+The public API is what the [API reference](api/index.md) documents: the names
+in `cash.__all__` (including `@cash.cache`), the magics, the `# @cash:`
+annotations and the `cash` command. Anything else, including any name that
+starts with an underscore, can change in any release.
 
-This is the one to remember. The on-disk cache format — how entries are keyed,
-serialized, and laid out under `.cash/` — is an **implementation detail** and
-**may change between minor versions**. Cache entries written by one minor version
-are not guaranteed to be readable by another.
+## The cache format
 
-**After upgrading cash, run `cash clear --all`** (or delete `.cash/`) to clear
-any entries written by the previous version. A stale entry from an older format
-is discarded rather than misread — you never get a *wrong* value from a format
-change, only a recompute — but clearing avoids the wasted space and the
-first-run misses.
+The on-disk cache format is not part of the public API and can change in any
+minor release. You do not need to do anything when it changes: cash clears a
+local cache written in an incompatible format when it opens it, and treats any
+entry it cannot read as a miss. An upgrade can cost a recompute, never a wrong
+value. Run `cash clear --all` only if you want the space back at once.
 
-There is deliberately no cross-version cache-migration tool: the cache is a
-disposable performance layer, not a source of truth. Anything you can't afford
-to recompute should be written out explicitly (to a file, a database, a
-model artifact), not left to live only in the cache.
-
-## Deprecations
-
-When a public API needs to change, the previous form is kept working for at
-least one minor version and emits a `DeprecationWarning` pointing at the
-replacement, wherever that's feasible. Removals are called out in the
-[CHANGELOG](https://github.com/galgtonold/cash/blob/main/CHANGELOG.md).
+There is no tool to migrate a cache between versions. The cache is a
+performance layer, not a store of record: write anything you cannot afford to
+recompute to a file or a database yourself.
 
 ## Pinning
 
-Pin cash the way you'd pin any dependency you rely on in production — e.g.
-`cash-lib<!-- docnum:version_pin -->~=0.11.0<!-- /docnum -->` to take patch fixes but not an
-automatic `<!-- docnum:version_next_minor -->0.12<!-- /docnum -->` — and upgrade
-deliberately, reading the CHANGELOG and running `cash clear --all` as part of
-the bump.
+Pin cash like any dependency you rely on, for example
+`cash-lib<!-- docnum:version_pin -->~=0.11.0<!-- /docnum -->` to take patch
+releases but not <!-- docnum:version_next_minor -->0.12<!-- /docnum -->, and
+read the CHANGELOG before you move to a new minor release.
