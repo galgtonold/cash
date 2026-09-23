@@ -6878,7 +6878,7 @@ class Cash:
         """
         parts: list[tuple] = self._pydantic_field_parts(cls)
         for base in reversed(cls.__mro__):
-            # An OPAQUE base contributes nothing, so `mark_opaque(VendorBase)`
+            # An OPAQUE base contributes nothing, so `cash.opaque(VendorBase)`
             # also stops a `Derived(VendorBase)` digest moving when the vendor
             # edits its own base. Without this the escape hatch worked only
             # when the opaque class was the one passed, which is not how
@@ -10075,12 +10075,7 @@ class Cash:
 
     @staticmethod
     def mark_opaque(*types_: type) -> None:
-        """Exclude *types_* from code-surface hashing.
-
-        For a class you cannot or should not edit -- third-party, generated, or
-        simply not yours. For one you own, ``@cash.opaque`` is the same thing
-        spelled declaratively.
-        """
+        """Exclude *types_* from code-surface hashing: what ``cash.opaque`` records."""
         Cash._OPAQUE_TYPES.update(types_)
 
     @staticmethod
@@ -10088,27 +10083,12 @@ class Cash:
         """True when *obj* -- a class, or an instance of one -- must not have
         its code hashed into a cache key.
 
-        Checks two independent marks, both EXACT-MATCH on the type itself,
-        deliberately not inheritance-aware:
-
-        * ``_OPAQUE_TYPES`` (``mark_opaque``) is a plain set. Registering a
-          base class does not implicitly cover a subclass the caller never
-          passed to ``mark_opaque`` -- sets have no notion of "and its
-          descendants."
-        * ``__cash_opaque__`` (``@cash.opaque``) is read from the target's
-          OWN ``__dict__`` via ``vars()``, not via plain ``getattr``.
-          ``getattr`` walks the MRO, so a subclass would inherit the mark
-          from an opaque ancestor even though the subclass may carry its
-          own freshly-written methods the user actively edits -- silently
-          exempting THAT code from ever invalidating the cache, for a
-          decision made about a different class entirely. Matching
-          ``_OPAQUE_TYPES``'s exact-match semantics here also keeps the two
-          spellings equivalent, as documented: "the same thing spelled
-          declaratively" should behave the same, not diverge on
-          inheritance because one happens to be implemented as a dunder
-          attribute. A subclass that wants the same treatment marks
-          itself; see ``test_a_subclass_of_an_opaque_class_does_not_
-          inherit_opacity`` for the pinned case.
+        The type itself must be in ``_OPAQUE_TYPES`` (``cash.opaque``); a
+        subclass of an opaque class is not covered. It may carry its own
+        freshly-written methods the user actively edits, and inheriting the
+        mark would silently exempt that code from ever invalidating the cache.
+        A subclass that wants the same treatment is marked itself (pinned by
+        ``test_a_subclass_of_an_opaque_class_does_not_inherit_opacity``).
 
         Never raises. Measured, not assumed: a metaclass that defines
         ``__eq__`` without ``__hash__`` makes the CLASS ITSELF unhashable
@@ -10120,15 +10100,13 @@ class Cash:
         try:
             if isinstance(obj, functools.partial):
                 # A partial is the function it wraps plus arguments, both of
-                # which are keyed now. `mark_opaque(functools.partial)` was the
+                # which are keyed now. `cash.opaque(functools.partial)` was the
                 # old advice for silencing KEY-OPAQUE-CALLABLE, and it silenced
                 # EVERY partial in the process, including ones over code the
                 # user then edited (round 18).
                 return False
             target = obj if isinstance(obj, type) else type(obj)
-            if target in Cash._OPAQUE_TYPES:
-                return True
-            return bool(vars(target).get("__cash_opaque__", False))
+            return target in Cash._OPAQUE_TYPES
         except Exception as e:  # noqa: BLE001 - opacity check must never break a call
             logger.debug("[CORE] opacity check failed for %r: %s", obj, e)
             return False
