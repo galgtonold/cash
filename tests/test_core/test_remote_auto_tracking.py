@@ -107,7 +107,7 @@ class TestSnapshotShape:
 
     def test_local_entries_are_untouched_by_the_branch(self, tmp_path):
         f = tmp_path / "data.csv"
-        f.write_text("a,b\n1,2\n")
+        f.write_text("a,b\n1,2\n", encoding="utf-8")
         snap = snapshot_file_deps({str(f)})
         assert "remote" not in snap[str(f)]
         assert file_dep_is_fresh(str(f), snap[str(f)]) == (True, None)

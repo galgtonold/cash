@@ -30,7 +30,7 @@ from cash.tracking.file_tracker import FileAccessTracker
 @pytest.fixture
 def data_file(tmp_path):
     f = tmp_path / "data.csv"
-    f.write_text("a,b\n1,2\n")
+    f.write_text("a,b\n1,2\n", encoding="utf-8")
     return f
 
 
@@ -42,7 +42,7 @@ class TestPathlibReadsAreTracked:
     def test_read_text_registers_a_dependency(self, data_file):
         tracker = FileAccessTracker()
         with tracker:
-            pathlib.Path(data_file).read_text()
+            pathlib.Path(data_file).read_text(encoding="utf-8")
         assert str(data_file).replace("\\", "/").lower() in _tracked(tracker), (
             "Path.read_text() left no file dependency — a cell reading through "
             "pathlib would never be invalidated when the file changes"
@@ -57,7 +57,7 @@ class TestPathlibReadsAreTracked:
     def test_explicit_open_registers_a_dependency(self, data_file):
         tracker = FileAccessTracker()
         with tracker:
-            with pathlib.Path(data_file).open() as fh:
+            with pathlib.Path(data_file).open(encoding="utf-8") as fh:
                 fh.read()
         assert str(data_file).replace("\\", "/").lower() in _tracked(tracker)
 
@@ -65,7 +65,7 @@ class TestPathlibReadsAreTracked:
         """Guard: the pathlib patch must not disturb the ordinary path."""
         tracker = FileAccessTracker()
         with tracker:
-            with open(data_file) as fh:
+            with open(data_file, encoding="utf-8") as fh:
                 fh.read()
         assert str(data_file).replace("\\", "/").lower() in _tracked(tracker)
 
@@ -76,26 +76,26 @@ class TestPathlibStillWorks:
     def test_contents_are_unchanged(self, data_file):
         tracker = FileAccessTracker()
         with tracker:
-            text = pathlib.Path(data_file).read_text()
+            text = pathlib.Path(data_file).read_text(encoding="utf-8")
         assert text == "a,b\n1,2\n"
 
     def test_write_and_reread_roundtrip(self, tmp_path):
         target = tmp_path / "out.txt"
         tracker = FileAccessTracker()
         with tracker:
-            pathlib.Path(target).write_text("written")
-            assert pathlib.Path(target).read_text() == "written"
+            pathlib.Path(target).write_text("written", encoding="utf-8")
+            assert pathlib.Path(target).read_text(encoding="utf-8") == "written"
 
     def test_missing_file_still_raises(self, tmp_path):
         tracker = FileAccessTracker()
         with tracker:
             with pytest.raises(FileNotFoundError):
-                pathlib.Path(tmp_path / "nope.txt").read_text()
+                pathlib.Path(tmp_path / "nope.txt").read_text(encoding="utf-8")
 
     def test_repeated_trackers_each_see_the_read(self, data_file):
         """Repeated trackers each record the read, however it was seen."""
         for _ in range(3):
             tracker = FileAccessTracker()
             with tracker:
-                pathlib.Path(data_file).read_text()
+                pathlib.Path(data_file).read_text(encoding="utf-8")
             assert str(data_file).replace("\\", "/").lower() in _tracked(tracker)

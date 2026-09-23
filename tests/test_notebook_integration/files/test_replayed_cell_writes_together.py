@@ -60,7 +60,7 @@ def _run_all(nb_runner, tail):
     work = Path(nb_runner.work_dir)
     (work / "in").mkdir()
     for i in (1, 2):
-        (work / "in" / f"{i}.txt").write_text(str(i))
+        (work / "in" / f"{i}.txt").write_text(str(i), encoding="utf-8")
     nb_runner.create_notebook(["import cash\n%cash_on", SETUP, MODEL, REPORT, tail])
     nb_runner.start_kernel()
     nb_runner.run_all()

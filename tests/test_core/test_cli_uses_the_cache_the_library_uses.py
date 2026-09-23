@@ -156,7 +156,7 @@ def test_python_m_cash_targets_the_project_you_stand_in(tmp_path):
     """
     project = tmp_path / "proj"
     (project / "sub").mkdir(parents=True)
-    (project / "pyproject.toml").write_text('[project]\nname="p"\nversion="0"\n')
+    (project / "pyproject.toml").write_text('[project]\nname="p"\nversion="0"\n', encoding="utf-8")
     out = _run("info", cwd=str(project / "sub"))
     assert out.returncode == 0, out.stderr
     line = next(ln for ln in out.stdout.splitlines() if "Cache dir" in ln)

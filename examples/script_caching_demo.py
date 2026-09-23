@@ -103,7 +103,7 @@ print()
 
 # Create a temporary data file
 data_file = os.path.join(tempfile.gettempdir(), "cash_demo_data.txt")
-with open(data_file, "w") as f:
+with open(data_file, "w", encoding="utf-8") as f:
     f.write("10\n20\n30\n")
 
 data_source = FileDataSource(data_file)
@@ -113,7 +113,7 @@ data_source = FileDataSource(data_file)
 def process_data():
     """Process data from file. Re-computes when file changes."""
     print("  [Reading and processing data file...]")
-    with open(data_file) as f:
+    with open(data_file, encoding="utf-8") as f:
         numbers = [int(line.strip()) for line in f if line.strip()]
     return sum(numbers)
 
@@ -129,7 +129,7 @@ result2 = process_data()
 print(f"  Sum: {result2} (cached - file unchanged)")
 
 # Modify the file
-with open(data_file, "w") as f:
+with open(data_file, "w", encoding="utf-8") as f:
     f.write("100\n200\n300\n")
 
 result3 = process_data()

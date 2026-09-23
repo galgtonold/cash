@@ -19,7 +19,7 @@ class TestPandasPipelinePatterns:
     def test_load_transform_aggregate(self, nb_runner, tmp_path):
         """Classic ETL: load CSV, transform, aggregate."""
         csv_path = tmp_path / "sales.csv"
-        csv_path.write_text("product,qty,price\nA,10,1.5\nB,5,3.0\nA,8,1.5\nB,12,3.0\n")
+        csv_path.write_text("product,qty,price\nA,10,1.5\nB,5,3.0\nA,8,1.5\nB,12,3.0\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -38,7 +38,7 @@ class TestPandasPipelinePatterns:
     def test_dataframe_filtering_chain(self, nb_runner, tmp_path):
         """Chain of DataFrame filters across cells."""
         csv_path = tmp_path / "people.csv"
-        csv_path.write_text("name,age,city\nAlice,30,NYC\nBob,25,LA\nCharlie,35,NYC\nDiana,28,LA\n")
+        csv_path.write_text("name,age,city\nAlice,30,NYC\nBob,25,LA\nCharlie,35,NYC\nDiana,28,LA\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -57,7 +57,7 @@ class TestPandasPipelinePatterns:
     def test_csv_modification_detected(self, nb_runner, tmp_path):
         """Modify the CSV file between runs — should re-compute."""
         csv_path = tmp_path / "data.csv"
-        csv_path.write_text("val\n10\n20\n30\n")
+        csv_path.write_text("val\n10\n20\n30\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -70,7 +70,7 @@ class TestPandasPipelinePatterns:
         assert "total = 60" in nb_runner.get_output(2)
 
         # Modify the CSV
-        csv_path.write_text("val\n100\n200\n300\n")
+        csv_path.write_text("val\n100\n200\n300\n", encoding="utf-8")
         time.sleep(0.5)
 
         nb_runner.run_all()
@@ -213,7 +213,8 @@ class TestFromImportClassReload:
             "    def __init__(self, r):\n"
             "        self.r = r\n"
             "    def area(self):\n"
-            "        return 3.14 * self.r ** 2\n"
+            "        return 3.14 * self.r ** 2\n",
+            encoding="utf-8",
         )
 
         nb_runner.create_notebook(
@@ -234,7 +235,8 @@ class TestFromImportClassReload:
             "    def __init__(self, r):\n"
             "        self.r = r\n"
             "    def area(self):\n"
-            "        return math.pi * self.r ** 2\n"
+            "        return math.pi * self.r ** 2\n",
+            encoding="utf-8",
         )
         time.sleep(0.5)
 
@@ -246,7 +248,7 @@ class TestFromImportClassReload:
     def test_from_import_constant_change(self, nb_runner, tmp_path):
         """from X import CONST — constant value change should propagate."""
         mod_path = tmp_path / "config.py"
-        mod_path.write_text("VERSION = '1.0'\n")
+        mod_path.write_text("VERSION = '1.0'\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -260,7 +262,7 @@ class TestFromImportClassReload:
         assert "Version: 1.0" in nb_runner.get_output(2)
 
         # Update the constant
-        mod_path.write_text("VERSION = '2.0'\n")
+        mod_path.write_text("VERSION = '2.0'\n", encoding="utf-8")
         time.sleep(0.5)
 
         nb_runner.run_all()
@@ -1222,7 +1224,8 @@ class TestETLPipelineComplex:
             "2024-01-01,Gadget,5,24.99\n"
             "2024-01-02,Widget,8,9.99\n"
             "2024-01-02,Gadget,12,24.99\n"
-            "2024-01-03,Widget,15,9.99\n"
+            "2024-01-03,Widget,15,9.99\n",
+            encoding="utf-8",
         )
         fpath = str(csv_file).replace("\\", "/")
 
@@ -1280,7 +1283,7 @@ class TestETLPipelineComplex:
         data_dir = tmp_path / "etl_data2"
         data_dir.mkdir()
         csv_file = data_dir / "data.csv"
-        csv_file.write_text("name,value\nA,10\nB,20\nC,30\n")
+        csv_file.write_text("name,value\nA,10\nB,20\nC,30\n", encoding="utf-8")
         fpath = str(csv_file).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -1327,7 +1330,8 @@ class TestETLPipeline:
         input_csv = tmp_path / "raw.csv"
         output_csv = tmp_path / "clean.csv"
         input_csv.write_text(
-            "id,name,value,category\n1,Alice,100,A\n2,Bob,-5,B\n3,Charlie,200,A\n4,Diana,150,B\n5,Eve,-10,A\n"
+            "id,name,value,category\n1,Alice,100,A\n2,Bob,-5,B\n3,Charlie,200,A\n4,Diana,150,B\n5,Eve,-10,A\n",
+            encoding="utf-8",
         )
         in_str = str(input_csv).replace("\\", "/")
         out_str = str(output_csv).replace("\\", "/")
@@ -1371,7 +1375,7 @@ class TestETLPipeline:
     def test_etl_modify_filter_and_rerun(self, nb_runner, tmp_path):
         """Modify filter criteria in ETL and re-run."""
         csv_path = tmp_path / "data.csv"
-        csv_path.write_text("x,y\n1,10\n2,20\n3,30\n4,40\n5,50\n")
+        csv_path.write_text("x,y\n1,10\n2,20\n3,30\n4,40\n5,50\n", encoding="utf-8")
         path_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(

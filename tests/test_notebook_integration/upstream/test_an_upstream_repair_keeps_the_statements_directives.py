@@ -31,7 +31,7 @@ COMPREHENSION = WORK + "\n\n# @cash:no-cache-calls\nvals = [work(i) for i in ran
 
 def _calls(runner) -> int:
     log = Path(runner.work_dir) / "calls.log"
-    return log.read_text().count("w|") if log.exists() else 0
+    return log.read_text(encoding="utf-8").count("w|") if log.exists() else 0
 
 
 def test_no_cache_calls_holds_when_the_statement_is_repaired(nb_runner):

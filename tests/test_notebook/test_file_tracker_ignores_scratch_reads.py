@@ -25,7 +25,7 @@ def test_a_joblib_memmap_read_is_not_a_dependency(tmp_path):
     scratch = tmp_path / "joblib_memmapping_folder_1234_abcd"
     scratch.mkdir()
     (scratch / "arr.pkl").write_bytes(b"x")
-    (tmp_path / "data.csv").write_text("a\n1\n")
+    (tmp_path / "data.csv").write_text("a\n1\n", encoding="utf-8")
 
     def read():
         with open(scratch / "arr.pkl", "rb"):
@@ -40,7 +40,7 @@ def test_a_joblib_memmap_read_is_not_a_dependency(tmp_path):
 
 def test_opening_a_file_descriptor_records_no_path(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "data.csv").write_text("a\n1\n")
+    (tmp_path / "data.csv").write_text("a\n1\n", encoding="utf-8")
     fd = os.open(tmp_path / "data.csv", os.O_RDONLY)
 
     def read():
@@ -66,7 +66,7 @@ def test_a_jit_or_bytecode_cache_read_is_not_a_dependency(tmp_path):
     elsewhere = tmp_path / "numba_cache"
     elsewhere.mkdir()
     (elsewhere / "f-12.py314.nbc").write_bytes(b"x")
-    (tmp_path / "data.csv").write_text("a\n1\n")
+    (tmp_path / "data.csv").write_text("a\n1\n", encoding="utf-8")
 
     def read():
         for p in (pyc / "_normalize_csr-parallel-29.py314.nbi", elsewhere / "f-12.py314.nbc", tmp_path / "data.csv"):

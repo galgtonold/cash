@@ -68,7 +68,7 @@ class TestSkipLogic:
     def test_04_skip_with_file_dep_unchanged(self, nb_runner, tmp_path):
         """Scenario 7: Statement reads file, file unchanged — should skip on re-run."""
         csv_path = tmp_path / "data.csv"
-        csv_path.write_text("a,b\n1,2\n3,4\n")
+        csv_path.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
         csv_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -87,7 +87,7 @@ class TestSkipLogic:
     def test_05_skip_with_file_dep_changed(self, nb_runner, tmp_path):
         """Scenario 8: Statement reads file, file CHANGED — should NOT skip."""
         csv_path = tmp_path / "data.csv"
-        csv_path.write_text("a,b\n1,2\n3,4\n")
+        csv_path.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
         csv_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -100,7 +100,7 @@ class TestSkipLogic:
         assert "2" in nb_runner.get_output(1)
         # Modify the file
         time.sleep(0.1)  # ensure mtime changes
-        csv_path.write_text("a,b\n1,2\n3,4\n5,6\n")
+        csv_path.write_text("a,b\n1,2\n3,4\n5,6\n", encoding="utf-8")
         # Re-run — should detect file change and re-execute
         nb_runner.run_cell(1)
         assert "3" in nb_runner.get_output(1)
@@ -456,7 +456,7 @@ class TestSkipWithFileDepEdit:
     def test_file_dep_prevents_skip(self, nb_runner, tmp_path):
         """If a file dependency changed, skip should not happen."""
         data_file = tmp_path / "data.txt"
-        data_file.write_text("10")
+        data_file.write_text("10", encoding="utf-8")
         path_str = str(data_file).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -473,14 +473,14 @@ class TestSkipWithFileDepEdit:
         import time
 
         time.sleep(0.1)  # Ensure mtime changes
-        data_file.write_text("50")
+        data_file.write_text("50", encoding="utf-8")
         nb_runner.run_all()
         assert "result = 100" in nb_runner.get_output(2)
 
     def test_file_unchanged_skips_correctly(self, nb_runner, tmp_path):
         """If file is unchanged, skip optimization should work."""
         data_file = tmp_path / "stable.txt"
-        data_file.write_text("42")
+        data_file.write_text("42", encoding="utf-8")
         path_str = str(data_file).replace("\\", "/")
 
         nb_runner.create_notebook(

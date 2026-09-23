@@ -12,14 +12,14 @@ async def test_async_auto_track_open(tmp_path):
     """An async function that reads a file should auto-track that file."""
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
     path = tmp_path / "data.txt"
-    path.write_text("v1")
+    path.write_text("v1", encoding="utf-8")
 
     n = {"calls": 0}
 
     @c.cache
     async def load():
         n["calls"] += 1
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return f.read()
 
     assert await load() == "v1"
@@ -28,7 +28,7 @@ async def test_async_auto_track_open(tmp_path):
 
     # Modify file → next call should miss
     time.sleep(0.05)  # ensure mtime ticks
-    path.write_text("v2")
+    path.write_text("v2", encoding="utf-8")
     import os
 
     future = time.time() + 60
@@ -43,20 +43,20 @@ async def test_async_gather_isolated_file_deps(tmp_path):
     must each only see their own file as a dep."""
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
     path_a = tmp_path / "a.txt"
-    path_a.write_text("a")
+    path_a.write_text("a", encoding="utf-8")
     path_b = tmp_path / "b.txt"
-    path_b.write_text("b")
+    path_b.write_text("b", encoding="utf-8")
 
     @c.cache
     async def load_a():
         await asyncio.sleep(0)  # yield to let task B start
-        with open(path_a) as f:
+        with open(path_a, encoding="utf-8") as f:
             return f.read()
 
     @c.cache
     async def load_b():
         await asyncio.sleep(0)
-        with open(path_b) as f:
+        with open(path_b, encoding="utf-8") as f:
             return f.read()
 
     a, b = await asyncio.gather(load_a(), load_b())
@@ -64,7 +64,7 @@ async def test_async_gather_isolated_file_deps(tmp_path):
 
     # Now mutate only path_a. load_a should miss; load_b should hit.
     time.sleep(0.05)
-    path_a.write_text("aa")
+    path_a.write_text("aa", encoding="utf-8")
     import os
 
     future = time.time() + 60
@@ -110,14 +110,14 @@ async def test_async_gather_cache_hit_across_tasks(tmp_path):
     """
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
     path = tmp_path / "shared.txt"
-    path.write_text("v1")
+    path.write_text("v1", encoding="utf-8")
     n = {"calls": 0}
 
     @c.cache
     async def load():
         await asyncio.sleep(0)
         n["calls"] += 1
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return f.read()
 
     # First gather populates the cache. With no async single-flight,
@@ -149,14 +149,14 @@ async def test_async_invalidation_visible_to_separate_task(tmp_path):
     """
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
     path = tmp_path / "shared.txt"
-    path.write_text("v1")
+    path.write_text("v1", encoding="utf-8")
     n = {"calls": 0}
 
     @c.cache
     async def load():
         await asyncio.sleep(0)
         n["calls"] += 1
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return f.read()
 
     # Task A: populate
@@ -166,7 +166,7 @@ async def test_async_invalidation_visible_to_separate_task(tmp_path):
 
     # Mutate file
     time.sleep(0.05)  # ensure mtime ticks
-    path.write_text("v2")
+    path.write_text("v2", encoding="utf-8")
     import os
 
     future = time.time() + 60

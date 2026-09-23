@@ -33,7 +33,7 @@ if os.environ.get("CASH_TEST_FAULTHANDLER", "1") == "1":
     try:
         os.makedirs(_FH_DIR, exist_ok=True)
         _FH_FILE = open(  # noqa: SIM115 - kept open for the worker's lifetime
-            os.path.join(_FH_DIR, f"worker_{os.getpid()}.log"), "w"
+            os.path.join(_FH_DIR, f"worker_{os.getpid()}.log"), "w", encoding="utf-8"
         )
         _faulthandler.enable(file=_FH_FILE, all_threads=True)
     except OSError:
@@ -175,7 +175,7 @@ class _StallWatchdog:
                 f"stall_{worker}_{os.getpid()}.log",
             )
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as fh:
+            with open(path, "w", encoding="utf-8") as fh:
                 fh.write(banner)
                 fh.flush()
                 faulthandler.dump_traceback(file=fh, all_threads=True)

@@ -36,7 +36,7 @@ _PROBE = textwrap.dedent(
 
 
 def _env_after_collecting(selection: str, tmp_path: Path) -> str:
-    (tmp_path / "cache_dir_probe.py").write_text(_PROBE)
+    (tmp_path / "cache_dir_probe.py").write_text(_PROBE, encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if k != "CASH_CACHE_DIR"}
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(tmp_path), env.get("PYTHONPATH")]))
     proc = subprocess.run(

@@ -71,7 +71,7 @@ def test_cleanup_expired_deletes_through_the_backend(tmp_path):
 
 def test_entry_totals_counts_only_entry_files(tmp_path):
     backend = _filled(tmp_path, "a", "b")
-    (tmp_path / "c" / "notes.txt").write_text("not an entry")
+    (tmp_path / "c" / "notes.txt").write_text("not an entry", encoding="utf-8")
     count, size = entry_totals(backend.cache_dir)
     assert count == 2
     assert size == sum(e.size for e in backend.entries())

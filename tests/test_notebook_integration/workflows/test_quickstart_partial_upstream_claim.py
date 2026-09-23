@@ -25,7 +25,7 @@ def _counts(log):
     if not log.exists():
         return {}
     out = {}
-    for line in log.read_text().splitlines():
+    for line in log.read_text(encoding="utf-8").splitlines():
         out[line] = out.get(line, 0) + 1
     return out
 

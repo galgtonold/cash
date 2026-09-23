@@ -57,13 +57,13 @@ def test_call_hit_recomputes_when_its_own_file_dependency_goes_stale(call_unit_h
     reverted.
     """
     data_path = tmp_path / "data.csv"
-    data_path.write_text("10")
+    data_path.write_text("10", encoding="utf-8")
     calls: list[int] = []
 
     def load(k):
         calls.append(k)
         time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
-        return int(data_path.read_text()) * k
+        return int(data_path.read_text(encoding="utf-8")) * k
 
     unit = call_unit_harness(lineage={"k": "hash-2"}, user_ns={"k": 2, "load": load})
     site = CallSite(source="load(k)", free_names=frozenset({"load", "k"}), occurrence_index=0)
@@ -82,7 +82,7 @@ def test_call_hit_recomputes_when_its_own_file_dependency_goes_stale(call_unit_h
 
     # The file changes on disk. The call's key is UNCHANGED (same source,
     # same k), so only its own freshness re-check can catch this.
-    data_path.write_text("100")
+    data_path.write_text("100", encoding="utf-8")
     with FileAccessTracker():
         assert wrapped(2) == 200
     assert calls == [2, 2], "a call whose file dependency went stale was still served the old value"
@@ -152,13 +152,13 @@ def test_two_reads_of_the_same_path_in_one_tracker_window_both_stay_correct(call
     -- verified below, then reverted.
     """
     data_path = tmp_path / "data.csv"
-    data_path.write_text("10")
+    data_path.write_text("10", encoding="utf-8")
     calls: list[int] = []
 
     def expensive(k):
         calls.append(k)
         time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
-        return int(data_path.read_text()) * k
+        return int(data_path.read_text(encoding="utf-8")) * k
 
     unit = call_unit_harness(lineage={}, user_ns={"expensive": expensive})
     site = CallSite(
@@ -182,7 +182,7 @@ def test_two_reads_of_the_same_path_in_one_tracker_window_both_stay_correct(call
 
     # The file changes. Re-run both calls, again sharing one window, as a
     # re-executed loop tail would.
-    data_path.write_text("100")
+    data_path.write_text("100", encoding="utf-8")
     with FileAccessTracker():
         result0 = wrapped(10)
         result1 = wrapped(20)

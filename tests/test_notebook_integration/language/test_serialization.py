@@ -105,7 +105,7 @@ class TestCsvPatterns:
     def test_csv_stdlib_across_cells(self, nb_runner, tmp_path):
         """csv module read/write across cells."""
         csv_path = tmp_path / "test.csv"
-        csv_path.write_text("name,score\nAlice,90\nBob,85\n")
+        csv_path.write_text("name,score\nAlice,90\nBob,85\n", encoding="utf-8")
         path_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(

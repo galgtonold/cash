@@ -185,7 +185,7 @@ def _cgroup_memory_limit() -> int | None:
     """
     for path in _CGROUP_LIMIT_PATHS:
         try:
-            with open(path) as fh:
+            with open(path, encoding="utf-8") as fh:
                 raw = fh.read().strip()
         except OSError:
             continue

@@ -729,7 +729,7 @@ class TestKernelRestartFileDeps:
     def test_file_dep_same_after_restart(self, nb_runner, tmp_path):
         """Unchanged file should allow cache restore after restart."""
         csv_path = tmp_path / "stable_data.csv"
-        csv_path.write_text("x,y\n1,2\n3,4\n")
+        csv_path.write_text("x,y\n1,2\n3,4\n", encoding="utf-8")
         path_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -754,7 +754,7 @@ class TestKernelRestartFileDeps:
     def test_file_changed_after_restart(self, nb_runner, tmp_path):
         """Changed file should invalidate cache even after restart."""
         csv_path = tmp_path / "changing_data.csv"
-        csv_path.write_text("x\n10\n20\n")
+        csv_path.write_text("x\n10\n20\n", encoding="utf-8")
         path_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -772,7 +772,7 @@ class TestKernelRestartFileDeps:
         assert "30" in nb_runner.get_output(3)
 
         # Modify file and restart
-        csv_path.write_text("x\n100\n200\n")
+        csv_path.write_text("x\n100\n200\n", encoding="utf-8")
         nb_runner.shutdown()
         nb_runner.start_kernel()
         nb_runner.run_all()

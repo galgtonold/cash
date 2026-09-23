@@ -98,6 +98,6 @@ def test_sub_unit_hit_preserves_the_statements_file_dep(nb_runner, tmp_path):
     # not because it recomputes blindly, but because the dependency the call
     # observed on the (fresh) first run was correctly carried onto the
     # statement's own entry when the call hit on the second.
-    (tmp_path / "data.csv").write_text("100")
+    (tmp_path / "data.csv").write_text("100", encoding="utf-8")
     nb_runner.run_cells([4])
     assert "TOTAL 205" in nb_runner.get_output(4), "the file dependency was lost when the sub-call hit"

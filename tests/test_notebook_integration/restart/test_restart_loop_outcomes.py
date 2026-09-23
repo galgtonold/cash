@@ -99,7 +99,7 @@ def _files(work):
     folder.mkdir()
     for i in range(N):
         path = folder / f"e{i:03d}.csv"
-        path.write_text("v\n" + "\n".join(str(j) for j in range(50)) + "\n")
+        path.write_text("v\n" + "\n".join(str(j) for j in range(50)) + "\n", encoding="utf-8")
         st = os.stat(path)
         os.utime(path, (st.st_atime - 3600, st.st_mtime - 3600))
 
@@ -177,7 +177,7 @@ def test_a_loop_that_learned_to_split_still_sees_a_changed_file(nb_runner, _teed
     _run_all(nb_runner, [f"{CELLS[0]}\n{LEARNS_A_SPLIT}", *CELLS[1:]])
     assert nb_runner.peek(_split_expr(LOOP)) != "None", "the loop learned no split"
     edited = Path(nb_runner.work_dir) / "exports" / "e000.csv"
-    edited.write_text("v\n" + "\n".join(str(j + 1) for j in range(50)) + "\n")
+    edited.write_text("v\n" + "\n".join(str(j + 1) for j in range(50)) + "\n", encoding="utf-8")
 
     ran = _restart_and_run(nb_runner, REPORT_CELL)
 

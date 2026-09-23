@@ -70,7 +70,7 @@ def import_from(monkeypatch):
 
 def _runs(root):
     log = root / "runs.log"
-    return log.read_text().count("run") if log.exists() else 0
+    return log.read_text(encoding="utf-8").count("run") if log.exists() else 0
 
 
 def _call(unit, pkg):

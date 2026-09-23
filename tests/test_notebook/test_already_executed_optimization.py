@@ -210,7 +210,7 @@ class TestAlreadyExecutedWithFileDeps:
 
         # Create a test file
         test_file = tmp_path / "data.txt"
-        test_file.write_text("original content")
+        test_file.write_text("original content", encoding="utf-8")
 
         file_path = str(test_file).replace("\\", "/")
         mock_shell.user_ns["path"] = file_path
@@ -222,7 +222,7 @@ class TestAlreadyExecutedWithFileDeps:
 
         # Modify the file (changes mtime)
         time.sleep(0.1)  # Ensure mtime differs
-        test_file.write_text("modified content")
+        test_file.write_text("modified content", encoding="utf-8")
 
         # Re-run - should detect file change and not skip
         metrics2 = statement_processor.process_statement("content = open(path).read()")
@@ -236,7 +236,7 @@ class TestAlreadyExecutedWithFileDeps:
         """
 
         test_file = tmp_path / "data.txt"
-        test_file.write_text("static content")
+        test_file.write_text("static content", encoding="utf-8")
 
         file_path = str(test_file).replace("\\", "/")
         mock_shell.user_ns["path"] = file_path

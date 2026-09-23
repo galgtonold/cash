@@ -204,10 +204,10 @@ class TestVerdictPersistence:
         guard = MissGuard(str(tmp_path))
         keys = (f"key-{i}" for i in itertools.count())
         _drive_to_guarded(guard, keys)
-        assert json.loads((tmp_path / "_miss_guard.json").read_text())["guarded"] == ["src"]
+        assert json.loads((tmp_path / "_miss_guard.json").read_text(encoding="utf-8"))["guarded"] == ["src"]
 
         guard.observe("src", "stable", hit=True)
-        assert json.loads((tmp_path / "_miss_guard.json").read_text())["guarded"] == []
+        assert json.loads((tmp_path / "_miss_guard.json").read_text(encoding="utf-8"))["guarded"] == []
         assert _is_guarded(MissGuard(str(tmp_path)), "src") is False
 
     def test_a_clean_notebook_never_writes_a_store(self, tmp_path):
@@ -220,7 +220,7 @@ class TestVerdictPersistence:
     def test_unreadable_store_degrades_to_no_guard(self, tmp_path, content):
         """The guard is an optimisation. Its failure mode must be 'no
         optimisation', never 'no cache'."""
-        (tmp_path / "_miss_guard.json").write_text(content)
+        (tmp_path / "_miss_guard.json").write_text(content, encoding="utf-8")
         guard = MissGuard(str(tmp_path))
         assert _is_guarded(guard, "src") is False
         assert guard.should_serialise("src") is True

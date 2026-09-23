@@ -41,7 +41,7 @@ def _helpers(log):
 
 
 def _n(log):
-    return len(log.read_text().splitlines()) if log.exists() else 0
+    return len(log.read_text(encoding="utf-8").splitlines()) if log.exists() else 0
 
 
 def test_append_loop_caches_the_call_with_no_directive(nb_runner, tmp_path):

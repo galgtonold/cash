@@ -44,7 +44,7 @@ def _defs(log):
 
 
 def _n(log):
-    return len(log.read_text().splitlines()) if log.exists() else 0
+    return len(log.read_text(encoding="utf-8").splitlines()) if log.exists() else 0
 
 
 # `results[t] = fetch_next(conn)` -- a subscript-assignment body, not

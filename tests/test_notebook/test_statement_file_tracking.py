@@ -25,7 +25,7 @@ class TestFileTracking(unittest.TestCase):
         self.processor = StatementProcessor(self.mock_shell, self.cash, compute_hash_fn=lambda x: str(hash(x)))
 
         # Create a temp file
-        with tempfile.NamedTemporaryFile(delete=False, mode="w+") as tf:
+        with tempfile.NamedTemporaryFile(encoding="utf-8", delete=False, mode="w+") as tf:
             tf.write("data1")
             # realpath, not just a separator swap: cash records dependencies in
             # canonical form (resolve_file_dep_path -> normalize_path(realpath))
@@ -65,7 +65,7 @@ class TestFileTracking(unittest.TestCase):
 
         # Modify file
         time.sleep(1.1)  # Ensure mtime changes (some systems have 1s resolution)
-        with open(self.temp_path, "w") as f:
+        with open(self.temp_path, "w", encoding="utf-8") as f:
             f.write("data2")
 
         # Second execution: Should be a cache miss due to file change
@@ -132,7 +132,7 @@ class TestFileTracking(unittest.TestCase):
 
             # Modify file
             time.sleep(1.1)
-            with open(self.temp_path, "w") as f:
+            with open(self.temp_path, "w", encoding="utf-8") as f:
                 f.write("data_pathlib_2")
 
             # Run 2

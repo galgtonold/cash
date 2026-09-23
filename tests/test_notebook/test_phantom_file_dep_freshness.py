@@ -55,7 +55,7 @@ class _StubBackend(CacheBackend):
 @pytest.fixture
 def real_file(tmp_path):
     p = tmp_path / "data.csv"
-    p.write_text("a,b\n1,2\n")
+    p.write_text("a,b\n1,2\n", encoding="utf-8")
     return str(p)
 
 
@@ -124,7 +124,7 @@ def test_snapshotted_file_that_changes_still_invalidates(real_file):
     checker = CacheFreshnessChecker(_StubBackend(producer_meta))
     state = _state({real_file, PHANTOM})
 
-    with open(real_file, "w") as fh:
+    with open(real_file, "w", encoding="utf-8") as fh:
         fh.write("a,b\n9,9\n")  # same size, different content
 
     assert checker._input_file_changed(state, "X", real_file) is True

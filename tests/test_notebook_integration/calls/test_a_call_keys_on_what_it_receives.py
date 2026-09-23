@@ -59,7 +59,7 @@ def _cells(swap="[]", target="sc"):
 
 def _fits(runner) -> int:
     log = Path(runner.work_dir) / "fits.log"
-    return log.read_text().count("fit|") if log.exists() else 0
+    return log.read_text(encoding="utf-8").count("fit|") if log.exists() else 0
 
 
 def _expected_rows(swap):

@@ -72,7 +72,7 @@ class TestReadNotebookCodeCells:
             ]
         }
         nb_path = tmp_path / "test.ipynb"
-        nb_path.write_text(json.dumps(nb))
+        nb_path.write_text(json.dumps(nb), encoding="utf-8")
 
         cells = get_notebook_cells(str(nb_path))
         assert len(cells) == 2
@@ -90,7 +90,7 @@ class TestReadNotebookCodeCells:
             ]
         }
         nb_path = tmp_path / "test.ipynb"
-        nb_path.write_text(json.dumps(nb))
+        nb_path.write_text(json.dumps(nb), encoding="utf-8")
 
         cells = get_notebook_cells_with_ids(str(nb_path))
         assert len(cells) == 2
@@ -107,7 +107,7 @@ class TestReadNotebookCodeCells:
             ]
         }
         nb_path = tmp_path / "test.ipynb"
-        nb_path.write_text(json.dumps(nb))
+        nb_path.write_text(json.dumps(nb), encoding="utf-8")
 
         cells = get_notebook_cells(str(nb_path))
         assert cells[0] == "x = 42"
@@ -124,7 +124,7 @@ class TestReadNotebookCodeCells:
         from cash.notebook.server_discovery import get_notebook_cells
 
         nb_path = tmp_path / "bad.ipynb"
-        nb_path.write_text("not valid json{{{")
+        nb_path.write_text("not valid json{{{", encoding="utf-8")
 
         cells = get_notebook_cells(str(nb_path))
         assert cells == []
@@ -134,7 +134,7 @@ class TestReadNotebookCodeCells:
         from cash.notebook.server_discovery import get_notebook_cells
 
         nb_path = tmp_path / "empty.ipynb"
-        nb_path.write_text(json.dumps({"metadata": {}}))
+        nb_path.write_text(json.dumps({"metadata": {}}), encoding="utf-8")
 
         cells = get_notebook_cells(str(nb_path))
         assert cells == []
@@ -149,7 +149,7 @@ class TestGetNotebookCells:
 
         nb = {"cells": [{"cell_type": "code", "source": ["x = 1"]}]}
         nb_path = tmp_path / "test.ipynb"
-        nb_path.write_text(json.dumps(nb))
+        nb_path.write_text(json.dumps(nb), encoding="utf-8")
 
         cells = get_notebook_cells(str(nb_path))
         assert cells == ["x = 1"]
@@ -160,7 +160,7 @@ class TestGetNotebookCells:
 
         nb = {"cells": [{"cell_type": "code", "source": ["x = 1"], "id": "c1"}]}
         nb_path = tmp_path / "test.ipynb"
-        nb_path.write_text(json.dumps(nb))
+        nb_path.write_text(json.dumps(nb), encoding="utf-8")
 
         cells = get_notebook_cells_with_ids(str(nb_path))
         assert cells == [("c1", "x = 1")]
@@ -174,7 +174,7 @@ class TestFileDataSource:
         from cash.data_source import FileDataSource
 
         f = tmp_path / "data.txt"
-        f.write_text("hello")
+        f.write_text("hello", encoding="utf-8")
         ds = FileDataSource(str(f))
         assert ds.get_id().startswith("file:")
         assert ds.state_token() == os.path.getmtime(f)
@@ -184,12 +184,12 @@ class TestFileDataSource:
         from cash.data_source import FileDataSource
 
         f = tmp_path / "data.txt"
-        f.write_text("hello")
+        f.write_text("hello", encoding="utf-8")
         ds = FileDataSource(str(f))
         before = ds.state_token()
 
         time.sleep(0.1)
-        f.write_text("world")
+        f.write_text("world", encoding="utf-8")
         assert ds.state_token() != before
 
     def test_nonexistent_file(self, tmp_path):
@@ -239,7 +239,7 @@ class TestGetNotebookPathEdgeCases:
         # Create a fake notebook in tmp_path
         nb = {"cells": [{"cell_type": "code", "source": ["x = 42"]}]}
         nb_path = tmp_path / "test.ipynb"
-        nb_path.write_text(json.dumps(nb))
+        nb_path.write_text(json.dumps(nb), encoding="utf-8")
 
         monkeypatch.chdir(tmp_path)
         with patch("cash.notebook.server_discovery.get_notebook_path", return_value=None):
@@ -257,7 +257,7 @@ class TestGetNotebookPathEdgeCases:
             ]
         }
         nb_path = tmp_path / "test.ipynb"
-        nb_path.write_text(json.dumps(nb))
+        nb_path.write_text(json.dumps(nb), encoding="utf-8")
 
         cells = get_notebook_cells_with_ids(str(nb_path))
         assert cells[0] == ("meta_id_1", "x = 1")
@@ -272,7 +272,7 @@ class TestGetNotebookPathEdgeCases:
             ]
         }
         nb_path = tmp_path / "test.ipynb"
-        nb_path.write_text(json.dumps(nb))
+        nb_path.write_text(json.dumps(nb), encoding="utf-8")
 
         cells = get_notebook_cells_with_ids(str(nb_path))
         assert cells[0] == (None, "x = 1")
@@ -286,7 +286,7 @@ class TestResolveFileDepPath:
         from cash._paths import resolve_file_dep_path
 
         f = tmp_path / "data.csv"
-        f.write_text("a,b\n1,2\n")
+        f.write_text("a,b\n1,2\n", encoding="utf-8")
         result = resolve_file_dep_path(str(f))
         assert result == str(f)
 
@@ -303,7 +303,7 @@ class TestResolveFileDepPath:
 
         # Create file in tmp_path (our fake CWD)
         f = tmp_path / "data.csv"
-        f.write_text("a,b\n1,2\n")
+        f.write_text("a,b\n1,2\n", encoding="utf-8")
 
         monkeypatch.chdir(tmp_path)
 
@@ -321,7 +321,7 @@ class TestResolveFileDepPath:
         # Create examples/data.csv under tmp_path
         (tmp_path / "examples").mkdir()
         f = tmp_path / "examples" / "data.csv"
-        f.write_text("a,b\n1,2\n")
+        f.write_text("a,b\n1,2\n", encoding="utf-8")
 
         monkeypatch.chdir(tmp_path)
 
@@ -337,7 +337,7 @@ class TestResolveFileDepPath:
         from cash._paths import resolve_file_dep_path
 
         f = tmp_path / "report.xlsx"
-        f.write_text("fake data")
+        f.write_text("fake data", encoding="utf-8")
 
         monkeypatch.chdir(tmp_path)
 

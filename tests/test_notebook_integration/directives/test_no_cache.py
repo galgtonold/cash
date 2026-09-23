@@ -108,13 +108,13 @@ def _bump_def(sink: str) -> str:
 
 
 def _tags(sink):
-    return [ln for ln in sink.read_text().splitlines() if ln.strip()]
+    return [ln for ln in sink.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
 
 @pytest.mark.timeout(180)
 def test_leading_no_cache_covers_whole_cell(nb_runner, tmp_path):
     sink = tmp_path / "bumps.txt"
-    sink.write_text("")
+    sink.write_text("", encoding="utf-8")
     sink_s = str(sink).replace("\\", "/")
 
     nb_runner.create_notebook(
@@ -152,7 +152,7 @@ def test_statement_adjacent_no_cache_still_scoped(nb_runner, tmp_path):
     """Control: a directive directly above ONE mid-cell statement stays scoped
     to that statement (this is the behaviour any fix must preserve)."""
     sink = tmp_path / "bumps2.txt"
-    sink.write_text("")
+    sink.write_text("", encoding="utf-8")
     sink_s = str(sink).replace("\\", "/")
 
     nb_runner.create_notebook(

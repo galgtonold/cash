@@ -96,7 +96,7 @@ class TestRemoteInTheKeyComponent:
         or every existing cached statement's key shifts and the whole cache is
         invalidated on upgrade."""
         f = tmp_path / "data.csv"
-        f.write_text("a,b\n1,2\n")
+        f.write_text("a,b\n1,2\n", encoding="utf-8")
         assert (
             compute_file_hash_component({str(f)})
             == compute_file_hash_component({str(f)}, set())
@@ -105,7 +105,7 @@ class TestRemoteInTheKeyComponent:
 
     def test_local_and_remote_compose(self, origin, tmp_path):
         f = tmp_path / "data.csv"
-        f.write_text("a,b\n1,2\n")
+        f.write_text("a,b\n1,2\n", encoding="utf-8")
         local_only = compute_file_hash_component({str(f)})
         both = compute_file_hash_component({str(f)}, {origin.url})
         assert both and both != local_only, "a statement reading both a file and an object must depend on both"

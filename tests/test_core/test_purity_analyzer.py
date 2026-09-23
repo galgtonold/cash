@@ -399,7 +399,7 @@ def test_local_purity_does_not_mask_real_impurity(analyzer):
     def f(rows, path):
         lines = []
         lines.append("x")  # pure local mutation
-        with open(path, "w") as fh:
+        with open(path, "w", encoding="utf-8") as fh:
             fh.write("\n".join(lines))  # real I/O - must still flag
         return path
 

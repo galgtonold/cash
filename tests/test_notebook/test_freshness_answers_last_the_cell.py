@@ -25,7 +25,7 @@ def _setup(tmp_path, monkeypatch, n=20):
     paths = []
     for i in range(n):
         p = tmp_path / f"d{i:02d}.txt"
-        p.write_text(f"doc {i}\n")
+        p.write_text(f"doc {i}\n", encoding="utf-8")
         paths.append(str(p))
     checks = []
     real = file_dep_snapshot.file_dep_is_fresh
@@ -51,7 +51,7 @@ def test_statements_of_one_cell_share_the_answers(tmp_path, monkeypatch):
 def test_the_next_cell_checks_again(tmp_path, monkeypatch):
     paths, checks, checker, state = _setup(tmp_path, monkeypatch)
     checker.check_cache(state, "stmt:a", None, epoch=7)
-    with open(paths[3], "w") as fh:
+    with open(paths[3], "w", encoding="utf-8") as fh:
         fh.write("edited between cells\n")
     _, data, _ = checker.check_cache(state, "stmt:a", None, epoch=8)
     assert data is None
@@ -62,7 +62,7 @@ def test_a_statement_that_runs_makes_the_next_lookup_check_again(tmp_path, monke
     paths, checks, checker, state = _setup(tmp_path, monkeypatch)
     checker.check_cache(state, "stmt:a", None, epoch=7)
     checker.forget_file_answers(7)  # what executing a statement does
-    with open(paths[5], "w") as fh:
+    with open(paths[5], "w", encoding="utf-8") as fh:
         fh.write("written by the statement that ran\n")
     _, data, _ = checker.check_cache(state, "stmt:b", None, epoch=7)
     assert data is None
@@ -73,7 +73,7 @@ def test_outside_a_cell_every_lookup_checks(tmp_path, monkeypatch):
     a file changed between two lookups is seen, as before."""
     paths, checks, checker, state = _setup(tmp_path, monkeypatch)
     checker.check_cache(state, "stmt:a", None, epoch=None)
-    with open(paths[0], "w") as fh:
+    with open(paths[0], "w", encoding="utf-8") as fh:
         fh.write("changed between lookups\n")
     _, data, _ = checker.check_cache(state, "stmt:a", None, epoch=None)
     assert data is None
@@ -95,7 +95,7 @@ def test_a_set_already_found_fresh_is_not_walked_again(tmp_path, monkeypatch):
     assert len(walked) == len(paths), f"walked {len(walked)} answers for {len(paths)} files"
 
     checker.forget_file_answers(7)  # a statement ran: check again
-    with open(paths[42], "w") as fh:
+    with open(paths[42], "w", encoding="utf-8") as fh:
         fh.write("written by the statement that ran\n")
     _, data, _ = checker.check_cache(state, "stmt:d", None, epoch=7)
     assert data is None

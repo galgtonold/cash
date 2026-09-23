@@ -48,7 +48,7 @@ def _on_disk(work_dir, output):
 
 def _runs(work_dir):
     log = Path(work_dir) / "runs.log"
-    return log.read_text().split("|")[:-1] if log.exists() else []
+    return log.read_text(encoding="utf-8").split("|")[:-1] if log.exists() else []
 
 
 def test_only_the_cells_final_version_reaches_disk_and_restores(nb_runner):

@@ -212,7 +212,7 @@ def compute(n):
 
 
 def _load_module(work, cash_instance, b_expr):
-    (work / "usermod.py").write_text(MODULE.format(b_expr=b_expr))
+    (work / "usermod.py").write_text(MODULE.format(b_expr=b_expr), encoding="utf-8")
     shutil.rmtree(work / "__pycache__", ignore_errors=True)
     sys.modules.pop("usermod", None)
     importlib.invalidate_caches()

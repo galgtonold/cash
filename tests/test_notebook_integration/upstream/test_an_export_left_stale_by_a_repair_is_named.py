@@ -35,7 +35,7 @@ def test_the_badge_names_the_export_the_repair_left_stale(nb_runner):
     out = nb_runner.get_output(5)
     assert "total 18" in out, nb_runner.get_raw_output(5)
     # the file is left alone, as a plain kernel leaves it ...
-    assert (nb_runner.work_dir / "sweep.csv").read_text().split() == ["v", "2", "4", "6"]
+    assert (nb_runner.work_dir / "sweep.csv").read_text(encoding="utf-8").split() == ["v", "2", "4", "6"]
     # ... and the badge says so
     assert "sweep.csv" in out and "not rewritten" in out, out
     assert "already current" not in out, out

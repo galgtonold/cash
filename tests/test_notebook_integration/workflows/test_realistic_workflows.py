@@ -1065,7 +1065,8 @@ class TestDataScienceWorkflow:
             "2024-01-02,Gadget,5,12.99\n"
             "2024-01-03,Widget,8,5.99\n"
             "2024-01-04,Gadget,12,12.99\n"
-            "2024-01-05,Widget,15,5.99\n"
+            "2024-01-05,Widget,15,5.99\n",
+            encoding="utf-8",
         )
         path_str = str(csv_path).replace("\\", "/")
 
@@ -1106,7 +1107,8 @@ class TestDataScienceWorkflow:
             "bob,click,0.8\n"
             "alice,scroll,2.5\n"
             "bob,scroll,3.1\n"
-            "charlie,click,0.5\n"
+            "charlie,click,0.5\n",
+            encoding="utf-8",
         )
         path_str = str(csv_path).replace("\\", "/")
 
@@ -1149,7 +1151,8 @@ class TestReportGenerationWorkflow:
         """Generate a text summary report from data."""
         csv_path = tmp_path / "quarterly.csv"
         csv_path.write_text(
-            "quarter,revenue,costs\nQ1,150000,120000\nQ2,175000,125000\nQ3,160000,130000\nQ4,200000,140000\n"
+            "quarter,revenue,costs\nQ1,150000,120000\nQ2,175000,125000\nQ3,160000,130000\nQ4,200000,140000\n",
+            encoding="utf-8",
         )
         path_str = str(csv_path).replace("\\", "/")
 
@@ -1175,7 +1178,7 @@ class TestReportGenerationWorkflow:
     def test_report_with_data_update(self, nb_runner, tmp_path):
         """Update data file and regenerate report."""
         csv_path = tmp_path / "report_data.csv"
-        csv_path.write_text("item,count\nA,10\nB,20\n")
+        csv_path.write_text("item,count\nA,10\nB,20\n", encoding="utf-8")
         path_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -1193,7 +1196,7 @@ class TestReportGenerationWorkflow:
         assert "Total: 30" in nb_runner.get_output(3)
 
         # Update data
-        csv_path.write_text("item,count\nA,100\nB,200\nC,300\n")
+        csv_path.write_text("item,count\nA,100\nB,200\nC,300\n", encoding="utf-8")
         nb_runner.reset_cash_state()
         nb_runner.run_all()
         assert "Total: 600" in nb_runner.get_output(3)

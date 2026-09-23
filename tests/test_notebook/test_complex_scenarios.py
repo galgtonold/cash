@@ -83,7 +83,7 @@ def test_file_dependency_invalidation_integrated(statement_processor, mock_shell
     """Test file dependency invalidation with a real temp file."""
 
     # Create temp file
-    with tempfile.NamedTemporaryFile(delete=False, mode="w+") as f:
+    with tempfile.NamedTemporaryFile(encoding="utf-8", delete=False, mode="w+") as f:
         f.write("initial_data")
         temp_path = f.name.replace(os.sep, "/")
 
@@ -104,7 +104,7 @@ def test_file_dependency_invalidation_integrated(statement_processor, mock_shell
 
         # 3. Third Run (File Changed)
         time.sleep(1.1)
-        with open(temp_path, "w") as f:
+        with open(temp_path, "w", encoding="utf-8") as f:
             f.write("new_data")
 
         mock_shell.user_ns.pop("data", None)
@@ -127,7 +127,7 @@ def test_file_dependency_quick_modification(statement_processor, mock_shell):
     """
 
     # Create temp file
-    with tempfile.NamedTemporaryFile(delete=False, mode="w+") as f:
+    with tempfile.NamedTemporaryFile(encoding="utf-8", delete=False, mode="w+") as f:
         f.write("initial_data")
         temp_path = f.name.replace(os.sep, "/")
 
@@ -147,7 +147,7 @@ def test_file_dependency_quick_modification(statement_processor, mock_shell):
 
         # 3. Quick modification (NO sleep - this is the regression test!)
         # Previously this would fail because the 1.0 second threshold was too lenient
-        with open(temp_path, "w") as f:
+        with open(temp_path, "w", encoding="utf-8") as f:
             f.write("quick_modified_data")
 
         mock_shell.user_ns.pop("data", None)
@@ -173,7 +173,7 @@ def test_file_dependency_older_file(statement_processor, mock_shell):
     """
 
     # Create temp file
-    with tempfile.NamedTemporaryFile(delete=False, mode="w+") as f:
+    with tempfile.NamedTemporaryFile(encoding="utf-8", delete=False, mode="w+") as f:
         f.write("original_data")
         temp_path = f.name.replace(os.sep, "/")
 
@@ -187,7 +187,7 @@ def test_file_dependency_older_file(statement_processor, mock_shell):
 
         # 2. Simulate file being "restored to older version" by setting older mtime
         time.sleep(0.1)  # Small delay
-        with open(temp_path, "w") as f:
+        with open(temp_path, "w", encoding="utf-8") as f:
             f.write("restored_older_data")
 
         # Set mtime to be OLDER than the cached mtime (simulate restore from backup)
@@ -226,7 +226,7 @@ def test_file_dependency_cascading(statement_processor, mock_shell):
     """
 
     # Create temp file
-    with tempfile.NamedTemporaryFile(delete=False, mode="w+") as f:
+    with tempfile.NamedTemporaryFile(encoding="utf-8", delete=False, mode="w+") as f:
         f.write("initial_content")
         temp_path = f.name.replace(os.sep, "/")
 
@@ -258,7 +258,7 @@ def test_file_dependency_cascading(statement_processor, mock_shell):
 
         # 4. Modify the file
         time.sleep(0.1)
-        with open(temp_path, "w") as f:
+        with open(temp_path, "w", encoding="utf-8") as f:
             f.write("modified_content")
 
         # 5. Run Cell B again - should be INVALIDATED because source file changed

@@ -134,7 +134,7 @@ class TestCLIClear:
         """
         cache_dir = tmp_path / "to_clear"
         cache_dir.mkdir()
-        (cache_dir / "CACHE_VERSION").write_text("1")
+        (cache_dir / "CACHE_VERSION").write_text("1", encoding="utf-8")
         (cache_dir / "file.data").write_bytes(b"data")
 
         from types import SimpleNamespace
@@ -149,7 +149,7 @@ class TestCLIClear:
         monkeypatch.chdir(tmp_path)
         cache_dir = tmp_path / ".cash"
         cache_dir.mkdir()
-        (cache_dir / "CACHE_VERSION").write_text("1")
+        (cache_dir / "CACHE_VERSION").write_text("1", encoding="utf-8")
         (cache_dir / "file.data").write_bytes(b"data")
         monkeypatch.setenv("CASH_CACHE_DIR", str(cache_dir))
 
@@ -194,10 +194,10 @@ class TestCLIClear:
         """Clear using a notebook path clears its .cash directory."""
         # Create a fake notebook and cache
         nb_path = tmp_path / "test.ipynb"
-        nb_path.write_text('{"cells":[]}')
+        nb_path.write_text('{"cells":[]}', encoding="utf-8")
         cache_dir = tmp_path / ".cash"
         cache_dir.mkdir()
-        (cache_dir / "CACHE_VERSION").write_text("1")
+        (cache_dir / "CACHE_VERSION").write_text("1", encoding="utf-8")
         (cache_dir / "data.meta").write_bytes(b"data")
 
         from types import SimpleNamespace
@@ -210,7 +210,7 @@ class TestCLIClear:
     def test_clear_notebook_without_cache(self, tmp_path, capsys):
         """Clear using a notebook with no cache prints message."""
         nb_path = tmp_path / "test.ipynb"
-        nb_path.write_text('{"cells":[]}')
+        nb_path.write_text('{"cells":[]}', encoding="utf-8")
 
         from types import SimpleNamespace
 
@@ -264,7 +264,7 @@ class TestCLIInspectNotebook:
         }
         import json
 
-        nb_path.write_text(json.dumps(nb_content))
+        nb_path.write_text(json.dumps(nb_content), encoding="utf-8")
 
         from cash.__main__ import _inspect_notebook
 
@@ -287,7 +287,7 @@ class TestCLIInspectNotebook:
         }
         import json
 
-        nb_path.write_text(json.dumps(nb_content))
+        nb_path.write_text(json.dumps(nb_content), encoding="utf-8")
 
         from cash.__main__ import _inspect_notebook
 
@@ -307,7 +307,7 @@ class TestCLIInspectNotebook:
         }
         import json
 
-        nb_path.write_text(json.dumps(nb_content))
+        nb_path.write_text(json.dumps(nb_content), encoding="utf-8")
 
         cache_dir = tmp_path / ".cash"
         cache_dir.mkdir()
@@ -322,7 +322,7 @@ class TestCLIInspectNotebook:
     def test_inspect_invalid_notebook(self, tmp_path, capsys):
         """Inspect an invalid notebook file."""
         nb_path = tmp_path / "bad.ipynb"
-        nb_path.write_text("not valid json for notebook")
+        nb_path.write_text("not valid json for notebook", encoding="utf-8")
 
         from cash.__main__ import _inspect_notebook
 
@@ -504,7 +504,7 @@ class TestInspectNamesWhatItWasGiven:
     def test_a_missing_path_is_not_silently_replaced(self, tmp_path, monkeypatch, capsys):
         cache = tmp_path / ".cash"
         cache.mkdir()
-        (cache / "CACHE_VERSION").write_text("2")
+        (cache / "CACHE_VERSION").write_text("2", encoding="utf-8")
         (cache / f"abc{ENTRY_SUFFIX}").write_bytes(pack_entry({"key": "k"}, b"v"))
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("CASH_CACHE_DIR", str(cache))

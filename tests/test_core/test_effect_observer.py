@@ -197,7 +197,7 @@ def test_a_file_write_inside_an_unnamed_call_is_observed(tmp_path):
     """
     c = _cash(tmp_path)
     source = tmp_path / "source.txt"
-    source.write_text("effect")
+    source.write_text("effect", encoding="utf-8")
     target = tmp_path / "written.txt"
 
     # A zip archive opened for writing is a real write (closing it writes the
@@ -210,7 +210,7 @@ def test_a_file_write_inside_an_unnamed_call_is_observed(tmp_path):
 
         with zipfile.ZipFile(target, "w") as archive:
             members = archive.namelist()
-        return str(target) + source.read_text() + str(members)
+        return str(target) + source.read_text(encoding="utf-8") + str(members)
 
     result, warned = _call_capturing(c, uses_stdlib_writer)
     assert target.exists() and str(target) in result
@@ -254,7 +254,7 @@ def test_observed_effects_are_silenced_by_assume_safe(tmp_path):
     target = tmp_path / "audited.txt"
 
     def writes():
-        with open(target, "w") as fh:
+        with open(target, "w", encoding="utf-8") as fh:
             fh.write("x")
         return 1
 
@@ -276,7 +276,7 @@ def test_no_second_warning_when_the_static_pass_already_flagged(tmp_path):
         # AND the observer sees the write. The user should hear it once.
         import pathlib
 
-        pathlib.Path(target).write_text("x")
+        pathlib.Path(target).write_text("x", encoding="utf-8")
         return 1
 
     _result, warned = _call_capturing(c, writes_by_name)
@@ -290,7 +290,7 @@ def test_a_cache_hit_does_not_re_warn_or_repeat_the_effect(tmp_path):
     target = tmp_path / "once.txt"
 
     def appends():
-        with open(target, "a") as fh:
+        with open(target, "a", encoding="utf-8") as fh:
             fh.write("x")
         return "done"
 
@@ -304,7 +304,7 @@ def test_a_cache_hit_does_not_re_warn_or_repeat_the_effect(tmp_path):
 
     assert _impurity_warnings(first_record), "the first call should warn"
     assert not _impurity_warnings(second_record), "the warning is once per function"
-    assert target.read_text() == "x", (
+    assert target.read_text(encoding="utf-8") == "x", (
         "the effect repeated on a cache hit -- if this ever holds, the warning "
         "is describing a hazard that does not exist"
     )

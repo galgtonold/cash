@@ -191,7 +191,7 @@ class TestWorkingDirectoryChanges:
         subdir = tmp_path / "subdir"
         subdir.mkdir()
         data_file = subdir / "data.txt"
-        data_file.write_text("hello from subdir")
+        data_file.write_text("hello from subdir", encoding="utf-8")
         subdir_str = str(subdir).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -213,8 +213,8 @@ class TestWorkingDirectoryChanges:
         dir2 = tmp_path / "dir2"
         dir1.mkdir()
         dir2.mkdir()
-        (dir1 / "a.txt").write_text("from dir1")
-        (dir2 / "b.txt").write_text("from dir2")
+        (dir1 / "a.txt").write_text("from dir1", encoding="utf-8")
+        (dir2 / "b.txt").write_text("from dir2", encoding="utf-8")
         dir1_str = str(dir1).replace("\\", "/")
         dir2_str = str(dir2).replace("\\", "/")
 
@@ -358,7 +358,8 @@ class TestFromImportEdgeCases:
                 return 'A_v1'
             def func_b():
                 return 'B_v1'
-        """)
+        """),
+            encoding="utf-8",
         )
         tmp_str = str(tmp_path).replace("\\", "/")
 
@@ -381,7 +382,8 @@ class TestFromImportEdgeCases:
                 return 'A_v2'
             def func_b():
                 return 'B_v2'
-        """)
+        """),
+            encoding="utf-8",
         )
         nb_runner.run_all()
         out2 = nb_runner.get_output(3)
@@ -395,7 +397,8 @@ class TestFromImportEdgeCases:
             textwrap.dedent("""\
             def compute():
                 return 100
-        """)
+        """),
+            encoding="utf-8",
         )
         tmp_str = str(tmp_path).replace("\\", "/")
 
@@ -416,7 +419,8 @@ class TestFromImportEdgeCases:
             textwrap.dedent("""\
             def compute():
                 return 999
-        """)
+        """),
+            encoding="utf-8",
         )
         nb_runner.run_all()
         out2 = nb_runner.get_output(3)

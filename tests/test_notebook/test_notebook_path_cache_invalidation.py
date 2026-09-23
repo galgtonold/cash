@@ -93,7 +93,7 @@ class TestNotebookPathCacheInvalidation:
         # Create a notebook in tmp_path
         nb = {"cells": [{"cell_type": "code", "source": ["wrong = True"]}]}
         nb_path = tmp_path / "wrong_notebook.ipynb"
-        nb_path.write_text(json.dumps(nb))
+        nb_path.write_text(json.dumps(nb), encoding="utf-8")
 
         # Change to tmp_path so glob would find the notebook
         old_cwd = os.getcwd()

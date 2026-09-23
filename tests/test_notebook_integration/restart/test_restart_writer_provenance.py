@@ -47,7 +47,7 @@ def _restart_and_run_last(nb_runner) -> str:
 
 def _files(nb_runner) -> dict[str, tuple[str, int]]:
     out = Path(nb_runner.work_dir) / "out"
-    return {p.name: (p.read_text(), p.stat().st_mtime_ns) for p in sorted(out.glob("*.txt"))}
+    return {p.name: (p.read_text(encoding="utf-8"), p.stat().st_mtime_ns) for p in sorted(out.glob("*.txt"))}
 
 
 def _contents(files) -> dict[str, str]:

@@ -137,7 +137,7 @@ def _why(work_dir):
         entries = list((work_dir / ".cash").glob("*.entry")) if (work_dir / ".cash").exists() else []
         return f"no split verdict recorded; {len(entries)} cache entries on disk"
     try:
-        return f"split store = {json.dumps(json.loads(store.read_text()))}"
+        return f"split store = {json.dumps(json.loads(store.read_text(encoding='utf-8')))}"
     except (OSError, ValueError) as e:
         return f"split store unreadable: {e}"
 

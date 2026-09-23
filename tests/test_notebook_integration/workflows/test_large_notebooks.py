@@ -26,7 +26,8 @@ class TestLargeFinancialNotebook:
             "2024-01-03,AAPL,184.80,950000\n"
             "2024-01-01,MSFT,375.00,800000\n"
             "2024-01-02,MSFT,377.50,850000\n"
-            "2024-01-03,MSFT,373.00,780000\n"
+            "2024-01-03,MSFT,373.00,780000\n",
+            encoding="utf-8",
         )
         path_str = str(csv_path).replace("\\", "/")
 
@@ -77,7 +78,7 @@ class TestLargeFinancialNotebook:
     def test_financial_notebook_modify_and_rerun(self, nb_runner, tmp_path):
         """Modify a middle cell and re-run the financial notebook."""
         csv_path = tmp_path / "prices.csv"
-        csv_path.write_text("symbol,price,shares\nAAPL,150,10\nGOOG,2800,2\nTSLA,900,5\n")
+        csv_path.write_text("symbol,price,shares\nAAPL,150,10\nGOOG,2800,2\nTSLA,900,5\n", encoding="utf-8")
         path_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(

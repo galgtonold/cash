@@ -71,7 +71,7 @@ def test_decorator_file_dep_propagates_through_chain(nb_runner, tmp_path):
     """#11: changing a file invalidates a downstream cached function that reads
     it only via a nested cached call."""
     data = tmp_path / "data.txt"
-    data.write_text("hello")
+    data.write_text("hello", encoding="utf-8")
     dpath = str(data).replace("\\", "/")
     cdir = str(tmp_path / "cache").replace("\\", "/")
 
@@ -96,7 +96,7 @@ def test_decorator_file_dep_propagates_through_chain(nb_runner, tmp_path):
     import time
 
     time.sleep(0.05)
-    data.write_text("world-changed")
+    data.write_text("world-changed", encoding="utf-8")
 
     nb_runner.run_cell(3)
     out = nb_runner.get_output(3)

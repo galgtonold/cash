@@ -168,7 +168,7 @@ class TestCustomModuleReload:
     def test_custom_module_edit(self, nb_runner, tmp_path):
         """Edit a custom module file, re-import should pick up changes."""
         mod_path = tmp_path / "mymod.py"
-        mod_path.write_text("VALUE = 10\n")
+        mod_path.write_text("VALUE = 10\n", encoding="utf-8")
         mod_path_str = str(mod_path.parent).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -182,7 +182,7 @@ class TestCustomModuleReload:
         assert "val = 10" in nb_runner.get_output(2)
 
         # Edit the module
-        mod_path.write_text("VALUE = 99\n")
+        mod_path.write_text("VALUE = 99\n", encoding="utf-8")
 
         # Restart for clean import
         nb_runner.shutdown()
@@ -193,7 +193,7 @@ class TestCustomModuleReload:
     def test_custom_module_function_edit(self, nb_runner, tmp_path):
         """Custom module with function, edit function body."""
         mod_path = tmp_path / "helpers.py"
-        mod_path.write_text("def compute(x):\n    return x * 2\n")
+        mod_path.write_text("def compute(x):\n    return x * 2\n", encoding="utf-8")
         mod_path_str = str(mod_path.parent).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -207,7 +207,7 @@ class TestCustomModuleReload:
         assert "result = 10" in nb_runner.get_output(2)
 
         # Edit module function
-        mod_path.write_text("def compute(x):\n    return x * 3\n")
+        mod_path.write_text("def compute(x):\n    return x * 3\n", encoding="utf-8")
 
         # Restart for clean import
         nb_runner.shutdown()
@@ -558,7 +558,7 @@ class TestDynamicImportPatterns:
     def test_reimport_after_change(self, nb_runner, tmp_path):
         """Module reimported after source change."""
         mod_file = tmp_path / "mymod.py"
-        mod_file.write_text("VALUE = 100\n")
+        mod_file.write_text("VALUE = 100\n", encoding="utf-8")
         sys_path_str = str(tmp_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -573,7 +573,7 @@ class TestDynamicImportPatterns:
         assert "100" in nb_runner.get_output(3)
 
         # Change module and restart
-        mod_file.write_text("VALUE = 999\n")
+        mod_file.write_text("VALUE = 999\n", encoding="utf-8")
         nb_runner.shutdown()
         nb_runner.start_kernel()
         nb_runner.run_all()
@@ -587,8 +587,8 @@ class TestMultiModuleImportInteraction:
 
     def test_two_modules_interact(self, nb_runner, tmp_path):
         """Two custom modules interact across cells."""
-        (tmp_path / "mod_a.py").write_text("def double(x): return x * 2\n")
-        (tmp_path / "mod_b.py").write_text("def format_result(val): return f'Result: {val}'\n")
+        (tmp_path / "mod_a.py").write_text("def double(x): return x * 2\n", encoding="utf-8")
+        (tmp_path / "mod_b.py").write_text("def format_result(val): return f'Result: {val}'\n", encoding="utf-8")
         sys_path_str = str(tmp_path).replace("\\", "/")
 
         nb_runner.create_notebook(

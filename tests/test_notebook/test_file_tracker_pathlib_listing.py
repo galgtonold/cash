@@ -27,7 +27,7 @@ LISTINGS = {
 
 @pytest.mark.parametrize("listing", LISTINGS)
 def test_listing_records_the_directory(tmp_path, listing):
-    (tmp_path / "a.csv").write_text("x")
+    (tmp_path / "a.csv").write_text("x", encoding="utf-8")
     with FileAccessTracker({}) as tracker:
         LISTINGS[listing](str(tmp_path))
     listed = {os.path.normcase(os.path.abspath(p)).rstrip("\\/") for p in tracker.get_accessed_files()}

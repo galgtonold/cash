@@ -17,7 +17,7 @@ pytestmark = pytest.mark.files
 
 def _rows(path):
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return sum(1 for _ in f)
     except FileNotFoundError:
         return 0

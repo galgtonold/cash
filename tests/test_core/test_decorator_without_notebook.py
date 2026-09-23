@@ -84,10 +84,11 @@ def _run(tmp_path: Path, script: Path) -> subprocess.CompletedProcess:
 
 
 def test_a_cached_function_runs_without_the_notebook_package(tmp_path):
-    (tmp_path / "data.txt").write_text("1 2 3\n")
+    (tmp_path / "data.txt").write_text("1 2 3\n", encoding="utf-8")
     script = tmp_path / "use_cash.py"
     script.write_text(
-        textwrap.dedent(_BLOCKER) + textwrap.dedent(_SCRIPT).replace("{sleep}", str(ABOVE_PERSISTENCE_FLOOR_S))
+        textwrap.dedent(_BLOCKER) + textwrap.dedent(_SCRIPT).replace("{sleep}", str(ABOVE_PERSISTENCE_FLOOR_S)),
+        encoding="utf-8",
     )
 
     first = _run(tmp_path, script)
@@ -95,4 +96,4 @@ def test_a_cached_function_runs_without_the_notebook_package(tmp_path):
     # A new process restores from disk: the body ran once across both.
     second = _run(tmp_path, script)
     assert second.returncode == 0 and "OK" in second.stdout, second.stderr
-    assert (tmp_path / "runs").read_text() == "x\n"
+    assert (tmp_path / "runs").read_text(encoding="utf-8") == "x\n"

@@ -23,7 +23,7 @@ class TestFileDependencies:
     def test_96_csv_read_then_modify(self, nb_runner, tmp_path):
         """Scenario 96: Read CSV, modify file, re-run — should re-execute."""
         csv_path = tmp_path / "data.csv"
-        csv_path.write_text("x\n1\n2\n3\n")
+        csv_path.write_text("x\n1\n2\n3\n", encoding="utf-8")
         csv_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -36,7 +36,7 @@ class TestFileDependencies:
         assert "len=3" in nb_runner.get_output(1)
         # Modify the file
         time.sleep(0.1)
-        csv_path.write_text("x\n1\n2\n3\n4\n5\n")
+        csv_path.write_text("x\n1\n2\n3\n4\n5\n", encoding="utf-8")
         # Re-run — should detect file change
         nb_runner.run_cell(1)
         assert "len=5" in nb_runner.get_output(1)
@@ -45,8 +45,8 @@ class TestFileDependencies:
         """Scenario 97: Statement reads 2 files — both tracked."""
         csv1 = tmp_path / "a.csv"
         csv2 = tmp_path / "b.csv"
-        csv1.write_text("x\n1\n2\n")
-        csv2.write_text("x\n3\n4\n")
+        csv1.write_text("x\n1\n2\n", encoding="utf-8")
+        csv2.write_text("x\n3\n4\n", encoding="utf-8")
         s1 = str(csv1).replace("\\", "/")
         s2 = str(csv2).replace("\\", "/")
 
@@ -61,14 +61,14 @@ class TestFileDependencies:
         assert "total=4" in nb_runner.get_output(1)
         # Modify only second file
         time.sleep(0.1)
-        csv2.write_text("x\n3\n4\n5\n")
+        csv2.write_text("x\n3\n4\n5\n", encoding="utf-8")
         nb_runner.run_cell(1)
         assert "total=5" in nb_runner.get_output(1)
 
     def test_98_file_dep_propagation_to_downstream(self, nb_runner, tmp_path):
         """Scenario 103: Cell 1 reads file → df, Cell 2 uses df — inherits file dep."""
         csv_path = tmp_path / "data.csv"
-        csv_path.write_text("x\n10\n20\n")
+        csv_path.write_text("x\n10\n20\n", encoding="utf-8")
         csv_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -82,7 +82,7 @@ class TestFileDependencies:
         assert "total=30" in nb_runner.get_output(2)
         # Modify file
         time.sleep(0.1)
-        csv_path.write_text("x\n10\n20\n30\n")
+        csv_path.write_text("x\n10\n20\n30\n", encoding="utf-8")
         # Re-run cell 2 only — should detect file dep changed via propagation
         nb_runner.run_cell(2)
         out = nb_runner.get_output(2)
@@ -93,7 +93,7 @@ class TestFileDependencies:
     def test_99_file_dep_not_propagated_to_scalar(self, nb_runner, tmp_path):
         """Scenario 104: n = len(df) — n should NOT inherit file dep."""
         csv_path = tmp_path / "data.csv"
-        csv_path.write_text("x\n1\n2\n3\n")
+        csv_path.write_text("x\n1\n2\n3\n", encoding="utf-8")
         csv_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -111,7 +111,7 @@ class TestFileDependencies:
     def test_100_file_read_unchanged_skips(self, nb_runner, tmp_path):
         """File unchanged between runs — should skip re-execution."""
         csv_path = tmp_path / "stable.csv"
-        csv_path.write_text("a,b\n1,2\n")
+        csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
         csv_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -209,7 +209,7 @@ class TestComplexInteractions:
     def test_107_data_pipeline_full(self, nb_runner, tmp_path):
         """Scenario 116: Full data pipeline: load → filter → transform → agg."""
         csv_path = tmp_path / "pipeline.csv"
-        csv_path.write_text("name,value\nalpha,10\nbeta,20\ngamma,30\nalpha,40\nbeta,50\n")
+        csv_path.write_text("name,value\nalpha,10\nbeta,20\ngamma,30\nalpha,40\nbeta,50\n", encoding="utf-8")
         csv_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -283,7 +283,7 @@ class TestComplexInteractions:
     def test_113_context_manager_file_read(self, nb_runner, tmp_path):
         """Scenario 130: with open() as f: — file tracking + caching."""
         txt_path = tmp_path / "test.txt"
-        txt_path.write_text("hello world")
+        txt_path.write_text("hello world", encoding="utf-8")
         txt_str = str(txt_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -296,7 +296,7 @@ class TestComplexInteractions:
         assert "content=hello world" in nb_runner.get_output(1)
         # Modify file
         time.sleep(0.1)
-        txt_path.write_text("updated content")
+        txt_path.write_text("updated content", encoding="utf-8")
         nb_runner.run_cell(1)
         assert "content=updated content" in nb_runner.get_output(1)
 

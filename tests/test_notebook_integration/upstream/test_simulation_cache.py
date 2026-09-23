@@ -415,7 +415,7 @@ class TestVirtualRestoreWithFiles:
     def test_restore_with_unchanged_file(self, nb_runner, tmp_path):
         """File unchanged after restart — restore should work."""
         data_file = tmp_path / "data.txt"
-        data_file.write_text("42")
+        data_file.write_text("42", encoding="utf-8")
         path_str = str(data_file).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -436,7 +436,7 @@ class TestVirtualRestoreWithFiles:
     def test_restore_with_changed_file(self, nb_runner, tmp_path):
         """File changed after restart — should recompute."""
         data_file = tmp_path / "data.txt"
-        data_file.write_text("10")
+        data_file.write_text("10", encoding="utf-8")
         path_str = str(data_file).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -453,7 +453,7 @@ class TestVirtualRestoreWithFiles:
         import time
 
         time.sleep(0.1)
-        data_file.write_text("99")
+        data_file.write_text("99", encoding="utf-8")
 
         nb_runner.shutdown()
         nb_runner.start_kernel()

@@ -37,7 +37,7 @@ def test_the_slow_step_restores_after_an_edit_and_a_restart(nb_runner, tmp_path)
     folder = tmp_path / "days"
     folder.mkdir()
     for i in range(5):
-        (folder / f"day_{i}.txt").write_text(f"day {i}\n")
+        (folder / f"day_{i}.txt").write_text(f"day {i}\n", encoding="utf-8")
     folder = folder.as_posix()
 
     nb_runner.create_notebook(_cells(folder, 2))

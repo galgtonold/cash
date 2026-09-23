@@ -23,27 +23,27 @@ def test_cached_generator_invalidates_on_file_change(tmp_path):
 
     @c.cache
     def stream(path):
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             for line in fh:
                 yield line.strip()
 
-    data.write_text("a\nb\nc\n")
+    data.write_text("a\nb\nc\n", encoding="utf-8")
     assert list(stream(str(data))) == ["a", "b", "c"]
     assert list(stream(str(data))) == ["a", "b", "c"]  # replay from chunks
 
     time.sleep(0.02)
-    data.write_text("x\ny\nz\n")
+    data.write_text("x\ny\nz\n", encoding="utf-8")
     assert list(stream(str(data))) == ["x", "y", "z"], "stale cached generator"
 
 
 def test_generator_manifest_records_file_dep(tmp_path):
     data = tmp_path / "d.txt"
-    data.write_text("1\n2\n")
+    data.write_text("1\n2\n", encoding="utf-8")
     c = Cash(backend=FileBackend(cache_dir=str(tmp_path / "cache")))
 
     @c.cache
     def stream(path):
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             yield from fh
 
     list(stream(str(data)))

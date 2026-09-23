@@ -130,13 +130,13 @@ def test_explain_ttl_expired(tmp_path):
 def test_explain_file_changed(tmp_path):
     """If an auto-tracked file dep changed, explain reports file_changed."""
     data_file = tmp_path / "data.txt"
-    data_file.write_text("v1")
+    data_file.write_text("v1", encoding="utf-8")
 
     c = Cash(cache_dir=str(tmp_path / "cache"), register_magic=False)
 
     @c.cache
     def load():
-        with open(data_file, "r") as fh:
+        with open(data_file, "r", encoding="utf-8") as fh:
             return fh.read()
 
     load()
@@ -146,7 +146,7 @@ def test_explain_file_changed(tmp_path):
 
     # Touch the file with new content + new mtime.
     time.sleep(0.05)
-    data_file.write_text("v2-with-more-chars")
+    data_file.write_text("v2-with-more-chars", encoding="utf-8")
     os.utime(data_file, None)
 
     e = load.explain()

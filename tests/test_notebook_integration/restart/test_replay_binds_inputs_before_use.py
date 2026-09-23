@@ -32,7 +32,7 @@ def test_an_import_repeated_in_a_later_cell(nb_runner):
     work = Path(nb_runner.work_dir)
     (work / "files").mkdir()
     for name in ("a.dat", "b.dat", "c.txt"):
-        (work / "files" / name).write_text("x")
+        (work / "files" / name).write_text("x", encoding="utf-8")
     cells = [
         "import cash\n%cash_on",
         "from pathlib import Path\nDATA = Path('files')",

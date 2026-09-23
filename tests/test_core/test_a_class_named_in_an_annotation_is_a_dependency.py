@@ -89,8 +89,10 @@ HINTS_MAIN = textwrap.dedent("""
 
 
 def _run(tmp_path, models, main, factor):
-    (tmp_path / "models.py").write_text(models.replace("{FACTOR}", str(factor)).replace("{{", "{").replace("}}", "}"))
-    (tmp_path / "main.py").write_text(main)
+    (tmp_path / "models.py").write_text(
+        models.replace("{FACTOR}", str(factor)).replace("{{", "{").replace("}}", "}"), encoding="utf-8"
+    )
+    (tmp_path / "main.py").write_text(main, encoding="utf-8")
     env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="ignore")
     proc = subprocess.run(
         [sys.executable, "main.py"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120

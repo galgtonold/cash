@@ -272,7 +272,7 @@ class TestCashCacheDecorator:
     def test_cache_with_depends_on_data_source(self, tmp_path):
         """Static dependency on a FileDataSource."""
         data_file = tmp_path / "data.txt"
-        data_file.write_text("hello")
+        data_file.write_text("hello", encoding="utf-8")
         ds = FileDataSource(str(data_file))
 
         c = Cash(backend=InMemoryBackend(), register_magic=False)
@@ -282,7 +282,7 @@ class TestCashCacheDecorator:
         def read_data():
             nonlocal call_count
             call_count += 1
-            return data_file.read_text()
+            return data_file.read_text(encoding="utf-8")
 
         result1 = read_data()
         assert result1 == "hello"
@@ -295,7 +295,7 @@ class TestCashCacheDecorator:
     def test_cache_with_dynamic_depends_on(self, tmp_path):
         """Dynamic dependency resolution."""
         data_file = tmp_path / "data.txt"
-        data_file.write_text("content1")
+        data_file.write_text("content1", encoding="utf-8")
 
         c = Cash(backend=InMemoryBackend(), register_magic=False)
         call_count = 0
@@ -307,7 +307,7 @@ class TestCashCacheDecorator:
         def read(filename):
             nonlocal call_count
             call_count += 1
-            return (tmp_path / filename).read_text()
+            return (tmp_path / filename).read_text(encoding="utf-8")
 
         result = read("data.txt")
         assert result == "content1"

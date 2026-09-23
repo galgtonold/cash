@@ -99,7 +99,7 @@ def _files(work):
     folder.mkdir()
     for i in range(N):
         path = folder / f"e{i:03d}.csv"
-        path.write_text("a,b,c\n" + "\n".join(f"{i},{j},{j * 0.5}" for j in range(2000)) + "\n")
+        path.write_text("a,b,c\n" + "\n".join(f"{i},{j},{j * 0.5}" for j in range(2000)) + "\n", encoding="utf-8")
         st = os.stat(path)
         os.utime(path, (st.st_atime - 3600, st.st_mtime - 3600))
 

@@ -77,7 +77,7 @@ OWN = textwrap.dedent("""
 
 def _run(tmp_path, files):
     for name, text in files.items():
-        (tmp_path / name).write_text(text)
+        (tmp_path / name).write_text(text, encoding="utf-8")
     env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="always")
     proc = subprocess.run(
         [sys.executable, "main.py"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120

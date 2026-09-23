@@ -429,7 +429,8 @@ class TestFileAndModuleInteraction:
             def write_data(path, data):
                 with open(path, 'w') as f:
                     f.write(data)
-        """)
+        """),
+            encoding="utf-8",
         )
 
         out_file = tmp_path / "output.txt"
@@ -463,7 +464,8 @@ class TestFileAndModuleInteraction:
                 df = df.copy()
                 df[col] = df[col] * 2
                 return df
-        """)
+        """),
+            encoding="utf-8",
         )
         tmp_str = str(tmp_path).replace("\\", "/")
 
@@ -487,7 +489,8 @@ class TestFileAndModuleInteraction:
                 df = df.copy()
                 df[col] = df[col] * 10
                 return df
-        """)
+        """),
+            encoding="utf-8",
         )
         nb_runner.run_all()
         out2 = nb_runner.get_output(4)

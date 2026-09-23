@@ -173,7 +173,7 @@ class TestFileDependencyTracking:
     def test_csv_file_tracking(self, cash_magics, mock_shell, tmp_path):
         """CSV file read should be tracked as dependency."""
         csv_path = tmp_path / "test.csv"
-        csv_path.write_text("a,b\n1,2\n3,4\n")
+        csv_path.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
         path_str = str(csv_path).replace("\\", "/")
 
         code = f"import pandas as pd\ndf = pd.read_csv('{path_str}')"
@@ -186,7 +186,7 @@ class TestFileDependencyTracking:
         import json
 
         json_path = tmp_path / "test.json"
-        json_path.write_text(json.dumps({"key": "value", "num": 42}))
+        json_path.write_text(json.dumps({"key": "value", "num": 42}), encoding="utf-8")
         path_str = str(json_path).replace("\\", "/")
 
         code = f"import json\nwith open('{path_str}') as f:\n    data = json.load(f)"
@@ -196,7 +196,7 @@ class TestFileDependencyTracking:
     def test_text_file_tracking(self, cash_magics, mock_shell, tmp_path):
         """Plain text file read should be tracked."""
         txt_path = tmp_path / "test.txt"
-        txt_path.write_text("hello world")
+        txt_path.write_text("hello world", encoding="utf-8")
         path_str = str(txt_path).replace("\\", "/")
 
         code = f"with open('{path_str}') as f:\n    content = f.read()"
@@ -206,7 +206,7 @@ class TestFileDependencyTracking:
     def test_file_change_invalidates_cache(self, cash_magics, mock_shell, tmp_path):
         """Changing a file should invalidate cached results."""
         csv_path = tmp_path / "data.csv"
-        csv_path.write_text("a,b\n1,2\n")
+        csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
         path_str = str(csv_path).replace("\\", "/")
 
         code = f"import pandas as pd\ndf = pd.read_csv('{path_str}')\nrow_count = len(df)"
@@ -214,7 +214,7 @@ class TestFileDependencyTracking:
         assert mock_shell.user_ns["row_count"] == 1
 
         # Modify the file
-        csv_path.write_text("a,b\n1,2\n3,4\n5,6\n")
+        csv_path.write_text("a,b\n1,2\n3,4\n5,6\n", encoding="utf-8")
 
         # Re-run should detect file change
         run_cash_cell(cash_magics, code)
@@ -233,7 +233,7 @@ class TestFileDependencyTracking:
         import os as _os
 
         csv_path = tmp_path / "data.csv"
-        csv_path.write_text("a,b\n1,2\n")
+        csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
         original_mtime = _os.stat(csv_path).st_mtime
         path_str = str(csv_path).replace("\\", "/")
 
@@ -243,7 +243,7 @@ class TestFileDependencyTracking:
 
         # Rewrite with different content but pin the mtime to its original
         # value, simulating a filesystem with coarse mtime granularity.
-        csv_path.write_text("a,b\n1,2\n3,4\n5,6\n")
+        csv_path.write_text("a,b\n1,2\n3,4\n5,6\n", encoding="utf-8")
         _os.utime(csv_path, (original_mtime, original_mtime))
         assert _os.stat(csv_path).st_mtime == original_mtime  # sanity
 

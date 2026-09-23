@@ -48,7 +48,7 @@ class TestIntermediateFileDependencyRestore:
         """
         csv = tmp_path / "data.csv"
         csv_path = str(csv).replace("\\", "/")
-        csv.write_text("val\n30\n10\n20\n")
+        csv.write_text("val\n30\n10\n20\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -80,7 +80,7 @@ class TestIntermediateFileDependencyRestore:
         """
         csv = tmp_path / "data.csv"
         csv_path = str(csv).replace("\\", "/")
-        csv.write_text("date,val\n2024-01-03,30\n2024-01-01,10\n2024-01-02,20\n")
+        csv.write_text("date,val\n2024-01-03,30\n2024-01-01,10\n2024-01-02,20\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -110,7 +110,7 @@ class TestIntermediateFileDependencyRestore:
         """
         csv = tmp_path / "data.csv"
         csv_path = str(csv).replace("\\", "/")
-        csv.write_text("val\n10\n20\n30\n")
+        csv.write_text("val\n10\n20\n30\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -126,7 +126,7 @@ class TestIntermediateFileDependencyRestore:
 
         # Modify file
         time.sleep(0.2)
-        csv.write_text("val\n100\n200\n300\n")
+        csv.write_text("val\n100\n200\n300\n", encoding="utf-8")
 
         # Re-run: cash should detect file change and recompute
         nb_runner.run_all()
@@ -140,7 +140,7 @@ class TestIntermediateFileDependencyRestore:
         """
         csv = tmp_path / "data.csv"
         csv_path = str(csv).replace("\\", "/")
-        csv.write_text("val\n5\n15\n25\n")
+        csv.write_text("val\n5\n15\n25\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [

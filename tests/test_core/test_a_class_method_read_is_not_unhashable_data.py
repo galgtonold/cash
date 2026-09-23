@@ -58,8 +58,10 @@ MAIN = textwrap.dedent("""
 
 
 def _run(tmp_path, factor=10, rate=0):
-    (tmp_path / "models.py").write_text(MODELS.replace("{FACTOR}", str(factor)).replace("{RATE}", str(rate)))
-    (tmp_path / "main.py").write_text(MAIN)
+    (tmp_path / "models.py").write_text(
+        MODELS.replace("{FACTOR}", str(factor)).replace("{RATE}", str(rate)), encoding="utf-8"
+    )
+    (tmp_path / "main.py").write_text(MAIN, encoding="utf-8")
     # No .pyc: Python validates one by whole-second mtime and size, so the
     # RATE 0 -> 1 edit (same size) landing in the second run's second loaded
     # the old bytecode, and printed 400 with or without cash.

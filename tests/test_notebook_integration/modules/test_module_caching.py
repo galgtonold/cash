@@ -76,7 +76,8 @@ class TestModuleCachingConsistency:
                 global _counter
                 _counter += n
                 return _counter
-        """)
+        """),
+            encoding="utf-8",
         )
 
         # Create notebook that imports and uses the module
@@ -135,7 +136,8 @@ class TestModuleCachingConsistency:
                 global _counter
                 _counter += n
                 return _counter
-        """)
+        """),
+            encoding="utf-8",
         )
 
         # Single cell with import + usage (multi-statement)
@@ -191,7 +193,8 @@ class TestModuleCachingConsistency:
             textwrap.dedent("""\
             def double(x):
                 return x * 2
-        """)
+        """),
+            encoding="utf-8",
         )
 
         nb_runner.create_notebook(

@@ -94,7 +94,7 @@ def test_run_page_surfaces_exec_errors_with_location():
 def test_infer_claims_finds_cached_functions():
     from tests.docs._harness import infer_claims
 
-    src = (FIXTURES / "page_with_decorator.md").read_text()
+    src = (FIXTURES / "page_with_decorator.md").read_text(encoding="utf-8")
     # Pull just the fence content for the test
     fence_code = src.split("```python\n", 1)[1].split("```", 1)[0]
     claims = infer_claims(fence_code)
@@ -109,7 +109,7 @@ def test_infer_claims_finds_cached_functions():
 def test_infer_claims_handles_no_cache_marker():
     from tests.docs._harness import infer_claims
 
-    src = (FIXTURES / "page_with_no_cache.md").read_text()
+    src = (FIXTURES / "page_with_no_cache.md").read_text(encoding="utf-8")
     fence_code = src.split("```python\n", 1)[1].split("```", 1)[0]
     claims = infer_claims(fence_code)
 

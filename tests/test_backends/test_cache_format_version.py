@@ -34,7 +34,7 @@ def test_fresh_cache_stamps_current_version(tmp_path):
 
     version_file = tmp_path / VERSION_FILENAME
     assert version_file.exists()
-    assert version_file.read_text().strip() == str(CACHE_FORMAT_VERSION)
+    assert version_file.read_text(encoding="utf-8").strip() == str(CACHE_FORMAT_VERSION)
 
 
 def test_matching_version_preserves_entries(tmp_path):
@@ -60,21 +60,21 @@ def test_stale_version_marker_wipes_cache(tmp_path):
     assert _entry_files(str(tmp_path)), "precondition: entries exist on disk"
 
     # Pretend the cache was written by an older, incompatible format.
-    (tmp_path / VERSION_FILENAME).write_text(str(CACHE_FORMAT_VERSION - 1))
+    (tmp_path / VERSION_FILENAME).write_text(str(CACHE_FORMAT_VERSION - 1), encoding="utf-8")
 
     reopened = FileBackend(str(tmp_path))
     meta, value = reopened.get("k")
     assert value is None, "stale-format entry must be invalidated, not decoded"
     assert not _entry_files(str(tmp_path)), "stale entries should be removed"
     # Marker is refreshed to the current version.
-    assert (tmp_path / VERSION_FILENAME).read_text().strip() == str(CACHE_FORMAT_VERSION)
+    assert (tmp_path / VERSION_FILENAME).read_text(encoding="utf-8").strip() == str(CACHE_FORMAT_VERSION)
 
 
 def test_empty_unstamped_dir_is_not_an_error(tmp_path):
     """An empty dir with no marker is just a fresh cache: stamp it, no warning-worthy wipe."""
     backend = FileBackend(str(tmp_path))
     backend._ensure_initialized()
-    assert (tmp_path / VERSION_FILENAME).read_text().strip() == str(CACHE_FORMAT_VERSION)
+    assert (tmp_path / VERSION_FILENAME).read_text(encoding="utf-8").strip() == str(CACHE_FORMAT_VERSION)
 
 
 def test_clear_preserves_version_marker(tmp_path):
@@ -84,7 +84,7 @@ def test_clear_preserves_version_marker(tmp_path):
     backend.get("k")
     backend.clear()
     assert (tmp_path / VERSION_FILENAME).exists()
-    assert (tmp_path / VERSION_FILENAME).read_text().strip() == str(CACHE_FORMAT_VERSION)
+    assert (tmp_path / VERSION_FILENAME).read_text(encoding="utf-8").strip() == str(CACHE_FORMAT_VERSION)
 
 
 # -- a cache cleared under a live process -----------------------------------
@@ -105,7 +105,7 @@ def test_a_directory_recreated_by_a_live_backend_is_stamped(tmp_path):
     live.get("after")
     live.shutdown()
 
-    assert (cache / VERSION_FILENAME).read_text().strip() == str(CACHE_FORMAT_VERSION)
+    assert (cache / VERSION_FILENAME).read_text(encoding="utf-8").strip() == str(CACHE_FORMAT_VERSION)
     fresh = FileBackend(str(cache))
     assert fresh.get("after")[1] == {"v": 2}, "the next process threw it away"
 
@@ -120,7 +120,7 @@ def test_unstamped_entries_in_the_current_format_are_kept(tmp_path):
 
     b2 = FileBackend(str(tmp_path))
     assert b2.get("k")[1] == {"v": 1}
-    assert (tmp_path / VERSION_FILENAME).read_text().strip() == str(CACHE_FORMAT_VERSION)
+    assert (tmp_path / VERSION_FILENAME).read_text(encoding="utf-8").strip() == str(CACHE_FORMAT_VERSION)
 
 
 def test_unstamped_entries_that_are_not_the_current_format_are_still_wiped(tmp_path):

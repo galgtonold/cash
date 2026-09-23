@@ -113,7 +113,7 @@ RUNTIME_NAME = textwrap.dedent("""
 
 
 def _run(tmp_path, script, **fmt):
-    (tmp_path / "main.py").write_text(script.format(**fmt) if fmt else script)
+    (tmp_path / "main.py").write_text(script.format(**fmt) if fmt else script, encoding="utf-8")
     # No .pyc: Python trusts one whose source has the same size and the same
     # whole-second mtime, and `return 10` -> `return 20` keeps the size, so an
     # edit landing in the previous run's second imported the old helpers.
@@ -134,13 +134,13 @@ def _run(tmp_path, script, **fmt):
     ids=["in_the_cached_function", "in_an_argument_method"],
 )
 def test_editing_a_function_named_by_a_constant_string_recomputes(tmp_path, script, base, edited):
-    (tmp_path / "helpers.py").write_text(HELPERS.format(RET=10))
+    (tmp_path / "helpers.py").write_text(HELPERS.format(RET=10), encoding="utf-8")
     out, err = _run(tmp_path, script)
     assert out == base and "[RUN]" in err
     out, err = _run(tmp_path, script)
     assert out == base and "[RUN]" not in err, "an unedited run must hit"
 
-    (tmp_path / "helpers.py").write_text(HELPERS.format(RET=20))
+    (tmp_path / "helpers.py").write_text(HELPERS.format(RET=20), encoding="utf-8")
     out, err = _run(tmp_path, script)
     assert out == edited, f"served the result from before the edit: {out}"
 

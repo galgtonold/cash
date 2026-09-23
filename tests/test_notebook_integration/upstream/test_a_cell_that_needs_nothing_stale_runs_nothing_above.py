@@ -33,7 +33,7 @@ CELLS = [
 
 def _calls(nb_runner):
     log = nb_runner.work_dir / "calls.log"
-    return log.read_text().split() if log.exists() else []
+    return log.read_text(encoding="utf-8").split() if log.exists() else []
 
 
 # an unresolvable read the bottom cell does not depend on at all

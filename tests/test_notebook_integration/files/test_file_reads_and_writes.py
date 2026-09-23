@@ -244,7 +244,7 @@ def test_tocsv_writer_edit_run_all_boundary(nb_runner, tmp_path):
 
 def test_pathlib_read_text_external_modification(nb_runner, tmp_path):
     data = tmp_path / "plib.txt"
-    data.write_text("alpha")
+    data.write_text("alpha", encoding="utf-8")
     p = _p(data)
     nb_runner.create_notebook(
         [
@@ -258,7 +258,7 @@ def test_pathlib_read_text_external_modification(nb_runner, tmp_path):
     assert "txt = alpha" in nb_runner.get_output(2)
 
     time.sleep(1.1)
-    data.write_text("bravo-longer")  # different size
+    data.write_text("bravo-longer", encoding="utf-8")  # different size
     nb_runner.run_all()
     out = nb_runner.get_output(2)
     assert "txt = bravo-longer" in out, (
@@ -306,7 +306,7 @@ def test_numpy_load_external_npy_rewrite(nb_runner, tmp_path):
 
 def test_deleted_file_errors_not_stale(nb_runner, tmp_path):
     data = tmp_path / "gone.txt"
-    data.write_text("still-here")
+    data.write_text("still-here", encoding="utf-8")
     p = _p(data)
     nb_runner.create_notebook(
         [
@@ -355,7 +355,7 @@ def test_deleted_file_errors_not_stale(nb_runner, tmp_path):
 
 def test_touch_only_mtime_should_stay_cached(nb_runner, tmp_path):
     data = tmp_path / "touched.txt"
-    data.write_text("constant-content")
+    data.write_text("constant-content", encoding="utf-8")
     p = _p(data)
     nb_runner.create_notebook(
         [
@@ -443,9 +443,9 @@ def test_chdir_relative_path_different_file(nb_runner, tmp_path):
 def test_glob_many_files_change_and_new_file(nb_runner, tmp_path):
     gdir = tmp_path / "gdir"
     gdir.mkdir()
-    (gdir / "d1.num").write_text("1")
-    (gdir / "d2.num").write_text("2")
-    (gdir / "d3.num").write_text("3")
+    (gdir / "d1.num").write_text("1", encoding="utf-8")
+    (gdir / "d2.num").write_text("2", encoding="utf-8")
+    (gdir / "d3.num").write_text("3", encoding="utf-8")
     gp = _p(gdir)
     nb_runner.create_notebook(
         [
@@ -464,7 +464,7 @@ def test_glob_many_files_change_and_new_file(nb_runner, tmp_path):
 
     # Phase A: one existing file changes (content AND size).
     time.sleep(1.1)
-    (gdir / "d2.num").write_text("222")
+    (gdir / "d2.num").write_text("222", encoding="utf-8")
     nb_runner.run_all()
     out1 = nb_runner.get_output(1)
     out2 = nb_runner.get_output(2)
@@ -474,7 +474,7 @@ def test_glob_many_files_change_and_new_file(nb_runner, tmp_path):
 
     # Phase B: a NEW file appears in the globbed directory.
     time.sleep(1.1)
-    (gdir / "d4.num").write_text("40")
+    (gdir / "d4.num").write_text("40", encoding="utf-8")
     nb_runner.run_all()
     out1b = nb_runner.get_output(1)
     out2b = nb_runner.get_output(2)
@@ -492,7 +492,7 @@ def test_glob_many_files_change_and_new_file(nb_runner, tmp_path):
 
 def test_two_cells_read_same_file_both_refresh(nb_runner, tmp_path):
     data = tmp_path / "shared.txt"
-    data.write_text("aaa")
+    data.write_text("aaa", encoding="utf-8")
     p = _p(data)
     nb_runner.create_notebook(
         [
@@ -507,7 +507,7 @@ def test_two_cells_read_same_file_both_refresh(nb_runner, tmp_path):
     assert "combo = aaa aaa" in nb_runner.get_output(3)
 
     time.sleep(1.1)
-    data.write_text("bbbbbb")  # different size
+    data.write_text("bbbbbb", encoding="utf-8")  # different size
     nb_runner.run_all()
     out1 = nb_runner.get_output(1)
     out2 = nb_runner.get_output(2)

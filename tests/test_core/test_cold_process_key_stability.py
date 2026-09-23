@@ -135,7 +135,8 @@ def test_cross_process_consumer_zero_warmup_misses(tmp_path):
 
         @c.cache(depends_on=[mid])
         def top(x): return mid(x) + 100
-    """)
+    """),
+        encoding="utf-8",
     )
     driver = textwrap.dedent("""
         import sys, json, qf_chain

@@ -32,7 +32,7 @@ def main() -> int:
 
     out = REPO / args.results_dir
     out.mkdir(parents=True, exist_ok=True)
-    notebooks = [ln.strip() for ln in LIST.read_text().splitlines() if ln.strip()]
+    notebooks = [ln.strip() for ln in LIST.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
     failures: list[str] = []
     for nb in notebooks:

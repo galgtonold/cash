@@ -42,7 +42,7 @@ def _exports(work_dir: Path) -> None:
     folder = work_dir / "exports"
     folder.mkdir()
     for i in range(READS):
-        (folder / f"e{i:02d}.csv").write_text(f"k,v\n{i},{i * 3}\n")
+        (folder / f"e{i:02d}.csv").write_text(f"k,v\n{i},{i * 3}\n", encoding="utf-8")
 
 
 def test_a_cheap_value_over_a_costly_input_is_restored_after_a_restart(nb_runner):

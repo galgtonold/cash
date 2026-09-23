@@ -19,14 +19,14 @@ def _build(c: Cash, base_dir):
 
     @c.cache(dynamic_depends_on=dep)
     def load(name):
-        with open(base_dir / f"{name}.parquet") as f:
+        with open(base_dir / f"{name}.parquet", encoding="utf-8") as f:
             return f.read()
 
     return load
 
 
 def test_dynamic_dep_change_is_explained(tmp_path):
-    (tmp_path / "AAA.parquet").write_text("v1")
+    (tmp_path / "AAA.parquet").write_text("v1", encoding="utf-8")
     c = Cash(backend=FileBackend(cache_dir=str(tmp_path / "cache")))
     load = _build(c, tmp_path)
 
@@ -34,7 +34,7 @@ def test_dynamic_dep_change_is_explained(tmp_path):
     assert load.explain("AAA").reason == "hit"
 
     time.sleep(0.02)
-    (tmp_path / "AAA.parquet").write_text("v2-changed")
+    (tmp_path / "AAA.parquet").write_text("v2-changed", encoding="utf-8")
 
     e = load.explain("AAA")
     assert e.reason == "no_entry"

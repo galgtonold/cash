@@ -39,7 +39,7 @@ _BASE = "['AAPL', 'MSFT', 'GOOGL']"
 
 
 def _n(log):
-    return len(log.read_text().splitlines()) if log.exists() else 0
+    return len(log.read_text(encoding="utf-8").splitlines()) if log.exists() else 0
 
 
 def _recomputed_after(nb_runner, tmp_path, tag, edited, directive=""):

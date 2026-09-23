@@ -34,7 +34,7 @@ LOOP = (
 
 def _calls(runner) -> list[str]:
     log = Path(runner.work_dir) / "calls.log"
-    return log.read_text().splitlines() if log.exists() else []
+    return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
 
 
 def test_an_unchanged_rerun_reuses_every_call(nb_runner):

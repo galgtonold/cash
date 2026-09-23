@@ -35,7 +35,7 @@ def temp_module(tmp_path):
     """
     module_name = f"_test_reload_mod_{id(tmp_path)}"
     module_file = tmp_path / f"{module_name}.py"
-    module_file.write_text("def increment(x):\n    return x + 1\n")
+    module_file.write_text("def increment(x):\n    return x + 1\n", encoding="utf-8")
 
     sys.path.insert(0, str(tmp_path))
 
@@ -251,7 +251,7 @@ class TestModuleReloadInvalidation:
         # Create module
         module_name = f"_test_flow_mod_{id(tmp_path)}"
         module_file = tmp_path / f"{module_name}.py"
-        module_file.write_text("def increment(x):\n    return x + 1\n")
+        module_file.write_text("def increment(x):\n    return x + 1\n", encoding="utf-8")
 
         sys.path.insert(0, str(tmp_path))
         try:
@@ -278,7 +278,7 @@ class TestModuleReloadInvalidation:
 
             # Now change the module source
             time.sleep(0.05)
-            module_file.write_text("def increment(x):\n    return x + 10\n")
+            module_file.write_text("def increment(x):\n    return x + 10\n", encoding="utf-8")
 
             # Simulate what _execute_cell does: check and reload
             changed, per_mod_syms = ft.check_and_reload_changed_modules(mock_shell.user_ns)
@@ -453,10 +453,12 @@ class TestTransitiveDependencyTracking:
     def two_level_modules(self, tmp_path):
         """Create a two-level module hierarchy: metrics -> helpers."""
         helpers_file = tmp_path / "helpers.py"
-        helpers_file.write_text("def add_one(x):\n    return x + 1\n")
+        helpers_file.write_text("def add_one(x):\n    return x + 1\n", encoding="utf-8")
 
         metrics_file = tmp_path / "metrics.py"
-        metrics_file.write_text("from helpers import add_one\ndef compute(x):\n    return add_one(x) * 2\n")
+        metrics_file.write_text(
+            "from helpers import add_one\ndef compute(x):\n    return add_one(x) * 2\n", encoding="utf-8"
+        )
 
         sys.path.insert(0, str(tmp_path))
         # Another test in this worker may have left its own "helpers" behind.
@@ -527,7 +529,7 @@ class TestTransitiveDependencyTracking:
 
         # Now change helpers.py
         time.sleep(0.05)
-        with open(info["helpers_file"], "w") as f:
+        with open(info["helpers_file"], "w", encoding="utf-8") as f:
             f.write("def add_one(x):\n    return x + 100\n")
 
         changed = ft.check_tracked_modules()
@@ -544,7 +546,7 @@ class TestTransitiveDependencyTracking:
 
         # Change helpers.py
         time.sleep(0.05)
-        with open(info["helpers_file"], "w") as f:
+        with open(info["helpers_file"], "w", encoding="utf-8") as f:
             f.write("def add_one(x):\n    return x + 100\n")
 
         result, _ = ft.check_and_reload_changed_modules(user_ns)
@@ -588,13 +590,13 @@ class TestTransitiveDependencyTracking:
     def test_three_level_transitive_deps(self, tmp_path):
         """Three-level chain: app -> service -> utils. Changing utils should invalidate app."""
         utils_file = tmp_path / "dep_utils.py"
-        utils_file.write_text("VALUE = 1\n")
+        utils_file.write_text("VALUE = 1\n", encoding="utf-8")
 
         service_file = tmp_path / "dep_service.py"
-        service_file.write_text("import dep_utils\ndef get():\n    return dep_utils.VALUE\n")
+        service_file.write_text("import dep_utils\ndef get():\n    return dep_utils.VALUE\n", encoding="utf-8")
 
         app_file = tmp_path / "dep_app.py"
-        app_file.write_text("import dep_service\ndef run():\n    return dep_service.get()\n")
+        app_file.write_text("import dep_service\ndef run():\n    return dep_service.get()\n", encoding="utf-8")
 
         sys.path.insert(0, str(tmp_path))
         try:
@@ -619,7 +621,7 @@ class TestTransitiveDependencyTracking:
 
             # Change dep_utils
             time.sleep(0.05)
-            utils_file.write_text("VALUE = 999\n")
+            utils_file.write_text("VALUE = 999\n", encoding="utf-8")
 
             changed = ft.check_tracked_modules()
             assert "dep_app" in changed, (

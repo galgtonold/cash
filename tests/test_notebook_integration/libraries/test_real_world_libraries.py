@@ -159,7 +159,8 @@ class TestMultiLibraryPipeline:
             "5.0,3.4,1.5,0.2,setosa\n"
             "6.7,3.1,4.4,1.4,versicolor\n"
             "7.1,3.0,5.9,2.1,virginica\n"
-            "5.4,3.9,1.7,0.4,setosa\n"
+            "5.4,3.9,1.7,0.4,setosa\n",
+            encoding="utf-8",
         )
         csv_str = str(csv_path).replace("\\", "/")
 
@@ -209,7 +210,7 @@ class TestMultiLibraryPipeline:
     def test_data_update_cascades(self, nb_runner, tmp_path):
         """Updating the CSV file should invalidate the entire pipeline."""
         csv_path = tmp_path / "data.csv"
-        csv_path.write_text("a,b,label\n1,2,0\n3,4,1\n5,6,0\n7,8,1\n")
+        csv_path.write_text("a,b,label\n1,2,0\n3,4,1\n5,6,0\n7,8,1\n", encoding="utf-8")
         csv_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -229,7 +230,7 @@ class TestMultiLibraryPipeline:
         assert "Rows: 4" in nb_runner.get_output(1)
 
         # Update CSV data
-        csv_path.write_text("a,b,label\n1,2,0\n3,4,1\n5,6,0\n7,8,1\n9,10,0\n11,12,1\n")
+        csv_path.write_text("a,b,label\n1,2,0\n3,4,1\n5,6,0\n7,8,1\n9,10,0\n11,12,1\n", encoding="utf-8")
 
         # Re-run - should detect file change and recompute
         nb_runner.run_all()

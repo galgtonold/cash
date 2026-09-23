@@ -139,7 +139,7 @@ def test_no_redundant_restore_control_structure_upstream(nb_runner, tmp_path):
     """
     # Create a data file
     data_file = tmp_path / "test_data.csv"
-    data_file.write_text("a,b\n1,2\n3,4\n5,6\n")
+    data_file.write_text("a,b\n1,2\n3,4\n5,6\n", encoding="utf-8")
     data_path_str = str(data_file).replace("\\", "/")
 
     nb_runner.create_notebook(

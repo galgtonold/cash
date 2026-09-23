@@ -50,7 +50,7 @@ def _part(d: Path, n: int) -> None:
 
 def _scores(work: Path) -> int:
     log = work / "calls.log"
-    return log.read_text().split().count("score") if log.exists() else 0
+    return log.read_text(encoding="utf-8").split().count("score") if log.exists() else 0
 
 
 @pytest.mark.parametrize("new_file", [True, False], ids=["new_file", "unchanged"])

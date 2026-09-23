@@ -57,7 +57,7 @@ def _defs(log):
 
 
 def _n(log):
-    return len(log.read_text().splitlines()) if log.exists() else 0
+    return len(log.read_text(encoding="utf-8").splitlines()) if log.exists() else 0
 
 
 def test_two_statements_same_call_text_get_independent_call_caches(nb_runner, tmp_path):

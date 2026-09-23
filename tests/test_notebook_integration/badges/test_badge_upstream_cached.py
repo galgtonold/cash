@@ -130,7 +130,8 @@ def test_multi_import_cell_fully_restored_after_kernel_restart(nb_runner, tmp_pa
     csv_path.write_text(
         "Ticker,Date,Close\n"
         + "\n".join(f"{t},2024-01-{d:02d},{100 + d}" for t in ("AAPL", "GOOGL", "MSFT") for d in range(1, 21))
-        + "\n"
+        + "\n",
+        encoding="utf-8",
     )
 
     nb_runner.create_notebook(

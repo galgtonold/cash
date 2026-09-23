@@ -39,7 +39,7 @@ class TestUpstreamSimulation:
     def test_32_fresh_kernel_with_file_dep(self, nb_runner, tmp_path):
         """Scenario 32: Fresh kernel restore with file dependency."""
         csv_path = tmp_path / "test_data.csv"
-        csv_path.write_text("x,y\n1,2\n3,4\n")
+        csv_path.write_text("x,y\n1,2\n3,4\n", encoding="utf-8")
         csv_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -365,7 +365,7 @@ class TestCellOrdering:
     def test_55_fresh_kernel_complex_pipeline(self, nb_runner, tmp_path):
         """Complex pipeline: data → filter → transform → aggregate, fresh kernel."""
         csv_path = tmp_path / "pipeline_data.csv"
-        csv_path.write_text("name,value\nalpha,10\nbeta,20\ngamma,30\nalpha,40\n")
+        csv_path.write_text("name,value\nalpha,10\nbeta,20\ngamma,30\nalpha,40\n", encoding="utf-8")
         csv_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(

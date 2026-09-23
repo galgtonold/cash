@@ -26,7 +26,7 @@ def test_skipped_only_shows_intermediate_deps(nb_runner, tmp_path):
     # Create test CSV
     csv_path = tmp_path / "data.csv"
     csv_path_str = str(csv_path).replace("\\", "/")
-    csv_path.write_text("a,b\n1,2\n3,4\n")
+    csv_path.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
 
     # Create notebook
     nb_runner.create_notebook(

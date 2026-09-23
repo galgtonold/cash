@@ -22,12 +22,12 @@ def report(df):
 
 
 def write_config(path, text):
-    with open(path, "w") as fh:
+    with open(path, "w", encoding="utf-8") as fh:
         fh.write(text)
 
 
 def log(msg):
-    open("run.log", "a").write(msg + "\n")
+    open("run.log", "a", encoding="utf-8").write(msg + "\n")
 
 
 def slow_and_logged(v):
@@ -41,7 +41,7 @@ def compute(v):
 
 @pure
 def promised(path):
-    open(path, "w").write("x")
+    open(path, "w", encoding="utf-8").write("x")
 
 
 def test_a_helper_that_saves_or_exports_is_a_writer():

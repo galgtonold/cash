@@ -34,7 +34,7 @@ def resolutions(monkeypatch):
 
 def test_within_a_run_both_spellings_resolve_once(tmp_path, resolutions):
     f = tmp_path / "a.csv"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
     file_dep_snapshot.begin_file_state_epoch()
     try:
         resolved = realpath_this_run(str(f))
@@ -48,7 +48,7 @@ def test_within_a_run_both_spellings_resolve_once(tmp_path, resolutions):
 
 def test_outside_a_run_nothing_is_remembered(tmp_path, resolutions):
     f = tmp_path / "a.csv"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
     realpath_this_run(str(f))
     realpath_this_run(str(f))
     assert len(resolutions) == 2
@@ -56,7 +56,7 @@ def test_outside_a_run_nothing_is_remembered(tmp_path, resolutions):
 
 def test_the_next_run_resolves_afresh(tmp_path, resolutions):
     f = tmp_path / "a.csv"
-    f.write_text("x")
+    f.write_text("x", encoding="utf-8")
     for _ in range(2):
         file_dep_snapshot.begin_file_state_epoch()
         try:
@@ -69,7 +69,7 @@ def test_the_next_run_resolves_afresh(tmp_path, resolutions):
 def test_a_relative_path_follows_a_chdir(tmp_path, monkeypatch):
     for sub in ("one", "two"):
         (tmp_path / sub).mkdir()
-        (tmp_path / sub / "data.csv").write_text(sub)
+        (tmp_path / sub / "data.csv").write_text(sub, encoding="utf-8")
     file_dep_snapshot.begin_file_state_epoch()
     try:
         monkeypatch.chdir(tmp_path / "one")
@@ -92,7 +92,7 @@ def test_files_in_one_directory_resolve_the_directory_once(tmp_path, resolutions
     files = []
     for i in range(20):
         f = tmp_path / f"doc{i}.md"
-        f.write_text("x")
+        f.write_text("x", encoding="utf-8")
         files.append(f)
     file_dep_snapshot.begin_file_state_epoch()
     try:
@@ -108,7 +108,7 @@ def test_files_in_one_directory_resolve_the_directory_once(tmp_path, resolutions
 def test_a_linked_file_is_resolved_to_its_target(tmp_path):
     target = tmp_path / "real" / "data.csv"
     target.parent.mkdir()
-    target.write_text("x")
+    target.write_text("x", encoding="utf-8")
     link = tmp_path / "link.csv"
     try:
         os.symlink(target, link)

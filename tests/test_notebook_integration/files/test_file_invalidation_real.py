@@ -94,7 +94,7 @@ def test_file_modification_detection(nb_runner, tmp_path):
     """
     # Create initial file
     data_file = tmp_path / "data.txt"
-    data_file.write_text("initial content")
+    data_file.write_text("initial content", encoding="utf-8")
     data_file_str = str(data_file).replace("\\", "/")
 
     nb_runner.create_notebook(
@@ -114,7 +114,7 @@ print(f"Content: {{content}}")"""
     import time
 
     time.sleep(0.1)  # Ensure mtime changes
-    data_file.write_text("modified content")
+    data_file.write_text("modified content", encoding="utf-8")
 
     # Re-run - should detect file change
     nb_runner.run_all()

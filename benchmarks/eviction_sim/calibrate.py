@@ -67,7 +67,7 @@ def describe(rows, label):
 def load(results_dir, pattern):
     rows = []
     for f in glob.glob(os.path.join(results_dir, pattern)):
-        with open(f) as fh:
+        with open(f, encoding="utf-8") as fh:
             try:
                 d = json.load(fh)
             except json.JSONDecodeError:

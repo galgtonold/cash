@@ -619,7 +619,7 @@ class TestContextManagerEdits:
     def test_edit_context_body(self, nb_runner, tmp_path):
         """Edit code inside context manager."""
         fpath = tmp_path / "test.txt"
-        fpath.write_text("hello world")
+        fpath.write_text("hello world", encoding="utf-8")
         fpath_str = str(fpath).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -714,7 +714,7 @@ class TestDataSciencePipeline:
     def test_full_pipeline_edit_source(self, nb_runner, tmp_path):
         """Full pipeline, edit source data."""
         csv = tmp_path / "dataset.csv"
-        csv.write_text("feature,target\n1,10\n2,20\n3,30\n4,40\n5,50\n")
+        csv.write_text("feature,target\n1,10\n2,20\n3,30\n4,40\n5,50\n", encoding="utf-8")
         csv_str = str(csv).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -732,7 +732,7 @@ class TestDataSciencePipeline:
         assert "rmse = " in nb_runner.get_output(5)
 
         # Edit source data
-        csv.write_text("feature,target\n10,100\n20,200\n30,300\n")
+        csv.write_text("feature,target\n10,100\n20,200\n30,300\n", encoding="utf-8")
         nb_runner.shutdown()
         nb_runner.start_kernel()
         nb_runner.run_all()
@@ -741,7 +741,7 @@ class TestDataSciencePipeline:
     def test_full_pipeline_edit_feature_engineering(self, nb_runner, tmp_path):
         """Edit feature engineering step."""
         csv = tmp_path / "data2.csv"
-        csv.write_text("x,y\n1,2\n2,4\n3,6\n4,8\n")
+        csv.write_text("x,y\n1,2\n2,4\n3,6\n4,8\n", encoding="utf-8")
         csv_str = str(csv).replace("\\", "/")
 
         nb_runner.create_notebook(

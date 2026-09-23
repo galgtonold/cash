@@ -28,7 +28,7 @@ def _p(path):
 def _lines(path):
     if not path.exists():
         return []
-    return [ln for ln in path.read_text().splitlines() if ln.strip()]
+    return [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
 
 def _cells(audit_path, *, cash_on):

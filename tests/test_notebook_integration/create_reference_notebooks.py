@@ -44,7 +44,7 @@ print(f'Keys cell: {list(ticker_stats.keys())}')""")
 
     nb.cells = [cell1, cell2, cell3]
 
-    with open(NOTEBOOKS_DIR / "financial_demo.ipynb", "w") as f:
+    with open(NOTEBOOKS_DIR / "financial_demo.ipynb", "w", encoding="utf-8") as f:
         nbformat.write(nb, f)
 
     print("Created financial_demo.ipynb")
@@ -67,7 +67,7 @@ print(f"Downstream: {data}")""")
 
     nb.cells = [cell1, cell2]
 
-    with open(NOTEBOOKS_DIR / "loop_accumulator.ipynb", "w") as f:
+    with open(NOTEBOOKS_DIR / "loop_accumulator.ipynb", "w", encoding="utf-8") as f:
         nbformat.write(nb, f)
 
     print("Created loop_accumulator.ipynb")

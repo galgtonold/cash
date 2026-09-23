@@ -30,11 +30,11 @@ def _site(source):
 
 def test_a_call_returning_an_open_file_is_not_served(call_cache, tmp_path):
     path = tmp_path / "lines.txt"
-    path.write_text("a\nb\n")
+    path.write_text("a\nb\n", encoding="utf-8")
 
     def handle(p):
         time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
-        return open(p)  # noqa: SIM115 - the handle is the point
+        return open(p, encoding="utf-8")  # noqa: SIM115 - the handle is the point
 
     call_cache.set_sites([_site("handle(p)")])
     cached = call_cache.resolve(handle)

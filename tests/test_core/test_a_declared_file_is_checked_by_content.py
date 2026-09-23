@@ -18,7 +18,7 @@ from cash.backends.memory_backend import InMemoryBackend
 def _make(tmp_path):
     c = Cash(backend=InMemoryBackend(), register_magic=False)
     path = tmp_path / "config.txt"
-    path.write_text("alpha")
+    path.write_text("alpha", encoding="utf-8")
     runs = []
 
     @c.cache(file_depends_on=str(path))
@@ -34,7 +34,7 @@ def test_an_edit_that_keeps_the_mtime_recomputes(tmp_path):
     path, load, runs = _make(tmp_path)
     load()
     st = os.stat(path)
-    path.write_text("omega")
+    path.write_text("omega", encoding="utf-8")
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
     load()
     assert len(runs) == 2, "an edit with the mtime restored served the old result"
@@ -52,15 +52,15 @@ def test_a_touch_with_the_same_content_hits(tmp_path):
 def test_an_edit_recomputes(tmp_path):
     path, load, runs = _make(tmp_path)
     load()
-    path.write_text("a different length")
+    path.write_text("a different length", encoding="utf-8")
     load()
     assert len(runs) == 2
 
 
 def test_re_pointing_the_declaration_recomputes(tmp_path):
     c = Cash(backend=InMemoryBackend(), register_magic=False)
-    (tmp_path / "a.txt").write_text("a")
-    (tmp_path / "b.txt").write_text("b")
+    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("b", encoding="utf-8")
     runs = []
 
     def body():

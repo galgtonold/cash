@@ -90,7 +90,7 @@ def test_patched_hooks_do_not_lie_to_ipykernel_in_a_real_kernel(nb_runner, tmp_p
         "(Do not relax this into a badge/output check: the badge reports EXECUTED "
         "for cells that never ran, which is how this bug shipped.)"
     )
-    assert side_effect.read_text() == "RAN"
+    assert side_effect.read_text(encoding="utf-8") == "RAN"
 
     # 2. ipykernel's real verdict on cash's hook == its verdict on the original.
     verdict = nb_runner.get_output(4)

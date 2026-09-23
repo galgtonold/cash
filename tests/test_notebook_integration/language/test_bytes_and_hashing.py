@@ -598,7 +598,7 @@ class TestHashlibPatterns:
         """Hash file content across cells."""
         test_file = tmp_path / "hashdata" / "sample.txt"
         test_file.parent.mkdir(parents=True, exist_ok=True)
-        test_file.write_text("Test content for hashing")
+        test_file.write_text("Test content for hashing", encoding="utf-8")
         fpath = str(test_file).replace("\\", "/")
 
         nb_runner.create_notebook(

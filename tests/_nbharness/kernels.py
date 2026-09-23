@@ -184,7 +184,7 @@ def _boot_lock_release(held: bool = True):
 
 def _boot_state_read():
     try:
-        with open(_BOOT_STATE) as f:
+        with open(_BOOT_STATE, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         return {}
@@ -192,7 +192,7 @@ def _boot_state_read():
 
 def _boot_state_write(state):
     try:
-        with open(_BOOT_STATE, "w") as f:
+        with open(_BOOT_STATE, "w", encoding="utf-8") as f:
             json.dump(state, f)
     except OSError:
         pass

@@ -69,9 +69,9 @@ def test_a_helper_that_only_appends_still_caches(nb_runner):
     nb_runner.enable_persist()
     nb_runner.run_all()
     log = Path(nb_runner.work_dir) / "out" / "log.txt"
-    assert log.read_text().split() == ["slow"]
+    assert log.read_text(encoding="utf-8").split() == ["slow"]
     nb_runner.restart()
     nb_runner.enable_persist()
     nb_runner.run_all()
     assert "x = 42" in nb_runner.get_output(4)
-    assert log.read_text().split() == ["slow"], "slow() re-ran instead of coming from the cache"
+    assert log.read_text(encoding="utf-8").split() == ["slow"], "slow() re-ran instead of coming from the cache"

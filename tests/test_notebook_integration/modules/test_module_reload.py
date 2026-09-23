@@ -24,7 +24,7 @@ class TestModuleReloadIntegration:
         """Changing a local module's source should cause cache miss on re-run."""
         # Create a local module in the work directory
         module_file = tmp_path / "mymod.py"
-        module_file.write_text("def compute(x):\n    return x + 1\n")
+        module_file.write_text("def compute(x):\n    return x + 1\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -45,7 +45,7 @@ class TestModuleReloadIntegration:
         assert "result=11" in output2
 
         # Now change the module
-        module_file.write_text("def compute(x):\n    return x + 100\n")
+        module_file.write_text("def compute(x):\n    return x + 100\n", encoding="utf-8")
 
         # Third run: should detect the change and re-compute
         nb_runner.run_all()
@@ -55,7 +55,7 @@ class TestModuleReloadIntegration:
     def test_module_reload_with_multiple_dependents(self, nb_runner, tmp_path):
         """Multiple cells depending on a changed module should all re-execute."""
         module_file = tmp_path / "helpers.py"
-        module_file.write_text("def double(x):\n    return x * 2\n")
+        module_file.write_text("def double(x):\n    return x * 2\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -72,7 +72,7 @@ class TestModuleReloadIntegration:
         assert "b=20" in nb_runner.get_output(3)
 
         # Change module: double now triples
-        module_file.write_text("def double(x):\n    return x * 3\n")
+        module_file.write_text("def double(x):\n    return x * 3\n", encoding="utf-8")
 
         # Re-run: both should get new results
         nb_runner.run_all()
@@ -84,7 +84,7 @@ class TestModuleReloadIntegration:
     def test_module_reload_badge_shows_notification(self, nb_runner, tmp_path):
         """Badge should show MODULE_RELOADED notification after module change."""
         module_file = tmp_path / "trackmod.py"
-        module_file.write_text("VAL = 42\n")
+        module_file.write_text("VAL = 42\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -100,7 +100,7 @@ class TestModuleReloadIntegration:
         assert "val=42" in nb_runner.get_output(2)
 
         # Change module
-        module_file.write_text("VAL = 99\n")
+        module_file.write_text("VAL = 99\n", encoding="utf-8")
 
         # Re-run and check debug output for reload notification
         nb_runner.run_all()
@@ -202,10 +202,12 @@ class TestTransitiveDependencyIntegration:
         """Changing helpers.py (imported by metrics.py) should cause cache miss."""
         # Create the two-level module hierarchy
         helpers_file = tmp_path / "helpers.py"
-        helpers_file.write_text("def add_one(x):\n    return x + 1\n")
+        helpers_file.write_text("def add_one(x):\n    return x + 1\n", encoding="utf-8")
 
         metrics_file = tmp_path / "metrics.py"
-        metrics_file.write_text("from helpers import add_one\ndef compute(x):\n    return add_one(x) * 2\n")
+        metrics_file.write_text(
+            "from helpers import add_one\ndef compute(x):\n    return add_one(x) * 2\n", encoding="utf-8"
+        )
 
         nb_runner.create_notebook(
             [
@@ -227,7 +229,7 @@ class TestTransitiveDependencyIntegration:
 
         # Now change ONLY helpers.py (metrics.py stays the same)
         time.sleep(0.1)
-        helpers_file.write_text("def add_one(x):\n    return x + 100\n")
+        helpers_file.write_text("def add_one(x):\n    return x + 100\n", encoding="utf-8")
 
         # Third run: should detect transitive change and re-compute
         nb_runner.run_all()
@@ -237,10 +239,10 @@ class TestTransitiveDependencyIntegration:
     def test_transitive_dep_multiple_dependents(self, nb_runner, tmp_path):
         """Multiple cells depending on a module whose sub-dep changed should all re-execute."""
         helpers_file = tmp_path / "helpers.py"
-        helpers_file.write_text("BASE = 10\n")
+        helpers_file.write_text("BASE = 10\n", encoding="utf-8")
 
         svc_file = tmp_path / "svc.py"
-        svc_file.write_text("from helpers import BASE\ndef calc(x):\n    return x + BASE\n")
+        svc_file.write_text("from helpers import BASE\ndef calc(x):\n    return x + BASE\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -258,7 +260,7 @@ class TestTransitiveDependencyIntegration:
 
         # Change helpers.py (not svc.py)
         time.sleep(0.1)
-        helpers_file.write_text("BASE = 1000\n")
+        helpers_file.write_text("BASE = 1000\n", encoding="utf-8")
 
         # Re-run: both should get new results
         nb_runner.run_all()
@@ -270,13 +272,17 @@ class TestTransitiveDependencyIntegration:
     def test_three_level_transitive_dep(self, nb_runner, tmp_path):
         """Three-level chain: notebook imports app, app imports svc, svc imports utils."""
         utils_file = tmp_path / "chain_utils.py"
-        utils_file.write_text("FACTOR = 2\n")
+        utils_file.write_text("FACTOR = 2\n", encoding="utf-8")
 
         svc_file = tmp_path / "chain_svc.py"
-        svc_file.write_text("from chain_utils import FACTOR\ndef multiply(x):\n    return x * FACTOR\n")
+        svc_file.write_text(
+            "from chain_utils import FACTOR\ndef multiply(x):\n    return x * FACTOR\n", encoding="utf-8"
+        )
 
         app_file = tmp_path / "chain_app.py"
-        app_file.write_text("from chain_svc import multiply\ndef run(x):\n    return multiply(x) + 1\n")
+        app_file.write_text(
+            "from chain_svc import multiply\ndef run(x):\n    return multiply(x) + 1\n", encoding="utf-8"
+        )
 
         nb_runner.create_notebook(
             [
@@ -293,7 +299,7 @@ class TestTransitiveDependencyIntegration:
 
         # Change the bottom-level utils
         time.sleep(0.1)
-        utils_file.write_text("FACTOR = 100\n")
+        utils_file.write_text("FACTOR = 100\n", encoding="utf-8")
 
         # Re-run: 5*100+1 = 501
         nb_runner.run_all()

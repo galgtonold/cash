@@ -36,22 +36,22 @@ class TestValidateFileFreshness:
 
     def test_existing_file_with_matching_mtime(self, tmp_path):
         test_file = tmp_path / "data.csv"
-        test_file.write_text("a,b\n1,2")
+        test_file.write_text("a,b\n1,2", encoding="utf-8")
         assert VirtualLineage._validate_file_freshness(snapshot_file_deps({str(test_file)})) is True
 
     def test_existing_file_with_stale_mtime(self, tmp_path):
         test_file = tmp_path / "data.csv"
-        test_file.write_text("a,b\n1,2")
+        test_file.write_text("a,b\n1,2", encoding="utf-8")
         snapshot = snapshot_file_deps({str(test_file)})
-        test_file.write_text("a,b\n1,2\n3,4")
+        test_file.write_text("a,b\n1,2\n3,4", encoding="utf-8")
         assert VirtualLineage._validate_file_freshness(snapshot) is False
 
     def test_multiple_files_all_fresh(self, tmp_path):
         """All files must be fresh for the result to be True."""
         f1 = tmp_path / "a.csv"
         f2 = tmp_path / "b.csv"
-        f1.write_text("data1")
-        f2.write_text("data2")
+        f1.write_text("data1", encoding="utf-8")
+        f2.write_text("data2", encoding="utf-8")
         files = snapshot_file_deps({str(f1), str(f2)})
         assert VirtualLineage._validate_file_freshness(files) is True
 
@@ -59,10 +59,10 @@ class TestValidateFileFreshness:
         """If any file is stale, the result should be False."""
         f1 = tmp_path / "a.csv"
         f2 = tmp_path / "b.csv"
-        f1.write_text("data1")
-        f2.write_text("data2")
+        f1.write_text("data1", encoding="utf-8")
+        f2.write_text("data2", encoding="utf-8")
         files = snapshot_file_deps({str(f1), str(f2)})
-        f2.write_text("data2 changed")
+        f2.write_text("data2 changed", encoding="utf-8")
         assert VirtualLineage._validate_file_freshness(files) is False
 
 
@@ -114,7 +114,7 @@ class TestRestoreRecordsFileDeps:
     def test_file_deps_propagated_from_metadata(self, tmp_path):
         """File deps in cache metadata should be propagated to executed_file_deps."""
         csv_file = tmp_path / "data.csv"
-        csv_file.write_text("a,b\n1,2")
+        csv_file.write_text("a,b\n1,2", encoding="utf-8")
         csv_path = str(csv_file)
 
         checker, restored = self._restore(
@@ -144,7 +144,7 @@ class TestRestoreRecordsFileDeps:
     def test_file_deps_resolved_via_fallback(self, tmp_path, monkeypatch):
         """A dependency recorded under a path that moved resolves by name in the CWD."""
         csv_file = tmp_path / "data.csv"
-        csv_file.write_text("a,b\n1,2")
+        csv_file.write_text("a,b\n1,2", encoding="utf-8")
         monkeypatch.chdir(tmp_path)
         stale_path = "/nonexistent/old/path/data.csv"
         recorded = snapshot_file_deps({str(csv_file)})[str(csv_file)]
@@ -182,7 +182,7 @@ class TestRestoreRecordsFileDeps:
     def test_file_deps_propagated_to_multiple_restored_vars(self, tmp_path):
         """When multiple vars are restored, all get the file deps."""
         csv_file = tmp_path / "data.csv"
-        csv_file.write_text("a,b\n1,2")
+        csv_file.write_text("a,b\n1,2", encoding="utf-8")
         csv_path = str(csv_file)
 
         checker, restored = self._restore(

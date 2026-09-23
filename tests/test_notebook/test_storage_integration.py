@@ -110,7 +110,7 @@ class TestStorageIntegration:
         """Test file dependency invalidation."""
         processor, shell, backend, _ = processor_fixture
 
-        with tempfile.NamedTemporaryFile(delete=False, mode="w+") as f:
+        with tempfile.NamedTemporaryFile(encoding="utf-8", delete=False, mode="w+") as f:
             f.write("v1")
             path = f.name.replace(os.sep, "/")
 
@@ -123,7 +123,7 @@ class TestStorageIntegration:
 
             # Modify File
             time.sleep(1.1)
-            with open(path, "w") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 f.write("v2")
 
             # Run 2

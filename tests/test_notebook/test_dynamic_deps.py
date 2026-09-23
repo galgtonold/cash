@@ -15,7 +15,7 @@ def file_resolver(filename):
 
 @app.cache(dynamic_depends_on=file_resolver)
 def read_dynamic_file(filename):
-    with open(filename, "r") as f:
+    with open(filename, "r", encoding="utf-8") as f:
         return f.read()
 
 
@@ -25,7 +25,7 @@ def reset_and_cleanup_file():
     app.backend.clear()
 
     # Create test file
-    with open("test_dyn.txt", "w") as f:
+    with open("test_dyn.txt", "w", encoding="utf-8") as f:
         f.write("v1")
 
     yield
@@ -48,7 +48,7 @@ def test_dynamic_invalidation():
 
     # 3. Modify file
     time.sleep(1.1)  # Ensure mtime change
-    with open("test_dyn.txt", "w") as f:
+    with open("test_dyn.txt", "w", encoding="utf-8") as f:
         f.write("v2")
 
     # 4. Should re-read because dynamic dependency changed

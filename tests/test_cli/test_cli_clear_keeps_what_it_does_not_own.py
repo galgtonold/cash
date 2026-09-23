@@ -21,11 +21,11 @@ from cash.backends.entry_format import ENTRY_SUFFIX
 def _cache_with(tmp_path, *foreign):
     cache = tmp_path / "shared_data"
     (cache / "raw").mkdir(parents=True)
-    (cache / "CACHE_VERSION").write_text("2")
+    (cache / "CACHE_VERSION").write_text("2", encoding="utf-8")
     (cache / f"abc{ENTRY_SUFFIX}").write_bytes(b"entry")
-    (cache / "_rank.log").write_text("")
+    (cache / "_rank.log").write_text("", encoding="utf-8")
     for name in foreign:
-        (cache / name).write_text("mine")
+        (cache / name).write_text("mine", encoding="utf-8")
     return cache
 
 
@@ -43,7 +43,7 @@ def test_a_cache_holding_user_files_is_not_removed(tmp_path, monkeypatch, capsys
         _clear(cache, monkeypatch, tmp_path)
     assert exit_info.value.code == 1
     out = capsys.readouterr().out
-    assert (cache / "precious.csv").read_text() == "mine", out
+    assert (cache / "precious.csv").read_text(encoding="utf-8") == "mine", out
     assert "precious.csv" in out, out
     assert (cache / f"abc{ENTRY_SUFFIX}").exists(), "nothing was cleared"
 

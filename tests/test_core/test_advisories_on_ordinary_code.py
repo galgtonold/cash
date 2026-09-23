@@ -93,7 +93,7 @@ def latency_by_path_sorted(log_rows):
 
 def parse_orders(path):
     out = []
-    with open(path, newline="") as f:
+    with open(path, encoding="utf-8", newline="") as f:
         for row in csv.reader(f):
             row[3] = float(row[3])
             out.append(row)
@@ -101,7 +101,7 @@ def parse_orders(path):
 
 
 def parse_users(path):
-    with open(path, newline="") as f:
+    with open(path, encoding="utf-8", newline="") as f:
         users = []
         for d in csv.DictReader(f):
             d["age"] = int(d["age"])

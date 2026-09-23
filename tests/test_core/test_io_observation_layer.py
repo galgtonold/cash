@@ -131,7 +131,7 @@ def test_the_next_scope_wraps_what_is_there_now():
 
 def test_a_read_through_a_reference_taken_before_cash_is_tracked(tmp_path):
     data = tmp_path / "data.txt"
-    data.write_text("x")
+    data.write_text("x", encoding="utf-8")
     tracker = FileAccessTracker()
     with tracker, _CAPTURED_OPEN(data) as fh:
         fh.read()
@@ -139,8 +139,8 @@ def test_a_read_through_a_reference_taken_before_cash_is_tracked(tmp_path):
 
 
 def test_importing_a_user_module_records_neither_its_source_nor_its_folder(tmp_path, monkeypatch):
-    (tmp_path / "freshly_written_module.py").write_text("VALUE = 7\n")
-    (tmp_path / "rows.txt").write_text("1\n")
+    (tmp_path / "freshly_written_module.py").write_text("VALUE = 7\n", encoding="utf-8")
+    (tmp_path / "rows.txt").write_text("1\n", encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setattr(sys, "dont_write_bytecode", True)
     tracker = FileAccessTracker()
@@ -149,7 +149,7 @@ def test_importing_a_user_module_records_neither_its_source_nor_its_folder(tmp_p
             import freshly_written_module  # noqa: F401
 
             imported = _tracked(tracker)
-            with open(tmp_path / "rows.txt") as fh:  # control: a read here IS tracked
+            with open(tmp_path / "rows.txt", encoding="utf-8") as fh:  # control: a read here IS tracked
                 fh.read()
     finally:
         sys.modules.pop("freshly_written_module", None)
@@ -162,8 +162,8 @@ def test_a_missing_file_opened_for_reading_is_an_absence_but_not_for_append(tmp_
     tracker = FileAccessTracker()
     with tracker:
         with pytest.raises(FileNotFoundError):
-            open(tmp_path / "gone.txt")
-        with open(tmp_path / "log.txt", "a+") as fh:  # creates it: no absence
+            open(tmp_path / "gone.txt", encoding="utf-8")
+        with open(tmp_path / "log.txt", "a+", encoding="utf-8") as fh:  # creates it: no absence
             fh.write("x")
     absent = {p.replace("\\", "/") for p in tracker.get_absent_files()}
     assert any(p.endswith("/gone.txt") for p in absent), absent
@@ -180,7 +180,7 @@ def test_cash_reading_a_file_for_itself_is_nobodys_dependency(tmp_path, reader):
     from cash.tracking import file_dep_snapshot
 
     module = tmp_path / "helpers.py"
-    module.write_text("def scale(x):\n    return x * 2\n")
+    module.write_text("def scale(x):\n    return x * 2\n", encoding="utf-8")
     read = {
         "read_code_file": source_norm.read_code_file,
         "file_content_hash": file_dep_snapshot.file_content_hash,
@@ -196,7 +196,7 @@ def test_os_open_is_not_a_dependency(tmp_path):
     """Tests count executions with os.open/os.write precisely because the
     tracker does not turn them into dependencies."""
     counter = tmp_path / "count.txt"
-    counter.write_text("0")
+    counter.write_text("0", encoding="utf-8")
     tracker = FileAccessTracker()
     with tracker:
         os.close(os.open(counter, os.O_RDONLY))

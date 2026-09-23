@@ -132,7 +132,7 @@ def test_file_depends_on_tracks_content_not_mtime(tmp_path):
     auto content tracking would be what is tested.)"""
     c = _cash(tmp_path)
     p = tmp_path / "cfg.bin"
-    p.write_text("aaaa")
+    p.write_text("aaaa", encoding="utf-8")
     st = p.stat()
     n = {"c": 0}
 
@@ -145,7 +145,7 @@ def test_file_depends_on_tracks_content_not_mtime(tmp_path):
     g()
     assert n["c"] == 1
 
-    p.write_text("bbbb")  # same size, new content
+    p.write_text("bbbb", encoding="utf-8")  # same size, new content
     os.utime(p, (st.st_atime, st.st_mtime))  # reset mtime to original
     g()
     assert n["c"] == 2, "content changed (mtime reset) -> recomputed"
@@ -161,20 +161,20 @@ def test_auto_file_tracking_is_content_hash(tmp_path):
     edit recomputes even if the mtime is reset to its original value."""
     c = _cash(tmp_path)
     p = tmp_path / "data.csv"
-    p.write_text("a,b\n1,2\n")
+    p.write_text("a,b\n1,2\n", encoding="utf-8")
     st = p.stat()
     n = {"c": 0}
 
     @c.cache(assume_safe=True)
     def load():
         n["c"] += 1
-        return p.read_text()
+        return p.read_text(encoding="utf-8")
 
     load()
     load()
     assert n["c"] == 1
 
-    p.write_text("a,b\n9,9\n")  # same size, new content
+    p.write_text("a,b\n9,9\n", encoding="utf-8")  # same size, new content
     os.utime(p, (st.st_atime, st.st_mtime))  # reset mtime
     load()
     assert n["c"] == 2, "content changed (mtime reset) -> recomputed (content-hash)"
@@ -505,7 +505,7 @@ def test_a_data_file_switched_back_recomputes_and_code_would_not(tmp_path):
     @c.cache(assume_safe=True)
     def load(path):
         calls.append(1)
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             return fh.read()
 
     for content in ("v1", "v2", "v1"):
@@ -526,7 +526,7 @@ def test_a_relative_path_from_two_directories_is_right_and_recomputes(tmp_path, 
     @c.cache(assume_safe=True)
     def read(path):
         calls.append(1)
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             return fh.read()
 
     for name, expected in (("a", "AAA"), ("b", "BBBB"), ("a", "AAA")):

@@ -119,7 +119,7 @@ def test_big_file_unchanged_is_fresh(tmp_path):
 def test_small_file_touch_still_hits(tmp_path):
     """Full-hashed files stay touch-tolerant: a touch must NOT invalidate."""
     f = tmp_path / "small.txt"
-    f.write_text("alpha-payload")  # well under the cap -> full hash
+    f.write_text("alpha-payload", encoding="utf-8")  # well under the cap -> full hash
     snap = snapshot_file_deps({str(f)})[str(f)]
     st = os.stat(f)
     os.utime(f, (st.st_atime + 100, st.st_mtime + 100))  # touch: mtime moves

@@ -24,7 +24,7 @@ def _calls(path):
     """Number of body invocations recorded so far, read from OUTSIDE the kernel."""
     if not path.exists():
         return 0
-    return len(path.read_text().strip())
+    return len(path.read_text(encoding="utf-8").strip())
 
 
 def test_statement_cache_survives_a_kernel_restart(nb_runner, tmp_path):

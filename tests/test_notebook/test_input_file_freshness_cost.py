@@ -32,7 +32,7 @@ def _files(tmp_path, n):
     paths = []
     for i in range(n):
         p = tmp_path / f"e{i:03d}.csv"
-        p.write_text(f"g,v\n{i},1\n")
+        p.write_text(f"g,v\n{i},1\n", encoding="utf-8")
         paths.append(str(p))
     return paths
 
@@ -57,7 +57,7 @@ def test_a_changed_file_is_still_caught(tmp_path):
     paths = _files(tmp_path, 50)
     backend = _CountingBackend({"key": "stmt:producer", "file_dependencies": snapshot_file_deps(set(paths))})
     checker = CacheFreshnessChecker(backend)
-    with open(paths[37], "w") as fh:
+    with open(paths[37], "w", encoding="utf-8") as fh:
         fh.write("g,v\n9,9\n")
     assert checker._invalidate_if_input_file_changed(_state(paths), {"raw"}, "payload") is None
     assert paths[37].replace("\\", "/").split("/")[-1] in (checker.last_miss_reason or "")

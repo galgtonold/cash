@@ -766,13 +766,13 @@ class TestDecoratorFileDependencies:
     def test_file_depends_on_single(self, tmp_path):
         """file_depends_on with a single file path."""
         data_file = tmp_path / "data.csv"
-        data_file.write_text("a,b\n1,2\n3,4")
+        data_file.write_text("a,b\n1,2\n3,4", encoding="utf-8")
 
         c = Cash()
 
         @c.cache(file_depends_on=str(data_file))
         def load_data():
-            return data_file.read_text()
+            return data_file.read_text(encoding="utf-8")
 
         result1 = load_data()
         assert result1 == "a,b\n1,2\n3,4"
@@ -785,20 +785,20 @@ class TestDecoratorFileDependencies:
     def test_file_depends_on_invalidates_on_change(self, tmp_path):
         """Cache should invalidate when tracked file changes."""
         data_file = tmp_path / "data.csv"
-        data_file.write_text("a,b\n1,2")
+        data_file.write_text("a,b\n1,2", encoding="utf-8")
 
         c = Cash()
 
         @c.cache(file_depends_on=str(data_file))
         def load_data():
-            return data_file.read_text()
+            return data_file.read_text(encoding="utf-8")
 
         result1 = load_data()
         assert "1,2" in result1
 
         # Modify the file
         time.sleep(0.05)  # Ensure mtime changes
-        data_file.write_text("a,b\n5,6")
+        data_file.write_text("a,b\n5,6", encoding="utf-8")
 
         result2 = load_data()
         # Should recompute because file changed
@@ -808,14 +808,14 @@ class TestDecoratorFileDependencies:
         """file_depends_on with multiple file paths."""
         f1 = tmp_path / "config.json"
         f2 = tmp_path / "data.csv"
-        f1.write_text('{"key": "val"}')
-        f2.write_text("a\n1")
+        f1.write_text('{"key": "val"}', encoding="utf-8")
+        f2.write_text("a\n1", encoding="utf-8")
 
         c = Cash()
 
         @c.cache(file_depends_on=[str(f1), str(f2)])
         def process():
-            return f1.read_text() + f2.read_text()
+            return f1.read_text(encoding="utf-8") + f2.read_text(encoding="utf-8")
 
         process()
         process()
@@ -826,7 +826,7 @@ class TestDecoratorFileDependencies:
     def test_file_depends_on_records_the_file_with_the_entry(self, tmp_path):
         """file_depends_on records the file the way a tracked read would."""
         data_file = tmp_path / "test.txt"
-        data_file.write_text("hello")
+        data_file.write_text("hello", encoding="utf-8")
 
         c = Cash(cache_dir=str(tmp_path / "cache"))
 
@@ -843,13 +843,13 @@ class TestDecoratorFileDependencies:
     def test_file_depends_on_with_ttl(self, tmp_path):
         """file_depends_on should work together with ttl."""
         data_file = tmp_path / "data.txt"
-        data_file.write_text("original")
+        data_file.write_text("original", encoding="utf-8")
 
         c = Cash()
 
         @c.cache(file_depends_on=str(data_file), ttl=3600)
         def read():
-            return data_file.read_text()
+            return data_file.read_text(encoding="utf-8")
 
         result = read()
         assert result == "original"

@@ -338,7 +338,7 @@ def test_side_effect_loop_not_cached(nb_runner, tmp_path):
     )
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert sink.read_text().count("\n") == 3, sink.read_text()
+    assert sink.read_text(encoding="utf-8").count("\n") == 3, sink.read_text(encoding="utf-8")
 
     # Re-run the loop cell: the side effect (file append) must fire AGAIN — the
     # loop is not cached, so the file grows to 6 lines. A wrongly-cached loop
@@ -346,8 +346,8 @@ def test_side_effect_loop_not_cached(nb_runner, tmp_path):
     nb_runner.run_cell(4)
     loop_out = nb_runner.get_output(4)
     assert not shows_cached(loop_out), f"side-effect loop was wrongly cached: {loop_out!r}"
-    assert sink.read_text().count("\n") == 6, (
-        f"side effect was skipped on re-run (loop wrongly cached): {sink.read_text()!r}"
+    assert sink.read_text(encoding="utf-8").count("\n") == 6, (
+        f"side effect was skipped on re-run (loop wrongly cached): {sink.read_text(encoding='utf-8')!r}"
     )
 
 

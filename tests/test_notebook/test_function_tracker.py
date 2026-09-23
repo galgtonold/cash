@@ -301,13 +301,16 @@ class TestIntraModuleCallDeps:
     def test_simple_call_dependency(self, tmp_path):
         """Function calling another function should be detected."""
         mod_file = tmp_path / "mod.py"
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 def dep(a):
     return a + 1
 
 def fun(a, b):
     return a + b + dep(a)
-""")
+""",
+            encoding="utf-8",
+        )
         deps = FunctionTracker.get_intra_module_call_deps(str(mod_file))
         assert "fun" in deps
         assert "dep" in deps["fun"]
@@ -315,12 +318,15 @@ def fun(a, b):
     def test_no_self_dependency(self, tmp_path):
         """A function should not depend on itself."""
         mod_file = tmp_path / "mod.py"
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 def recursive(n):
     if n <= 0:
         return 0
     return recursive(n - 1) + 1
-""")
+""",
+            encoding="utf-8",
+        )
         deps = FunctionTracker.get_intra_module_call_deps(str(mod_file))
         # recursive references itself, but should be excluded
         assert "recursive" not in deps or "recursive" not in deps.get("recursive", set())
@@ -328,7 +334,8 @@ def recursive(n):
     def test_transitive_chain(self, tmp_path):
         """A -> B -> C should be captured at each level."""
         mod_file = tmp_path / "mod.py"
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 def c():
     return 1
 
@@ -337,7 +344,9 @@ def b():
 
 def a():
     return b() + 1
-""")
+""",
+            encoding="utf-8",
+        )
         deps = FunctionTracker.get_intra_module_call_deps(str(mod_file))
         assert deps.get("b") == {"c"}
         assert deps.get("a") == {"b"}
@@ -346,14 +355,17 @@ def a():
     def test_class_method_deps(self, tmp_path):
         """Class referencing top-level functions should be detected."""
         mod_file = tmp_path / "mod.py"
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 def helper():
     return 42
 
 class MyClass:
     def method(self):
         return helper()
-""")
+""",
+            encoding="utf-8",
+        )
         deps = FunctionTracker.get_intra_module_call_deps(str(mod_file))
         assert "MyClass" in deps
         assert "helper" in deps["MyClass"]
@@ -361,25 +373,31 @@ class MyClass:
     def test_independent_functions(self, tmp_path):
         """Functions that don't reference each other should have no deps."""
         mod_file = tmp_path / "mod.py"
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 def foo(a):
     return a + 1
 
 def bar(b):
     return b * 2
-""")
+""",
+            encoding="utf-8",
+        )
         deps = FunctionTracker.get_intra_module_call_deps(str(mod_file))
         assert deps == {}
 
     def test_constant_reference(self, tmp_path):
         """Function referencing a module-level constant should be detected."""
         mod_file = tmp_path / "mod.py"
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 MULTIPLIER = 10
 
 def scale(x):
     return x * MULTIPLIER
-""")
+""",
+            encoding="utf-8",
+        )
         deps = FunctionTracker.get_intra_module_call_deps(str(mod_file))
         assert "scale" in deps
         assert "MULTIPLIER" in deps["scale"]
@@ -392,7 +410,7 @@ def scale(x):
     def test_syntax_error_file(self, tmp_path):
         """Should return empty dict for file with syntax errors."""
         mod_file = tmp_path / "bad.py"
-        mod_file.write_text("def broken(:\n    pass")
+        mod_file.write_text("def broken(:\n    pass", encoding="utf-8")
         deps = FunctionTracker.get_intra_module_call_deps(str(mod_file))
         assert deps == {}
 

@@ -42,7 +42,7 @@ class TestAutoFileTracking:
         def f():
             time.sleep(0.12)
             calls[0] += 1
-            with open(path) as fh:
+            with open(path, encoding="utf-8") as fh:
                 return fh.read()
 
         assert f() == "v1"
@@ -93,7 +93,7 @@ class TestAutoFileTracking:
         def f():
             time.sleep(0.12)
             calls[0] += 1
-            with open(path) as fh:
+            with open(path, encoding="utf-8") as fh:
                 return fh.read()
 
         assert f() == "static"
@@ -114,7 +114,7 @@ class TestAutoFileTracking:
         def f():
             time.sleep(0.12)
             calls[0] += 1
-            return path.read_text()
+            return path.read_text(encoding="utf-8")
 
         f()
         f()

@@ -20,7 +20,7 @@ class TestSingleModuleImportReload:
     def test_import_user_module(self, nb_runner, tmp_path):
         """Import a user-defined module from a .py file."""
         mod_path = tmp_path / "helpers.py"
-        mod_path.write_text("def greet(name):\n    return f'Hello {name}'\n")
+        mod_path.write_text("def greet(name):\n    return f'Hello {name}'\n", encoding="utf-8")
         path_str = str(tmp_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -40,7 +40,7 @@ class TestSingleModuleImportReload:
     def test_from_import_user_module(self, nb_runner, tmp_path):
         """From-import specific items from user module."""
         mod_path = tmp_path / "mathutils.py"
-        mod_path.write_text("def square(x):\n    return x ** 2\n\ndef cube(x):\n    return x ** 3\n")
+        mod_path.write_text("def square(x):\n    return x ** 2\n\ndef cube(x):\n    return x ** 3\n", encoding="utf-8")
         path_str = str(tmp_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -61,7 +61,7 @@ class TestSingleModuleImportReload:
     def test_module_function_change_detected(self, nb_runner, tmp_path):
         """Changing a module function should invalidate cache."""
         mod_path = tmp_path / "compute.py"
-        mod_path.write_text("def calc(x):\n    return x * 2\n")
+        mod_path.write_text("def calc(x):\n    return x * 2\n", encoding="utf-8")
         path_str = str(tmp_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -79,7 +79,7 @@ class TestSingleModuleImportReload:
         assert "20" in nb_runner.get_output(3)
 
         # Modify module
-        mod_path.write_text("def calc(x):\n    return x * 10\n")
+        mod_path.write_text("def calc(x):\n    return x * 10\n", encoding="utf-8")
         nb_runner.reset_cash_state()
         nb_runner.run_all()
         assert "100" in nb_runner.get_output(3)
@@ -87,7 +87,7 @@ class TestSingleModuleImportReload:
     def test_module_constant_change_detected(self, nb_runner, tmp_path):
         """Changing a module constant should invalidate cache."""
         mod_path = tmp_path / "config_mod.py"
-        mod_path.write_text("VERSION = '1.0'\nDEBUG = False\n")
+        mod_path.write_text("VERSION = '1.0'\nDEBUG = False\n", encoding="utf-8")
         path_str = str(tmp_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -104,7 +104,7 @@ class TestSingleModuleImportReload:
         assert "v1.0 debug=False" in nb_runner.get_output(3)
 
         # Modify module
-        mod_path.write_text("VERSION = '2.0'\nDEBUG = True\n")
+        mod_path.write_text("VERSION = '2.0'\nDEBUG = True\n", encoding="utf-8")
         nb_runner.reset_cash_state()
         nb_runner.run_all()
         assert "v2.0 debug=True" in nb_runner.get_output(3)
@@ -118,8 +118,8 @@ class TestMultiModuleDependencies:
 
     def test_two_independent_modules(self, nb_runner, tmp_path):
         """Two independent modules imported in same notebook."""
-        (tmp_path / "mod_a.py").write_text("A_VAL = 10\n")
-        (tmp_path / "mod_b.py").write_text("B_VAL = 20\n")
+        (tmp_path / "mod_a.py").write_text("A_VAL = 10\n", encoding="utf-8")
+        (tmp_path / "mod_b.py").write_text("B_VAL = 20\n", encoding="utf-8")
         path_str = str(tmp_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -138,15 +138,15 @@ class TestMultiModuleDependencies:
         assert "30" in nb_runner.get_output(4)
 
         # Change only mod_a
-        (tmp_path / "mod_a.py").write_text("A_VAL = 100\n")
+        (tmp_path / "mod_a.py").write_text("A_VAL = 100\n", encoding="utf-8")
         nb_runner.reset_cash_state()
         nb_runner.run_all()
         assert "120" in nb_runner.get_output(4)
 
     def test_module_importing_another_module(self, nb_runner, tmp_path):
         """Module that imports another module."""
-        (tmp_path / "base_mod.py").write_text("BASE = 5\n")
-        (tmp_path / "derived_mod.py").write_text("from base_mod import BASE\nDERIVED = BASE * 3\n")
+        (tmp_path / "base_mod.py").write_text("BASE = 5\n", encoding="utf-8")
+        (tmp_path / "derived_mod.py").write_text("from base_mod import BASE\nDERIVED = BASE * 3\n", encoding="utf-8")
         path_str = str(tmp_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -172,7 +172,7 @@ class TestModuleFileDependency:
     def test_module_with_csv_reader(self, nb_runner, tmp_path):
         """Module contains a function that reads a CSV, file tracked."""
         csv_path = tmp_path / "data.csv"
-        csv_path.write_text("x\n1\n2\n3\n")
+        csv_path.write_text("x\n1\n2\n3\n", encoding="utf-8")
         csv_path_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -190,7 +190,7 @@ class TestModuleFileDependency:
         assert "6" in nb_runner.get_output(3)
 
         # Change CSV
-        csv_path.write_text("x\n10\n20\n30\n")
+        csv_path.write_text("x\n10\n20\n30\n", encoding="utf-8")
         nb_runner.reset_cash_state()
         nb_runner.run_all()
         assert "60" in nb_runner.get_output(3)
@@ -205,7 +205,7 @@ class TestModuleReloadEdgeCases:
     def test_from_import_function_reload(self, nb_runner, tmp_path):
         """From-import a function, modify module, function should update."""
         mod_path = tmp_path / "toolbox.py"
-        mod_path.write_text("def tool(x):\n    return x + 1\n")
+        mod_path.write_text("def tool(x):\n    return x + 1\n", encoding="utf-8")
         path_str = str(tmp_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -223,7 +223,7 @@ class TestModuleReloadEdgeCases:
         assert "11" in nb_runner.get_output(3)
 
         # Modify module function and restart kernel (sys.modules must be cleared)
-        mod_path.write_text("def tool(x):\n    return x + 100\n")
+        mod_path.write_text("def tool(x):\n    return x + 100\n", encoding="utf-8")
         nb_runner.shutdown()
         nb_runner.start_kernel()
         nb_runner.run_all()
@@ -232,7 +232,7 @@ class TestModuleReloadEdgeCases:
     def test_from_import_constant_reload(self, nb_runner, tmp_path):
         """From-import a constant, modify module, constant should update."""
         mod_path = tmp_path / "settings.py"
-        mod_path.write_text("TIMEOUT = 30\n")
+        mod_path.write_text("TIMEOUT = 30\n", encoding="utf-8")
         path_str = str(tmp_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -249,7 +249,7 @@ class TestModuleReloadEdgeCases:
         assert "timeout=30" in nb_runner.get_output(3)
 
         # Modify constant and restart kernel (sys.modules must be cleared)
-        mod_path.write_text("TIMEOUT = 60\n")
+        mod_path.write_text("TIMEOUT = 60\n", encoding="utf-8")
         nb_runner.shutdown()
         nb_runner.start_kernel()
         nb_runner.run_all()
@@ -258,7 +258,7 @@ class TestModuleReloadEdgeCases:
     def test_module_add_new_function(self, nb_runner, tmp_path):
         """Add a new function to an existing module."""
         mod_path = tmp_path / "evolving.py"
-        mod_path.write_text("def old_func():\n    return 'old'\n")
+        mod_path.write_text("def old_func():\n    return 'old'\n", encoding="utf-8")
         path_str = str(tmp_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -276,7 +276,9 @@ class TestModuleReloadEdgeCases:
         assert "old" in nb_runner.get_output(3)
 
         # Add new function
-        mod_path.write_text("def old_func():\n    return 'old'\n\ndef new_func():\n    return 'new'\n")
+        mod_path.write_text(
+            "def old_func():\n    return 'old'\n\ndef new_func():\n    return 'new'\n", encoding="utf-8"
+        )
         nb_runner.set_cell_source(
             3,
             textwrap.dedent("""\
@@ -299,7 +301,8 @@ class TestModuleReloadEdgeCases:
             "    def __init__(self, name):\n"
             "        self.name = name\n"
             "    def label(self):\n"
-            "        return self.name.upper()\n"
+            "        return self.name.upper()\n",
+            encoding="utf-8",
         )
         path_str = str(tmp_path).replace("\\", "/")
 
@@ -323,7 +326,8 @@ class TestModuleReloadEdgeCases:
             "    def __init__(self, name):\n"
             "        self.name = name\n"
             "    def label(self):\n"
-            "        return f'[{self.name}]'\n"
+            "        return f'[{self.name}]'\n",
+            encoding="utf-8",
         )
         nb_runner.shutdown()
         nb_runner.start_kernel()
@@ -340,10 +344,14 @@ class TestMultiModuleBasics:
         """Module A imports B, B imports C — chain dependency."""
         pkg = tmp_path / "chain_pkg"
         pkg.mkdir()
-        (pkg / "__init__.py").write_text("")
-        (pkg / "mod_c.py").write_text("BASE = 10\ndef get_base(): return BASE\n")
-        (pkg / "mod_b.py").write_text("from chain_pkg.mod_c import get_base\ndef double(): return get_base() * 2\n")
-        (pkg / "mod_a.py").write_text("from chain_pkg.mod_b import double\ndef compute(): return double() + 1\n")
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / "mod_c.py").write_text("BASE = 10\ndef get_base(): return BASE\n", encoding="utf-8")
+        (pkg / "mod_b.py").write_text(
+            "from chain_pkg.mod_c import get_base\ndef double(): return get_base() * 2\n", encoding="utf-8"
+        )
+        (pkg / "mod_a.py").write_text(
+            "from chain_pkg.mod_b import double\ndef compute(): return double() + 1\n", encoding="utf-8"
+        )
         pkg_parent = str(tmp_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -367,8 +375,10 @@ class TestMultiModuleBasics:
         """Package with __init__.py exporting symbols."""
         pkg = tmp_path / "mathlib"
         pkg.mkdir()
-        (pkg / "__init__.py").write_text("from mathlib.ops import add, multiply\n__version__ = '1.0'\n")
-        (pkg / "ops.py").write_text("def add(a, b): return a + b\ndef multiply(a, b): return a * b\n")
+        (pkg / "__init__.py").write_text(
+            "from mathlib.ops import add, multiply\n__version__ = '1.0'\n", encoding="utf-8"
+        )
+        (pkg / "ops.py").write_text("def add(a, b): return a + b\ndef multiply(a, b): return a * b\n", encoding="utf-8")
         pkg_parent = str(tmp_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -393,18 +403,19 @@ class TestMultiModuleBasics:
         """Nested subpackages with cross-imports."""
         root = tmp_path / "project"
         root.mkdir()
-        (root / "__init__.py").write_text("")
+        (root / "__init__.py").write_text("", encoding="utf-8")
 
         utils = root / "utils"
         utils.mkdir()
-        (utils / "__init__.py").write_text("")
-        (utils / "helpers.py").write_text("def fmt(x): return f'[{x}]'\n")
+        (utils / "__init__.py").write_text("", encoding="utf-8")
+        (utils / "helpers.py").write_text("def fmt(x): return f'[{x}]'\n", encoding="utf-8")
 
         core = root / "core"
         core.mkdir()
-        (core / "__init__.py").write_text("")
+        (core / "__init__.py").write_text("", encoding="utf-8")
         (core / "engine.py").write_text(
-            "from project.utils.helpers import fmt\ndef process(data): return [fmt(d) for d in data]\n"
+            "from project.utils.helpers import fmt\ndef process(data): return [fmt(d) for d in data]\n",
+            encoding="utf-8",
         )
         pkg_parent = str(tmp_path).replace("\\", "/")
 
@@ -434,10 +445,14 @@ class TestModuleReloadChain:
         """Reload propagates through deep module chain."""
         pkg = tmp_path / "deep_pkg"
         pkg.mkdir()
-        (pkg / "__init__.py").write_text("")
-        (pkg / "base.py").write_text("FACTOR = 2\n")
-        (pkg / "middle.py").write_text("from deep_pkg.base import FACTOR\ndef scaled(x): return x * FACTOR\n")
-        (pkg / "top.py").write_text("from deep_pkg.middle import scaled\ndef compute(x): return scaled(x) + 1\n")
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / "base.py").write_text("FACTOR = 2\n", encoding="utf-8")
+        (pkg / "middle.py").write_text(
+            "from deep_pkg.base import FACTOR\ndef scaled(x): return x * FACTOR\n", encoding="utf-8"
+        )
+        (pkg / "top.py").write_text(
+            "from deep_pkg.middle import scaled\ndef compute(x): return scaled(x) + 1\n", encoding="utf-8"
+        )
         pkg_parent = str(tmp_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -461,9 +476,9 @@ class TestModuleReloadChain:
         """Conditional import based on config."""
         pkg = tmp_path / "cond_pkg"
         pkg.mkdir()
-        (pkg / "__init__.py").write_text("")
-        (pkg / "fast.py").write_text("def process(x): return x * 10\n")
-        (pkg / "slow.py").write_text("def process(x): return x + 1\n")
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / "fast.py").write_text("def process(x): return x * 10\n", encoding="utf-8")
+        (pkg / "slow.py").write_text("def process(x): return x + 1\n", encoding="utf-8")
         pkg_parent = str(tmp_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -491,12 +506,13 @@ class TestModuleReloadChain:
         """Simulate relative imports with explicit paths."""
         pkg = tmp_path / "rel_pkg"
         pkg.mkdir()
-        (pkg / "__init__.py").write_text("")
-        (pkg / "constants.py").write_text("PI = 3.14159\nE = 2.71828\n")
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / "constants.py").write_text("PI = 3.14159\nE = 2.71828\n", encoding="utf-8")
         (pkg / "math_ops.py").write_text(
             "from rel_pkg.constants import PI, E\n"
             "def circle_area(r): return PI * r * r\n"
-            "def exp_approx(x): return E ** x\n"
+            "def exp_approx(x): return E ** x\n",
+            encoding="utf-8",
         )
         pkg_parent = str(tmp_path).replace("\\", "/")
 

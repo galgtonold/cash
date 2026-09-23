@@ -33,7 +33,7 @@ def _inputs(tmp_path, n=N):
     paths = []
     for i in range(n):
         p = tmp_path / f"part{i:03d}.csv"
-        p.write_text("g,v\n" + "\n".join(f"{i},{j}" for j in range(20)) + "\n")
+        p.write_text("g,v\n" + "\n".join(f"{i},{j}" for j in range(20)) + "\n", encoding="utf-8")
         st = os.stat(p)
         os.utime(p, (st.st_atime - 3600, st.st_mtime - 3600))
         paths.append(str(p))
@@ -90,7 +90,7 @@ def test_an_edit_that_keeps_size_and_time_is_still_caught(tmp_path):
 def test_a_size_change_is_caught(tmp_path):
     paths = _inputs(tmp_path)
     checker, metadata = _check(paths)
-    with open(paths[7], "a") as fh:
+    with open(paths[7], "a", encoding="utf-8") as fh:
         fh.write("9,9\n")
     assert checker._invalidate_if_direct_file_changed(metadata, "payload") is None
 

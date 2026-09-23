@@ -216,7 +216,7 @@ class TestContextManagers:
     def test_file_context_manager_tracking(self, nb_runner, tmp_path):
         """File opened with context manager should be tracked."""
         data_file = tmp_path / "ctx_data.txt"
-        data_file.write_text("hello context")
+        data_file.write_text("hello context", encoding="utf-8")
         path_str = str(data_file).replace("\\", "/")
 
         nb_runner.create_notebook(

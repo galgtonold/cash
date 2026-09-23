@@ -107,7 +107,7 @@ class TestMultiFileDependencies:
         """Read a text file and count lines."""
         txt_path = tmp_path / "data.txt"
         txt_str = str(txt_path).replace("\\", "/")
-        txt_path.write_text("line1\nline2\nline3\n")
+        txt_path.write_text("line1\nline2\nline3\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -121,7 +121,7 @@ class TestMultiFileDependencies:
         assert "Lines: 3" in out1
 
         # Add more lines
-        txt_path.write_text("line1\nline2\nline3\nline4\nline5\n")
+        txt_path.write_text("line1\nline2\nline3\nline4\nline5\n", encoding="utf-8")
         time.sleep(0.1)
         nb_runner.run_all()
         out2 = nb_runner.get_output(2)
@@ -194,7 +194,8 @@ class TestComplexModulePatterns:
             
             def quick_process(x):
                 return x * 2
-        """)
+        """),
+            encoding="utf-8",
         )
         tmp_str = str(tmp_path).replace("\\", "/")
 
@@ -225,7 +226,8 @@ class TestComplexModulePatterns:
                 return _count
             def get_count():
                 return _count
-        """)
+        """),
+            encoding="utf-8",
         )
         tmp_str = str(tmp_path).replace("\\", "/")
 
@@ -250,7 +252,8 @@ class TestComplexModulePatterns:
             textwrap.dedent("""\
             def normalize(x):
                 return x / 100.0
-        """)
+        """),
+            encoding="utf-8",
         )
         calc_mod = tmp_path / "calculator.py"
         calc_mod.write_text(
@@ -258,7 +261,8 @@ class TestComplexModulePatterns:
             from base_utils import normalize
             def calc(x):
                 return normalize(x) * 2
-        """)
+        """),
+            encoding="utf-8",
         )
         tmp_str = str(tmp_path).replace("\\", "/")
 
@@ -707,7 +711,7 @@ class TestModuleReloadCombined:
         """Changing a module function should invalidate all downstream users."""
         mod_path = str(tmp_path / "mymod.py").replace("\\", "/")
 
-        with open(mod_path, "w") as f:
+        with open(mod_path, "w", encoding="utf-8") as f:
             f.write("def transform(x): return x * 2\n")
 
         nb_runner.create_notebook(
@@ -727,7 +731,7 @@ class TestModuleReloadCombined:
 
         # Modify module
         time.sleep(0.1)
-        with open(mod_path, "w") as f:
+        with open(mod_path, "w", encoding="utf-8") as f:
             f.write("def transform(x): return x * 3\n")
 
         nb_runner.run_all()
@@ -739,7 +743,7 @@ class TestModuleReloadCombined:
         """Module with both function and constant from-imports."""
         mod_path = str(tmp_path / "config_mod.py").replace("\\", "/")
 
-        with open(mod_path, "w") as f:
+        with open(mod_path, "w", encoding="utf-8") as f:
             f.write("VERSION = '1.0'\ndef greet(name): return f'Hello {name} v{VERSION}'\n")
 
         nb_runner.create_notebook(
@@ -759,7 +763,7 @@ class TestModuleReloadCombined:
 
         # Update module
         time.sleep(0.1)
-        with open(mod_path, "w") as f:
+        with open(mod_path, "w", encoding="utf-8") as f:
             f.write("VERSION = '2.0'\ndef greet(name): return f'Hi {name} v{VERSION}'\n")
 
         nb_runner.run_all()
@@ -1442,7 +1446,7 @@ class TestFunctionPlusFileEdit:
     def test_function_reads_file_then_file_changes(self, nb_runner, tmp_path):
         """Function reads a file; file content changes."""
         data_file = tmp_path / "data.txt"
-        data_file.write_text("100")
+        data_file.write_text("100", encoding="utf-8")
         path_str = str(data_file).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -1456,14 +1460,14 @@ class TestFunctionPlusFileEdit:
         assert "val = 100" in nb_runner.get_output(2)
 
         # Change file
-        data_file.write_text("999")
+        data_file.write_text("999", encoding="utf-8")
         nb_runner.run_all()
         assert "val = 999" in nb_runner.get_output(2)
 
     def test_function_and_file_both_change(self, nb_runner, tmp_path):
         """Both the function definition and the file change."""
         data_file = tmp_path / "vals.txt"
-        data_file.write_text("10\n20\n30")
+        data_file.write_text("10\n20\n30", encoding="utf-8")
         path_str = str(data_file).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -1477,7 +1481,7 @@ class TestFunctionPlusFileEdit:
         assert "result = 60" in nb_runner.get_output(2)
 
         # Change file content and function
-        data_file.write_text("1\n2\n3")
+        data_file.write_text("1\n2\n3", encoding="utf-8")
         nb_runner.set_cell_source(
             1,
             f"def process():\n    with open('{path_str}') as f:\n        return max(int(x) for x in f)",

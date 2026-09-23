@@ -72,13 +72,13 @@ def test_the_template_carries_the_field_docs_and_every_layer(tmp_path):
 
 def test_an_existing_file_is_kept_unless_forced(tmp_path):
     target = tmp_path / "config.toml"
-    target.write_text("[cash]\ndebug = true\n")
+    target.write_text("[cash]\ndebug = true\n", encoding="utf-8")
     with pytest.raises(FileExistsError):
         create_default_config(str(target))
-    assert target.read_text() == "[cash]\ndebug = true\n"
+    assert target.read_text(encoding="utf-8") == "[cash]\ndebug = true\n"
 
     create_default_config(str(target), force=True)
-    assert "# debug = false" in target.read_text()
+    assert "# debug = false" in target.read_text(encoding="utf-8")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="the user config lives under %APPDATA% on Windows")

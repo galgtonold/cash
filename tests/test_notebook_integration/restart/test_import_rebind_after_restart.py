@@ -22,7 +22,7 @@ def test_import_rebinds_when_downstream_recomputes_after_restart(nb_runner, tmp_
     the file changed - it must still see the rebound module."""
     csv = tmp_path / "data.csv"
     csv_str = str(csv).replace("\\", "/")
-    csv.write_text("v\n1\n2\n3\n")
+    csv.write_text("v\n1\n2\n3\n", encoding="utf-8")
 
     nb_runner.create_notebook(
         [
@@ -37,7 +37,7 @@ def test_import_rebinds_when_downstream_recomputes_after_restart(nb_runner, tmp_
 
     # Restart, change the file so the read cell must recompute.
     nb_runner.shutdown()
-    csv.write_text("v\n10\n20\n30\n")
+    csv.write_text("v\n10\n20\n30\n", encoding="utf-8")
     time.sleep(0.1)
     nb_runner.start_kernel()
     nb_runner.run_all()
@@ -49,7 +49,7 @@ def test_import_only_cell_unchanged_file_still_works_after_restart(nb_runner, tm
     right answer (the import is rebound on re-execution, downstream restores)."""
     csv = tmp_path / "data.csv"
     csv_str = str(csv).replace("\\", "/")
-    csv.write_text("v\n4\n5\n6\n")
+    csv.write_text("v\n4\n5\n6\n", encoding="utf-8")
 
     nb_runner.create_notebook(
         [

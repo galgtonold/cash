@@ -44,7 +44,7 @@ def _exports(work_dir: Path) -> None:
     folder = work_dir / "exports"
     folder.mkdir()
     for i in range(4):
-        (folder / f"e{i}.csv").write_text(f"k,v\n{i},{10 * (i + 1)}\n")
+        (folder / f"e{i}.csv").write_text(f"k,v\n{i},{10 * (i + 1)}\n", encoding="utf-8")
 
 
 def _chart(nb_runner) -> int:

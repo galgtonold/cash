@@ -125,7 +125,7 @@ def probe_module(tmp_path_factory):
     body = _HEADER
     for i, (call, _nb, _dec) in enumerate(ROWS):
         body += f"\n\ndef f{i}({_PARAMS}):\n    r = {call}\n    return r\n"
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     spec = importlib.util.spec_from_file_location("_effect_verdicts_probe", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -191,7 +191,7 @@ def test_a_pandas_clock_read_is_refused_and_reported(tmp_path):
     notebook statement."""
     pd = pytest.importorskip("pandas")
     path = tmp_path / "_effect_verdicts_pandas.py"
-    path.write_text("import pandas as pd\n\n\ndef f():\n    r = pd.Timestamp.now()\n    return r\n")
+    path.write_text("import pandas as pd\n\n\ndef f():\n    r = pd.Timestamp.now()\n    return r\n", encoding="utf-8")
     spec = importlib.util.spec_from_file_location("_effect_verdicts_pandas", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -202,7 +202,7 @@ def test_a_pandas_clock_read_is_refused_and_reported(tmp_path):
 
 def test_a_discarded_pyplot_call_is_reported_once(tmp_path):
     path = tmp_path / "_effect_verdicts_plot.py"
-    path.write_text("def f(plt):\n    plt.title('t')\n    return 1\n")
+    path.write_text("def f(plt):\n    plt.title('t')\n    return 1\n", encoding="utf-8")
     spec = importlib.util.spec_from_file_location("_effect_verdicts_plot", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

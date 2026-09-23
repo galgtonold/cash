@@ -113,7 +113,7 @@ def test_an_effect_the_static_warning_named_is_not_repeated(c, tmp_path):
     target = tmp_path / "out.txt"
 
     def write_it(path):
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write("x")
         return 1
 

@@ -15,7 +15,7 @@ class TestConfigFilePatterns:
     def test_json_config_file(self, nb_runner, tmp_path):
         """Load JSON config file and use values across cells."""
         config_path = tmp_path / "config.json"
-        config_path.write_text('{"db_host": "localhost", "db_port": 5432, "debug": true}')
+        config_path.write_text('{"db_host": "localhost", "db_port": 5432, "debug": true}', encoding="utf-8")
         path_str = str(config_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -39,7 +39,7 @@ class TestConfigFilePatterns:
     def test_config_file_change_detected(self, nb_runner, tmp_path):
         """Change config file → re-run picks up changes."""
         config_path = tmp_path / "settings.json"
-        config_path.write_text('{"mode": "dev", "batch_size": 32}')
+        config_path.write_text('{"mode": "dev", "batch_size": 32}', encoding="utf-8")
         path_str = str(config_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -57,14 +57,14 @@ class TestConfigFilePatterns:
         assert "mode=dev bs=32" in nb_runner.get_output(3)
 
         # Change config
-        config_path.write_text('{"mode": "prod", "batch_size": 128}')
+        config_path.write_text('{"mode": "prod", "batch_size": 128}', encoding="utf-8")
         nb_runner.run_all()
         assert "mode=prod bs=128" in nb_runner.get_output(3)
 
     def test_ini_style_config(self, nb_runner, tmp_path):
         """INI-style config file using configparser."""
         ini_path = tmp_path / "app.ini"
-        ini_path.write_text("[database]\nhost = db.example.com\nport = 3306\n\n[app]\nname = MyApp\n")
+        ini_path.write_text("[database]\nhost = db.example.com\nport = 3306\n\n[app]\nname = MyApp\n", encoding="utf-8")
         path_str = str(ini_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -158,8 +158,8 @@ class TestMultiFileConfig:
 
     def test_merge_two_config_files(self, nb_runner, tmp_path):
         """Load and merge two config files."""
-        (tmp_path / "defaults.json").write_text('{"a": 1, "b": 2, "c": 3}')
-        (tmp_path / "overrides.json").write_text('{"b": 20, "d": 40}')
+        (tmp_path / "defaults.json").write_text('{"a": 1, "b": 2, "c": 3}', encoding="utf-8")
+        (tmp_path / "overrides.json").write_text('{"b": 20, "d": 40}', encoding="utf-8")
         d_str = str(tmp_path / "defaults.json").replace("\\", "/")
         o_str = str(tmp_path / "overrides.json").replace("\\", "/")
 

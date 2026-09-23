@@ -215,7 +215,7 @@ class TestFileDepsDisplayHygiene:
 
     def test_phantom_paths_are_not_displayed(self, tmp_path):
         real = tmp_path / "sales.csv"
-        real.write_text("a,b\n")
+        real.write_text("a,b\n", encoding="utf-8")
         phantoms = [str(tmp_path / "venv" / f"pkg{i}" / "entry_points.txt") for i in range(120)]
 
         t = self._tracker()
@@ -229,7 +229,7 @@ class TestFileDepsDisplayHygiene:
         paths = []
         for i in range(25):
             p = tmp_path / f"f{i}.csv"
-            p.write_text("x")
+            p.write_text("x", encoding="utf-8")
             paths.append(str(p))
 
         t = self._tracker()

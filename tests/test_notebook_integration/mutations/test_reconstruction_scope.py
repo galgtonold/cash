@@ -25,7 +25,7 @@ pytestmark = [pytest.mark.files, pytest.mark.timeout(180)]
 
 def _rows(path):
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return sum(1 for ln in f if ln.strip())
     except FileNotFoundError:
         return 0

@@ -190,7 +190,7 @@ def test_read_write_same_path_amplifies(nb_runner, tmp_path, counters):
     """
     state = {k: tmp_path / f"s_{k}.json" for k in KEYS}
     for p in state.values():
-        p.write_text("{}")
+        p.write_text("{}", encoding="utf-8")
     per_run = _measure_executions(
         nb_runner,
         [_cell_rmw(k, state[k]) for k in KEYS],
@@ -205,7 +205,7 @@ def test_read_only_does_not_amplify(nb_runner, tmp_path, counters):
     """Does merely DEPENDING on a file amplify, with nothing written?"""
     src = {k: tmp_path / f"r_{k}.json" for k in KEYS}
     for p in src.values():
-        p.write_text('{"seed": 1}')
+        p.write_text('{"seed": 1}', encoding="utf-8")
     per_run = _measure_executions(
         nb_runner,
         [_cell_read_only(k, src[k]) for k in KEYS],
@@ -238,7 +238,7 @@ def test_persist_on_a_file_writer_amplifies(nb_runner, tmp_path, counters):
     """
     state = {k: tmp_path / f"p_{k}.json" for k in KEYS}
     for p in state.values():
-        p.write_text("{}")
+        p.write_text("{}", encoding="utf-8")
     per_run = _measure_executions(
         nb_runner,
         ["# @cash:persist\n" + _cell_rmw(k, state[k]) for k in KEYS],
@@ -277,7 +277,7 @@ def test_per_statement_execution_profile(nb_runner, tmp_path):
 
     state = {k: tmp_path / f"st_{k}.json" for k in KEYS}
     for p in state.values():
-        p.write_text("{}")
+        p.write_text("{}", encoding="utf-8")
 
     def cell(k):
         s = str(state[k]).replace("\\", "/")
@@ -306,7 +306,9 @@ def test_per_statement_execution_profile(nb_runner, tmp_path):
     for k in KEYS:
         row = "".join(f"{_count(fds[(k, pos)]) / RUNS:>9.2f}" for pos in POSITIONS)
         print(f"  {k:<6}{row}")
-    print(f"  state file totals: { {k: __import__('json').load(open(p)).get(k, 0) / RUNS for k, p in state.items()} }")
+    print(
+        f"  state file totals: { {k: __import__('json').load(open(p, encoding='utf-8')).get(k, 0) / RUNS for k, p in state.items()} }"
+    )
 
 
 @pytest.mark.timeout(900)
@@ -340,7 +342,7 @@ def test_fused_witness_execution_profile(nb_runner, tmp_path):
 
     state = {k: tmp_path / f"fs_{k}.json" for k in KEYS}
     for p in state.values():
-        p.write_text("{}")
+        p.write_text("{}", encoding="utf-8")
 
     def cell(k):
         s = str(state[k]).replace("\\", "/")
@@ -365,7 +367,7 @@ def test_fused_witness_execution_profile(nb_runner, tmp_path):
     for k in KEYS:
         incr = _count(fds[(k, "incr")]) / RUNS
         write = _count(fds[(k, "write")]) / RUNS
-        val = _json.load(open(state[k])).get(k, 0) / RUNS
+        val = _json.load(open(state[k], encoding="utf-8")).get(k, 0) / RUNS
         print(f"  {k:<6}{incr:>9.2f}{write:>9.2f}{val:>9.2f}")
 
 
@@ -387,7 +389,7 @@ def test_inplace_vs_rebind_with_identical_file_write(nb_runner, tmp_path):
     ):
         state = {k: tmp_path / f"{label[:7].strip()}_{k}.json" for k in KEYS}
         for p in state.values():
-            p.write_text("{}")
+            p.write_text("{}", encoding="utf-8")
 
         def cell(k):
             s = str(state[k]).replace("\\", "/")
@@ -404,7 +406,7 @@ def test_inplace_vs_rebind_with_identical_file_write(nb_runner, tmp_path):
         nb_runner.start_kernel()
         for _ in range(RUNS):
             nb_runner.run_all()
-        results[label] = {k: _json.load(open(p)).get(k, 0) / RUNS for k, p in state.items()}
+        results[label] = {k: _json.load(open(p, encoding="utf-8")).get(k, 0) / RUNS for k, p in state.items()}
 
     print("\n=== In-place vs rebind (identical file write) ===")
     for label, per_run in results.items():
@@ -429,13 +431,13 @@ def _cell(key, path):
 
 
 def _read(path, key):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f).get(key, 0)
 
 
 def _measure(nb_runner, paths, label):
     for p in set(paths.values()):
-        p.write_text("{}")
+        p.write_text("{}", encoding="utf-8")
     nb_runner.create_notebook([SETUP] + [_cell(k, p) for k, p in paths.items()])
     nb_runner.start_kernel()
 

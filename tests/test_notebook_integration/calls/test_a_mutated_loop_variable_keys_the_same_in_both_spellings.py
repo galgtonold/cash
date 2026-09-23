@@ -52,7 +52,7 @@ def _defs(log):
 
 
 def _runs(log):
-    return len(log.read_text().splitlines()) if log.exists() else 0
+    return len(log.read_text(encoding="utf-8").splitlines()) if log.exists() else 0
 
 
 # Call-unit spelling: `pull(handle)` is intercepted and cached as its own

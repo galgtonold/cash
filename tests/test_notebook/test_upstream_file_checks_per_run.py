@@ -39,7 +39,7 @@ def _inputs(tmp_path):
     paths = []
     for i in range(N):
         p = tmp_path / f"doc{i:03d}.txt"
-        p.write_text(f"document {i}\n" * 20)
+        p.write_text(f"document {i}\n" * 20, encoding="utf-8")
         st = os.stat(p)
         os.utime(p, (st.st_atime - 3600, st.st_mtime - 3600))
         paths.append(str(p))
@@ -92,7 +92,7 @@ def test_a_write_in_the_run_is_seen_by_what_is_checked_after_it(tmp_path, checks
     is the documented same-stat limitation, bounded by the cell run.)"""
     deps = _inputs(tmp_path)
     assert VirtualLineage._validate_file_freshness(deps, memo_key="stmt:a")
-    with open(next(iter(deps)), "a") as fh:
+    with open(next(iter(deps)), "a", encoding="utf-8") as fh:
         fh.write("appended\n")
     forget_file_state_this_run()  # a file-writing statement ran
     assert not VirtualLineage._validate_file_freshness(deps, memo_key="stmt:b")
@@ -103,7 +103,7 @@ def test_without_a_write_the_answer_holds_for_the_run(tmp_path, checks):
     shares the answer -- the trust whole entries already had in their run."""
     deps = _inputs(tmp_path)
     assert VirtualLineage._validate_file_freshness(deps, memo_key="stmt:a")
-    with open(next(iter(deps)), "a") as fh:
+    with open(next(iter(deps)), "a", encoding="utf-8") as fh:
         fh.write("appended\n")
     assert VirtualLineage._validate_file_freshness(deps, memo_key="stmt:b")
 

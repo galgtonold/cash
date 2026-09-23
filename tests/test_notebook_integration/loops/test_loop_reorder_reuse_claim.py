@@ -62,7 +62,7 @@ def compute(x):
 
 def _calls(log):
     """Total recorded compute() calls so far."""
-    return len(log.read_text().splitlines()) if log.exists() else 0
+    return len(log.read_text(encoding="utf-8").splitlines()) if log.exists() else 0
 
 
 def test_accumulator_fold_reuses_only_the_unchanged_prefix(nb_runner, tmp_path):

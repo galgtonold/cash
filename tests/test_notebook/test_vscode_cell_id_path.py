@@ -49,7 +49,8 @@ class TestExtractNotebookPathFromVscodeCellId:
                     "nbformat": 4,
                     "nbformat_minor": 5,
                 }
-            )
+            ),
+            encoding="utf-8",
         )
         # Construct a VS Code-style URI
         # On Windows: vscode-notebook-cell:/c%3A/Users/.../demo.ipynb#W1sZmlsZQ==
@@ -74,7 +75,7 @@ class TestExtractNotebookPathFromVscodeCellId:
     def test_valid_vscode_uri_non_ipynb(self, tmp_path):
         """If the decoded path exists but isn't .ipynb, return None."""
         txt_file = tmp_path / "notes.txt"
-        txt_file.write_text("hello")
+        txt_file.write_text("hello", encoding="utf-8")
         raw_path = str(txt_file).replace("\\", "/")
         if len(raw_path) > 1 and raw_path[1] == ":":
             encoded_path = "/" + raw_path[0] + "%3A" + raw_path[2:]
@@ -97,7 +98,8 @@ class TestExtractNotebookPathFromVscodeCellId:
                     "nbformat": 4,
                     "nbformat_minor": 5,
                 }
-            )
+            ),
+            encoding="utf-8",
         )
         raw_path = str(nb).replace("\\", "/")
         if len(raw_path) > 1 and raw_path[1] == ":":
@@ -123,7 +125,8 @@ class TestExtractNotebookPathFromVscodeCellId:
                     "nbformat": 4,
                     "nbformat_minor": 5,
                 }
-            )
+            ),
+            encoding="utf-8",
         )
         raw_path = str(nb).replace("\\", "/")
         if len(raw_path) > 1 and raw_path[1] == ":":
@@ -153,7 +156,7 @@ class TestSetNotebookPath:
     def test_set_existing_path(self, tmp_path):
         """Setting a valid path should make get_notebook_path return it."""
         nb = tmp_path / "cached.ipynb"
-        nb.write_text("{}")
+        nb.write_text("{}", encoding="utf-8")
         set_notebook_path(str(nb))
         # get_notebook_path checks cache first
         result = get_notebook_path()
@@ -187,7 +190,7 @@ class TestSetNotebookPath:
     def test_invalidate_clears_set_path(self, tmp_path):
         """invalidate_notebook_path_cache should clear explicitly set paths."""
         nb = tmp_path / "test.ipynb"
-        nb.write_text("{}")
+        nb.write_text("{}", encoding="utf-8")
         set_notebook_path(str(nb))
         invalidate_notebook_path_cache()
         import cash.notebook.server_discovery as utils_mod
@@ -291,7 +294,8 @@ class TestEarlyCellIdCapture:
                     "nbformat": 4,
                     "nbformat_minor": 5,
                 }
-            )
+            ),
+            encoding="utf-8",
         )
         raw_path = str(nb).replace("\\", "/")
         encoded = "/" + raw_path[0] + "%3A" + raw_path[2:] if len(raw_path) > 1 and raw_path[1] == ":" else raw_path

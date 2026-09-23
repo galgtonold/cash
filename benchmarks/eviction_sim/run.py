@@ -278,7 +278,7 @@ def main():
         print(f"(unbounded disk footprint = {fp:.0f}x live set on average)")
     if a.out:
         os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
-        with open(a.out, "w") as fh:
+        with open(a.out, "w", encoding="utf-8") as fh:
             json.dump(
                 dict(
                     tier=a.tier,

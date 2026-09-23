@@ -122,7 +122,7 @@ class TestACacheDirectoryNotCalledDotCash:
         register_cache_dir(str(cache))
 
         data = cache / "data.csv"
-        data.write_text("a,b\n1,2\n")
+        data.write_text("a,b\n1,2\n", encoding="utf-8")
         entry = cache / ("b" * 64 + ".entry")
         entry.write_bytes(b"cached")
 

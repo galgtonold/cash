@@ -31,7 +31,7 @@ NESTED = "out = weights(fit(data, K), 10)\nprint('OUT', out)"
 
 def _runs(runner, name) -> int:
     log = Path(runner.work_dir) / "runs.log"
-    return log.read_text().count(name) if log.exists() else 0
+    return log.read_text(encoding="utf-8").count(name) if log.exists() else 0
 
 
 def test_the_nested_call_is_restored(nb_runner):

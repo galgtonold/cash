@@ -107,7 +107,7 @@ server = subprocess.Popen(
         "--ServerApp.disable_check_xsrf=True",
     ],
     env=env,
-    stdout=open(os.path.join(WORK, "server.log"), "w"),
+    stdout=open(os.path.join(WORK, "server.log"), "w", encoding="utf-8"),
     stderr=subprocess.STDOUT,
 )
 
@@ -312,7 +312,7 @@ while True:
             except Exception:
                 pass
             _kill_server_tree()  # tree kill, not server.terminate() (leaks kernels on Windows)
-            with open(os.path.join(OUTBOX, name), "w") as fh:
+            with open(os.path.join(OUTBOX, name), "w", encoding="utf-8") as fh:
                 json.dump({"ok": True, "msg": "bye"}, fh)
             break
         elif a == "set":

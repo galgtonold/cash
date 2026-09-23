@@ -460,8 +460,8 @@ class TestComplexDataFlows:
         """Two files read, only one changes."""
         f1 = tmp_path / "file1.csv"
         f2 = tmp_path / "file2.csv"
-        f1.write_text("x\n1\n2\n")
-        f2.write_text("x\n3\n4\n")
+        f1.write_text("x\n1\n2\n", encoding="utf-8")
+        f2.write_text("x\n3\n4\n", encoding="utf-8")
         s1 = str(f1).replace("\\", "/")
         s2 = str(f2).replace("\\", "/")
 
@@ -477,7 +477,7 @@ class TestComplexDataFlows:
         assert "total=4" in nb_runner.get_output(3)
         # Change only file2
         time.sleep(0.1)
-        f2.write_text("x\n3\n4\n5\n")
+        f2.write_text("x\n3\n4\n5\n", encoding="utf-8")
         nb_runner.run_cell(3)
         # Should detect file2 changed and update
         out = nb_runner.get_output(3)

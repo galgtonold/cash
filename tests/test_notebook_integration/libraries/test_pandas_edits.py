@@ -20,7 +20,7 @@ class TestPandasFileIO:
     def test_csv_read_cached(self, nb_runner, tmp_path):
         """CSV read should be tracked and cached."""
         csv_path = tmp_path / "test_data.csv"
-        csv_path.write_text("a,b,c\n1,2,3\n4,5,6\n7,8,9\n")
+        csv_path.write_text("a,b,c\n1,2,3\n4,5,6\n7,8,9\n", encoding="utf-8")
         path_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -40,7 +40,7 @@ class TestPandasFileIO:
     def test_csv_change_invalidates_cache(self, nb_runner, tmp_path):
         """Modifying CSV file should invalidate cached reads."""
         csv_path = tmp_path / "changing_data.csv"
-        csv_path.write_text("x,y\n1,10\n2,20\n")
+        csv_path.write_text("x,y\n1,10\n2,20\n", encoding="utf-8")
         path_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -58,7 +58,7 @@ class TestPandasFileIO:
         assert "30" in nb_runner.get_output(3)
 
         # Modify CSV
-        csv_path.write_text("x,y\n1,100\n2,200\n")
+        csv_path.write_text("x,y\n1,100\n2,200\n", encoding="utf-8")
         nb_runner.reset_cash_state()
         nb_runner.run_all()
         assert "300" in nb_runner.get_output(3)
@@ -94,7 +94,9 @@ class TestTransformationPipelines:
     def test_etl_pipeline(self, nb_runner, tmp_path):
         """Extract-Transform-Load pattern across cells."""
         csv_path = tmp_path / "raw_data.csv"
-        csv_path.write_text("name,score,category\nalice,85,A\nbob,92,B\ncharlie,78,A\ndavid,95,B\neve,88,A\n")
+        csv_path.write_text(
+            "name,score,category\nalice,85,A\nbob,92,B\ncharlie,78,A\ndavid,95,B\neve,88,A\n", encoding="utf-8"
+        )
         path_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -157,7 +159,7 @@ class TestDataFrameEdits:
     def test_edit_filter_condition(self, nb_runner, tmp_path):
         """Edit DataFrame filter condition."""
         csv = tmp_path / "data.csv"
-        csv.write_text("name,score\nAlice,85\nBob,92\nCharlie,78\nDiana,95\n")
+        csv.write_text("name,score\nAlice,85\nBob,92\nCharlie,78\nDiana,95\n", encoding="utf-8")
         csv_str = str(csv).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -178,7 +180,7 @@ class TestDataFrameEdits:
     def test_edit_aggregation(self, nb_runner, tmp_path):
         """Edit aggregation function."""
         csv = tmp_path / "sales.csv"
-        csv.write_text("product,amount\nA,100\nB,200\nA,150\nB,300\n")
+        csv.write_text("product,amount\nA,100\nB,200\nA,150\nB,300\n", encoding="utf-8")
         csv_str = str(csv).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -199,7 +201,7 @@ class TestDataFrameEdits:
     def test_edit_column_selection(self, nb_runner, tmp_path):
         """Edit which columns are selected."""
         csv = tmp_path / "multi.csv"
-        csv.write_text("a,b,c\n1,10,100\n2,20,200\n3,30,300\n")
+        csv.write_text("a,b,c\n1,10,100\n2,20,200\n3,30,300\n", encoding="utf-8")
         csv_str = str(csv).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -226,7 +228,7 @@ class TestDataFrameChainEdits:
     def test_filter_then_aggregate_edit_filter(self, nb_runner, tmp_path):
         """Filter → aggregate, edit filter."""
         csv = tmp_path / "records.csv"
-        csv.write_text("cat,val\nX,10\nY,20\nX,30\nY,40\nX,50\n")
+        csv.write_text("cat,val\nX,10\nY,20\nX,30\nY,40\nX,50\n", encoding="utf-8")
         csv_str = str(csv).replace("\\", "/")
 
         nb_runner.create_notebook(

@@ -21,7 +21,7 @@ from cash import Cash, FileBackend
 def _build(c: Cash, data_path):
     @c.cache
     def load():
-        with open(data_path) as f:
+        with open(data_path, encoding="utf-8") as f:
             return f.read().strip()
 
     @c.cache(depends_on=[load])
@@ -34,7 +34,7 @@ def _build(c: Cash, data_path):
 @pytest.mark.parametrize("compute_inner_first", [False, True])
 def test_file_change_propagates_through_depends_on(tmp_path, compute_inner_first):
     data = tmp_path / "data.txt"
-    data.write_text("hello")
+    data.write_text("hello", encoding="utf-8")
     c = Cash(backend=FileBackend(cache_dir=str(tmp_path / "cache")))
     load, upper = _build(c, str(data))
 
@@ -43,7 +43,7 @@ def test_file_change_propagates_through_depends_on(tmp_path, compute_inner_first
     assert upper() == "HELLO"
 
     time.sleep(0.02)
-    data.write_text("world-changed")
+    data.write_text("world-changed", encoding="utf-8")
 
     # The outer function must notice the change, not return the stale value.
     assert upper.explain().reason != "hit"
@@ -52,7 +52,7 @@ def test_file_change_propagates_through_depends_on(tmp_path, compute_inner_first
 
 def test_outer_records_nested_file_dep(tmp_path):
     data = tmp_path / "data.txt"
-    data.write_text("hello")
+    data.write_text("hello", encoding="utf-8")
     c = Cash(backend=FileBackend(cache_dir=str(tmp_path / "cache")))
     load, upper = _build(c, str(data))
 

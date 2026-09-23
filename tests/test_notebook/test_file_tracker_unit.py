@@ -55,10 +55,10 @@ class TestFileAccessTrackerOpen:
 
     def test_tracks_read_open(self, tmp_path: Path):
         test_file = tmp_path / "data.txt"
-        test_file.write_text("hello")
+        test_file.write_text("hello", encoding="utf-8")
 
         tracker = FileAccessTracker()
-        with tracker, open(str(test_file), "r") as f:
+        with tracker, open(str(test_file), "r", encoding="utf-8") as f:
             _ = f.read()
 
         accessed = tracker.get_accessed_files()
@@ -70,7 +70,7 @@ class TestFileAccessTrackerOpen:
         test_file = tmp_path / "output.txt"
 
         tracker = FileAccessTracker()
-        with tracker, open(str(test_file), "w") as f:
+        with tracker, open(str(test_file), "w", encoding="utf-8") as f:
             f.write("written")
 
         accessed = tracker.get_accessed_files()
@@ -88,13 +88,13 @@ class TestFileAccessTrackerOpen:
         this test now verifies.
         """
         test_file = tmp_path / "outside.txt"
-        test_file.write_text("data")
+        test_file.write_text("data", encoding="utf-8")
 
         tracker = FileAccessTracker()
         with tracker:
             pass
         # After exit: a read should NOT be recorded by the tracker.
-        with open(str(test_file), "r") as f:
+        with open(str(test_file), "r", encoding="utf-8") as f:
             _ = f.read()
         assert test_file.name not in {p.rsplit("/", 1)[-1] for p in tracker.get_accessed_files()}
 
@@ -110,10 +110,10 @@ class TestPathNormalisation:
     def test_path_normalised(self, tmp_path: Path):
         test_file = tmp_path / "sub" / "test.csv"
         test_file.parent.mkdir(parents=True, exist_ok=True)
-        test_file.write_text("a,b\n1,2")
+        test_file.write_text("a,b\n1,2", encoding="utf-8")
 
         tracker = FileAccessTracker()
-        with tracker, open(str(test_file), "r") as f:
+        with tracker, open(str(test_file), "r", encoding="utf-8") as f:
             _ = f.read()
 
         accessed = tracker.get_accessed_files()
@@ -132,7 +132,7 @@ class TestUserNamespacePatching:
 
     def test_patches_open_in_user_ns(self, tmp_path: Path):
         test_file = tmp_path / "ns_test.txt"
-        test_file.write_text("ns content")
+        test_file.write_text("ns content", encoding="utf-8")
 
         user_ns = {"open": open}
         tracker = FileAccessTracker(user_ns=user_ns)
@@ -152,7 +152,7 @@ class TestUserNamespacePatching:
         wrapper is a no-op when no tracker is active.
         """
         path = tmp_path / "data.txt"
-        path.write_text("hello")
+        path.write_text("hello", encoding="utf-8")
         user_ns: dict = {"open": open}
         tracker = FileAccessTracker(user_ns=user_ns)
         with tracker:
@@ -165,7 +165,7 @@ class TestUserNamespacePatching:
         # must NOT be added to this tracker.
         before = set(tracker.get_accessed_files())
         other_path = tmp_path / "after.txt"
-        other_path.write_text("nope")
+        other_path.write_text("nope", encoding="utf-8")
         with user_ns["open"](other_path) as f:
             f.read()
         after = set(tracker.get_accessed_files())
@@ -200,16 +200,16 @@ class TestInstalledWhileInUse:
         """Two trackers used back-to-back must each see only their own
         block's reads — no cross-contamination."""
         p_a = tmp_path / "a.txt"
-        p_a.write_text("a")
+        p_a.write_text("a", encoding="utf-8")
         p_b = tmp_path / "b.txt"
-        p_b.write_text("b")
+        p_b.write_text("b", encoding="utf-8")
 
         t1 = FileAccessTracker()
-        with t1, open(str(p_a)) as f:
+        with t1, open(str(p_a), encoding="utf-8") as f:
             f.read()
 
         t2 = FileAccessTracker()
-        with t2, open(str(p_b)) as f:
+        with t2, open(str(p_b), encoding="utf-8") as f:
             f.read()
 
         assert any(r.endswith("a.txt") for r in t1.get_accessed_files())
@@ -270,7 +270,7 @@ class TestRemoteUrlChannel:
         """A Windows drive letter is not a URL scheme, and ``file://`` names a
         path that can genuinely be stat'ed."""
         real = tmp_path / "data.csv"
-        real.write_text("a,b\n1,2\n")
+        real.write_text("a,b\n1,2\n", encoding="utf-8")
         tracker = FileAccessTracker()
         tracker._track_path(str(real))
         tracker._track_path(r"C:\Users\someone\data.csv")

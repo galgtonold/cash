@@ -30,7 +30,7 @@ def test_for_loop_caching(nb_runner, tmp_path):
 
     # Verify all iterations were executed
     assert execution_log.exists(), "Execution log should exist"
-    log_content = execution_log.read_text()
+    log_content = execution_log.read_text(encoding="utf-8")
     assert "executed_0" in log_content
     assert "executed_1" in log_content
     assert "executed_2" in log_content

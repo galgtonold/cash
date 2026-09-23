@@ -336,7 +336,7 @@ def _call(tmp_path, c, source):
     import sys
 
     path = tmp_path / "usermod.py"
-    path.write_text(source)
+    path.write_text(source, encoding="utf-8")
     # Drop __pycache__ every time. ``return x * 2`` -> ``return x * 3`` is a
     # SAME-LENGTH edit, so a rewrite inside one mtime second lets Python reuse
     # the cached .pyc and the module never recompiles. The arms below then

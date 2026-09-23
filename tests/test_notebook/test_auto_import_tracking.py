@@ -41,7 +41,7 @@ def temp_module(tmp_path):
     module_name = f"_test_auto_track_{id(tmp_path)}"
     module_file = tmp_path / f"{module_name}.py"
     module_file.write_text(
-        "def helper(x):\n    return x * 2\n\ndef transform(data):\n    return [x + 1 for x in data]\n"
+        "def helper(x):\n    return x * 2\n\ndef transform(data):\n    return [x + 1 for x in data]\n", encoding="utf-8"
     )
 
     sys.path.insert(0, str(tmp_path))
@@ -65,10 +65,10 @@ def temp_module_pair(tmp_path):
     mod2_name = f"_test_mod_b_{id(tmp_path)}"
 
     mod1_file = tmp_path / f"{mod1_name}.py"
-    mod1_file.write_text("def func_a(x):\n    return x + 1\n")
+    mod1_file.write_text("def func_a(x):\n    return x + 1\n", encoding="utf-8")
 
     mod2_file = tmp_path / f"{mod2_name}.py"
-    mod2_file.write_text("def func_b(x):\n    return x * 10\n")
+    mod2_file.write_text("def func_b(x):\n    return x * 10\n", encoding="utf-8")
 
     sys.path.insert(0, str(tmp_path))
 
@@ -221,8 +221,8 @@ class TestAutoTrackLocalImports:
         pkg_name = f"_test_pkg_{id(tmp_path)}"
         pkg_dir = tmp_path / pkg_name
         pkg_dir.mkdir()
-        (pkg_dir / "__init__.py").write_text("# package\n")
-        (pkg_dir / "sub.py").write_text("def sub_func(): return 42\n")
+        (pkg_dir / "__init__.py").write_text("# package\n", encoding="utf-8")
+        (pkg_dir / "sub.py").write_text("def sub_func(): return 42\n", encoding="utf-8")
 
         sys.path.insert(0, str(tmp_path))
         try:
@@ -277,7 +277,7 @@ class TestCheckAndReloadChangedModules:
 
         # Modify the file
         time.sleep(0.1)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write("def helper(x):\n    return x * 99\n")
 
         user_ns = {}
@@ -301,7 +301,7 @@ class TestCheckAndReloadChangedModules:
 
         # Modify the module
         time.sleep(0.1)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write("def helper(x):\n    return x * 100\n")
 
         result, _ = tracker.check_and_reload_changed_modules(user_ns)
@@ -320,7 +320,7 @@ class TestCheckAndReloadChangedModules:
 
         # Only modify mod1
         time.sleep(0.1)
-        with open(mod1_file, "w") as f:
+        with open(mod1_file, "w", encoding="utf-8") as f:
             f.write("def func_a(x):\n    return x + 999\n")
 
         result, _ = tracker.check_and_reload_changed_modules({})
@@ -346,7 +346,7 @@ class TestUpdateUserNsFromModule:
 
         # Modify and reload
         time.sleep(0.1)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write("def helper(x):\n    return x ** 2\n")
 
         tracker.reload_module(module_name)
@@ -517,7 +517,7 @@ class TestSourceHashCacheBypass:
 
         # Modify the file (change the function body)
         time.sleep(0.1)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write("def helper(x):\n    return x ** 3\n")
 
         # Reload the module so inspect.getsource can read fresh code
@@ -565,7 +565,7 @@ class TestAutoTrackingIntegration:
 
         # Step 3: Modify the source file
         time.sleep(0.1)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write("def helper(x):\n    return x * 7\n")
 
         # Step 4: check_and_reload detects change and updates user_ns
@@ -596,7 +596,7 @@ class TestAutoTrackingIntegration:
 
         # Modify the source
         time.sleep(0.1)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write("def helper(x):\n    return x - 1\n")
 
         # Auto-reload
@@ -688,7 +688,7 @@ output = handler(df)
         }
 
         time.sleep(0.1)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write("def helper(x):\n    return x + 100\n")
 
         tracker.check_and_reload_changed_modules(user_ns)

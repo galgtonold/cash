@@ -90,7 +90,7 @@ def test_the_index_is_read_back_by_another_process(tmp_path):
 
 
 def test_a_torn_or_foreign_line_is_skipped(tmp_path):
-    (tmp_path / "_versions.log").write_text("s k0 10 1.0\ngarbage\ns k1 10 1.0 2.0\n- \n")
+    (tmp_path / "_versions.log").write_text("s k0 10 1.0\ngarbage\ns k1 10 1.0 2.0\n- \n", encoding="utf-8")
     versions = VersionIndex(str(tmp_path), _untracked).record("s", "k2", 10, 1.0, 3.0)
     assert set(versions) == {"k1", "k2"}
 

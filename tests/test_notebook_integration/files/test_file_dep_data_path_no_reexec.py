@@ -23,7 +23,7 @@ class TestDataPathNotReexecuted:
     def test_data_path_not_reexecuted_on_file_change(self, nb_runner, tmp_path):
         """data_path assignment should NOT be auto-executed when CSV changes."""
         csv_file = tmp_path / "test_data.csv"
-        csv_file.write_text("a,b\n1,2\n3,4\n")
+        csv_file.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -43,7 +43,7 @@ class TestDataPathNotReexecuted:
 
         # Modify the CSV file
         time.sleep(0.1)
-        csv_file.write_text("a,b\n10,20\n30,40\n50,60\n")
+        csv_file.write_text("a,b\n10,20\n30,40\n50,60\n", encoding="utf-8")
 
         # Run cell 3 again — should trigger upstream re-execution of
         # df = pd.read_csv(...) but NOT data_path assignment
@@ -65,7 +65,7 @@ class TestDataPathNotReexecuted:
     def test_data_path_separate_cell_not_reexecuted(self, nb_runner, tmp_path):
         """data_path in a separate cell from read_csv should not be re-executed."""
         csv_file = tmp_path / "test_data.csv"
-        csv_file.write_text("a,b\n1,2\n3,4\n")
+        csv_file.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -87,7 +87,7 @@ class TestDataPathNotReexecuted:
 
         # Modify the CSV file
         time.sleep(0.1)
-        csv_file.write_text("a,b\n10,20\n30,40\n50,60\n")
+        csv_file.write_text("a,b\n10,20\n30,40\n50,60\n", encoding="utf-8")
 
         # Run cell 5 again — upstream should re-execute df=pd.read_csv(data_path)
         # but NOT data_path assignment (it's a constant, no file dependency)
@@ -110,7 +110,9 @@ class TestDataPathNotReexecuted:
         data_path should NOT be scheduled for re-execution.
         """
         csv_file = tmp_path / "test_data.csv"
-        csv_file.write_text("Ticker,Date,Close,Volume\nAAPL,2024-01-01,100,1000\nAAPL,2024-01-02,101,1100\n")
+        csv_file.write_text(
+            "Ticker,Date,Close,Volume\nAAPL,2024-01-01,100,1000\nAAPL,2024-01-02,101,1100\n", encoding="utf-8"
+        )
 
         csv_path = str(csv_file).replace("\\", "/")
         nb_runner.create_notebook(
@@ -150,7 +152,8 @@ class TestDataPathNotReexecuted:
         # Modify the CSV file (same columns, different values)
         time.sleep(0.2)
         csv_file.write_text(
-            "Ticker,Date,Close,Volume\nAAPL,2024-01-01,200,1000\nAAPL,2024-01-02,201,1100\nGOOGL,2024-01-01,300,2000\n"
+            "Ticker,Date,Close,Volume\nAAPL,2024-01-01,200,1000\nAAPL,2024-01-02,201,1100\nGOOGL,2024-01-01,300,2000\n",
+            encoding="utf-8",
         )
 
         # Re-execute cell 5 — should trigger upstream re-execution

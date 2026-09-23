@@ -61,7 +61,7 @@ class TestMultiFileDependencies:
         config_file = tmp_path / "config.json"
         config_str = str(config_file).replace("\\", "/")
 
-        with open(config_file, "w") as f:
+        with open(config_file, "w", encoding="utf-8") as f:
             json.dump({"multiplier": 5, "offset": 10}, f)
 
         nb_runner.create_notebook(
@@ -79,7 +79,7 @@ with open('{config_str}') as f:
         assert "result = 510" in out, f"Got: {out}"
 
         # Modify config
-        with open(config_file, "w") as f:
+        with open(config_file, "w", encoding="utf-8") as f:
             json.dump({"multiplier": 2, "offset": 0}, f)
         time.sleep(0.5)
 
@@ -225,7 +225,7 @@ class TestModuleHotReload:
         the change and recomputes on run_all().
         """
         mod_path = tmp_path / "mymodule.py"
-        mod_path.write_text("def compute(x):\n    return x * 2\n")
+        mod_path.write_text("def compute(x):\n    return x * 2\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -239,7 +239,7 @@ class TestModuleHotReload:
         assert "result = 20" in nb_runner.get_output(2)
 
         # Modify the module on disk
-        mod_path.write_text("def compute(x):\n    return x * 3\n")
+        mod_path.write_text("def compute(x):\n    return x * 3\n", encoding="utf-8")
         time.sleep(0.5)
 
         # Re-run all - module reload should detect change
@@ -258,7 +258,8 @@ class TestModuleHotReload:
             "    def __init__(self, r):\n"
             "        self.r = r\n"
             "    def area(self):\n"
-            "        return 3.14 * self.r ** 2\n"
+            "        return 3.14 * self.r ** 2\n",
+            encoding="utf-8",
         )
 
         nb_runner.create_notebook(
@@ -280,7 +281,8 @@ class TestModuleHotReload:
             "        self.r = r\n"
             "    def area(self):\n"
             "        import math\n"
-            "        return math.pi * self.r ** 2\n"
+            "        return math.pi * self.r ** 2\n",
+            encoding="utf-8",
         )
         time.sleep(0.5)
 
@@ -295,7 +297,7 @@ class TestModuleHotReload:
         Add a new function to an existing module and use it.
         """
         mod_path = tmp_path / "utils.py"
-        mod_path.write_text("def add(a, b):\n    return a + b\n")
+        mod_path.write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -309,7 +311,9 @@ class TestModuleHotReload:
         assert "r1 = 7" in nb_runner.get_output(2)
 
         # Add a multiply function to the module
-        mod_path.write_text("def add(a, b):\n    return a + b\n\ndef multiply(a, b):\n    return a * b\n")
+        mod_path.write_text(
+            "def add(a, b):\n    return a + b\n\ndef multiply(a, b):\n    return a * b\n", encoding="utf-8"
+        )
         time.sleep(0.5)
 
         # Modify cell 2 to also use the new function
@@ -332,7 +336,7 @@ class TestModuleHotReload:
         (3) the cache key for import statements didn't include module source hash.
         """
         mod_path = tmp_path / "mathlib.py"
-        mod_path.write_text("def square(x):\n    return x ** 2\n")
+        mod_path.write_text("def square(x):\n    return x ** 2\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -346,7 +350,7 @@ class TestModuleHotReload:
         assert "result = 25" in nb_runner.get_output(2)
 
         # Modify the module to cube instead
-        mod_path.write_text("def square(x):\n    return x ** 3\n")
+        mod_path.write_text("def square(x):\n    return x ** 3\n", encoding="utf-8")
         time.sleep(0.5)
 
         # Re-run all — cash should detect the module change and re-execute
@@ -513,7 +517,7 @@ class TestFileTrackingEdgeCases:
         # Create JSON file
         import json
 
-        with open(json_path, "w") as f:
+        with open(json_path, "w", encoding="utf-8") as f:
             json.dump({"value": 42, "name": "test"}, f)
 
         nb_runner.create_notebook(
@@ -535,7 +539,7 @@ class TestFileTrackingEdgeCases:
         """Read text file line by line."""
         txt_path = str(tmp_path / "data.txt").replace("\\", "/")
 
-        with open(txt_path, "w") as f:
+        with open(txt_path, "w", encoding="utf-8") as f:
             f.write("line1\nline2\nline3\n")
 
         nb_runner.create_notebook(
@@ -848,7 +852,7 @@ class TestFileChangeWithCellEdit:
         """Change file contents, then also edit the code reading it."""
         csv_path = tmp_path / "data.csv"
         csv_path_str = str(csv_path).replace("\\", "/")
-        csv_path.write_text("val\n10\n20\n30\n")
+        csv_path.write_text("val\n10\n20\n30\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -861,7 +865,7 @@ class TestFileChangeWithCellEdit:
         assert "result = 60" in nb_runner.get_output(2)
 
         # Change file AND edit cell to use mean instead
-        csv_path.write_text("val\n100\n200\n300\n")
+        csv_path.write_text("val\n100\n200\n300\n", encoding="utf-8")
         import time
 
         time.sleep(0.1)
@@ -874,7 +878,7 @@ class TestFileChangeWithCellEdit:
         """Change file between runs, cell code unchanged → detects stale file."""
         csv_path = tmp_path / "data.csv"
         csv_path_str = str(csv_path).replace("\\", "/")
-        csv_path.write_text("x\n1\n2\n3\n")
+        csv_path.write_text("x\n1\n2\n3\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -887,7 +891,7 @@ class TestFileChangeWithCellEdit:
         assert "total = 6" in nb_runner.get_output(2)
 
         # Change file only
-        csv_path.write_text("x\n10\n20\n30\n")
+        csv_path.write_text("x\n10\n20\n30\n", encoding="utf-8")
         import time
 
         time.sleep(0.1)
@@ -898,7 +902,7 @@ class TestFileChangeWithCellEdit:
         """Upstream cell code changes AND file changes simultaneously."""
         csv_path = tmp_path / "data.csv"
         csv_path_str = str(csv_path).replace("\\", "/")
-        csv_path.write_text("a\n5\n10\n")
+        csv_path.write_text("a\n5\n10\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -912,7 +916,7 @@ class TestFileChangeWithCellEdit:
         assert "result = 30" in nb_runner.get_output(3)
 
         # Change BOTH file AND multiplier
-        csv_path.write_text("a\n50\n100\n")
+        csv_path.write_text("a\n50\n100\n", encoding="utf-8")
         import time
 
         time.sleep(0.1)
@@ -930,7 +934,7 @@ class TestFileChangeWithRestart:
         """Change file after restart — should detect stale cache."""
         csv_path = tmp_path / "data.csv"
         csv_path_str = str(csv_path).replace("\\", "/")
-        csv_path.write_text("val\n1\n2\n3\n")
+        csv_path.write_text("val\n1\n2\n3\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -944,7 +948,7 @@ class TestFileChangeWithRestart:
 
         # Restart + change file
         nb_runner.shutdown()
-        csv_path.write_text("val\n10\n20\n30\n")
+        csv_path.write_text("val\n10\n20\n30\n", encoding="utf-8")
         import time
 
         time.sleep(0.1)
@@ -956,7 +960,7 @@ class TestFileChangeWithRestart:
         """File changes + code edit + kernel restart — triple stress."""
         csv_path = tmp_path / "data.csv"
         csv_path_str = str(csv_path).replace("\\", "/")
-        csv_path.write_text("x\n5\n")
+        csv_path.write_text("x\n5\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -969,7 +973,7 @@ class TestFileChangeWithRestart:
         assert "result = 10" in nb_runner.get_output(2)
 
         nb_runner.shutdown()
-        csv_path.write_text("x\n100\n")
+        csv_path.write_text("x\n100\n", encoding="utf-8")
         import time
 
         time.sleep(0.1)
@@ -990,8 +994,8 @@ class TestMultipleFileReads:
         f2 = tmp_path / "f2.csv"
         f1_str = str(f1).replace("\\", "/")
         f2_str = str(f2).replace("\\", "/")
-        f1.write_text("a\n10\n")
-        f2.write_text("b\n20\n")
+        f1.write_text("a\n10\n", encoding="utf-8")
+        f2.write_text("b\n20\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -1004,7 +1008,7 @@ class TestMultipleFileReads:
         assert "result = 30" in nb_runner.get_output(2)
 
         # Only change f1
-        f1.write_text("a\n100\n")
+        f1.write_text("a\n100\n", encoding="utf-8")
         import time
 
         time.sleep(0.1)
@@ -1015,7 +1019,7 @@ class TestMultipleFileReads:
         """Delete a file, then recreate it with new data."""
         csv_path = tmp_path / "data.csv"
         csv_path_str = str(csv_path).replace("\\", "/")
-        csv_path.write_text("x\n5\n")
+        csv_path.write_text("x\n5\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -1029,7 +1033,7 @@ class TestMultipleFileReads:
 
         # Delete and recreate
         csv_path.unlink()
-        csv_path.write_text("x\n999\n")
+        csv_path.write_text("x\n999\n", encoding="utf-8")
         import time
 
         time.sleep(0.1)
@@ -1051,7 +1055,7 @@ class TestCSVFileWithEdits:
     def test_read_csv_then_edit_processing(self, nb_runner, tmp_path):
         """Read CSV, edit the processing code."""
         csv_path = tmp_path / "data.csv"
-        csv_path.write_text("a,b\n1,2\n3,4\n5,6\n")
+        csv_path.write_text("a,b\n1,2\n3,4\n5,6\n", encoding="utf-8")
         csv_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -1072,7 +1076,7 @@ class TestCSVFileWithEdits:
     def test_edit_csv_then_rerun(self, nb_runner, tmp_path):
         """Read CSV, modify the CSV file, rerun."""
         csv_path = tmp_path / "vals.csv"
-        csv_path.write_text("x\n10\n20\n30\n")
+        csv_path.write_text("x\n10\n20\n30\n", encoding="utf-8")
         csv_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -1086,7 +1090,7 @@ class TestCSVFileWithEdits:
         assert "total = 60" in nb_runner.get_output(2)
 
         # Modify the CSV file
-        csv_path.write_text("x\n100\n200\n300\n")
+        csv_path.write_text("x\n100\n200\n300\n", encoding="utf-8")
         nb_runner.shutdown()
         nb_runner.start_kernel()
         nb_runner.run_all()
@@ -1095,7 +1099,7 @@ class TestCSVFileWithEdits:
     def test_edit_csv_and_code_together(self, nb_runner, tmp_path):
         """Change both the file and the code."""
         csv_path = tmp_path / "items.csv"
-        csv_path.write_text("val\n1\n2\n3\n")
+        csv_path.write_text("val\n1\n2\n3\n", encoding="utf-8")
         csv_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -1109,7 +1113,7 @@ class TestCSVFileWithEdits:
         assert "result = 6" in nb_runner.get_output(2)
 
         # Change both file and code
-        csv_path.write_text("val\n10\n20\n30\n")
+        csv_path.write_text("val\n10\n20\n30\n", encoding="utf-8")
         nb_runner.set_cell_source(2, "result = df['val'].mean()\nprint(f'result = {result}')")
         nb_runner.shutdown()
         nb_runner.start_kernel()
@@ -1126,7 +1130,7 @@ class TestJSONFileWithEdits:
     def test_read_json_edit_processing(self, nb_runner, tmp_path):
         """Read JSON file, edit the processing."""
         json_path = tmp_path / "config.json"
-        json_path.write_text('{"scale": 2, "offset": 10}')
+        json_path.write_text('{"scale": 2, "offset": 10}', encoding="utf-8")
         json_str = str(json_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -1154,7 +1158,7 @@ class TestTextFileWithEdits:
     def test_read_text_file_edit_processing(self, nb_runner, tmp_path):
         """Read text file, edit the processing code."""
         txt_path = tmp_path / "data.txt"
-        txt_path.write_text("hello\nworld\nfoo\nbar\n")
+        txt_path.write_text("hello\nworld\nfoo\nbar\n", encoding="utf-8")
         txt_str = str(txt_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -1175,7 +1179,7 @@ class TestTextFileWithEdits:
     def test_edit_text_file_rerun(self, nb_runner, tmp_path):
         """Modify text file content, rerun."""
         txt_path = tmp_path / "notes.txt"
-        txt_path.write_text("alpha\nbeta\n")
+        txt_path.write_text("alpha\nbeta\n", encoding="utf-8")
         txt_str = str(txt_path).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -1189,7 +1193,7 @@ class TestTextFileWithEdits:
         assert "words = 2" in nb_runner.get_output(2)
 
         # Add more content
-        txt_path.write_text("alpha\nbeta\ngamma\ndelta\nepsilon\n")
+        txt_path.write_text("alpha\nbeta\ngamma\ndelta\nepsilon\n", encoding="utf-8")
         nb_runner.shutdown()
         nb_runner.start_kernel()
         nb_runner.run_all()
@@ -1209,7 +1213,7 @@ class TestFilePlusCellEdits:
     def test_edit_code_with_same_file(self, nb_runner, tmp_path):
         """Same file content, different code → recompute."""
         data_file = tmp_path / "data.txt"
-        data_file.write_text("hello")
+        data_file.write_text("hello", encoding="utf-8")
         fpath = str(data_file).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -1230,7 +1234,7 @@ class TestFilePlusCellEdits:
     def test_edit_file_with_same_code(self, nb_runner, tmp_path):
         """Same code, different file content → recompute."""
         data_file = tmp_path / "numbers.txt"
-        data_file.write_text("1,2,3")
+        data_file.write_text("1,2,3", encoding="utf-8")
         fpath = str(data_file).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -1244,7 +1248,7 @@ class TestFilePlusCellEdits:
         assert "total = 6" in nb_runner.get_output(2)
 
         # Edit file
-        data_file.write_text("10,20,30")
+        data_file.write_text("10,20,30", encoding="utf-8")
         # Restart to ensure file dep is re-checked
         nb_runner.shutdown()
         nb_runner.start_kernel()
@@ -1254,7 +1258,7 @@ class TestFilePlusCellEdits:
     def test_edit_both_file_and_code(self, nb_runner, tmp_path):
         """Change both file content AND code → recompute."""
         data_file = tmp_path / "config.txt"
-        data_file.write_text("scale=2")
+        data_file.write_text("scale=2", encoding="utf-8")
         fpath = str(data_file).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -1268,7 +1272,7 @@ class TestFilePlusCellEdits:
         assert "result = 20" in nb_runner.get_output(2)
 
         # Edit file and code
-        data_file.write_text("scale=5")
+        data_file.write_text("scale=5", encoding="utf-8")
         nb_runner.set_cell_source(
             2,
             "key, val = line.split('=')\nresult = int(val) * 100\nprint(f'result = {result}')",
@@ -1288,7 +1292,7 @@ class TestCSVFileEdits:
     def test_csv_data_change(self, nb_runner, tmp_path):
         """Change CSV data, verify cache invalidation."""
         csv_file = tmp_path / "data.csv"
-        csv_file.write_text("a,b\n1,2\n3,4\n")
+        csv_file.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
         fpath = str(csv_file).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -1303,7 +1307,7 @@ class TestCSVFileEdits:
         assert "total_a = 4" in nb_runner.get_output(3)
 
         # Edit CSV
-        csv_file.write_text("a,b\n10,20\n30,40\n")
+        csv_file.write_text("a,b\n10,20\n30,40\n", encoding="utf-8")
         nb_runner.shutdown()
         nb_runner.start_kernel()
         nb_runner.run_all()

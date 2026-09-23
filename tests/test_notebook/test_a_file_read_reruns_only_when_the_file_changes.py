@@ -14,7 +14,7 @@ class TestSkipWithoutRestore:
         """Statement with file deps should be SKIPPED if files haven't changed."""
         # Create a test file
         test_file = tmp_path / "data.csv"
-        test_file.write_text("a,b\n1,2\n3,4\n")
+        test_file.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
 
         file_path = str(test_file).replace("\\", "/")
 
@@ -34,7 +34,7 @@ class TestSkipWithoutRestore:
     def test_file_deps_reexecuted_when_changed(self, cash_magics, mock_shell, tmp_path):
         """Statement with file deps should be REEXECUTED if files have changed."""
         test_file = tmp_path / "data.csv"
-        test_file.write_text("a,b\n1,2\n3,4\n")
+        test_file.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
         file_path = str(test_file).replace("\\", "/")
 
         # First execution
@@ -44,7 +44,7 @@ class TestSkipWithoutRestore:
 
         # Modify the file
         time.sleep(0.1)  # Ensure different mtime
-        test_file.write_text("a,b\n5,6\n7,8\n")
+        test_file.write_text("a,b\n5,6\n7,8\n", encoding="utf-8")
 
         # Second execution — should detect file change and re-execute
         run_cash_cell(cash_magics, code)

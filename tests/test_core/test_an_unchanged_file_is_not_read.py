@@ -46,7 +46,7 @@ def reads(monkeypatch):
 
 def _settled(tmp_path, text="a,b\n1,2\n"):
     p = tmp_path / "input.csv"
-    p.write_text(text)
+    p.write_text(text, encoding="utf-8")
     st = os.stat(p)
     os.utime(p, ns=(st.st_atime_ns - 3600 * 10**9, st.st_mtime_ns - 3600 * 10**9))
     return str(p)
@@ -75,7 +75,7 @@ def test_a_touch_is_read_and_stays_fresh(tmp_path, reads):
 def test_an_edit_is_caught(tmp_path):
     path = _settled(tmp_path)
     stored = snapshot_file_deps({path})[path]
-    with open(path, "w") as fh:
+    with open(path, "w", encoding="utf-8") as fh:
         fh.write("a,b\n9,9\n")  # same size, a new mtime
 
     assert file_dep_is_fresh(path, stored)[0] is False
@@ -85,7 +85,7 @@ def test_a_file_hashed_while_young_is_read(tmp_path, reads):
     """Written moments before its digest was taken, it could be written again
     within the same timestamp tick: its metadata does not answer for it."""
     p = tmp_path / "fresh.csv"
-    p.write_text("a,b\n1,2\n")
+    p.write_text("a,b\n1,2\n", encoding="utf-8")
     stored = snapshot_file_deps({str(p)})[str(p)]
     reads.clear()
 
@@ -110,7 +110,7 @@ def test_another_file_under_the_same_path_is_read(tmp_path, reads):
     stored = snapshot_file_deps({path})[path]
     before = os.stat(path)
     other = tmp_path / "other.csv"
-    other.write_text("a,b\n7,7\n")
+    other.write_text("a,b\n7,7\n", encoding="utf-8")
     os.utime(other, ns=(before.st_atime_ns, before.st_mtime_ns))
     os.replace(other, path)
     reads.clear()

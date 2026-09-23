@@ -241,7 +241,7 @@ def test_append_writer_not_refired_after_restart(nb_runner, tmp_path):
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "nlines = 1" in nb_runner.get_output(4)
-    with open(log) as fh:
+    with open(log, encoding="utf-8") as fh:
         assert sum(1 for _ in fh) == 1
 
     _restart_kernel(nb_runner)
@@ -252,7 +252,7 @@ def test_append_writer_not_refired_after_restart(nb_runner, tmp_path):
     nb_runner.run_cell(4)
     out = nb_runner.get_output(4)
     assert "nlines = 1" in out, f"reader saw a re-fired append (log grew) after restart: {out!r}"
-    with open(log) as fh:
+    with open(log, encoding="utf-8") as fh:
         on_disk = sum(1 for _ in fh)
     assert on_disk == 1, (
         f"append writer re-fired during freshness simulation: audit.log grew to "

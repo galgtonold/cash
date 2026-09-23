@@ -19,7 +19,7 @@ class TestFileTrackingExtensibility(unittest.TestCase):
         file_tracker._registry = FileDependencyRegistry()
 
         # Test helpers
-        with tempfile.NamedTemporaryFile(delete=False, mode="w+") as tf:
+        with tempfile.NamedTemporaryFile(encoding="utf-8", delete=False, mode="w+") as tf:
             tf.write("data")
             # Canonical form — see the note in test_notebook/test_statement_file_tracking.py: the CI
             # runners' temp dirs are spelled non-canonically (macOS /var

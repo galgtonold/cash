@@ -241,7 +241,7 @@ class TestSelfAssignmentDemoRepro:
         data = []
         for ticker in ["AAPL"] * 30 + ["GOOGL"] * 30:
             data.append([ticker, 100.0 + _np.random.randn()])
-        with open(csv_file, "w", newline="") as f:
+        with open(csv_file, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["Ticker", "Close"])
             writer.writerows(data)

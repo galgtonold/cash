@@ -91,7 +91,7 @@ def test_cache_value_readable_in_second_script(tmp_path: Path):
         timeout=30,
     )
     # First run: must have computed.
-    assert sentinel.read_text() == "1"
+    assert sentinel.read_text(encoding="utf-8") == "1"
 
     # Second run: should hit cache, NOT recompute.
     subprocess.run(
@@ -99,4 +99,6 @@ def test_cache_value_readable_in_second_script(tmp_path: Path):
         check=True,
         timeout=30,
     )
-    assert sentinel.read_text() == "1", "second script run recomputed — cached value did not survive exit of script 1"
+    assert sentinel.read_text(encoding="utf-8") == "1", (
+        "second script run recomputed — cached value did not survive exit of script 1"
+    )

@@ -35,7 +35,7 @@ def temp_module(tmp_path):
     """
     module_name = f"_test_tracking_mod_{id(tmp_path)}"
     module_file = tmp_path / f"{module_name}.py"
-    module_file.write_text("def helper(x):\n    return x * 2\n")
+    module_file.write_text("def helper(x):\n    return x * 2\n", encoding="utf-8")
 
     # Add to sys.path so it can be imported
     sys.path.insert(0, str(tmp_path))
@@ -125,7 +125,7 @@ class TestCheckTrackedModules:
 
         # Modify the file (need to ensure mtime changes)
         time.sleep(0.1)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write("def helper(x):\n    return x * 3\n")
 
         changed = tracker.check_tracked_modules()
@@ -142,7 +142,7 @@ class TestCheckTrackedModules:
 
         # Modify and detect
         time.sleep(0.1)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write("def helper(x):\n    return x * 3\n")
 
         changed = tracker.check_tracked_modules()
@@ -181,7 +181,7 @@ class TestReloadModule:
 
         # Modify the module
         time.sleep(0.1)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write("def helper(x):\n    return x * 3\n")
 
         # Reload
@@ -212,7 +212,7 @@ class TestReloadModule:
 
         # Modify the module
         time.sleep(0.1)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write("def helper(x):\n    return x * 3\n")
 
         # Reload (should clear cache)

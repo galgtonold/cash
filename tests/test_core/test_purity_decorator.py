@@ -148,7 +148,7 @@ def test_helper_source_hash_invalidates_cache_across_instances(tmp_path):
 
     pkg_root = tmp_path / "pkg"
     pkg_root.mkdir()
-    (pkg_root / "__init__.py").write_text("")
+    (pkg_root / "__init__.py").write_text("", encoding="utf-8")
     helper_module = pkg_root / "helpers.py"
     main_module = pkg_root / "main.py"
 
@@ -156,7 +156,8 @@ def test_helper_source_hash_invalidates_cache_across_instances(tmp_path):
         textwrap.dedent("""
         def double(x):
             return x * 2
-    """)
+    """),
+        encoding="utf-8",
     )
     main_module.write_text(
         textwrap.dedent("""
@@ -164,7 +165,8 @@ def test_helper_source_hash_invalidates_cache_across_instances(tmp_path):
 
         def compute(x):
             return double(x)
-    """)
+    """),
+        encoding="utf-8",
     )
 
     sys.path.insert(0, str(tmp_path))
@@ -181,7 +183,8 @@ def test_helper_source_hash_invalidates_cache_across_instances(tmp_path):
             textwrap.dedent("""
             def double(x):
                 return x * 3  # changed!
-        """)
+        """),
+            encoding="utf-8",
         )
 
         # Fresh Cash instance + reload module so the changed helper is picked up.

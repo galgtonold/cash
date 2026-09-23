@@ -52,7 +52,8 @@ def temp_module(tmp_path):
         "    return f'Result: {x}'\n"
         "\n"
         "class Config:\n"
-        "    debug = False\n"
+        "    debug = False\n",
+        encoding="utf-8",
     )
 
     sys.path.insert(0, str(tmp_path))
@@ -74,7 +75,7 @@ class TestComputeSymbolHashes:
     def test_functions_hashed(self, tmp_path):
         """Each function should get its own hash."""
         f = tmp_path / "mod.py"
-        f.write_text("def foo():\n    return 1\n\ndef bar():\n    return 2\n")
+        f.write_text("def foo():\n    return 1\n\ndef bar():\n    return 2\n", encoding="utf-8")
         hashes = FunctionTracker.compute_symbol_hashes(str(f))
         assert "foo" in hashes
         assert "bar" in hashes
@@ -83,14 +84,14 @@ class TestComputeSymbolHashes:
     def test_classes_hashed(self, tmp_path):
         """Classes should get their own hash."""
         f = tmp_path / "mod.py"
-        f.write_text("class MyClass:\n    x = 1\n")
+        f.write_text("class MyClass:\n    x = 1\n", encoding="utf-8")
         hashes = FunctionTracker.compute_symbol_hashes(str(f))
         assert "MyClass" in hashes
 
     def test_constants_hashed(self, tmp_path):
         """Top-level assignments should be hashed."""
         f = tmp_path / "mod.py"
-        f.write_text("VERSION = '1.0'\nDEBUG = False\n")
+        f.write_text("VERSION = '1.0'\nDEBUG = False\n", encoding="utf-8")
         hashes = FunctionTracker.compute_symbol_hashes(str(f))
         assert "VERSION" in hashes
         assert "DEBUG" in hashes
@@ -98,10 +99,10 @@ class TestComputeSymbolHashes:
     def test_changing_function_changes_hash(self, tmp_path):
         """Modifying a function should change its hash."""
         f = tmp_path / "mod.py"
-        f.write_text("def foo():\n    return 1\n")
+        f.write_text("def foo():\n    return 1\n", encoding="utf-8")
         h1 = FunctionTracker.compute_symbol_hashes(str(f))
 
-        f.write_text("def foo():\n    return 999\n")
+        f.write_text("def foo():\n    return 999\n", encoding="utf-8")
         h2 = FunctionTracker.compute_symbol_hashes(str(f))
 
         assert h1["foo"] != h2["foo"]
@@ -109,11 +110,11 @@ class TestComputeSymbolHashes:
     def test_unchanged_function_same_hash(self, tmp_path):
         """Unchanged function produces same hash."""
         f = tmp_path / "mod.py"
-        f.write_text("def foo():\n    return 1\n\ndef bar():\n    return 2\n")
+        f.write_text("def foo():\n    return 1\n\ndef bar():\n    return 2\n", encoding="utf-8")
         h1 = FunctionTracker.compute_symbol_hashes(str(f))
 
         # Change only bar, leave foo unchanged
-        f.write_text("def foo():\n    return 1\n\ndef bar():\n    return 999\n")
+        f.write_text("def foo():\n    return 1\n\ndef bar():\n    return 999\n", encoding="utf-8")
         h2 = FunctionTracker.compute_symbol_hashes(str(f))
 
         assert h1["foo"] == h2["foo"]  # foo unchanged
@@ -122,10 +123,10 @@ class TestComputeSymbolHashes:
     def test_comment_only_change_same_hash(self, tmp_path):
         """Adding/changing comments doesn't change symbol hashes (AST-based)."""
         f = tmp_path / "mod.py"
-        f.write_text("def foo():\n    return 1\n")
+        f.write_text("def foo():\n    return 1\n", encoding="utf-8")
         h1 = FunctionTracker.compute_symbol_hashes(str(f))
 
-        f.write_text("# This is a comment\ndef foo():\n    return 1\n")
+        f.write_text("# This is a comment\ndef foo():\n    return 1\n", encoding="utf-8")
         h2 = FunctionTracker.compute_symbol_hashes(str(f))
 
         assert h1["foo"] == h2["foo"]
@@ -137,27 +138,27 @@ class TestComputeSymbolHashes:
     def test_syntax_error_returns_empty(self, tmp_path):
         """File with syntax errors returns empty dict."""
         f = tmp_path / "bad.py"
-        f.write_text("def foo(\n  broken syntax")
+        f.write_text("def foo(\n  broken syntax", encoding="utf-8")
         assert FunctionTracker.compute_symbol_hashes(str(f)) == {}
 
     def test_async_function_hashed(self, tmp_path):
         """Async functions should be hashed."""
         f = tmp_path / "mod.py"
-        f.write_text("async def fetch():\n    return 42\n")
+        f.write_text("async def fetch():\n    return 42\n", encoding="utf-8")
         hashes = FunctionTracker.compute_symbol_hashes(str(f))
         assert "fetch" in hashes
 
     def test_annotated_assignment_hashed(self, tmp_path):
         """Annotated assignments should be hashed."""
         f = tmp_path / "mod.py"
-        f.write_text("name: str = 'hello'\n")
+        f.write_text("name: str = 'hello'\n", encoding="utf-8")
         hashes = FunctionTracker.compute_symbol_hashes(str(f))
         assert "name" in hashes
 
     def test_tuple_unpacking_hashed(self, tmp_path):
         """Tuple unpacking assignments should hash each name."""
         f = tmp_path / "mod.py"
-        f.write_text("x, y = 1, 2\n")
+        f.write_text("x, y = 1, 2\n", encoding="utf-8")
         hashes = FunctionTracker.compute_symbol_hashes(str(f))
         assert "x" in hashes
         assert "y" in hashes
@@ -165,7 +166,7 @@ class TestComputeSymbolHashes:
     def test_import_statements_tracked(self, tmp_path):
         """Import statements are tracked as __import__ symbols."""
         f = tmp_path / "mod.py"
-        f.write_text("import os\nfrom sys import path\n")
+        f.write_text("import os\nfrom sys import path\n", encoding="utf-8")
         hashes = FunctionTracker.compute_symbol_hashes(str(f))
         assert "__import__os" in hashes
         assert "__import__path" in hashes
@@ -207,7 +208,7 @@ class TestGetChangedSymbols:
 
         # Change compute() only
         time.sleep(0.05)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write(
                 "VERSION = '1.0'\n\n"
                 "def compute(x):\n    return x * 100\n\n"  # Changed!
@@ -231,7 +232,7 @@ class TestGetChangedSymbols:
 
         # Add new_func
         time.sleep(0.05)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write(
                 "VERSION = '1.0'\n\n"
                 "def compute(x):\n    return x * 2\n\n"
@@ -255,7 +256,7 @@ class TestGetChangedSymbols:
 
         # Remove format_result
         time.sleep(0.05)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write("VERSION = '1.0'\n\ndef compute(x):\n    return x * 2\n\nclass Config:\n    debug = False\n")
 
         result = ft.get_changed_symbols(module_name)
@@ -271,7 +272,7 @@ class TestGetChangedSymbols:
 
         # Change VERSION
         time.sleep(0.05)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write(
                 "VERSION = '2.0'\n\n"  # Changed!
                 "def compute(x):\n    return x * 2\n\n"
@@ -292,7 +293,7 @@ class TestGetChangedSymbols:
 
         # Change compute
         time.sleep(0.05)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write(
                 "VERSION = '1.0'\n\n"
                 "def compute(x):\n    return x * 100\n\n"
@@ -439,7 +440,7 @@ class TestComputeModuleSymbolHash:
 
         # Change compute() — leave VERSION unchanged
         time.sleep(0.05)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write(
                 "VERSION = '1.0'\n\n"
                 "def compute(x):\n    return x * 100\n\n"
@@ -464,7 +465,7 @@ class TestComputeModuleSymbolHash:
 
         # Change compute()
         time.sleep(0.05)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write(
                 "VERSION = '1.0'\n\n"
                 "def compute(x):\n    return x * 100\n\n"
@@ -638,8 +639,8 @@ class TestGranularInvalidation:
         mod_b_name = f"_test_gran_b_{id(tmp_path)}"
         mod_a_file = tmp_path / f"{mod_a_name}.py"
         mod_b_file = tmp_path / f"{mod_b_name}.py"
-        mod_a_file.write_text("def func_a():\n    return 1\nCONST_A = 10\n")
-        mod_b_file.write_text("def func_b():\n    return 2\nCONST_B = 20\n")
+        mod_a_file.write_text("def func_a():\n    return 1\nCONST_A = 10\n", encoding="utf-8")
+        mod_b_file.write_text("def func_b():\n    return 2\nCONST_B = 20\n", encoding="utf-8")
 
         old_lineage_a = hashlib.sha256(b"old_a").hexdigest()
         old_lineage_b = hashlib.sha256(b"old_b").hexdigest()
@@ -710,7 +711,8 @@ class TestGranularEndToEnd:
         module_name = f"_test_e2e_gran_{id(tmp_path)}"
         module_file = tmp_path / f"{module_name}.py"
         module_file.write_text(
-            "VERSION = '1.0'\n\ndef compute(x):\n    return x * 2\n\ndef format_result(x):\n    return f'Result: {x}'\n"
+            "VERSION = '1.0'\n\ndef compute(x):\n    return x * 2\n\ndef format_result(x):\n    return f'Result: {x}'\n",
+            encoding="utf-8",
         )
 
         sys.path.insert(0, str(tmp_path))
@@ -753,7 +755,8 @@ class TestGranularEndToEnd:
             module_file.write_text(
                 "VERSION = '1.0'\n\n"
                 "def compute(x):\n    return x * 100\n\n"  # Changed!
-                "def format_result(x):\n    return f'Result: {x}'\n"
+                "def format_result(x):\n    return f'Result: {x}'\n",
+                encoding="utf-8",
             )
 
             # Simulate cell execution: check and reload
@@ -801,7 +804,7 @@ class TestGranularEndToEnd:
 
         module_name = f"_test_e2e_const_{id(tmp_path)}"
         module_file = tmp_path / f"{module_name}.py"
-        module_file.write_text("VERSION = '1.0'\n\ndef compute(x):\n    return x * 2\n")
+        module_file.write_text("VERSION = '1.0'\n\ndef compute(x):\n    return x * 2\n", encoding="utf-8")
 
         sys.path.insert(0, str(tmp_path))
         try:
@@ -820,7 +823,8 @@ class TestGranularEndToEnd:
             time.sleep(0.05)
             module_file.write_text(
                 "VERSION = '2.0'\n\n"  # Changed!
-                "def compute(x):\n    return x * 2\n"
+                "def compute(x):\n    return x * 2\n",
+                encoding="utf-8",
             )
 
             changed_modules, per_mod_syms = ft.check_and_reload_changed_modules(mock_shell.user_ns)
@@ -864,7 +868,7 @@ class TestGranularEdgeCases:
 
         # Add comments only
         time.sleep(0.05)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write(
                 "# New comment added\n"
                 "VERSION = '1.0'\n\n"
@@ -886,7 +890,7 @@ class TestGranularEdgeCases:
 
         # Add blank lines
         time.sleep(0.05)
-        with open(module_file, "w") as f:
+        with open(module_file, "w", encoding="utf-8") as f:
             f.write(
                 "\n\nVERSION = '1.0'\n\n\n\n"
                 "def compute(x):\n    return x * 2\n\n\n"
@@ -984,11 +988,11 @@ class TestGranularEdgeCases:
     def test_class_change_detected(self, tmp_path):
         """Changing a class body should be detected as a symbol change."""
         f = tmp_path / "mod.py"
-        f.write_text("class Config:\n    debug = False\n")
+        f.write_text("class Config:\n    debug = False\n", encoding="utf-8")
         ft = FunctionTracker()
         h1 = ft.compute_symbol_hashes(str(f))
 
-        f.write_text("class Config:\n    debug = True\n    verbose = True\n")
+        f.write_text("class Config:\n    debug = True\n    verbose = True\n", encoding="utf-8")
         h2 = ft.compute_symbol_hashes(str(f))
 
         assert h1["Config"] != h2["Config"]

@@ -34,7 +34,8 @@ class TestDecoratorModuleReloadSameCell:
         mod_dir = tmp_path / "mymod"
         mod_dir.mkdir()
         mod_file = mod_dir / "calc.py"
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 import cash
 
 @cash.cache
@@ -44,7 +45,9 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-""")
+""",
+            encoding="utf-8",
+        )
 
         mod_dir_str = str(mod_dir).replace("\\", "/")
 
@@ -65,7 +68,8 @@ def fun(a, b):
 
         # Change dep() in the module
         time.sleep(0.5)
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 import cash
 
 @cash.cache
@@ -75,7 +79,9 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-""")
+""",
+            encoding="utf-8",
+        )
 
         # Re-run ONLY cell 2 (same cell has import + call)
         nb_runner.run_cell(2)
@@ -92,7 +98,8 @@ def fun(a, b):
         mod_dir = tmp_path / "mymod2"
         mod_dir.mkdir()
         mod_file = mod_dir / "calc2.py"
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 import cash
 
 @cash.cache
@@ -102,7 +109,9 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-""")
+""",
+            encoding="utf-8",
+        )
 
         mod_dir_str = str(mod_dir).replace("\\", "/")
 
@@ -123,7 +132,8 @@ def fun(a, b):
 
         # Change dep
         time.sleep(0.5)
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 import cash
 
 @cash.cache
@@ -133,7 +143,9 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-""")
+""",
+            encoding="utf-8",
+        )
 
         # Re-run ONLY cell 2
         nb_runner.run_cell(2)
@@ -151,7 +163,8 @@ def fun(a, b):
         mod_dir = tmp_path / "mymod3"
         mod_dir.mkdir()
         mod_file = mod_dir / "calc3.py"
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 import cash
 
 @cash.cache
@@ -161,7 +174,9 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-""")
+""",
+            encoding="utf-8",
+        )
 
         mod_dir_str = str(mod_dir).replace("\\", "/")
 
@@ -184,7 +199,8 @@ def fun(a, b):
 
         # Change dep() in the module
         time.sleep(0.5)
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 import cash
 
 @cash.cache
@@ -194,7 +210,9 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-""")
+""",
+            encoding="utf-8",
+        )
 
         # Re-run ONLY cell 3 (the one with import + call)
         nb_runner.run_cell(3)
@@ -217,7 +235,8 @@ def fun(a, b):
         mod_dir = tmp_path / "mymod_collision"
         mod_dir.mkdir()
         mod_file = mod_dir / "calc_col.py"
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 import cash
 
 @cash.cache
@@ -227,7 +246,9 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-""")
+""",
+            encoding="utf-8",
+        )
 
         mod_dir_str = str(mod_dir).replace("\\", "/")
 
@@ -252,7 +273,8 @@ def fun(a, b):
 
         # Now change ONLY the module's dep() — the notebook's dep() is unchanged
         time.sleep(0.5)
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 import cash
 
 @cash.cache
@@ -262,7 +284,9 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-""")
+""",
+            encoding="utf-8",
+        )
 
         # Re-run cell 4 (import + module call)
         nb_runner.run_cell(4)
@@ -289,7 +313,8 @@ class TestDecoratorModuleReloadInvalidation:
         mod_dir = tmp_path / "mymod"
         mod_dir.mkdir()
         mod_file = mod_dir / "calc.py"
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 import cash
 
 @cash.cache
@@ -299,7 +324,9 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-""")
+""",
+            encoding="utf-8",
+        )
 
         mod_dir_str = str(mod_dir).replace("\\", "/")
 
@@ -322,7 +349,8 @@ def fun(a, b):
 
         # Change dep() in the module
         time.sleep(0.5)
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 import cash
 
 @cash.cache
@@ -332,7 +360,9 @@ def dep(a):
 @cash.cache
 def fun(a, b):
     return a + b + dep(a)
-""")
+""",
+            encoding="utf-8",
+        )
 
         # Re-run: dep(5) should now = 105, fun(5,1) = 5+1+105 = 111
         nb_runner.run_cells([1, 2, 3])
@@ -346,13 +376,16 @@ def fun(a, b):
         mod_dir = tmp_path / "mymod2"
         mod_dir.mkdir()
         mod_file = mod_dir / "calc2.py"
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 import cash
 
 @cash.cache
 def dep(a):
     return a + 1
-""")
+""",
+            encoding="utf-8",
+        )
 
         mod_dir_str = str(mod_dir).replace("\\", "/")
 
@@ -371,13 +404,16 @@ def dep(a):
 
         # Change dep
         time.sleep(0.1)
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 import cash
 
 @cash.cache
 def dep(a):
     return a + 100
-""")
+""",
+            encoding="utf-8",
+        )
 
         nb_runner.run_cells([2, 3])
         output2 = nb_runner.get_output(3)
@@ -392,7 +428,8 @@ def dep(a):
         mod_dir = tmp_path / "mymod3"
         mod_dir.mkdir()
         mod_file = mod_dir / "calc3.py"
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 import cash
 
 @cash.cache
@@ -402,7 +439,9 @@ def helper(a):
 @cash.cache
 def independent(a):
     return a * 2
-""")
+""",
+            encoding="utf-8",
+        )
 
         mod_dir_str = str(mod_dir).replace("\\", "/")
 
@@ -422,7 +461,8 @@ def independent(a):
 
         # Change only helper — independent should be preserved
         time.sleep(0.1)
-        mod_file.write_text("""
+        mod_file.write_text(
+            """
 import cash
 
 @cash.cache
@@ -432,7 +472,9 @@ def helper(a):
 @cash.cache
 def independent(a):
     return a * 2  # UNCHANGED
-""")
+""",
+            encoding="utf-8",
+        )
 
         nb_runner.run_cells([1, 2, 3])
         output2 = nb_runner.get_output(3)

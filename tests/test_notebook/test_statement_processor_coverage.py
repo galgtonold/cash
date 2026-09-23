@@ -80,11 +80,11 @@ class TestCheckCache:
     def test_file_dep_changed_mtime(self, statement_processor, clean_backend, tmp_path):
         """Cache with changed file mtime should be invalidated."""
         test_file = tmp_path / "data.csv"
-        test_file.write_text("a,b\n1,2\n")
+        test_file.write_text("a,b\n1,2\n", encoding="utf-8")
         from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
         snapshot = snapshot_file_deps({str(test_file)})
-        test_file.write_text("a,b\n1,2\n3,4\n")  # changed since the snapshot
+        test_file.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")  # changed since the snapshot
 
         cache_key = "test_file_dep_changed"
         metadata = {
@@ -103,7 +103,7 @@ class TestCheckCache:
     def test_file_dep_unchanged(self, statement_processor, clean_backend, tmp_path):
         """Cache with unchanged file should be valid."""
         test_file = tmp_path / "data.csv"
-        test_file.write_text("a,b\n1,2\n")
+        test_file.write_text("a,b\n1,2\n", encoding="utf-8")
         from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
         cache_key = "test_file_dep_ok"
@@ -123,7 +123,7 @@ class TestCheckCache:
     def test_input_file_dep_invalidation(self, statement_processor, clean_backend, tmp_path):
         """Cache should invalidate when an input variable's file dep changed."""
         test_file = tmp_path / "source.csv"
-        test_file.write_text("a,b\n1,2\n")
+        test_file.write_text("a,b\n1,2\n", encoding="utf-8")
         current_mtime = os.path.getmtime(str(test_file))
 
         # Set up input var's file dependencies — mutate the shared TrackingState
@@ -292,7 +292,7 @@ class TestFileDependencyPropagation:
 
         # First, create a variable with file deps
         test_file = tmp_path / "data.csv"
-        test_file.write_text("a,b\n1,2\n3,4\n")
+        test_file.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
 
         # Simulate that 'df' has file deps — mutate the shared dicts so
         # sibling sub-components (StatementFileDeps) see the update too.
@@ -314,7 +314,7 @@ class TestFileDependencyPropagation:
         """Non-scalar outputs SHOULD inherit file deps from inputs."""
 
         test_file = tmp_path / "data.csv"
-        test_file.write_text("a,b\n1,2\n")
+        test_file.write_text("a,b\n1,2\n", encoding="utf-8")
 
         # Mutate the shared dicts so StatementFileDeps sees the update too.
         statement_processor.tracking_state.executed_file_deps["data"] = {str(test_file)}

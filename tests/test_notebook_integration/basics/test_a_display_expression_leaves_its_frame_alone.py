@@ -46,7 +46,7 @@ ON = "import cash\n%cash_on"
 
 def _runs(runner) -> int:
     log = Path(runner.work_dir) / "runs.log"
-    return log.read_text().count("x") if log.exists() else 0
+    return log.read_text(encoding="utf-8").count("x") if log.exists() else 0
 
 
 @pytest.mark.parametrize(

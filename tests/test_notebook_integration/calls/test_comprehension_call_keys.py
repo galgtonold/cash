@@ -27,7 +27,7 @@ SETUP = (
 
 def _calls(runner) -> list[str]:
     log = Path(runner.work_dir) / "calls.log"
-    return log.read_text().splitlines() if log.exists() else []
+    return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
 
 
 @pytest.mark.parametrize(
@@ -68,7 +68,7 @@ COUNTED = (
 
 def _counted(runner) -> list[str]:
     log = Path(runner.work_dir) / "counted.log"
-    return [c for c in log.read_text().split("|") if c] if log.exists() else []
+    return [c for c in log.read_text(encoding="utf-8").split("|") if c] if log.exists() else []
 
 
 @pytest.mark.parametrize(

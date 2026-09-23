@@ -55,7 +55,7 @@ CELLS = [
 
 def _runs(work_dir, name):
     log = Path(work_dir) / "runs.log"
-    return log.read_text().count(name + "|") if log.exists() else 0
+    return log.read_text(encoding="utf-8").count(name + "|") if log.exists() else 0
 
 
 def _versions_on_disk(work_dir, output):

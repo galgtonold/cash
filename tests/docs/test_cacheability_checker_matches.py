@@ -37,13 +37,15 @@ _DECIDED_AT_RUN_TIME = {"model.fit(X, y)"}
 
 
 def _snippets() -> list[tuple[str, str]]:
-    found = [(json.loads(f'"{code}"'), verdict) for code, verdict in _SNIPPET.findall(SCRIPT.read_text())]
+    found = [
+        (json.loads(f'"{code}"'), verdict) for code, verdict in _SNIPPET.findall(SCRIPT.read_text(encoding="utf-8"))
+    ]
     assert found, "no snippets parsed from the checker script"
     return found
 
 
 def _fallback_rows() -> dict[str, str]:
-    text = PAGE.read_text()
+    text = PAGE.read_text(encoding="utf-8")
     block = text[text.index('<div class="cash-cacheability-checker"') :]
     block = block[: block.index("</div>")]
     rows = {code.replace("&#39;", "'").replace("&quot;", '"'): verdict for code, verdict in _ROW.findall(block)}

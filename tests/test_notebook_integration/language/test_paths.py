@@ -14,7 +14,7 @@ class TestSysPatterns:
         """sys.path append and import from custom path."""
         mod_dir = tmp_path / "custom_lib"
         mod_dir.mkdir()
-        (mod_dir / "helper.py").write_text("VALUE = 42\ndef compute(x): return x * VALUE\n")
+        (mod_dir / "helper.py").write_text("VALUE = 42\ndef compute(x): return x * VALUE\n", encoding="utf-8")
         mod_path = str(mod_dir).replace("\\", "/")
         nb_runner.create_notebook(
             [
@@ -499,9 +499,9 @@ class TestPathLibPatterns:
         sub2 = tmp_path / "sub2"
         sub1.mkdir()
         sub2.mkdir()
-        (sub1 / "f1.txt").write_text("a")
-        (sub2 / "f2.txt").write_text("b")
-        (sub2 / "f3.txt").write_text("c")
+        (sub1 / "f1.txt").write_text("a", encoding="utf-8")
+        (sub2 / "f2.txt").write_text("b", encoding="utf-8")
+        (sub2 / "f3.txt").write_text("c", encoding="utf-8")
 
         path1 = str(sub1).replace("\\", "/")
         path2 = str(sub2).replace("\\", "/")

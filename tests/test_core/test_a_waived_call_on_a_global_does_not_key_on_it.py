@@ -73,8 +73,8 @@ MAIN = textwrap.dedent("""
 
 
 def _run(tmp_path, waiver):
-    (tmp_path / "llm.py").write_text(LLM.replace("{WAIVER}", waiver))
-    (tmp_path / "main.py").write_text(MAIN)
+    (tmp_path / "llm.py").write_text(LLM.replace("{WAIVER}", waiver), encoding="utf-8")
+    (tmp_path / "main.py").write_text(MAIN, encoding="utf-8")
     env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="always")
     proc = subprocess.run(
         [sys.executable, "main.py"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120

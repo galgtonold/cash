@@ -242,7 +242,7 @@ class TestDecoratorFileDepsIntegration:
     def test_file_depends_on_in_notebook(self, nb_runner, tmp_path):
         """file_depends_on should track file changes in notebook context."""
         data_file = tmp_path / "data.csv"
-        data_file.write_text("a,b\n1,2\n3,4")
+        data_file.write_text("a,b\n1,2\n3,4", encoding="utf-8")
         path_str = str(data_file).replace("\\", "/")
 
         nb_runner.create_notebook(

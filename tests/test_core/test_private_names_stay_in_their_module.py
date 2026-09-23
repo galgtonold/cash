@@ -93,10 +93,12 @@ def test_the_check_sees_a_private_import(tmp_path, monkeypatch):
     # for the wrong reason.
     fake_pkg = tmp_path / "cash"
     fake_pkg.mkdir()
-    (fake_pkg / "__init__.py").write_text("")
-    (fake_pkg / "owner.py").write_text("_secret = 1\n")
+    (fake_pkg / "__init__.py").write_text("", encoding="utf-8")
+    (fake_pkg / "owner.py").write_text("_secret = 1\n", encoding="utf-8")
     user = fake_pkg / "user.py"
-    user.write_text("from . import owner\nfrom .owner import _secret\nprint(owner._secret, _secret)\n")
+    user.write_text(
+        "from . import owner\nfrom .owner import _secret\nprint(owner._secret, _secret)\n", encoding="utf-8"
+    )
     monkeypatch.setitem(globals(), "SRC", fake_pkg)
     uses = _private_uses(user)
     assert any("imports _secret" in u for u in uses), uses

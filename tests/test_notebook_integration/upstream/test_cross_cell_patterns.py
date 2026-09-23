@@ -187,7 +187,7 @@ class TestFromImportCascadeChain:
         Module change should invalidate both downstream cells.
         """
         mod_path = tmp_path / "calc.py"
-        mod_path.write_text("def double(x):\n    return x * 2\n")
+        mod_path.write_text("def double(x):\n    return x * 2\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -203,7 +203,7 @@ class TestFromImportCascadeChain:
         assert "b = 20" in nb_runner.get_output(3)
 
         # Change double to triple
-        mod_path.write_text("def double(x):\n    return x * 3\n")
+        mod_path.write_text("def double(x):\n    return x * 3\n", encoding="utf-8")
         time.sleep(0.5)
 
         nb_runner.run_all()
@@ -218,7 +218,7 @@ class TestFromImportCascadeChain:
         from X import Y, Z — both names should update when module changes.
         """
         mod_path = tmp_path / "ops.py"
-        mod_path.write_text("def add(a, b):\n    return a + b\n\ndef sub(a, b):\n    return a - b\n")
+        mod_path.write_text("def add(a, b):\n    return a + b\n\ndef sub(a, b):\n    return a - b\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -234,7 +234,7 @@ class TestFromImportCascadeChain:
         assert "sub=7" in out, f"Got: {out}"
 
         # Change add to multiply
-        mod_path.write_text("def add(a, b):\n    return a * b\n\ndef sub(a, b):\n    return a - b\n")
+        mod_path.write_text("def add(a, b):\n    return a * b\n\ndef sub(a, b):\n    return a - b\n", encoding="utf-8")
         time.sleep(0.5)
 
         nb_runner.run_all()
@@ -251,9 +251,9 @@ class TestMultiModuleDependencies:
     def test_two_modules_one_cell(self, nb_runner, tmp_path):
         """Import two different modules and use both."""
         mod_a = tmp_path / "mod_a.py"
-        mod_a.write_text("def fa(x):\n    return x + 1\n")
+        mod_a.write_text("def fa(x):\n    return x + 1\n", encoding="utf-8")
         mod_b = tmp_path / "mod_b.py"
-        mod_b.write_text("def fb(x):\n    return x * 2\n")
+        mod_b.write_text("def fb(x):\n    return x * 2\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -267,7 +267,7 @@ class TestMultiModuleDependencies:
         assert "r = 11" in nb_runner.get_output(2)
 
         # Change mod_b
-        mod_b.write_text("def fb(x):\n    return x * 3\n")
+        mod_b.write_text("def fb(x):\n    return x * 3\n", encoding="utf-8")
         time.sleep(0.5)
 
         nb_runner.run_all()
@@ -280,9 +280,9 @@ class TestMultiModuleDependencies:
         Module A imports Module B. Change B, both should update.
         """
         mod_b = tmp_path / "helper.py"
-        mod_b.write_text("FACTOR = 10\n")
+        mod_b.write_text("FACTOR = 10\n", encoding="utf-8")
         mod_a = tmp_path / "processor.py"
-        mod_a.write_text("from helper import FACTOR\ndef process(x):\n    return x * FACTOR\n")
+        mod_a.write_text("from helper import FACTOR\ndef process(x):\n    return x * FACTOR\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -296,7 +296,7 @@ class TestMultiModuleDependencies:
         assert "result = 50" in nb_runner.get_output(2)
 
         # Change the helper module's FACTOR
-        mod_b.write_text("FACTOR = 100\n")
+        mod_b.write_text("FACTOR = 100\n", encoding="utf-8")
         time.sleep(0.5)
 
         nb_runner.run_all()
@@ -326,7 +326,7 @@ class TestFileOperationPatterns:
     def test_csv_with_different_separators(self, nb_runner, tmp_path):
         """Read CSV with semicolons."""
         csv_path = tmp_path / "semi.csv"
-        csv_path.write_text("a;b;c\n1;2;3\n4;5;6\n")
+        csv_path.write_text("a;b;c\n1;2;3\n4;5;6\n", encoding="utf-8")
 
         nb_runner.create_notebook(
             [
@@ -698,7 +698,7 @@ class TestClassWithFileDependency:
     def test_class_reads_config_file(self, nb_runner, tmp_path):
         """Class method reads from a config file."""
         config_file = tmp_path / "app_config.json"
-        config_file.write_text('{"version": "1.0", "debug": false}')
+        config_file.write_text('{"version": "1.0", "debug": false}', encoding="utf-8")
         path_str = str(config_file).replace("\\", "/")
 
         nb_runner.create_notebook(
@@ -726,7 +726,7 @@ class TestClassWithFileDependency:
     def test_data_processor_with_csv(self, nb_runner, tmp_path):
         """Data processing class that reads CSV files."""
         csv_path = tmp_path / "processor_data.csv"
-        csv_path.write_text("metric,value\nCPU,75\nMEM,60\nDISK,45\n")
+        csv_path.write_text("metric,value\nCPU,75\nMEM,60\nDISK,45\n", encoding="utf-8")
         path_str = str(csv_path).replace("\\", "/")
 
         nb_runner.create_notebook(

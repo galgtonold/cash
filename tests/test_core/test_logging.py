@@ -80,7 +80,7 @@ class TestSetupLogging:
         for h in cash_logger.handlers:
             h.flush()
         assert os.path.isfile(log_file)
-        with open(log_file) as f:
+        with open(log_file, encoding="utf-8") as f:
             content = f.read()
         assert "test file logging" in content
         # Should be valid JSON per line

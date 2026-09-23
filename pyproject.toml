@@ -207,11 +207,12 @@ line-length = 120
 extend-exclude = ["*.ipynb", "tests/docs/_fixtures"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "PLC2701"]
+select = ["E", "F", "W", "I", "PLC2701", "PLW1514"]
 ignore = ["E501", "E402"]
-# PLC2701 (importing another module's private name) is a preview rule. With
-# explicit-preview-rules, only it is switched on: no other preview rule or
-# behaviour comes along.
+# PLC2701 (importing another module's private name) and PLW1514 (a text-mode
+# open() without an encoding, which reads cp1252 on Windows) are preview rules.
+# With explicit-preview-rules, only they are switched on: no other preview rule
+# or behaviour comes along.
 preview = true
 explicit-preview-rules = true
 

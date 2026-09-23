@@ -54,8 +54,8 @@ def _load(cash, work, helper_body):
     ``.pyc``, so the edit never reaches the interpreter. That artefact
     silently faked a cache hit while this test was being written.
     """
-    (work / "dynmod.py").write_text(DYNMOD.format(src=helper_body))
-    (work / "usermod.py").write_text(USERMOD)
+    (work / "dynmod.py").write_text(DYNMOD.format(src=helper_body), encoding="utf-8")
+    (work / "usermod.py").write_text(USERMOD, encoding="utf-8")
     shutil.rmtree(work / "__pycache__", ignore_errors=True)
     for name in ("dynmod", "usermod"):
         sys.modules.pop(name, None)

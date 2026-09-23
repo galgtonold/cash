@@ -43,7 +43,7 @@ VECTORS = "Z = fit_vectors(docs['text'], SEED)\nprint('Z', round(float(Z.sum()),
 
 def _fits(runner) -> int:
     log = Path(runner.work_dir) / "fits.log"
-    return log.read_text().count("fit|") if log.exists() else 0
+    return log.read_text(encoding="utf-8").count("fit|") if log.exists() else 0
 
 
 def test_fixing_the_titles_does_not_refit_on_identical_text(nb_runner):

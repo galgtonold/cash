@@ -38,7 +38,8 @@ def test_no_module_keeps_its_own_copy():
     copies = [
         str(path.relative_to(SRC))
         for path in SRC.rglob("*.py")
-        if path.name != "value_types.py" and re.search(r"frozenset\(\s*dir\(\s*_?builtins\s*\)", path.read_text())
+        if path.name != "value_types.py"
+        and re.search(r"frozenset\(\s*dir\(\s*_?builtins\s*\)", path.read_text(encoding="utf-8"))
     ]
     assert copies == []
 

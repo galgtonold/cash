@@ -298,8 +298,8 @@ def test_chdir_relative_path_different_file_invalidates(nb_runner, tmp_path):
     dirb = tmp_path / "dirb"
     dira.mkdir()
     dirb.mkdir()
-    (dira / "data.csv").write_text("v\n1\n2\n3\n")
-    (dirb / "data.csv").write_text("v\n100\n200\n300\n400\n")
+    (dira / "data.csv").write_text("v\n1\n2\n3\n", encoding="utf-8")
+    (dirb / "data.csv").write_text("v\n100\n200\n300\n400\n", encoding="utf-8")
     pa = str(dira).replace("\\", "/")
     pb = str(dirb).replace("\\", "/")
 
@@ -327,7 +327,7 @@ def test_chdir_relative_path_different_file_invalidates(nb_runner, tmp_path):
 def test_relative_read_same_cwd_stays_cached(nb_runner, tmp_path):
     d = tmp_path / "proj"
     d.mkdir()
-    (d / "data.csv").write_text("v\n7\n8\n")
+    (d / "data.csv").write_text("v\n7\n8\n", encoding="utf-8")
     p = str(d).replace("\\", "/")
     nb_runner.create_notebook(
         [

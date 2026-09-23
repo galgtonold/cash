@@ -208,7 +208,7 @@ class TestStatFileDeps:
 
     def test_existing_files(self, tmp_path):
         f = tmp_path / "data.csv"
-        f.write_text("a,b\n1,2")
+        f.write_text("a,b\n1,2", encoding="utf-8")
         result = VirtualLineage._stat_file_deps({str(f): 0.0})
         assert str(f) in result
         assert result[str(f)] == pytest.approx(os.path.getmtime(str(f)), abs=0.1)
@@ -225,8 +225,8 @@ class TestStatFileDeps:
     def test_multiple_files(self, tmp_path):
         f1 = tmp_path / "a.csv"
         f2 = tmp_path / "b.csv"
-        f1.write_text("data1")
-        f2.write_text("data2")
+        f1.write_text("data1", encoding="utf-8")
+        f2.write_text("data2", encoding="utf-8")
         result = VirtualLineage._stat_file_deps({str(f1): 0.0, str(f2): 0.0})
         assert len(result) == 2
 
@@ -251,15 +251,15 @@ class TestRestoreChecksFileDeps:
 
     def test_all_fresh(self, tmp_path):
         f = tmp_path / "data.csv"
-        f.write_text("content")
+        f.write_text("content", encoding="utf-8")
         checker = _restoring_checker({"file_dependencies": snapshot_file_deps({str(f)})})
         assert _restore(checker) == {"x"}
 
     def test_stale_file(self, tmp_path):
         f = tmp_path / "data.csv"
-        f.write_text("content")
+        f.write_text("content", encoding="utf-8")
         snapshot = snapshot_file_deps({str(f)})
-        f.write_text("changed content")
+        f.write_text("changed content", encoding="utf-8")
         checker = _restoring_checker({"file_dependencies": snapshot})
         assert _restore(checker) == set()
 
@@ -286,7 +286,7 @@ class TestLineageConflict:
     def test_skipped_with_file_deps(self, tmp_path):
         """With file deps the lineages are not compared: the files decide."""
         f = tmp_path / "data.csv"
-        f.write_text("content")
+        f.write_text("content", encoding="utf-8")
         metadata = {"output_lineages": {"x": "cached_hash"}, "file_dependencies": snapshot_file_deps({str(f)})}
         assert lineage_conflict(metadata, metadata["file_dependencies"], {"x": "expected_hash"}) is None
         assert _restore(_restoring_checker(metadata), {"x": "expected_hash"}) == {"x"}
@@ -500,7 +500,7 @@ class TestModuleSourceComponent:
     def test_module_with_source(self, tmp_path):
         """Module with trackable source file should return hash."""
         mod_file = tmp_path / "my_module.py"
-        mod_file.write_text("def hello(): return 42")
+        mod_file.write_text("def hello(): return 42", encoding="utf-8")
         mod = types.ModuleType("my_module")
         mod.__file__ = str(mod_file)
         tracker = MagicMock()
@@ -513,16 +513,16 @@ class TestModuleSourceComponent:
 
     def test_hash_includes_dep_files(self, tmp_path):
         mod_file = tmp_path / "mod.py"
-        mod_file.write_text("from helper import util")
+        mod_file.write_text("from helper import util", encoding="utf-8")
         dep_file = tmp_path / "helper.py"
-        dep_file.write_text("def util(): pass")
+        dep_file.write_text("def util(): pass", encoding="utf-8")
         mod = types.ModuleType("mod")
         mod.__file__ = str(mod_file)
         tracker = MagicMock()
         tracker.tracked_modules = {"mod"}
         tracker.dep_file_to_parents = {str(dep_file): {"mod"}}
         h1 = self._component(tracker, mod, "mod")
-        dep_file.write_text("def util(): return 42")
+        dep_file.write_text("def util(): return 42", encoding="utf-8")
         assert h1 != self._component(tracker, mod, "mod")
 
     def test_missing_module_file(self, tmp_path):
@@ -538,10 +538,10 @@ class TestModuleSourceComponent:
         import sys
 
         mod_file = tmp_path / "zz_helpers_mod.py"
-        mod_file.write_text("def clean(x): return x\nTHRESHOLD = 3\n")
+        mod_file.write_text("def clean(x): return x\nTHRESHOLD = 3\n", encoding="utf-8")
         mod = types.ModuleType("zz_helpers_mod")
         mod.__file__ = str(mod_file)
-        exec(mod_file.read_text(), mod.__dict__)
+        exec(mod_file.read_text(encoding="utf-8"), mod.__dict__)
         monkeypatch.setitem(sys.modules, "zz_helpers_mod", mod)
         tracker = MagicMock()
         tracker.tracked_modules = {"zz_helpers_mod"}

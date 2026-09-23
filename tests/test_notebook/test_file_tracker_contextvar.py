@@ -11,9 +11,9 @@ from cash.tracking.file_tracker import FileAccessTracker
 def test_two_threads_isolated(tmp_path):
     """Tracker installed in one thread does not capture file reads in another."""
     p_a = tmp_path / "a.txt"
-    p_a.write_text("a")
+    p_a.write_text("a", encoding="utf-8")
     p_b = tmp_path / "b.txt"
-    p_b.write_text("b")
+    p_b.write_text("b", encoding="utf-8")
 
     result = {}
     barrier = threading.Barrier(2)
@@ -22,14 +22,14 @@ def test_two_threads_isolated(tmp_path):
         t = FileAccessTracker()
         with t:
             barrier.wait()
-            with open(p_a) as f:
+            with open(p_a, encoding="utf-8") as f:
                 f.read()
             barrier.wait()  # give the other thread time to read p_b
         result["with_tracker"] = {x for x in t.get_accessed_files()}
 
     def thread_without_tracker():
         barrier.wait()  # sync entry into the tracked block
-        with open(p_b) as f:
+        with open(p_b, encoding="utf-8") as f:
             f.read()
         barrier.wait()
 
@@ -48,15 +48,15 @@ def test_two_threads_isolated(tmp_path):
 async def test_two_async_tasks_isolated(tmp_path):
     """asyncio.gather: each task's tracker only sees its own file reads."""
     p_a = tmp_path / "a.txt"
-    p_a.write_text("a")
+    p_a.write_text("a", encoding="utf-8")
     p_b = tmp_path / "b.txt"
-    p_b.write_text("b")
+    p_b.write_text("b", encoding="utf-8")
 
     async def reader(path):
         t = FileAccessTracker()
         with t:
             await asyncio.sleep(0)  # yield, let the other task interleave
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 f.read()
             await asyncio.sleep(0)
         return t.get_accessed_files()
@@ -73,21 +73,21 @@ def test_nested_with_blocks(tmp_path):
     """Nested tracker contexts: inner block sees only its own reads;
     outer block resumes capturing after inner exits."""
     p_a = tmp_path / "a.txt"
-    p_a.write_text("a")
+    p_a.write_text("a", encoding="utf-8")
     p_b = tmp_path / "b.txt"
-    p_b.write_text("b")
+    p_b.write_text("b", encoding="utf-8")
     p_c = tmp_path / "c.txt"
-    p_c.write_text("c")
+    p_c.write_text("c", encoding="utf-8")
 
     outer = FileAccessTracker()
     with outer:
-        with open(p_a) as f:
+        with open(p_a, encoding="utf-8") as f:
             f.read()
         inner = FileAccessTracker()
         with inner:
-            with open(p_b) as f:
+            with open(p_b, encoding="utf-8") as f:
                 f.read()
-        with open(p_c) as f:
+        with open(p_c, encoding="utf-8") as f:
             f.read()
 
     outer_files = outer.get_accessed_files()
@@ -106,7 +106,7 @@ def test_reentry_same_instance_via_stack(tmp_path):
     from cash.tracking.file_tracker import active_tracker
 
     p_a = tmp_path / "a.txt"
-    p_a.write_text("a")
+    p_a.write_text("a", encoding="utf-8")
     t = FileAccessTracker()
 
     assert active_tracker.get() is None
@@ -114,7 +114,7 @@ def test_reentry_same_instance_via_stack(tmp_path):
         assert active_tracker.get() is t
         with t:  # re-entry of the same instance
             assert active_tracker.get() is t
-            with open(p_a) as f:
+            with open(p_a, encoding="utf-8") as f:
                 f.read()
         # After inner exit, the outer is still active.
         assert active_tracker.get() is t

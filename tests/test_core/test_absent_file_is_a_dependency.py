@@ -48,7 +48,7 @@ def _optional_config_reader(c, runs, name="cfg.txt"):
     def scaled(n):
         runs.append(n)
         if os.path.exists(name):
-            with open(name) as fh:
+            with open(name, encoding="utf-8") as fh:
                 return n * int(fh.read().strip())
         return n
 
