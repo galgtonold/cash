@@ -266,7 +266,7 @@ def staleness_notification(tracker) -> dict | None:
     hint = tracker.hint()
     where = f" '{hint}' differs from the saved copy." if hint else ""
     return {
-        "status": "WARNING",
+        "status": CacheStatus.WARNING,
         "code": (
             f"[!] Notebook file is stale -- Save (Ctrl+S) and re-run to be sure. "
             f"Upstream check used the copy saved at {when}.{where} "
@@ -310,7 +310,7 @@ def discarded_writes_notification(seen_before: int) -> tuple[dict | None, int]:
     new = total - seen_before
     plural = "s" if new != 1 else ""
     return {
-        "status": "WARNING",
+        "status": CacheStatus.WARNING,
         "code": (f"[!] {new} cache write{plural} failed -- not cached, will recompute. See %cash_stats."),
         "is_upstream": False,
         "total_time": 0.0,
@@ -978,7 +978,7 @@ class CellExecutor:
 
                 mod_names = ", ".join(sorted(changed_modules.keys()))
                 notification: ProcessResult = {
-                    "status": "MODULE_RELOADED",
+                    "status": CacheStatus.MODULE_RELOADED,
                     # No glyph: this text reaches `%cash_badge print`, whose readers are
                     # often cp1252 consoles. The label says it already.
                     "code": f"Module{'s' if len(changed_modules) > 1 else ''} reloaded: {mod_names}",
@@ -1324,7 +1324,7 @@ class CellExecutor:
             logger.debug("[FUNCTION_CHANGE] Detected changed functions: %s", func_names)
             return [
                 {
-                    "status": "FUNCTION_CHANGED",
+                    "status": CacheStatus.FUNCTION_CHANGED,
                     "code": f"Function{'s' if len(changed_funcs) > 1 else ''} changed: {func_names}",
                     "is_upstream": True,
                     "execution_time": 0.0,
@@ -1352,7 +1352,7 @@ class CellExecutor:
                 logger.debug("[OPAQUE_CALL] %s", w)
             return [
                 {
-                    "status": "WARNING",
+                    "status": CacheStatus.WARNING,
                     "code": f"⚠️ {msg}",
                     "is_upstream": True,
                     "execution_time": 0.0,
@@ -1579,7 +1579,7 @@ class CellExecutor:
         badge_render_time = 0.0
 
         upstream_step_count = len(
-            [m for m in all_metrics if m.get("is_upstream", False) and m.get("status") != "SKIPPED"]
+            [m for m in all_metrics if m.get("is_upstream", False) and m.get("status") is not CacheStatus.SKIPPED]
         )
         total_steps_unified = upstream_step_count + len(tree.body)
         stmt_occurrence_counts: dict[str, int] = {}
