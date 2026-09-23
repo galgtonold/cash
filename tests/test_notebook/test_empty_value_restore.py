@@ -12,7 +12,7 @@ When lineage cannot be confirmed (file-dependency restores, or no expected
 lineages supplied) an empty value is indistinguishable from a corrupt entry, and
 the conservative refusal stands.
 
-The pre-existing guard test in ``test_issue_fixes.py`` covers the unconfirmed
+The pre-existing guard test in ``test_upstream_trusts_values_derived_from_loop_mutations.py`` covers the unconfirmed
 direction and passes UNCHANGED — it supplies no expected lineages, so nothing is
 confirmed. These tests cover the confirmed direction and the boundary.
 """
