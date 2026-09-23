@@ -39,15 +39,5 @@ jobs:
       - name: Build docs
         run: python -m mkdocs build --strict
 
-# NOTE: there is deliberately no ReadTheDocs trigger job here.
-# ReadTheDocs builds this project through its own GitHub integration, which
-# needs no repo secrets and no webhook step -- verified by a commit appearing
-# on the published site within ~30 minutes of the push.
-#
-# A `trigger-rtd` job used to live here, gated on RTD_WEBHOOK_URL /
-# RTD_WEBHOOK_TOKEN. Those secrets were never set, so the job skipped its only
-# real step and reported success on every push. It therefore did nothing, while
-# looking exactly like a working deploy -- which led to a false diagnosis that
-# the published docs were stale when they were current. If you ever want CI to
-# own the deploy, prefer `mkdocs gh-deploy` (no secrets, and it fails loudly)
-# over re-adding a webhook job that is green whether or not it fired.
+# No deploy job: Read the Docs builds the site through its own GitHub
+# integration. A webhook job that needs unset secrets would pass without firing.

@@ -1,81 +1,30 @@
 [build-system]
-# Upper bound is a TWINE compatibility pin, not a hatchling problem.
-#
-# hatchling >= 1.28 emits `Metadata-Version: 2.5`. twine 6.2.0 monkeypatches
-# `packaging.metadata._VALID_METADATA_VERSIONS` to its own hardcoded list
-# (twine/package.py) that stops at 2.4 -- so `twine check dist/*` fails with
-# "'2.5' is not a valid metadata version", even though the installed
-# `packaging` accepts 2.5 perfectly well. `.github/workflows/publish.yml`
-# runs that exact check before uploading, so an unpinned build fails the
-# release, not merely a local lint.
-#
-# Verified: hatchling 1.27 emits 2.4 and both artifacts pass `twine check`;
-# 1.30.1 emits 2.5 and the wheel fails it. The artifacts are otherwise fine
-# either way -- a bare clean-venv install from wheel AND sdist works.
-#
-# REMOVE the bound once twine ships a release that accepts 2.5.
+# hatchling >= 1.28 writes Metadata-Version 2.5, which twine 6.2 rejects, and
+# publish.yml runs `twine check`. Lift the bound once twine accepts 2.5.
 requires = ["hatchling<1.28"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cash"]
 
-# The JupyterLab extension (labextension/) is what makes an UNSAVED cell edit
-# visible to cash on JupyterLab: it pushes live cell sources over the
-# `cash_live_cells` comm that src/cash/notebook/live_cells.py receives. Without
-# it cash reads the saved .ipynb and a downstream cell can restore a stale
-# value.
-#
-# `share/jupyter/labextensions/<name>` is where JupyterLab discovers PREBUILT
-# extensions, so this mapping is the entire install step -- `pip install
-# cash-lib` and it is enabled, no `jupyter labextension install`, no JupyterLab
-# rebuild, no Node on the user's machine. The directory name MUST stay equal to
-# the npm package name in labextension/package.json (federated module loading
-# resolves by package name); tests/test_notebook/test_labextension_packaging.py
-# asserts they agree.
-#
-# The built bundle is COMMITTED under src/cash/labextension/ rather than built
-# here, deliberately: adding a JS build to the wheel build would put Node on the
-# critical path of `pip install -e .` and of every contributor running pytest.
-# Rebuild it with `cd labextension && npm run build` when index.ts changes.
-#
-# install.json is what makes `jupyter labextension uninstall` say "use pip"
-# instead of trying to remove a directory pip owns.
+# Ships the prebuilt JupyterLab extension that sends unsaved cell edits to cash.
+# The directory name must equal the npm package name in labextension/package.json
+# (test_labextension_packaging.py checks it). The bundle is committed so the wheel
+# build never needs Node; rebuild it with `cd labextension && npm run build`.
 [tool.hatch.build.targets.wheel.shared-data]
 "src/cash/labextension" = "share/jupyter/labextensions/cash-live-cells"
 "labextension/install.json" = "share/jupyter/labextensions/cash-live-cells/install.json"
 
-# A source distribution only needs to REBUILD the package, so it ships exactly
-# that: the package source, the build config, and the two files the metadata
-# references (README = the PyPI description, LICENSE). Everything else in the
-# repo — tests, docs, example notebooks, benchmarks, CI/governance files — is not
-# required to build, install, or run cash, so it is deliberately NOT shipped. The
-# demos and docs live on GitHub for anyone who wants them.
-#
-# This is an INCLUDE list. The usual objection — "an include list silently drops
-# newly added package files" — does not apply here because ``src/cash`` is a
-# whole DIRECTORY: new modules under it are picked up automatically. The payoff
-# is that stray/generated/dev files can never leak in (hatchling's sdist walk
-# does not honour the self-ignoring `.gitignore` that venv/coverage drop in their
-# own output dirs, so an exclude list has to chase each one; a whitelist can't be
-# surprised that way). Verify with an actual build, never with ``git`` alone.
+# The sdist ships only what rebuilding the package needs. An include list keeps
+# generated files out, and /src/cash is a directory, so new modules are included.
 [tool.hatch.build.targets.sdist]
 include = [
     "/src/cash",
     "/pyproject.toml",
     "/README.md",
     "/LICENSE",
-    # The JupyterLab extension. `/src/cash/labextension` (the committed BUILD
-    # OUTPUT) is already covered by `/src/cash` above and is what the wheel's
-    # shared-data mapping ships; these four entries are its SOURCE, so an sdist
-    # can rebuild the bundle rather than only re-package it. install.json is not
-    # optional -- the shared-data mapping names it by path, so a wheel built
-    # from an sdist without it would lose it.
-    #
-    # Named file-by-file rather than as `/labextension` because that directory
-    # also grows node_modules/ and lib/ once anyone runs `npm install`, and this
-    # project's sdist is a whitelist precisely so generated output can never
-    # leak in.
+    # The extension's source, so an sdist can rebuild the bundle. Listed file by
+    # file so node_modules/ and lib/ never get in.
     "/labextension/install.json",
     "/labextension/package.json",
     "/labextension/tsconfig.json",
@@ -84,9 +33,7 @@ include = [
     "/labextension/scripts",
 ]
 
-# Single source of truth for the version: src/cash/__init__.py's __version__.
-# Keep the literal there in sync on release; pyproject reads it, so the wheel
-# metadata and cash.__version__ can never disagree.
+# The version lives only in src/cash/__init__.py's __version__.
 [tool.hatch.version]
 path = "src/cash/__init__.py"
 
@@ -139,7 +86,6 @@ pandas = ["pandas", "pyarrow>=13.0"]
 ipynbname = ["ipynbname>=0.1"]
 redis = ["redis>=4.0,<6"]
 s3 = ["boto3>=1.26,<2"]
-sqlite = []  # uses stdlib sqlite3
 cloudpickle = ["cloudpickle>=2.0,<4"]
 polars = ["polars>=1.0,<3"]
 notebook = ["ipython>=8.0,<10"]
@@ -147,22 +93,12 @@ viz = [
     "matplotlib>=3.5,<4",
     "ipywidgets>=7.0,<9",
 ]
-# Reading `[tool.cash]` needs a TOML parser, which the standard library has only
-# from Python 3.11. Without it a 3.10 install ignored its whole config file
-# (CONFIG-TOML-UNREADABLE says so) even under `cash-lib[all]` (round 20).
+# Reading `[tool.cash]` needs a TOML parser, which the stdlib has only from 3.11.
 toml = ["tomli>=1.1; python_version < '3.11'"]
-# `all` = every user-facing extra, composed by reference (PEP 631 self-referential
-# extras) rather than by hand-copying each requirement. Do NOT expand these back
-# into a literal list: the hand-maintained version silently drifted out of sync
-# with the individual extras (it dropped `ipython` entirely, and lost the upper
-# bounds on polars, matplotlib and ipywidgets), so `pip install cash-lib[all]`
-# would happily take a future ipython 10 / ipywidgets 9 / matplotlib 4 / polars 3
-# that the individual extras explicitly exclude. Referencing the extras makes that
-# class of drift structurally impossible — each bound is declared exactly once.
-# `dev` and `docs` are deliberately absent: they are contributor tooling, not part
-# of what a user means by "everything".
+# Composed from the other extras, so each version bound is declared once. The
+# contributor extras (dev, docs, docs-test) stay out.
 all = [
-    "cash-lib[cloudpickle,ipynbname,memory,notebook,pandas,polars,redis,s3,sqlite,toml,viz]",
+    "cash-lib[cloudpickle,ipynbname,memory,notebook,pandas,polars,redis,s3,toml,viz]",
 ]
 docs = [
     "mkdocs>=1.5",
@@ -170,20 +106,13 @@ docs = [
     "mkdocstrings[python]>=0.24",
     "mkdocs-mermaid2-plugin>=1.2",
 ]
-# Third-party packages that documentation pages import in their examples.
-# tests/docs/ EXECUTES those pages, and its autouse fixtures stub the network
-# and backend calls by monkeypatching the real module — so the module has to be
-# importable for the stub to have anything to patch. When it is absent the
-# fixture no-ops and the page dies on the real import instead, which is how the
-# docs-parity job read as four broken pages when nothing was wrong with them.
-# Everything else the docs touch (openai, httpx, boto3, sklearn, polars, ...)
-# is injected as a fake module and needs no install.
+# Packages the docs examples import. tests/docs stubs them by monkeypatching the
+# real module, so they have to be installed.
 docs-test = [
     "aiohttp>=3.9",
     "redis>=4.0,<6",
     "fakeredis>=2.0",
-    # S3Backend does its own `import boto3` and raises DependencyNotFoundError
-    # before any fixture can intercept, so the stub module is not enough here.
+    # S3Backend imports boto3 itself, before any stub can step in.
     "boto3>=1.28",
 ]
 dev = [
@@ -198,65 +127,25 @@ dev = [
     "ipykernel",
     "pandas",
     "pyarrow>=13.0",
-    # polars and dask are OPTIONAL for users but not for CI: cash ships a
-    # content hasher for each, and an untested hasher is how a polars
-    # LazyFrame came to be identified by its query plan instead of its
-    # data -- two frames over different values printed the same plan and
-    # collided into a wrong cached answer. 4 MB and 6 MB installed, next
-    # to the pandas/numpy already here.
+    # Optional for users, needed here: cash ships a content hasher for each.
     "polars>=1.0,<3",
     "dask[dataframe]",
-    # scipy is used by tests/test_notebook/test_size_estimator.py to
-    # exercise the csr/csc/coo branches of _estimate_object_size.
+    # For the sparse-matrix branches of the size estimator tests.
     "scipy",
-    # matplotlib and pydantic are OPTIONAL for users and were absent here, so
-    # the tests that guard on them were skipped AT COLLECTION on every CI run
-    # and only ever ran on a contributor machine that happened to have them.
-    # That is invisible: a skipped module reports nothing.
-    #
-    # matplotlib covers the figure identity guard -- `@cash.cache` REFUSING to
-    # store a figure, which decorator.md states as a claim -- across 8 files
-    # and ~30 tests. pydantic covers `model_fields` folding into the cache key,
-    # the 0.8.0 fix for a spec that was tracked but never cached; that
-    # regression test shipped with no CI protecting it.
-    #
-    # Every matplotlib test sets the Agg backend, so neither needs a display.
+    # Optional for users. Without them here, the tests that need them would be
+    # skipped at collection in CI without anyone noticing.
     "matplotlib>=3.5,<4",
     "pydantic>=2,<3",
-    # scikit-learn is needed by the integration tests that drive a REAL kernel
-    # (test_real_world_libraries.py, test_rng_badge_indicator.py,
-    # test_user_testing_findings.py). The `docs-test` note above explains that
-    # sklearn is injected as a fake module for the docs pages — that works only
-    # because those execute in-process. `nb_runner` runs a separate kernel, and
-    # a fake module in the pytest process is not on the kernel's sys.path, so
-    # those tests need the genuine package.
-    #
-    # Declared rather than importorskip'd on purpose: skipping would keep the
-    # estimator duck-type gate, the `# @cash:cache-fit` opt-in path and the
-    # unseeded-fit randomness pills silently untested on any dev machine
-    # without it, which is how nine of them read as a regression (CAS-244).
+    # Integration tests import it inside a real kernel, where no stub reaches.
     "scikit-learn",
-    # The only way left to pump a kernel's event loop from inside a running
-    # cell: IPythonKernel.do_one_iteration, which every older recipe uses, no
-    # longer exists on ipykernel 7. test_comm_reply_during_execution.py needs
-    # it to establish whether a frontend can answer the kernel MID-EXECUTION —
-    # the fact that decides whether a JupyterLab extension could serve cash a
-    # live notebook read synchronously (it cannot; see that file).
-    #
-    # Declared rather than left to importorskip for the same reason as sklearn
-    # above: skipped, the test proves nothing, and a future ipykernel that
-    # quietly changes this would sail through CI.
+    # test_comm_reply_during_execution.py pumps the kernel event loop from inside
+    # a cell, which ipykernel 7 no longer supports on its own.
     "jupyter_ui_poll",
     "nest_asyncio",
     "traitlets",
     "pyinstrument>=4.6,<6",
-    # An in-process S3 emulator, so the object-storage examples in the docs run
-    # against a real store rather than a stub. Two things need it, and neither
-    # is servable any other way: the docs claim "a hit costs no download", which
-    # is only checkable if something counts the requests; and cash's remote
-    # token depends on which keys s3fs puts in fs.info(), which is a fact about
-    # s3fs that only s3fs can confirm. Both tests importorskip, so a contributor
-    # without these installed sees skips rather than failures.
+    # An in-process S3 emulator for the object-storage docs examples and s3fs
+    # tests. Those tests importorskip them.
     "s3fs",
     "moto[server]>=5.0",
 ]
@@ -277,55 +166,14 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 timeout = 30
 asyncio_mode = "auto"
-# An xfail that starts passing is a FAILURE, not a quiet "x" in the output.
-#
-# This suite records known-open bugs as xfails, so an xfail that begins to pass
-# is news: either a bug got fixed and its ticket should close, or a test stopped
-# testing what it claims. With the default (false) that event is invisible --
-# CAS-179 was fixed by unrelated work and sat as a silent XPASS through two full
-# full sweeps, found only by reading a summary line by hand. The previous
-# mitigation was "remember to run `pytest --runxfail` over the xfail set after
-# lineage/cache work", which is exactly the kind of discipline that gets skipped.
-#
-# Tests whose outcome is genuinely nondeterministic or environment-dependent opt
-# out per-marker with an explicit `strict=False` and a reason (see CAS-61's
-# alias tests and CAS-64's runtime-dependent assert). That makes each exception
-# a visible, argued choice rather than the silent default for everything.
+# An xfail that starts passing means a bug got fixed or a test stopped testing,
+# so it fails. Nondeterministic tests opt out per marker with strict=False.
 xfail_strict = true
-# Parallel by default: integration tests each spawn a fresh Jupyter kernel and
-# spend ~90% of wall-clock blocked on kernel boot/IPC, so a serial run pins one
-# core and leaves the rest idle. For interactive debugging (pdb, -s) disable
-# parallelism with `-n0`.
-#
-# Scheduler is `worksteal`, NOT `loadscope`. Worker deaths are inevitable across
-# thousands of Jupyter-kernel spawns on Windows (boot-storm "node down"), and
-# under loadscope a SINGLE death is catastrophic: its rescheduler can't reassign
-# the dead worker's scope, so the master either aborts the whole session
-# (INTERNALERROR KeyError) or hangs indefinitely (observed 15h; a 90s
-# self-killing-worker repro hung the full 90s). worksteal isolates a death to the
-# one in-flight test and redistributes the rest, so the run always completes;
-# `--max-worker-restart` lets dead workers respawn. Neither suite needs
-# loadscope's module-grouping (nb_runner is function-scoped; no module/session/
-# class-scoped fixtures exist). `timeout=30` per test is the in-worker backstop.
-#
-# Worker count is pinned to 16, NOT `-n auto`. The suite is boot-throttle-bound
-# (CASH_TEST_BOOT_THROTTLE, default 8), not CPU-bound: CPU never saturates even
-# at 64 workers. A sweep on this box (32 logical / 24 physical) found n=16 both
-# fastest (121s vs 135s at n=32) and most stable. Past ~2x the boot throttle,
-# extra workers only queue kernel boots -- slowing AND destabilizing the run.
-# Rule of thumb: workers ~= 2 x boot throttle. Lower on a much smaller box.
-#
-# Reruns absorb the residual transient kernel-boot infra casualties (a worker
-# crashes / a kernel can't get a socket under boot-storm pressure -- WinError
-# 10055, ZMQ "connection refused", "node down"). `--only-rerun` scopes retries to
-# those infra signatures ONLY, so a real assertion failure still fails fast and
-# clearly (no wasted retries, no masking of genuine test bugs). Reruns are
-# reported, so any test that needed one stays visible. `.` stands in for spaces
-# in the patterns to avoid TOML/shlex quoting.
-# `Timeout` is in the list for the same reason: under worker oversubscription a
-# heavy page (an IPython-kernel docs page caching multi-MB arrays, say) can blow
-# the 30s per-test budget purely from I/O contention — bimodal ~8s vs ~39s. A
-# genuinely hung test still fails, it just burns all three attempts first.
+# Parallel by default, because integration tests mostly wait on kernel boot; use
+# -n 0 to debug. worksteal, not loadscope: under loadscope one dead worker can
+# abort or hang the whole run. 16 workers is about twice the kernel boot throttle
+# (CASH_TEST_BOOT_THROTTLE, default 8); use fewer on a small machine. Reruns
+# cover only kernel-boot and timeout failures, never a failed assertion.
 addopts = "-n 16 --dist worksteal --max-worker-restart=24 --reruns 2 --reruns-delay 2 --only-rerun crashed --only-rerun ConnectionError --only-rerun WinError --only-rerun ZMQError --only-rerun node.down --only-rerun Not.properly.terminated --only-rerun Kernel.died --only-rerun failed.to.boot --only-rerun Timeout"
 markers = [
     "expects_failed_writes: induces a cache-write failure on purpose; exempt from the discarded-write guard",
@@ -363,33 +211,3 @@ known-first-party = ["cash"]
 [tool.ruff.lint.per-file-ignores]
 # Trailing whitespace inside tests is notebook cell source used as test data.
 "tests/**" = ["E731", "E741", "W291", "W293"]
-
-[tool.mypy]
-python_version = "3.10"
-warn_return_any = true
-warn_unused_configs = true
-ignore_missing_imports = true
-
-[tool.coverage.run]
-source = ["cash"]
-omit = [
-    "tests/*",
-    "examples/*",
-    "*/ui/dashboard.py",
-    "*/ui/debugger.py",
-    "*/ui/visualizer.py",
-    "*/ui/explorer.py",
-    "*/backends/redis_backend.py",
-    "*/backends/s3_backend.py",
-]
-
-[tool.coverage.report]
-show_missing = true
-skip_empty = true
-exclude_lines = [
-    "pragma: no cover",
-    "if __name__ == .__main__.",
-    "if TYPE_CHECKING:",
-    "raise NotImplementedError",
-]
-fail_under = 70

@@ -22,13 +22,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The real release gate for doc-claim drift. `docs-parity`'s "Report
-      # drifted doc claims" step (ci.yml) is advisory-only on every PR; this
-      # is where CASH_CLAIMS_STRICT=1 actually promotes it to blocking, on
-      # the one workflow every release runs. `.github/copilot-instructions.md`
-      # §1b's manual `--queue` check is the fast local echo of this gate, not
-      # a substitute for it -- if it's skipped, this step still stops the
-      # build.
+      # Release gate for doc-claim drift: the same check is advisory in ci.yml
+      # and blocking here.
       - name: Install docs-claim test dependencies
         run: |
           python -m pip install --upgrade pip
@@ -50,21 +45,8 @@ jobs:
       - name: Check package
         run: twine check dist/*
       
-      # Version-locked as a PAIR, and not to the newest of each.
-      #
-      # These must be the lowest majors that run on node24 (node20 is
-      # deprecated on the runners and every release annotated a warning about
-      # it). Read `using:` in each action's own action.yml before changing
-      # these -- download-artifact's v6.0.0 release notes claim node24 support
-      # and its v6 action.yml still says node20, so the release notes are not
-      # the authority here and a one-major bump would have left the warning.
-      #
-      # Deliberately NOT upload@v7 / download@v8: those are the matched pair
-      # for direct uploads, where download stops unzipping unconditionally and
-      # dispatches on Content-Type. That is a real behaviour change on the
-      # release path, and this workflow only ever moves one dist/ between two
-      # jobs -- there is nothing to gain from it. Bump both together or
-      # neither.
+      # upload-artifact@v6 and download-artifact@v7 are the lowest majors that
+      # run on node24. Newer pairs change unzip behaviour; bump both together.
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:

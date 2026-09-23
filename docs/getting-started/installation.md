@@ -27,7 +27,6 @@ pip install "cash-lib[notebook]"      # IPython integration for %cash_on and fri
 pip install "cash-lib[memory]"        # psutil for memory-aware cache budgets
 pip install "cash-lib[redis]"         # Redis backend (shared/distributed caching)
 pip install "cash-lib[s3]"            # S3 backend (cloud storage, via boto3)
-pip install "cash-lib[sqlite]"        # SQLite backend (uses stdlib sqlite3; no extra deps)
 pip install "cash-lib[cloudpickle]"   # cloudpickle for serializing closures and lambdas
 pip install "cash-lib[ipynbname]"     # notebook-name detection helper
 pip install "cash-lib[viz]"           # matplotlib + ipywidgets for visualization helpers

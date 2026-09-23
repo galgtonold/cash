@@ -13,47 +13,29 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        # Keep in lockstep with the `Programming Language :: Python :: 3.x`
-        # classifiers in pyproject.toml: a version we advertise on PyPI but
-        # never run is a support claim backed by nothing. requires-python is
-        # ">=3.10", so 3.10 is the floor and the newest classifier is the ceiling.
+        # Keep in step with the Python classifiers in pyproject.toml.
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
-    
+
     steps:
       - uses: actions/checkout@v6
-      
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
-      
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-      
-      # EXCLUDE, never enumerate (CAS-152). This step used to name the ~8 files
-      # it ran, which silently omitted 18 top-level test files and four of the
-      # five test directories — and anything added later. A tracked regression
-      # test for an Urgent correctness bug (CAS-175) sat red on main for weeks
-      # because nothing outside the allowlist was ever executed by CI.
-      #
-      # So the default is now "run everything" and each exclusion has to justify
-      # itself here:
-      #   test_notebook_integration/  starts real kernels, too slow per push. The
-      #                               headline features are covered by the smoke
-      #                               subset below; run the rest locally.
-      #   test_wheel_gate/            builds a wheel and starts a real Jupyter
-      #                               server; belongs to the release gate.
-      #   docs/                       has its own job, which needs the extra
-      #                               docs-test dependencies.
-      # Everything else — including anything added tomorrow — runs by default.
-      #
-      # `-n auto` overrides the `-n 16` in pyproject's addopts, which is tuned
-      # for a 32-thread dev box. Hosted runners have 3-4 vCPUs, so 16 workers is
-      # a 4-5x oversubscription that stalls timed sections and turns wall-clock
-      # heuristics into coin flips — it is what made the cost-model floor test
-      # fail only on the 3-vCPU macOS runner.
+
+      # Run tests/ by exclusion, never by listing files, so a new test file runs
+      # without anyone adding it here (tests/test_ci_covers_the_suite.py checks).
+      # Excluded: test_notebook_integration/ starts real kernels and is too slow
+      # per push (the smoke subset below covers the headline features);
+      # test_wheel_gate/ belongs to the release gate; docs/ has its own job.
+      # `perf` tests assert wall-clock thresholds and run in benchmarks.yml.
+      # -n auto replaces pyproject's -n 16, which oversubscribes 3-4 vCPU runners.
       - name: Run unit tests
         run: |
           pytest tests/ \
@@ -62,17 +44,11 @@ jobs:
             --ignore=tests/docs \
             -m "not perf" \
             -n auto --tb=short -q
-        # Windows runners default to pwsh, where `\` is NOT a line continuation:
-        # the backslashes above parse as "Missing expression after unary
-        # operator '--'" and pytest never runs at all. Every Windows job failed
-        # that way for two full runs while looking like a test failure.
+        # Windows defaults to pwsh, where `\` does not continue a line.
         shell: bash
 
-      # Curated subset of the notebook integration suite — the headline-feature
-      # tests (basic flow, restore-after-restart, file invalidation, decorator
-      # bridge, badge rendering, forward-probe skip, file-dep path fallback).
-      # The full suite is too slow for per-push
-      # CI; run it locally with `pytest tests/test_notebook_integration/`.
+      # Headline features of the notebook integration suite. Run the full suite
+      # locally; see .github/copilot-instructions.md for choosing a subset.
       - name: Run notebook integration smoke subset
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: |
@@ -85,9 +61,6 @@ jobs:
             tests/test_notebook_integration/test_forward_probe_upstream_skip.py \
             tests/test_notebook_integration/test_file_dep_path_fallback.py \
             -n auto --tb=short -q
-        # Ubuntu-only today, but the continuations above would break the moment
-        # this step ran on Windows. Declare the shell rather than depend on the
-        # `if:` above staying ubuntu-only.
         shell: bash
         timeout-minutes: 10
 
@@ -95,35 +68,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      
+
+      # Same ruff version as .pre-commit-config.yaml, so a new ruff release
+      # cannot fail CI with rules the code was never checked against.
       - name: Install dependencies
-        # Pin to the same ruff the pre-commit hook uses (.pre-commit-config.yaml).
-        # Unpinned, CI installs the latest ruff and a new release can silently
-        # re-redden the gate with rules the code was never linted against.
         run: |
           python -m pip install --upgrade pip
           pip install ruff==0.15.8
 
       - name: Run ruff check
         run: ruff check .
-      
+
       - name: Run ruff format check
         run: ruff format --check .
 
+  # Blocking. Runs everything in tests/docs/: doc examples execute, documented
+  # claims resolve to real source, config and env-var tables match the code.
   docs-parity:
     runs-on: ubuntu-latest
-    # Hard gate. This job runs every tests/docs/ check: the fence harness
-    # (examples execute, documented hit/miss counts hold, no un-opted-in cash
-    # warning), the structured-claim linters (CASH_* env vars, internal
-    # anchors, config defaults), the claim-anchor checks (prose claims resolve
-    # to real source, documented literals match, coverage does not regress),
-    # the documented-behavior tier, and the mermaid diagram validation. Docs
-    # drift here is a build failure, not a report.
     steps:
       - uses: actions/checkout@v6
 
@@ -132,43 +99,28 @@ jobs:
         with:
           python-version: "3.12"
 
-      # `docs-test` carries the third-party packages doc examples import. The
-      # autouse fixtures in tests/docs/conftest.py stub them by monkeypatching
-      # the real module, so it has to be importable or the fixture no-ops and
-      # the page dies on the import instead.
+      # docs-test holds packages the doc examples import; tests/docs stubs them
+      # by patching the real module, so they must be installed.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev,docs-test]"
 
-      # `-rs` surfaces skip REASONS in the log, not just a skip count.
-      # test_no_fingerprint_drift's whole reason for existing is that reason
-      # string -- it's the drift queue -- so without -rs it never reaches
-      # the log at all (pytest's default reportchars is "fE").
+      # -rs prints skip reasons; test_no_fingerprint_drift reports the drift
+      # queue through its skip reason.
       - name: Run docs feature-parity tests
         run: pytest tests/docs/ -n auto -v -rs --tb=short
 
-      # Blocking. tests/docs/test_doc_numbers.py already ran the cheap half of
-      # this (version, claim count, platform count) on every suite run; the
-      # test COUNTS need three `pytest --collect-only` passes, which cannot run
-      # recursively from inside pytest, so they are checked here. This job's
-      # env is a superset of the unit job's, so every suite collects.
-      #
-      # A failure here means a number a reader sees is no longer true. The fix
-      # is `python scripts/doc_numbers.py --update`, not editing the prose.
+      # The test counts in the docs need `pytest --collect-only`, which cannot run
+      # inside pytest. On failure run `python scripts/doc_numbers.py --update`.
       - name: Check derived doc numbers
         run: python scripts/doc_numbers.py --check
 
-      # Advisory, never blocking. Surfaces the re-verification queue while the
-      # author still remembers why the code moved -- which is the only moment
-      # re-verifying is cheap. The release gate (CASH_CLAIMS_STRICT=1) is the
-      # backstop; this step is what keeps that queue short.
+      # Advisory. The release gate in publish.yml (CASH_CLAIMS_STRICT=1) blocks.
       - name: Report drifted doc claims
         if: always()
         run: |
-          # $GITHUB_STEP_SUMMARY renders as Markdown: --queue's indented
-          # lines become code blocks and adjacent lines collapse unless the
-          # whole thing is fenced.
+          # Fence the output so the step summary's Markdown keeps it verbatim.
           output="$(python scripts/claims.py --queue || true)"
           {
             echo '```'
