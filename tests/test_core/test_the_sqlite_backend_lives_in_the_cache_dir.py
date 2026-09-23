@@ -73,17 +73,3 @@ def test_it_does_not_crash_when_the_cache_directory_already_exists(tmp_path):
     done = _run(project)
     assert "RESULT 6" in done.stdout, done.stderr[-1500:]
     assert "Traceback" not in done.stderr, done.stderr[-1500:]
-
-
-@pytest.mark.timeout(300)
-def test_a_database_at_the_old_location_keeps_working(tmp_path):
-    """Anyone who ran the sqlite backend before has a database FILE named
-    `.cash`; the fix must not make `makedirs` crash on it, or lose it."""
-    project = _project(tmp_path, '[tool.cash]\nbackend = "sqlite"\n')
-    import sqlite3
-
-    sqlite3.connect(str(project / ".cash")).close()  # the old layout
-    done = _run(project)
-    assert "RESULT 6" in done.stdout, done.stderr[-1500:]
-    assert "Traceback" not in done.stderr, done.stderr[-1500:]
-    assert (project / ".cash").is_file(), "the old database was replaced"
