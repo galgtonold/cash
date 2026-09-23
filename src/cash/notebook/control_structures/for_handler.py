@@ -56,8 +56,8 @@ logger = logging.getLogger(__name__)
 def _stamp_call_events_loop_header(m: dict, loop_header: str) -> None:
     """Propagate *m*'s ``loop_header``/``loop_header_chain`` onto its call events.
 
-    ``m['decorator_calls']`` may hold intercepted (on by default, CAS-243)
-    sub-call events. Those need the identical loop-nesting stamp
+    ``m['decorator_calls']`` may hold intercepted (on by default) sub-call
+    events. Those need the identical loop-nesting stamp
     the enclosing metric just got, or the badge view-builder has nothing to
     key nesting on and renders them as siblings of the loop instead of
     inside it. Mirrors the caller's own first-writer-wins / prepend rules
@@ -140,8 +140,8 @@ class ForLoopHandler:
 
         *prev_node* is the loop's immediately-preceding top-level sibling in
         the same cell, or ``None`` — passed through so the single-unit branch
-        can compute ``force_outputs`` for a pure accumulator-loop shape (CAS-259
-        follow-up: without it, that branch is refused outright by the
+        can compute ``force_outputs`` for a pure accumulator-loop shape
+        (without it, that branch is refused outright by the
         in-place-mutation detector, since nothing suppresses that refusal for
         a matching ``out = []`` / ``out.append(f(e))`` loop). ``None`` by
         default so nested / direct callers with no notion of a preceding
@@ -171,18 +171,13 @@ class ForLoopHandler:
             # Evaluate the iterator, watching what it READS.
             #
             # A loop is decomposed per-iteration and every body statement is
-            # tracked, but this expression is not a statement -- so before
-            # round 27 the files it opened were recorded against nothing.
-            # `for line in DATA.read_text().splitlines():` put the only read
-            # of DATA here, the body never touched the file, and the dict the
-            # loop filled came out with no file dependency at all:
-            # `%cash_provenance ALIAS` reported `Code: ALIAS = {}`. Change the
-            # file, run a cell below, and the stale table was served with a
-            # clean badge (r27s4: nine wrong exports, no `Upstream:` block).
-            #
-            # The same rule as the body's reads, which `inherit_body_file_deps`
-            # has applied since round 23 -- the header was simply never part
-            # of it.
+            # tracked, but this expression is not a statement, so the files
+            # it opens must be recorded here. `for line in
+            # DATA.read_text().splitlines():` puts the only read of DATA in
+            # the header; untracked, the dict the loop fills has no file
+            # dependency at all, and after the file changes a stale table is
+            # served with a clean badge. The same rule as the body's reads
+            # (`inherit_body_file_deps`).
             #
             # `propagate_to_parent` is required, not tidiness. A manual
             # `with FileAccessTracker(...)` is isolated by default, so a
@@ -247,9 +242,8 @@ class ForLoopHandler:
                 # A pure accumulator loop's body (``out.append(f(e))``) reads as
                 # an in-place mutation to the per-statement analyzer, which
                 # would otherwise refuse to cache this whole unit outright --
-                # CAS-259 shipped without this and every large/cheap
-                # accumulator loop got ZERO caching from either mechanism
-                # (decomposition never runs here; the single unit was refused).
+                # and a large, cheap accumulator loop would get no caching
+                # from either mechanism (decomposition never runs here).
                 # force_outputs, computed from the narrow shape detector,
                 # suppresses exactly that refusal reason (and captures the
                 # leaked loop variable) so the chosen single-unit path is
@@ -361,7 +355,7 @@ class ForLoopHandler:
                 # A statement's intercepted (on by default) sub-call
                 # events need this SAME stamp, or the view-builder has no way
                 # to tell they belong inside this loop and renders them as
-                # siblings instead (CAS-243 task 9). ``event`` is a dict
+                # siblings instead. ``event`` is a dict
                 # inside ``m['decorator_calls']`` -- stamped in lockstep with
                 # ``m`` itself, same first-writer-wins / prepend rules, so
                 # nesting can never disagree between the two.
@@ -376,8 +370,8 @@ class ForLoopHandler:
             )
 
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user for-loop body code
-            # Handed back to the cell, which raises it: logged at ERROR it printed
-            # the traceback a second time, through cash (round 25, r25s2/r25s3).
+            # Handed back to the cell, which raises it; logged above debug it
+            # would print the traceback a second time.
             logger.debug("[CONTROL] Error in for loop: %s", e, exc_info=True)
             return ControlStructureResult(success=False, metrics=all_metrics, error=e)
 
@@ -425,8 +419,7 @@ class ForLoopHandler:
                 # result on the first run. Hash full content here.
                 full = compute_hash_full(val)
                 # `variable_lineage[name]` and `loop_var_digests[name]`
-                # WANT DIFFERENT THINGS and must not be conflated -- a lesson
-                # learned the hard way (CAS-243 review, round 5): `val`'s own
+                # WANT DIFFERENT THINGS and must not be conflated: `val`'s own
                 # `_cash_lineage_hash`, when present, may itself have been
                 # derived from a SAMPLED hash -- `update_mutated_variable_lineages`
                 # (control_structures/helpers.py) computes a mutated
@@ -441,9 +434,8 @@ class ForLoopHandler:
                 # variable is later bound to each of them in turn (`for df in
                 # [df_a, df_b]:`), preferring that attribute for the CALL KEY
                 # would collapse iteration 2 onto iteration 1's cached value.
-                # Reproduced live in a real kernel: `SL2 [1, 1]` instead of
-                # the oracle's `[1, 2]`. This is round 1's lesson one layer
-                # further out -- a sampled hash is never sound as a key
+                # (`SL2 [1, 1]` instead of `[1, 2]`) -- a sampled hash is
+                # never sound as a key
                 # discriminator, even smuggled in through an attribute rather
                 # than passed directly.
                 #
@@ -552,7 +544,7 @@ class ForLoopHandler:
                     if "body_index" not in m:
                         m["body_index"] = body_idx
                     # Same stamp, same reason, onto this statement's intercepted
-                    # sub-call events (CAS-243 task 9) -- see the loop_header
+                    # sub-call events -- see the loop_header
                     # stamp above for why.
                     _stamp_call_events_body_index(m, body_idx)
                 if was_computed:

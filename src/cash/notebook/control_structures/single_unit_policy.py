@@ -50,11 +50,9 @@ MIN_OVERHEAD_SEC = 1.0
 # The builtins that compute a BOUND are here too, not only the ones that
 # produce the iterable. `for t in range(0, len(frame), STEP):` is about
 # the commonest loop header there is, and without `len` on this list it
-# was refused the fast path and decomposed per iteration: r27s3's 627
-# iterations of four cheap numpy statements took 2.5 s where the same
-# loop with a literal bound took 0.06 s, and a re-run with nothing changed
-# took 4.5 s. The tester measured 16.9 s cached against 1.0 s uncached and
-# called it BLOCKING.
+# was refused the fast path and decomposed per iteration: 627 iterations
+# of four cheap numpy statements took 2.5 s where the same loop with a
+# literal bound took 0.06 s.
 #
 # A name on this list is only trusted while it still IS the builtin -- see
 # `header_safe_to_reevaluate`. And none of these can drain a one-shot
@@ -283,8 +281,8 @@ def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, A
 
     ``len(iterable)`` alone missed ``df.itertuples()`` / ``iterrows()``,
     whose value is an iterator with no length, so a long cheap loop over a
-    frame never ran as one unit: r28s3's 631-iteration loop spent ~9 s in
-    per-statement machinery around 0.07 s of work (round 28). The length is
+    frame never ran as one unit: a 631-iteration loop spent ~9 s in
+    per-statement machinery around 0.07 s of work. The length is
     read from what the header iterates instead -- the frame's rows, its
     columns for ``items()``, through ``enumerate``/``zip``/``reversed``/
     ``sorted``/``list``/``tuple``.
@@ -304,8 +302,8 @@ def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, A
         if _is_pure_access(node):
             # `a.var["symbol"]` in `for gid, s in a.var["symbol"].items()`:
             # attribute reads and constant subscripts on a name, read here
-            # to size the loop. Only a plain name was read, so r30s4's
-            # 200,000-iteration inner loop counted as unknown and went
+            # to size the loop. Reading only a plain name left a
+            # 200,000-iteration inner loop counted as unknown, so it went
             # through the per-statement machinery: 243 s against 3.8 s.
             try:
                 value = eval(compile(ast.Expression(node), "<loop-size>", "eval"), {"__builtins__": {}}, dict(user_ns))

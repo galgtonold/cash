@@ -313,7 +313,7 @@ def inherit_body_file_deps(
     pd.concat(parts)`` inherited no file, the next statement's key had no file
     component, and after an existing file was rewritten ``sales`` was restored
     from the old content -- visible once the list passed 200 frames and its
-    sampled hash stopped covering the middle (round 23, r23s2, 4/4). A
+    sampled hash stopped covering the middle. A
     statement that reads files already hands them to its outputs
     (``FileDepsTracker.inherit_from_inputs``); this is the same rule for the
     loop's accumulators.
@@ -526,15 +526,15 @@ def update_mutated_variable_lineages(
     ``variable_lineage`` wants PROVENANCE. *iterable_lineage* was already
     provenance; this extends the same treatment to the body's other reads.
 
-    Component 5 closes the same hole from the other side, and round 26 walked
-    into it. :func:`collect_body_input_lineages` deliberately EXCLUDES the
-    mutated variables, reasoning that a body almost always reads what it
+    Component 5 closes the same hole from the other side.
+    :func:`collect_body_input_lineages` deliberately EXCLUDES the mutated
+    variables, reasoning that a body almost always reads what it
     mutates and folding that back in would "re-add the sampled hash by another
     route". That holds only when the receiver's lineage came from THIS path.
     Usually it did not: it came from whatever built the receiver, and that is
     provenance worth having.
 
-    The month-end close in round 26 is the case. A cell built ``status_all``
+    A month-end close is the case. A cell built ``status_all``
     one way on Monday and a different way on Tuesday (a matching fix; 50,000 of
     300,000 rows changed), and in both versions ran the same loop over it::
 

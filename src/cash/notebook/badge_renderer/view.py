@@ -165,7 +165,7 @@ class StatementRow:
     guard_cause: str | None = None  # for "unstable key": what kept changing the key
     #: What an upstream statement the repair re-ran printed (stdout, stderr).
     #: Kept out of the cell's own output -- it belongs to another cell -- and
-    #: shown under the step instead (round 29, r29s3).
+    #: shown under the step instead.
     output_text: str = ""
     # Notification-row metadata (FUNCTION_CHANGED / MODULE_RELOADED rows).
     changed_functions: tuple[str, ...] = ()
@@ -205,8 +205,8 @@ class StatementRow:
     # draw/fit with no frozen seed — its cached value is a frozen replay.
     random_effect: str | None = None
     random_unseeded: bool = False
-    # Per-call-SITE groups of intercepted (on by default, CAS-243) sub-calls
-    # made from inside this statement (CAS-243 call-unit caching). Distinct
+    # Per-call-SITE groups of intercepted (on by default) sub-calls made
+    # from inside this statement (call-unit caching). Distinct
     # from ``decorator_calls`` above: that field is flat and keyed on nothing
     # in particular, which is fine for the "@cache: N/M hits" summary but
     # wrong for debugging — see :class:`SubUnitGroup` for why site matters.
@@ -240,8 +240,8 @@ class IterationRow:
     Stored as a tuple of ``(name, value)`` pairs (not a dict) so the whole
     node remains hashable. Renderers iterate in order.
     """
-    # Per-call-SITE groups of this iteration's intercepted sub-calls (CAS-243
-    # task 9) — same field, same purpose as ``StatementRow.sub_units``. A
+    # Per-call-SITE groups of this iteration's intercepted sub-calls — same
+    # field, same purpose as ``StatementRow.sub_units``. A
     # loop-body statement renders as an ``IterationRow``, not a
     # ``StatementRow`` (see ``view_builder._iteration_row``), so it needs
     # its own copy of this field or a sub-call made inside a loop body is
@@ -259,8 +259,8 @@ class LoopStatement:
 
     base_code: str
     iterations: tuple[IterationRow, ...]
-    # Per-call-site sub-call groups AGGREGATED across every iteration (CAS-243
-    # task 9) -- built from the union of all iterations' raw ``decorator_calls``
+    # Per-call-site sub-call groups AGGREGATED across every iteration --
+    # built from the union of all iterations' raw ``decorator_calls``
     # events, re-grouped by ``(call_source, occurrence_index)``. Renderers that
     # show this statement as one collapsed aggregate row (the HTML renderer's
     # loop-body row) show this instead of per-iteration ``IterationRow.sub_units``,
@@ -349,7 +349,7 @@ class SkippedBucket:
     items: tuple[Union["StatementRow", "ForLoopGroup"], ...]
     total_saved_time_s: float
     #: ``(code, paths)`` of file writers left out of the repair although what
-    #: they write changed: their file on disk is out of date (round 28).
+    #: they write changed: their file on disk is out of date.
     stale_exports: tuple[tuple[str, tuple[str, ...]], ...] = ()
     rollup: Rollup = _rollup_field()
 
@@ -374,7 +374,7 @@ class DecoratorCallGroup:
     calls: tuple[DecoratorCall, ...]
     condensed: bool
     # True when cash wrapped this callee itself via call interception
-    # (on by default, CAS-243) rather than the user decorating it. Same
+    # (on by default) rather than the user decorating it. Same
     # cache, same section — but the reader needs to know where it came from.
     # Defaults False so pre-existing metrics keep reading as decorated.
     intercepted: bool = False

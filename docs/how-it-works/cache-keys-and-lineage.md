@@ -77,7 +77,7 @@ when both imports ran through Cash. Until this was fixed it kept the first impor
 lineage: after a restart, a helper that read `sys` got a new lineage when it was
 defined again, and every call to it missed.
 
-<!-- claim: cash/notebook/control_structures/processor.py:_entry_lineages @c94d73af -->
+<!-- claim: cash/notebook/control_structures/processor.py:_entry_lineages @36626ac1 -->
 Ordinary names in that cell are in the same position, and a loop that reads one
 has to record what it was worth. `DATA = Path("data/")` written after `%cash_on`
 runs uncached too, so nothing records what it produced, while the upstream

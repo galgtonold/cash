@@ -118,9 +118,7 @@ class ModuleInvalidator:
             # write. Updating only `tickets_lib` left `tl` holding the
             # pre-edit hash forever, so the statement's key never moved: the
             # module was reloaded, the badge said so, and the cell returned
-            # the pre-edit answer anyway until the kernel was restarted
-            # (round 27, r27s2, 3/3 -- two exported deliverables computed
-            # from a value the user had just fixed).
+            # the pre-edit answer anyway until the kernel was restarted.
             #
             # It also feeds the propagation step below, which matches
             # downstream variables on the lineage they RECORDED for their
@@ -155,7 +153,7 @@ class ModuleInvalidator:
         whose closure cannot be bounded: a helper that reads the clock) is
         keyed on this lineage, so everything the session computed after an
         edit was keyed apart from what the next morning looked up: nothing
-        restored until a second restart (round 29, r29s1 2/2, r29s3 2/2).
+        restored until a second restart.
         """
 
         code = processor.executed_cell_codes.get(name)
@@ -386,7 +384,7 @@ class ModuleInvalidator:
         # The value is still in memory, built by the pre-edit module. Dropping
         # its lineage makes a READER of it recompute, but a cell further down
         # reading only something built from it compared lineages and saw
-        # nothing to compare: r28s5 exported the pre-edit numbers, 5/5. Ask
+        # nothing to compare, and exported the pre-edit numbers. Ask
         # for its binding to be re-run instead -- TrackingState.rerun_bindings.
         if var_name in self._shell.user_ns:
             processor.tracking_state.rerun_bindings.add(var_name)

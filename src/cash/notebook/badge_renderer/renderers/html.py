@@ -351,8 +351,8 @@ def _rowtip_html(row: StatementRow, rp: _RenderPass) -> str:
     """
     kind = theme.kind_of(row.status)
     # Same word the text renderer uses for this row, and the same word the cell
-    # header uses for the whole-cell case (CAS-272) -- this pill used to render
-    # the raw enum value, so an HTML row read RESTORED under a CACHED header.
+    # header uses for the whole-cell case -- never the raw enum value, which
+    # read RESTORED under a CACHED header.
     label = (
         theme.LABEL_UNCACHEABLE
         if row.status is BadgeStatus.COMPUTED and (row.uncacheable_reasons or row.skipped_reason)
@@ -404,10 +404,10 @@ def _rowtip_html(row: StatementRow, rp: _RenderPass) -> str:
     elif row.skipped_reason:
         dl_parts.append(f"<dt>Skipped</dt><dd>{_esc(row.skipped_reason)}</dd>")
     if row.output_text:
-        # What a re-run upstream step printed (round 29, r29s3).
+        # What a re-run upstream step printed.
         dl_parts.append(f'<dt>Printed</dt><dd><pre class="c3-rt-code">{_esc(row.output_text[:4000])}</pre></dd>')
         if row.guard_cause:
-            # What kept changing the key (round 29, r29s1).
+            # What kept changing the key.
             dl_parts.append(f"<dt>Key changed by</dt><dd>{_esc(row.guard_cause)}</dd>")
 
     if row.restored_vars:
@@ -420,8 +420,8 @@ def _rowtip_html(row: StatementRow, rp: _RenderPass) -> str:
         n = len(row.decorator_calls)
         dl_parts.append(f"<dt>@cache</dt><dd>{hits}/{n} cache hits</dd>")
     if row.sub_units:
-        # Per-call-SITE breakdown of the intercepted (on by default, CAS-243)
-        # sub-calls this statement made -- see SubUnitGroup for why grouping
+        # Per-call-SITE breakdown of the intercepted (on by default) sub-calls
+        # this statement made -- see SubUnitGroup for why grouping
         # is by site rather than callee. One summary line, then one line per
         # site with its own hit ratio and cache-key prefix (the same-prefix-
         # across-runs signal the statement row already gives for itself).
@@ -688,8 +688,8 @@ def _loop_stmt_sub_units_html(sub_units: tuple[SubUnitGroup, ...]) -> str:
     """Sub-calls block for a loop-body statement's collapsed aggregate row.
 
     Sits INSIDE the same toggle-revealed area as ``_iter_drilldown_html``
-    (nested under the loop body row, not a sibling of the loop) -- CAS-243
-    task 9. *sub_units* here is already aggregated across every iteration
+    (nested under the loop body row, not a sibling of the loop).
+    *sub_units* here is already aggregated across every iteration
     (see ``view_builder``'s ``LoopStatement.sub_units``), so this shows one
     line per call SITE for the whole statement, not per iteration.
     """
@@ -748,7 +748,7 @@ def _loop_tip_html(
     code_block = f'<pre class="c3-rt-code">{highlight_python(title_code)}</pre>'
     counts = []
     # The loop's trip count, not its statement-iterations summed: a 3-trip
-    # loop with three body statements read "Iterations 9" (round 29, r29s4).
+    # loop with three body statements is "Iterations 3", not 9.
     # Cached/Computed count statement runs, so they are labelled as such
     # whenever that total differs from the trips.
     trips = total if trips is None else trips
@@ -1087,8 +1087,8 @@ def _skipped_bucket_html(sb: SkippedBucket, rp: _RenderPass) -> str:
 # Decorator section
 # ---------------------------------------------------------------------------
 
-#: Tag shown on a call cash wrapped itself via call interception (CAS-243,
-#: on by default), as opposed to one the user decorated with ``@cash.cache``.
+#: Tag shown on a call cash wrapped itself via call interception (on by
+#: default), as opposed to one the user decorated with ``@cash.cache``.
 #: Same cache, but the reader needs to know which mechanism put it there.
 #:
 #: Deliberately NOT named after a directive: interception is on unless opted
@@ -1313,7 +1313,7 @@ def _summary_meta(header: BadgeHeader) -> tuple[str, str, str]:
         return "cached", label, sub
 
     if header.restored_count and header.computed_count:
-        # See `_headline.mixed_headline` (round 29, r29s4).
+        # See `_headline.mixed_headline`.
         label, counts = mixed_headline(header)
         return (
             "cached" if label == "CACHED" else "exec",

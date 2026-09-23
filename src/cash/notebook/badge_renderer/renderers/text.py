@@ -56,8 +56,8 @@ def _header_line(h: BadgeHeader) -> str:
         return "SKIPPED (already computed)"
     if h.restored_count and h.computed_count:
         # Counts, and CACHED when restoring saved more than running cost: a
-        # sweep cell that restored 12 fits and ran `sweep_rows = []` read
-        # "EXECUTED · saved 257s" (round 29, r29s4).
+        # sweep cell that restored 12 fits and ran `sweep_rows = []` must not
+        # read "EXECUTED · saved 257s".
         label, counts = mixed_headline(h)
         line = f"{label} ({counts}; {h.total_exec_s:.2f}s, saved {h.total_saved_s:.2f}s)"
     elif h.total_saved_s > 0:
@@ -142,8 +142,8 @@ def _row_line(row: StatementRow, *, is_upstream: bool) -> str:
 
 def _row_line_computed(row: StatementRow, tag: str, code: str) -> str:
     # The statement ran, but what it exists for may have come from the cache:
-    # "EXECUTED (0.03s)" read like a suspiciously fast re-fit, with only the
-    # footer saying otherwise (round 25, r25s1).
+    # "EXECUTED (0.03s)" reads like a suspiciously fast re-fit, with only the
+    # footer saying otherwise.
     saved = sum(c.time_s for g in (row.sub_units or ()) for c in g.calls if c.status is BadgeStatus.RESTORED)
     timing = f"({row.time_s:.2f}s, saved {saved:.2f}s by cached calls)" if saved else f"({row.time_s:.2f}s)"
     if row.uncacheable_reasons:
@@ -162,7 +162,7 @@ def _row_line_computed(row: StatementRow, tag: str, code: str) -> str:
 def _iteration_pseudo_row(it: IterationRow) -> StatementRow:
     """A ``StatementRow`` view of *it*, for reuse of the row-rendering helpers.
 
-    Carries ``sub_units`` through (CAS-243 task 9) -- an iteration's
+    Carries ``sub_units`` through -- an iteration's
     intercepted sub-calls otherwise never reach ``_sub_unit_lines``, since a
     loop-body statement is an ``IterationRow``, not a ``StatementRow``.
     """
@@ -184,13 +184,13 @@ def _iteration_pseudo_row(it: IterationRow) -> StatementRow:
 def _iteration_lines(it: IterationRow, pad: str, *, is_upstream: bool) -> list[str]:
     """The iteration's own line plus one ``sub-call ...`` line per call site,
     nested at the SAME indent the loop's other body lines use -- not as
-    siblings of the loop (CAS-243 task 9)."""
+    siblings of the loop."""
     pseudo = _iteration_pseudo_row(it)
     return [pad + _row_line(pseudo, is_upstream=is_upstream), *_sub_unit_lines(pseudo, pad)]
 
 
 def _sub_unit_lines(row: StatementRow, pad: str) -> list[str]:
-    """One line per call SITE inside *row* (CAS-243 intercepted sub-calls).
+    """One line per call SITE inside *row* (intercepted sub-calls).
 
     Mirrors the cell-level ``[intercepted]`` line's job at
     statement granularity: grouped by ``(call_source, occurrence_index)``,
@@ -198,16 +198,15 @@ def _sub_unit_lines(row: StatementRow, pad: str) -> list[str]:
     statement made no intercepted calls, and none for a site where cash did
     nothing: every call missed and none was stored -- too cheap to cache.
     ``sub-call roc_auc_score(...): 0/1 hit`` on every run of a report cell
-    said only that (round 25, r25s1).
+    would say only that.
     """
     return [
         f"{pad}    sub-call {g.call_source}: "
         f"{sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)}/{len(g.calls)} hit"
         + (f", {g.ran_plain} run plain (too cheap to cache)" if getattr(g, "ran_plain", 0) else "")
         # Why it was not served, when the runtime worked it out. The HTML badge
-        # has shown this; the text badge said only "0/6 hit", and a tester read
-        # a correct re-run as a bug for want of the word after it (round 30,
-        # r30s4).
+        # shows this too; a bare "0/6 hit" reads a correct re-run as a bug
+        # for want of the word after it.
         + (f" - {g.miss_reason}" if g.miss_reason else "")
         for g in row.sub_units
         if not (g.unstored and g.unstored == len(g.calls) and not g.miss_reason)
@@ -231,7 +230,7 @@ def _loop_statement_summary(stmt: LoopStatement, pad: str, *, is_upstream: bool)
     """One line for every pass of *stmt*, and its sub-calls across all of them.
 
     A row per pass put 126+ lines on the badge for 63 machines, each not-cached
-    row repeating the same reason (round 25, r25s3). The counts and the
+    row repeating the same reason. The counts and the
     distinct reasons are what a reader looks for; a short loop keeps its rows.
     """
     its = stmt.iterations
@@ -273,7 +272,7 @@ _OUTPUT_LINES_MAX = 5
 
 
 def _output_lines(row: StatementRow, pad: str) -> list[str]:
-    """What a re-run upstream step printed, under it (round 29, r29s3)."""
+    """What a re-run upstream step printed, under it."""
     if not row.output_text:
         return []
     lines = row.output_text.splitlines()
@@ -319,7 +318,7 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
     if isinstance(item, SkippedBucket):
         # One line, as the HTML badge folds it: each of these is a step the
         # repair did not need, and a row apiece put 18 ``^SKIPPED: import os``
-        # style rows into a report cell's badge (round 25, r25s1).
+        # style rows into a report cell's badge.
         n = len(item.items)
         lead = "^" if is_upstream else ""
         out = (
@@ -328,7 +327,7 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
             else []
         )
         # A write the repair left alone although its data changed: the file
-        # is out of date, and "already current" would say otherwise (r28s3).
+        # is out of date, and "already current" would say otherwise.
         for code, paths in item.stale_exports:
             out.append(f"{pad}  {lead}{stale_export_text(code, paths)}")
         return out
@@ -360,8 +359,8 @@ def _items_lines(items, *, is_upstream: bool) -> list[str]:
 
     ``ax.axhline(...)``, ``ax.legend()``, ``fig.savefig(...)``, ``to_csv(...)``:
     a row apiece, each with its reason, put 10 of 12 lines of a chart cell's
-    badge on steps that re-run in milliseconds and must (round 25, r25s1 and
-    r25s2). They cost nothing to re-run; one line names them.
+    badge on steps that re-run in milliseconds and must. They cost nothing
+    to re-run; one line names them.
     """
     out: list[str] = []
     items = list(items)
@@ -404,7 +403,7 @@ def _decorator_lines(sections: tuple[Section, ...]) -> list[str]:
         # Name the mechanism for a call cash wrapped itself: the user decorated
         # nothing, so an unlabelled entry reads as someone else's doing.
         # Deliberately not named after a directive -- interception is
-        # unconditional (CAS-243 default-on), and spelling this
+        # unconditional (default-on), and spelling this
         # ``cache-calls`` would substring-collide with the opt-out
         # ``no-cache-calls`` in any grep/assertion over badge text.
         via = " [intercepted]" if g.intercepted else ""

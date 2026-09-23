@@ -39,7 +39,7 @@ from cash.utils import is_remote_url, normalize_path
 # drop it — leaving the entry with *no* dependency, hitting forever even after
 # the object changed. URLs are routed to their own channel instead and tracked
 # by the store's own validator (ETag / version id / generation). ``file://`` is
-# excluded: it names a local path that can genuinely be stat'ed. See CAS-236.
+# excluded: it names a local path that can genuinely be stat'ed.
 
 __all__ = ["FileDependencyRegistry", "PostImportHook", "FileAccessTracker", "FileDependencies", "file_registry"]
 
@@ -171,8 +171,7 @@ _install_lock = threading.RLock()
 # reliable trigger — it writes one entry per chunk plus a manifest, so a
 # 10-chunk result crosses the eviction-check threshold inside a single call.
 #
-# Same shape as CAS-214 (cash's own ``open`` shim poisoning its cache key):
-# the tracker cannot tell cash's internal reads from the user's, so paths that
+# Same shape as cash's own ``open`` shim poisoning its cache key: the tracker cannot tell cash's internal reads from the user's, so paths that
 # are definitionally not data get excluded here. Linux-only in effect; on
 # Windows these prefixes never match.
 _PSEUDO_FS_PREFIXES: tuple[str, ...] = ("/proc/", "/sys/", "/dev/")
@@ -190,8 +189,7 @@ def _regular_file_stat(path: str) -> tuple[int, int, int] | None:
 
     ``ctime_ns`` is the inode change time on POSIX, so an edit that restores
     the mtime still moves this tuple there; on Windows it is the creation
-    time and adds nothing, which is the residual the NTFS change-time ticket
-    (CAS-114) is about.
+    time and adds nothing.
     """
 
     try:
@@ -210,8 +208,7 @@ _SCRATCH_MEMMAP = "joblib_memmapping_folder_"
 #: JIT index/data (``.nbi`` / ``.nbc``), which live in a ``__pycache__`` next to
 #: the code or wherever ``NUMBA_CACHE_DIR`` points. Never the user's data, and
 #: rewritten by any other process that runs the same function -- recorded,
-#: scanpy's normalize made every step after it re-run after a restart (round
-#: 28, r28s4, 3/3).
+#: scanpy's normalize made every step after it re-run after a restart.
 _RUNTIME_CACHE_SEGMENT = "/__pycache__/"
 _RUNTIME_CACHE_SUFFIXES = (".nbi", ".nbc", ".pyc")
 
@@ -239,8 +236,8 @@ def _is_pseudo_fs(path: str) -> bool:
 # (including the notebook's own folder) and reading ~100 ``entry_points.txt``
 # files, matplotlib loading its style sheets and font cache on import and its
 # fonts on first draw, scikit-learn reading the template for an estimator's
-# HTML display. Round 21 traced every "code or state changed" with no change
-# to them: they happen only the FIRST time (the second run finds everything
+# HTML display. Each was behind a "code or state changed" with no change to
+# them: they happen only the FIRST time (the second run finds everything
 # loaded), so the same statement got a different lineage on a re-run; a new
 # file anywhere next to the notebook invalidated everything after an import;
 # and a figure that looked changed had its ``savefig`` replayed without its
@@ -301,7 +298,7 @@ def _installed_data_file(path_nc: str, own_package: str | None) -> bool:
     """Is *path_nc* a file of an installed package other than *own_package*,
     or of the system time zone database?
 
-    Whoever reads it, it is library data, not the user's. Round 30 (r30s1):
+    Whoever reads it, it is library data, not the user's. For example
     ``zoneinfo`` -- the standard library, so not "a library reading its own
     package" -- loaded ``tzdata/zoneinfo/UTC`` on the first load in a process
     and kept the zone for the rest of it. The load's lineage carried that file
@@ -334,14 +331,14 @@ def _module_package_dir(module_name: str) -> str | None:
 
 
 # A read walks the whole stack, ~30 frames in a kernel, and a folder read does
-# it for every file: 5,030 reads re-classified the same modules (round 25,
-# r25s4). Hence `_memory.module_kind`.
+# it for every file: 5,030 reads re-classified the same modules. Hence
+# `_memory.module_kind`.
 
 
 def incidental_read(path: str, own_package: str | None = None) -> str | None:
     """Why the read of *path* happening now is not the user's data, or None.
 
-    Four cases, each measured in round 21: a file of the interpreter itself;
+    Four cases, each seen in practice: a file of the interpreter itself;
     a package metadata or resource lookup; a library reading files while it is
     being imported; and a library reading a file inside its own installed
     package directory. *own_package* is the top-level package of the code
@@ -480,10 +477,10 @@ def _is_cash_internal(path: str) -> bool:
 #: files read while a frame of that code was on the stack, process-wide. A memo (``functools.lru_cache``, a
 #: module dict) hands a later call the product of an earlier read, and the
 #: later call reads nothing -- so its entry recorded no file and kept serving
-#: after the file changed (round 19). What a helper read once is what
+#: after the file changed. What a helper read once is what
 #: `credited_reads` answers when a call reaches it again, and the stat says
 #: WHICH version it read: a memo filled before the file changed hands back the
-#: old version's data (round 20). Reads outside any cached call count too
+#: old version's data. Reads outside any cached call count too
 #: (`_note_untracked_read`) -- `main()` logging its settings through the memo
 #: before the first cached call is the ordinary way to fill one. A code past
 #: `_READS_PER_CODE_MAX` files is marked ``None``: it reads per argument, and
@@ -556,7 +553,7 @@ def tracking_seconds() -> float:
     Read before and after a statement, the difference is cash's own time inside
     it, which is not the statement's cost: a folder read recorded 16.5 s for a
     load that takes 1.8 s without cash, and a later hit credited all of it as
-    saved (round 25, r25s4).
+    saved.
     """
     return _memory.tracking_seconds
 
@@ -674,8 +671,8 @@ def _audited_caller() -> Any:
 def _is_read_mode(mode: str) -> bool:
     # `w+` and `x+` start from an empty file, so nothing the code reads back
     # existed before it: a write, not an input. Pillow saves every image with
-    # "w+b", and round 21 found each `savefig` recorded as a dependency on its
-    # own output.
+    # "w+b", and would have each `savefig` recorded as a dependency on its own
+    # output.
     return "r" in mode or ("+" in mode and "w" not in mode and "x" not in mode)
 
 
@@ -702,8 +699,7 @@ def _on_open(args: tuple) -> None:
             # A file that was not there is an input too, and the docs say so --
             # but only the `os.path.exists` spelling recorded it.
             # `try: open(p) except FileNotFoundError:` kept serving its default
-            # after the file appeared (found attacking the decorator before
-            # round 26). The event comes before the open, so ask the disk.
+            # after the file appeared. The event comes before the open, so ask the disk.
             try:
                 os.stat(path)
             except FileNotFoundError:
@@ -904,11 +900,11 @@ def _track_regular_file(path: Any) -> None:
 def _patch_pathlib_stat() -> None:
     """Track the file ``Path.stat()`` looks at.
 
-    Round 24's r24s4 ended an export cell with
+    An export cell ending with
     ``print({p.name: p.stat().st_size for p in sorted(OUT.glob('*.csv'))})``:
-    the folder's listing was a dependency and its names had not changed, so
-    after the exports above were rewritten the line was served from the cache
-    with the old sizes. Patched where ``stat`` is defined on ``Path``'s MRO,
+    has the folder's listing as a dependency, and its names do not change, so
+    after the exports above are rewritten the line would be served from the
+    cache with the old sizes. Patched where ``stat`` is defined on ``Path``'s MRO,
     since pathlib has moved it between versions.
     """
     owner = next((k for k in pathlib.Path.__mro__ if "stat" in k.__dict__), None)
@@ -934,7 +930,7 @@ def _patch_thread_pool_submit() -> None:
     The tracker is found through a ContextVar, and a pool's worker threads
     start with an empty context -- so ``ex.map(np.load, shards)`` inside a
     cached function read files no tracker saw, and editing a shard served the
-    pre-edit result while the serial loop beside it invalidated (round 19).
+    pre-edit result while the serial loop beside it invalidated.
 
     With a tracker active, ``submit`` (which ``Executor.map`` calls) wraps the
     call in ``copy_context().run``; with none, it is the original. A pool can
@@ -1008,7 +1004,7 @@ def _patch_process_pool_submit() -> None:
     A cached orchestrator that fans work out to a process pool read its data in
     the workers, where no tracker of the parent's can see: after a data fix in
     one input it served the pre-fix report, while the thread-pool version beside
-    it invalidated (round 20). With a tracker active, ``submit`` (which
+    it invalidated. With a tracker active, ``submit`` (which
     ``Executor.map`` calls, chunked or not) sends a `_ReadsInWorker` instead of
     the bare function, and credits what it read to the submitting call when the
     result comes back -- before the caller can see the result, so before the
@@ -1095,7 +1091,7 @@ class FileDependencyRegistry:
         # pyarrow reads in C++, so nothing passes through Python's open(): a
         # cached function that switched to pyarrow.csv for speed recorded no
         # file dependency at all, and a whole new export returned yesterday's
-        # numbers (CAS-115). Path-taking readers only -- a class such as
+        # numbers. Path-taking readers only -- a class such as
         # ParquetFile is left alone, since replacing it with a function would
         # break isinstance checks.
         self.register("pyarrow.csv", "read_csv", self._create_path_arg_handler)
@@ -1108,8 +1104,7 @@ class FileDependencyRegistry:
 
         # pyarrow.dataset reads in C++ like the rest of pyarrow; `read_table`
         # was registered and `dataset()` was not, so one entry point of an
-        # otherwise-covered library went stale (found attacking the decorator
-        # before round 26).
+        # otherwise-covered library went stale.
         self.register("pyarrow.dataset", "dataset", self._create_path_arg_handler)
 
         # linecache answers from its own cache, so a file read once is not
@@ -1124,7 +1119,7 @@ class FileDependencyRegistry:
         # sqlite3 opens the database in C, so nothing reaches a patched
         # reader: a cached `select sum(x)` returned 1 where an uncached run
         # returned 101 after an INSERT, and `pd.read_sql_query` over the same
-        # connection did too (found attacking the decorator before round 26).
+        # connection did too.
         # The connection's path is the dependency; a URI or ":memory:" has no
         # file behind it and `_track_path` drops what it cannot resolve.
         self.register("sqlite3", "connect", self._create_path_arg_handler)
@@ -1135,8 +1130,8 @@ class FileDependencyRegistry:
         # input cash could not see, because a file that is never opened
         # produces no read to track. An entry written by a run that found
         # nothing recorded no dependencies at all, so it looked valid
-        # everywhere: a round-16 tester got directory B's answer in directory
-        # A, silently, 4/4. Only a NEGATIVE result is recorded; a probe that
+        # everywhere: directory B's answer came back in directory A,
+        # silently. Only a NEGATIVE result is recorded; a probe that
         # says yes is followed by the read that tracks it properly. `os.stat`
         # raises no audit event.
         self.register("os.path", "exists", self._create_exists_handler)
@@ -1409,7 +1404,7 @@ class FileAccessTracker:
         # store time instead, a file changed mid-call by a writer that moves no
         # timestamp -- an np.memmap write on Windows -- was fingerprinted as
         # the NEW file next to a result computed from the old one, and served
-        # to every later process (round 20). Moving the hash here costs
+        # to every later process. Moving the hash here costs
         # nothing extra: the snapshot reuses it while the stat is unchanged.
         self._hash_on_read = hash_on_read
         self.read_digests: dict[str, str] = {}
@@ -1431,7 +1426,7 @@ class FileAccessTracker:
         # The stat of each regular file WHEN IT WAS FIRST READ. The entry's
         # fingerprint is taken when it is stored, after the body has finished,
         # so a file that changed in between was fingerprinted as if it were
-        # what the body read -- and served, stale, forever after (CAS-109).
+        # what the body read -- and served, stale, forever after.
         # Comparing against this is what lets the store step refuse instead.
         self.read_stats: dict[str, tuple[int, int, int]] = {}
         self.user_ns = user_ns or {}
@@ -1531,7 +1526,7 @@ class FileAccessTracker:
             # ``open(3)`` opens a file DESCRIPTOR: joblib and loky do, and
             # ``str(3)`` was recorded as a read of ``<cwd>/3`` -- a directory
             # every file under the cwd sits in, so every write there read as
-            # an input (round 25, r25s1).
+            # an input.
             return
         raw_path = os.fsdecode(path) if isinstance(path, bytes) else str(path)
         if _is_pseudo_fs(raw_path):
@@ -1543,7 +1538,7 @@ class FileAccessTracker:
             # A remote URL is a real dependency, just not a stat-able one:
             # ``realpath`` would mangle it into a nonexistent local path and the
             # dependency would vanish. Record it on the remote channel, where it
-            # is tracked by the store's own validator. See CAS-236.
+            # is tracked by the store's own validator.
             self.add_tracked_remote(raw_path)
             return
         try:
@@ -1568,8 +1563,8 @@ class FileAccessTracker:
         if _SCRATCH_MEMMAP in abs_path:
             # joblib's memmaps of a parallel call's arrays: deleted when the
             # call returns, so recorded, every entry that read them was stale
-            # for ever -- r25s1's ``cross_val_predict(n_jobs=4)`` loop re-ran
-            # on every run of the report cell (round 25).
+            # for ever -- a ``cross_val_predict(n_jobs=4)`` loop re-ran on
+            # every run of the report cell.
             logger.debug("[TRACKER] Ignoring joblib scratch read %r", abs_path)
             return
         if _RUNTIME_CACHE_SEGMENT in abs_path or abs_path.endswith(_RUNTIME_CACHE_SUFFIXES):
@@ -1607,9 +1602,8 @@ class FileAccessTracker:
                 # treatment: its unresolved form is recorded too. The realpath
                 # above resolved the link at WRITE time, so after the link is
                 # re-pointed every check stats the old target -- which still
-                # exists and has not changed. Round 17 lost eleven nightly
-                # reports to that, including a rollback that returned the NEWER
-                # release's answer (CAS-108). Checked through the link as it
+                # exists and has not changed; a rollback would return the
+                # NEWER release's answer. Checked through the link as it
                 # points NOW, the switch is seen; the realpath entry keeps
                 # catching an edit to the target itself.
                 link = normalize_path(os.path.abspath(raw))

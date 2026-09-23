@@ -6,9 +6,9 @@ times for a single cell -- ~380 words of prose to say the same thing seven
 times. The badge is a glanceable UI, and noise is how a user learns to ignore
 the thing that will later tell them something important.
 
-The guard's BEHAVIOUR is correct and deliberately untouched here: a tester
-confirmed it fires during edits and drops to zero firings once the notebook
-stabilises. This module changes only its voice --
+The guard's BEHAVIOUR is correct and deliberately untouched here: it fires
+during edits and drops to zero firings once the notebook stabilises. This
+module changes only its voice --
 
 * one short line per statement (what happened + the reason, in three words);
 * the full explanation once per cell, aggregated across the statements it
@@ -73,8 +73,8 @@ def guard_summary_line(count: int, codes: list[str] | None = None) -> str | None
     if count <= 0:
         return None
     s = "statement" if count == 1 else "statements"
-    # Which ones: "1 statement stopped caching" left a tester unable to tell a
-    # model fit from something trivial (round 25, r25s1).
+    # Which ones: "1 statement stopped caching" does not tell a model fit
+    # from something trivial.
     named = ""
     if codes:
         shown = [f"`{(c.splitlines() or [''])[0][:40]}`" for c in codes[:_GUARD_NAMED]]
@@ -95,7 +95,7 @@ def stale_export_text(code: str, paths) -> str:
     The repair rebuilt what the write reads but not the write itself --
     nothing the run needs reads the file, and a plain kernel leaves a cell the
     user did not run alone too. The file keeps the old data; say which, and
-    what rewrites it (round 28, r28s3: the badge called it "already current").
+    what rewrites it, rather than calling it "already current".
     """
     first = (code.splitlines() or [""])[0].strip()
     if len(first) > 50:

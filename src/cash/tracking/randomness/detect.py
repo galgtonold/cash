@@ -730,7 +730,7 @@ def _scan(code: str) -> _ScanResult:
     The detector and the module helpers (:func:`get_drawing_rng_modules` and
     its siblings) used to keep a cache each over the same visitor. A statement
     asks them ten times between its key, its execution and its store: 40,414
-    parses for the 3,016 statements of a loop over 1,000 files (round 23).
+    parses for the 3,016 statements of a loop over 1,000 files.
     Everything returned is an immutable, purely-source-derived fact, so the
     memo entry stays valid for the life of the process and callers cannot
     corrupt it. Carrier draws are kept UNRESOLVED: whether ``rng`` names a

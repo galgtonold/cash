@@ -432,7 +432,7 @@ coming back False is an input — it chose the defaults branch — so the entry 
 produced stops being valid once that file appears, including when the same
 relative name resolves into a directory that has one.
 
-<!-- claim: cash/tracking/file_tracker.py:_patch_thread_pool_submit @7592ddc8 -->
+<!-- claim: cash/tracking/file_tracker.py:_patch_thread_pool_submit @d32ffb58 -->
 Reads in a **thread pool** the function starts count too:
 `ThreadPoolExecutor(4).map(np.load, shards)` records every shard, the same as a
 serial loop would — it used to record none of them. A thread you start
@@ -440,7 +440,7 @@ yourself with `threading.Thread(target=...)` begins with nothing cash can see,
 so a file read only there is not tracked; read it in the function, hand the work
 to a `ThreadPoolExecutor`, or name the file with `file_depends_on=`.
 
-<!-- claim: cash/tracking/file_tracker.py:_patch_process_pool_submit @2b073044, cash/tracking/file_tracker.py:_ReadsInWorker.__call__ @288a0a53 -->
+<!-- claim: cash/tracking/file_tracker.py:_patch_process_pool_submit @f036a70f, cash/tracking/file_tracker.py:_ReadsInWorker.__call__ @288a0a53 -->
 A **`ProcessPoolExecutor`** the function starts reads in other processes, and
 cash brings those reads back: each task runs in its worker under a tracker of
 its own and returns what it read with its result, so `ex.map(read_region,

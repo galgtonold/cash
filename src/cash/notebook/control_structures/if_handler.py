@@ -135,8 +135,8 @@ class IfHandler:
             )
 
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user if-branch code
-            # Handed back to the cell, which raises it: logged at ERROR it printed
-            # the traceback a second time, through cash (round 25, r25s2/r25s3).
+            # Handed back to the cell, which raises it; logged above debug it
+            # would print the traceback a second time.
             logger.debug("[CONTROL] Error in if per-statement execution: %s", e, exc_info=True)
             return ControlStructureResult(
                 success=False,

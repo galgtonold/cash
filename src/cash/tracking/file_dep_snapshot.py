@@ -79,11 +79,11 @@ _REMOTE_MARKER = "remote"
 # Marks a snapshot entry as a path that was NOT there when the call ran. The
 # absence of a file is an input like any other -- an optional config that is
 # missing means "use the defaults" -- and it was the one input cash could not
-# see, because a file that is never opened produces no read to track. A
-# round-16 tester found what that costs: a cached function reading `cfg.txt`
-# by relative name in directory A, then in B (which has no such file), then in
-# A again, was served B's answer in A as a hit, with no warning. The B run
-# recorded NO dependencies at all, so its entry looked valid everywhere.
+# see, because a file that is never opened produces no read to track. Without
+# it, a cached function reading `cfg.txt` by relative name in directory A, then
+# in B (which has no such file), then in A again, is served B's answer in A as
+# a hit: the B run recorded NO dependencies, so its entry looks valid
+# everywhere.
 _ABSENT_MARKER = "absent"
 
 # Files up to this size are hashed in full; larger files are sampled
@@ -92,12 +92,11 @@ _ABSENT_MARKER = "absent"
 # only, so snapshot-time and check-time hashes are computed identically.
 #
 # 256 MiB, not the 8 MiB this shipped with: the sampled regime has a hole (see
-# ``file_dep_is_fresh``) that cost two round-16 testers a wrong answer each,
-# and the memo below makes the full hash a once-per-window cost rather than a
+# ``file_dep_is_fresh``) that serves wrong answers, and the memo below makes the full hash a once-per-window cost rather than a
 # per-check one -- which is what makes covering the ordinary CSV affordable.
-# Raised from 64 MiB in round 19: an 80 MiB .npy written through np.memmap on
-# Windows changes neither its size nor any timestamp, so above the cap only
-# content can see it, and a stale answer came back 3 of 3. Content is now read
+# Not 64 MiB either: an 80 MiB .npy written through np.memmap on Windows
+# changes neither its size nor any timestamp, so above the cap only content
+# can see it. Content is now read
 # only when the metadata moved (``_unchanged_since_hashed``), so that write is
 # not seen below the cap either, until the file is touched -- a documented
 # limitation; the cap still decides how a file whose metadata moved is hashed.
@@ -116,7 +115,7 @@ def full_hash_max_bytes() -> int:
     not pass its own ``full_hash_max``.
 
     Configurable (``file_hash_full_max_bytes``) because the sampled regime has
-    a hole that cost two round-16 testers a wrong answer each: a same-size
+    a hole that serves wrong answers: a same-size
     interior edit with the mtime restored is invisible to both the sample and
     the mtime backstop. Raising this closes it, and the price is real and
     measurable -- a full hash costs about 0.72 ms per MiB, on every freshness
@@ -188,8 +187,8 @@ _HASH_READ_CHUNK = 1024 * 1024  # 1 MiB streaming chunk
 #: 50-file 400 MiB pass fell back to 151 ms from 49 ms.
 #:
 #: The window is a documented limitation, not an oversight (known-limitations:
-#: "an edit that keeps size and timestamps, in a running process"). Round 20
-#: found it -- on Windows an ``np.memmap`` write, or a write with the mtime put
+#: "an edit that keeps size and timestamps, in a running process"). On
+#: Windows an ``np.memmap`` write, or a write with the mtime put
 #: back, leaves every key field alone, and a call within the window got the
 #: old result in that process -- and closing it was tried: re-hashing on every
 #: call made a loop over a 200 MB input pay ~144 ms per iteration, minutes per
@@ -199,10 +198,10 @@ _HASH_READ_CHUNK = 1024 * 1024  # 1 MiB streaming chunk
 #:
 #: 3. In a notebook a digest also holds for the rest of the CELL RUN it was
 #:    computed in (``begin_file_state_epoch``). A cell over thousands of files
-#:    outlasts the five seconds on its own -- r23s4 read 5,222 files, and every
+#:    outlasts the five seconds on its own -- one read 5,222 files, and every
 #:    statement derived from them re-hashed all of them on save, lookup and
 #:    upstream simulation: 19-108 s per cell for a notebook that runs in 25 s
-#:    uncached (round 23). A new cell run falls back to the window, so the edit
+#:    uncached. A new cell run falls back to the window, so the edit
 #:    it was bounding is still seen by the first cell run that starts after
 #:    it. The run ends with the cell (``end_file_state_epoch``): whatever runs
 #:    between cells -- a thread the cell started, a callback -- has the window
@@ -260,7 +259,7 @@ def realpath_of_read_this_run(path: str) -> tuple[str, os.stat_result | None]:
 
     ``realpath`` costs two ``_getfinalpathname`` calls per file on Windows, and
     a folder read paid them for all 5,030 files in one directory: a quarter of
-    what cash added to the read (round 25, r25s4). A regular file that is not
+    what cash added to the read. A regular file that is not
     itself a link or reparse point resolves to its directory's real path plus
     its name, so the directory is resolved once; the ``lstat`` that shows it is
     such a file is also the stat the read needs. Anything else -- a link, a
@@ -297,7 +296,7 @@ def realpath_this_run(path: str) -> str:
 
     ``realpath`` is a handful of ``_getfinalpathname`` calls on Windows, ~60us,
     and a statement's files were resolved again at every read, every lineage
-    component and every snapshot: 13% of a cell reading 3,000 files (round 23).
+    component and every snapshot: 13% of a cell reading 3,000 files.
     Within one run a link is not re-pointed under the same statement's feet;
     the next run resolves afresh, and so does anything outside a run. A
     relative path is keyed on the working directory too, so an ``os.chdir``
@@ -359,7 +358,7 @@ def file_content_hash(
             # st_dev/st_ino: the FILE's identity, not only the path's. A path
             # through a re-pointed junction names a different file with the same
             # path, and two release copies laid down by one deploy can share
-            # size and timestamps exactly (CAS-108's reproduction did). Where
+            # size and timestamps exactly. Where
             # the filesystem gives an identity, it is the whole key: a relative
             # read is recorded under both spellings (``FileTracker._track_path``)
             # and was hashed once for each. Where it gives none (st_ino 0 --
@@ -477,7 +476,7 @@ def snapshot_file_deps(
         entry["ctime_ns"] = getattr(st, "st_ctime_ns", 0)
         # Which file it was: two releases laid down by one deploy can share size
         # and timestamps exactly, and a re-pointed junction swaps one for the
-        # other under the same path (CAS-108).
+        # other under the same path.
         entry["dev"], entry["ino"] = st.st_dev, st.st_ino
         entry["sampled"] = st.st_size > full_hash_max
         snapshot[f] = entry
@@ -636,7 +635,7 @@ def stats_from_listings(paths: Iterable[str]) -> dict[str, os.stat_result]:
 
     A stat on Windows opens the file, ~90 us here; re-running statements
     derived from 3,000 files made one per file per statement lookup, most of
-    the cell (round 23). A listing returns every entry's size and timestamps
+    the cell. A listing returns every entry's size and timestamps
     from the directory itself, a few milliseconds for the lot. Elsewhere a
     listing entry's stat IS a stat, so there is nothing to gain.
 
@@ -690,7 +689,7 @@ def _unchanged_since_hashed(st: os.stat_result, stored: dict[str, Any]) -> bool:
     ``np.memmap`` write). Those are not seen: see known-limitations.
 
     Re-reading every input at every check is what this saves -- 1,312 exports
-    re-hashed before each cell of round 23's r23s2, about 5 s a cell, and
+    re-hashed before each cell, about 5 s a cell, and
     again after every restart. The digest still decides whenever the metadata
     moved: a ``touch`` or a byte-identical re-download stays fresh.
     """
@@ -795,7 +794,7 @@ def file_dep_is_fresh(
             # Recorded in one regime and checked in the other -- the size is
             # the same, so `file_hash_full_max_bytes` moved across it. The
             # two digests are not comparable, and "content changed" blamed
-            # the data for a setting (round 20). The snapshot says which.
+            # the data for a setting. The snapshot says which.
             if stored.get("sampled", False) != (st.st_size > full_hash_max):
                 return False, "hash-mode"
             return False, "content"
@@ -804,10 +803,8 @@ def file_dep_is_fresh(
             return True, None
         # Sampled file: the hash only covers head/middle/tail, so trust it only
         # when the timestamps also match — otherwise a same-size edit outside
-        # the sampled regions would be served stale. Measured, twice, by two
-        # round-16 testers independently: a 9 MiB CSV with one amount field
-        # rewritten in place and the mtime restored was served from cache with
-        # the old total, 5/5 and 3/3.
+        # the sampled regions would be served stale: a 9 MiB CSV with one
+        # amount field rewritten in place and the mtime restored.
         #
         # mtime alone is restorable -- that is exactly what `cp -p`, `rsync -a`
         # and `tar -x` do. On POSIX ``st_ctime`` is not: it is the inode change
@@ -840,8 +837,8 @@ def file_dep_is_fresh(
 # of one job side by side, run byte-identical code, so they share cache keys;
 # and the entry's file dependency was recorded at the WRITER's path. The other
 # install's lookup validated the writer's file, found it unchanged, and served
-# the writer's answer. Round 17 measured both: a tool served another install's
-# exchange rates, and a rollback served the newer release's report (CAS-108).
+# the writer's answer: a tool served another install's exchange rates, and a
+# rollback served the newer release's report.
 #
 # So such a dependency is also recorded relative to the code's root, and each
 # process checks it against ITS OWN copy. Same bytes in both installs: a hit,
@@ -961,8 +958,8 @@ class StaleDep(NamedTuple):
 
 def _memo_key(path: str, recorded: Any) -> Any:
     # A tuple of the snapshot's items, not its repr: the key is built on every
-    # check, answered or not, and a sorted repr was 1 s of r24s4's 120,000
-    # lookups against 5,000 real checks.
+    # check, answered or not, and a sorted repr was 1 s of 120,000 lookups
+    # against 5,000 real checks.
     try:
         key = (path, tuple(recorded.items()) if isinstance(recorded, dict) else recorded)
         hash(key)
@@ -983,7 +980,7 @@ def _check_dep(
     # Checked where it was recorded first: the stat that decides freshness
     # also says the file is there, so a dependency costs one syscall, not an
     # ``exists`` and then a stat (a re-run of statements derived from 3,000
-    # files made 72,000; round 23).
+    # files made 72,000).
     is_fresh, reason = file_dep_is_fresh(here, recorded, full_hash_max, listed if here == path else None)
     if reason != "unreadable" or here != path or recorded.get(_REMOTE_MARKER):
         # A dependency beside the code is checked in THIS install's copy and

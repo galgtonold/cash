@@ -1,13 +1,10 @@
 """What a computation cost when it was last measured, kept across kernels.
 
 ``%cash_stats`` credits a restore as a saving only where it can point at a
-measurement of what that computation costs. Until round 30 the only
-measurement it would accept was one THIS kernel took, which made the headline
-useless in the one reading every tester takes: after a Restart & Run All
-nothing has been recomputed, so the net printed as "at least -10.3s, at best
-1.3min" -- a range whose floor is exactly minus cash's own overhead (r30s3,
-r30s5). "For a team lead the range reads as 'cash may have cost you time',
-which the measurement contradicts."
+measurement of what that computation costs. Accepting only one THIS kernel
+took makes the headline useless in the commonest reading: after a Restart &
+Run All nothing has been recomputed, so the net prints as "at least -10.3s,
+at best 1.3min" -- a range whose floor is exactly minus cash's own overhead.
 
 This store keeps those measurements on disk beside the cache, so the next
 kernel can still point at one. Two rules keep it honest:
@@ -22,7 +19,7 @@ kernel can still point at one. Two rules keep it honest:
 
 Best-effort throughout, like the loop-split store: a missing, unreadable,
 corrupt or future-versioned file leaves it empty, which means "no baseline",
-which is the pre-round-30 behaviour. The failure mode is a less informative
+which is the behaviour without the store. The failure mode is a less informative
 number, never a wrong one.
 """
 

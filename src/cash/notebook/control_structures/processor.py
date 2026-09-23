@@ -89,10 +89,7 @@ def _entry_lineages(
     key the simulation carries, so ``recorded[0] == input_hashes`` in
     ``VirtualLineage._simulate_one_control_unit`` was false every time, the
     loop's recorded outcome was never adopted, and the loop re-ran with
-    everything below it after every restart -- round 23's symptom, still live
-    for this one shape. Measured 2026-09-20 on the same eight-iteration loop:
-    0.94 s re-running the chain with ``DATA`` in the ``%cash_on`` cell against
-    0.07 s and ``5 upstream steps not re-run`` with it one cell lower.
+    everything below it after every restart.
 
     Filling the gap from the simulation rather than inventing a value is what
     keeps the comparison honest. Edit that cell and the simulated lineage
@@ -186,8 +183,8 @@ class ControlStructureProcessor:
             inherited_annotation: Directives from enclosing structures, already
                 resolved, to merge into everything within this one.
             prev_node: The immediately-preceding top-level statement in the same
-                cell, or ``None``. Threaded down to ``ForLoopHandler`` (CAS-259
-                follow-up), which needs the ``out = []`` seed that sits right
+                cell, or ``None``. Threaded down to ``ForLoopHandler``,
+                which needs the ``out = []`` seed that sits right
                 before the loop to compute ``force_outputs`` for its cost-based
                 single-unit branch — see ``cacheability.cacheable_accumulator_loop``
                 and ``for_handler.py``'s single-unit branch for why. Additive and
@@ -256,7 +253,7 @@ class ControlStructureProcessor:
                 # resolve, so without it the read set of every cell below was
                 # unknown after a restart, no writer could be ruled out as
                 # unread, and a table cell under a chart cell re-drew the charts
-                # with everything they read (round 23, r23s2).
+                # with everything they read.
                 self.statement_processor.persist_read_provenance(code, files)
         return result
 
@@ -267,8 +264,7 @@ class ControlStructureProcessor:
         planner looks for a writer's provenance. Each body statement ran on
         its own and knew its writes, but ``for kind in KINDS: save_chart(kind)``
         as a whole had none, and after a restart it was re-fired -- with
-        everything it reads (round 23, r23s3: a 263 s sweep, to redraw four
-        charts already on disk).
+        everything it reads, to redraw charts already on disk.
         """
         sp = self.statement_processor
         try:
@@ -286,8 +282,7 @@ class ControlStructureProcessor:
         ``control_outcomes`` dies with the kernel, and without it the
         simulation's lineages for what a loop built disagreed with the
         entries written from them: after a restart nothing downstream of a
-        loop restored, and the loop ran again (round 23; see
-        ``control_outcome_key``). A record is trusted instead of a replay, so
+        loop restored, and the loop ran again (see ``control_outcome_key``). A record is trusted instead of a replay, so
         it is written only for a loop whose outcome is all it did
         (``_persistable_callees``), together with the lineages of what its
         callees read. A loop that no longer qualifies deletes its record.
@@ -485,8 +480,8 @@ class ControlStructureProcessor:
             )
             return self._finalize_single_unit(node, code, metrics)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code executed as a unit
-            # Handed back to the cell, which raises it: logged at ERROR it printed
-            # the traceback a second time, through cash (round 25, r25s2/r25s3).
+            # Handed back to the cell, which raises it; logged above debug it
+            # would print the traceback a second time.
             logger.debug("[CONTROL] Error executing control structure as single unit: %s", e, exc_info=True)
             return ControlStructureResult(success=False, metrics=[], error=e)
 
@@ -534,8 +529,8 @@ class ControlStructureProcessor:
             )
             return self._finalize_single_unit(node, code, metrics)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code executed as a unit
-            # Handed back to the cell, which raises it: logged at ERROR it printed
-            # the traceback a second time, through cash (round 25, r25s2/r25s3).
+            # Handed back to the cell, which raises it; logged above debug it
+            # would print the traceback a second time.
             logger.debug("[CONTROL] Error executing awaited control structure as single unit: %s", e, exc_info=True)
             return ControlStructureResult(success=False, metrics=[], error=e)
 

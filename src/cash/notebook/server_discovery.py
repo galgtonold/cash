@@ -341,8 +341,8 @@ def _search_servers_for_notebook(kernel_id: str) -> str | None:
         except (OSError, ValueError, urllib.error.URLError, json.JSONDecodeError) as exc:
             # Deliberately no longer catches KeyError blind. A missing key is a
             # SCHEMA mismatch, not a transport failure, and reporting it as
-            # "failed to query" sent two independent testers hunting the network
-            # while the request had actually returned 200.
+            # "failed to query" sends the reader hunting the network while the
+            # request had actually returned 200.
             logger.debug(
                 "[UTILS] Failed to query sessions from server %s: %s",
                 server.get("url", "?"),
@@ -554,8 +554,8 @@ def _try_extension_cells() -> tuple[NotebookCell, ...] | None:
         logger.debug("[UTILS] extension cell shape unusable: %s", e)
         return None
     # An unrecognised shape must fall through to the file, never disable the
-    # upstream check by returning an empty list -- exactly that made cash
-    # strictly worse than not having the feature in CAS-274 Tier 1c.
+    # upstream check by returning an empty list -- that would make cash
+    # strictly worse than not having the feature.
     return extracted or None
 
 
