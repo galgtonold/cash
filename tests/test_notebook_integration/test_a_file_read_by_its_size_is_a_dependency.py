@@ -28,14 +28,16 @@ SETUP = (
     ids=["path_stat", "os_path_getsize"],
 )
 def test_a_size_shown_after_the_file_changed_is_the_new_one(nb_runner, shown):
-    export = "pd.DataFrame({'x': range(N)}).to_csv(OUT / 'a.csv', index=False)\n" + shown
+    # `lineterminator` pinned: `to_csv` defaults to the platform's line ending,
+    # and the sizes below would differ between Windows and everywhere else.
+    export = "pd.DataFrame({'x': range(N)}).to_csv(OUT / 'a.csv', index=False, lineterminator='\\n')\n" + shown
     nb_runner.create_notebook(["import cash\n%cash_on", SETUP.format(n=10), export])
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert "SIZES {'a.csv': 33}" in nb_runner.get_output(3), nb_runner.get_output(3)
+    assert "SIZES {'a.csv': 22}" in nb_runner.get_output(3), nb_runner.get_output(3)
 
     nb_runner.set_cell_source(2, SETUP.format(n=1000))
     nb_runner.run_cell(2)
     nb_runner.run_cell(3)
 
-    assert "SIZES {'a.csv': 4893}" in nb_runner.get_output(3), nb_runner.get_output(3)
+    assert "SIZES {'a.csv': 3892}" in nb_runner.get_output(3), nb_runner.get_output(3)
