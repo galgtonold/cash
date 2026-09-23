@@ -99,6 +99,10 @@ What it covers and what it doesn't is documented under
 - `tests/` — Core library tests
 - `benchmarks/tests/` — Tests for the benchmark tooling, run separately with
   `pytest benchmarks/tests`
+- `tools/test_selection/` — The integration core set CI runs on every push
+  (`core_set.txt`), the scripts that pick it, and the shard plugin the nightly
+  run of the whole integration suite uses
+- `tools/claims/` — The claim-anchor library behind `scripts/claims.py`
 
 ### Running Tests
 
@@ -109,8 +113,11 @@ pytest tests/ -v --tb=short
 # Unit tests only
 pytest tests/test_notebook/ -v
 
-# Integration tests only
+# Integration tests only (all of them take a long time)
 pytest tests/test_notebook_integration/ -v
+
+# The integration core set CI runs on every push
+pytest @tools/test_selection/core_set.txt
 
 # Specific test file
 pytest tests/test_notebook/test_magics.py -v
