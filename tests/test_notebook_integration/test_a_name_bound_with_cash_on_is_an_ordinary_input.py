@@ -8,7 +8,7 @@ name had no lineage, and the first statement to read it was refused as
 cached NOTHING until its author split cell 0 in two; another got the same
 reason on two statements and could not act on it.
 
-Measured 2026-09-21 on the round's build: the first reader of ``DATA`` / ``N``
+Measured 2026-09-21 before the fix: the first reader of ``DATA`` / ``N``
 was refused; one cell further down, an upstream repair had re-run the
 ``%cash_on`` cell's statements under tracking and everything below cached.
 So the gap was one cell wide -- and it was the cell that loads the data.

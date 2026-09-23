@@ -4,8 +4,7 @@ Reported as confusing: a user's new ``repair_missed_splits()`` printed what
 it repaired, to stderr. Run from a cell below after an edit, the repair re-ran
 it -- and the message appeared nowhere, so its false positive (a real -50%
 day read as a missed split) showed only in their no-cash oracle's log. The
-line stays out of the cell's own output (it belongs to another cell -- round
-21), and goes in the badge, under the upstream step that printed it.
+line stays out of the cell's own output (it belongs to another cell), and goes in the badge, under the upstream step that printed it.
 """
 
 import pytest

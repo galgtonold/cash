@@ -90,9 +90,8 @@ def test_display_cell_invalidation_on_file_change(processor_with_pandas):
 
         # Cell 3: Just display df
         # Given real work on purpose: a statement below the too-cheap floor
-        # is no longer stored just because its input came from a file (round
-        # 28), and an uncached statement would pass the staleness check below
-        # trivially. This one is cached, so it must invalidate.
+        # is no longer stored just because its input came from a file, and an
+        # uncached statement would pass the staleness check below trivially. This one is cached, so it must invalidate.
         code_display = "(df, sum(i * i for i in range(400_000)))[0]"
 
         # === FIRST RUN: Execute all cells ===
@@ -185,9 +184,8 @@ def test_display_cell_with_intermediate_processing(processor_with_pandas):
         code_transform = "df['New'] = df['Close'] * 2"
         code_summary = "summary = df.describe()"
         # Given real work on purpose: a statement below the too-cheap floor
-        # is no longer stored just because its input came from a file (round
-        # 28), and an uncached statement would pass the staleness check below
-        # trivially. This one is cached, so it must invalidate.
+        # is no longer stored just because its input came from a file, and an
+        # uncached statement would pass the staleness check below trivially. This one is cached, so it must invalidate.
         code_display = "(df, sum(i * i for i in range(400_000)))[0]"
 
         # First run

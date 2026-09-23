@@ -32,8 +32,8 @@ are pinned here so none regresses silently:
   as if it did not exist. See ``tests/test_notebook_integration/
   test_callee_global_capture.py::test_a_same_session_rerun_neither_freezes_nor_accumulates``
   for the end-to-end regression this was caught by.
-* **The substring gate itself was a false-positive surface (final
-  whole-branch review, finding 1).** ``"@cash:" in body`` fires on any text
+* **The substring gate itself was a false-positive surface.**
+  ``"@cash:" in body`` fires on any text
   containing that substring, directive or not -- a docstring merely
   mentioning ``@cash:`` in prose, a string literal containing it, or an
   ordinary comment documenting cash's own annotation syntax all matched,
@@ -164,9 +164,8 @@ def test_a_pep614_parenthesised_decorator_returns_none_not_uncompilable_text():
     assert _exec_source_for_node(cell, node, None) is None
 
 
-# --- FINDING 1 (final whole-branch review) -- the substring gate's own
-# false-positive surface. `"@cash:" in body` cannot distinguish a real
-# directive from the substring merely appearing in prose, a string literal,
+# --- The substring gate's own false-positive surface. `"@cash:" in body`
+# cannot distinguish a real directive from the substring merely appearing in prose, a string literal,
 # or a comment that documents cash's own syntax rather than invoking it.
 # Each case below must return None -- exactly as if the def/class recovery
 # did not exist -- and the control that follows proves a REAL directive in

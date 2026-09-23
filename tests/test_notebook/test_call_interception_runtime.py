@@ -17,7 +17,7 @@ understand is handed back unchanged.
 ``resolve()`` — ``_code_and_tree_for_execution`` never binds ``__cash_call__``
 into ``user_ns`` without a non-empty site table. A review found this file
 previously tested ONLY the no-site fallback
-branch (the pre-Task-5 decorator path), which is unreachable in real notebook
+branch (the old decorator path), which is unreachable in real notebook
 execution — that gap is exactly why a wrapper-cache staleness bug shipped
 with a green suite. See ``test_call_interception_no_site_fallback.py`` for the
 one file that deliberately keeps testing the fallback branch on its own terms.

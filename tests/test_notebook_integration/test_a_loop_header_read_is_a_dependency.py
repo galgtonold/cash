@@ -121,7 +121,7 @@ def test_the_same_loop_with_its_input_bound_in_a_tracked_cell(nb_runner, tmp_pat
 
 
 def test_the_same_shape_written_as_one_statement_already_works(nb_runner, tmp_path):
-    """The control, and the reason this went unnoticed for four rounds."""
+    """The control, and the reason this went unnoticed for so long."""
     data = tmp_path / "alias2.tsv"
     _write(data, "GENE_C_OLD")
 

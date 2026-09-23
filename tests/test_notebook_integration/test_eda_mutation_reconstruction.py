@@ -1,10 +1,10 @@
-"""R12 EDA correctness probe.
+"""Messy exploratory analysis must never be served a wrong or stale value.
 
 A new user runs a messy exploratory-data-analysis workflow (in-place pandas
 mutation, aliasing, helper edits, cell reordering, variable deletion) and hunts
 for cases where cash serves a WRONG or STALE value.
 
-ORACLE (per task): ground truth = the FINAL cell sources run top-to-bottom in a
+ORACLE: ground truth = the FINAL cell sources run top-to-bottom in a
 fresh kernel with NO cash. cash's whole promise is that an interactive edit +
 isolated re-run reconstructs upstream state so the result matches that clean
 top-to-bottom run. So each scenario:

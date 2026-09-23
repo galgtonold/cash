@@ -1,6 +1,6 @@
 """A cached result mutated in place and passed on is keyed by what it holds NOW.
 
-Rounds 17-18: in a script, the decorator tags what it returns with the
+In a script, the decorator tags what it returns with the
 producing call's identity, and nothing ever moves that tag. The argument hasher
 trusted it twice -- a memo that skipped re-hashing a tagged frame, and the tag
 itself as the identity of an object with no content hasher -- so

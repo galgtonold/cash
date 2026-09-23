@@ -674,8 +674,7 @@ def test_a_top_level_def_still_renders_clipped_to_one_line() -> None:
     alone contains embedded newlines -- the CSS clip used to be the only
     thing hiding the body, and a naive "prefer display_code" renderer fix
     (passing display_code through unconditionally whenever present) would
-    have carried a captured one straight through and expanded it. See
-    task-5-report.md finding 2.
+    have carried a captured one straight through and expanded it.
     """
     import ast
 
@@ -746,8 +745,7 @@ def test_a_top_level_match_statement_renders_across_lines() -> None:
 
 
 def test_multiline_row_is_stamped_data_multiline_single_line_is_not() -> None:
-    """Finding 4's mechanism: the row itself carries whether it needs
-    start-alignment, via a ``data-multiline`` attribute stamped only when
+    """A multi-line row carries whether it needs start-alignment, via a ``data-multiline`` attribute stamped only when
     the rendered code contains a newline -- so the CSS never has to guess,
     and a single-line (including every ``display_code=None``) row never
     carries it at all.
@@ -805,8 +803,8 @@ def _rule_blocks(css: str, selector: str) -> list[str]:
 
 
 def test_c3_row_default_alignment_is_center_start_is_scoped_separately() -> None:
-    """Finding 4: an earlier version of this fix set ``align-items: start``
-    directly on the bare ``.c3-row`` rule, which moves EVERY row's
+    """Only multi-line rows are start-aligned. An earlier version set
+    ``align-items: start`` directly on the bare ``.c3-row`` rule, which moves EVERY row's
     dots/bar/chip -- including every ``display_code=None`` row -- breaking
     "a None row renders exactly as today". The fix must leave the bare rule
     at ``center`` and put ``start`` only on the ``[data-multiline="true"]``

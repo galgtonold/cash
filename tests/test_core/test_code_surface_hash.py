@@ -222,7 +222,7 @@ def test_a_functools_wraps_decorated_method_body_edit_invalidates():
 
 def test_a_partialmethod_bound_argument_change_invalidates():
     """Fold-both regression: the __wrapped__/.func unwrap that fixed
-    functools.singledispatchmethod (previous round) let a successful `ident`
+    functools.singledispatchmethod let a successful `ident`
     fully REPLACE the content fold for any non-callable member -- so a
     functools.partialmethod's bound arguments, which live on the descriptor
     itself rather than on the function .func resolves to, went invisible.

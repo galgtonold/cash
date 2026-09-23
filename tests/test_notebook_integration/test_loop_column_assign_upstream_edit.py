@@ -110,7 +110,7 @@ def test_an_unchanged_rerun_of_the_loop_still_restores(nb_runner):
     loop must still be restored rather than recomputed.
 
     Counts restores rather than timing anything -- six sessions on one box made
-    wall-clock useless as a signal during the round that found this.
+    wall-clock useless as a signal when this was found.
     """
     nb_runner.create_notebook([SETUP, LOAD_BEFORE, FEATURES_LOOP, DOWNSTREAM])
     nb_runner.start_kernel()
