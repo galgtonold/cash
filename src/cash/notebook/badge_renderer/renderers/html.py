@@ -24,6 +24,7 @@ stays compact and the CSS class names form a stable contract for tests.
 
 from __future__ import annotations
 
+import html as _html
 from contextvars import ContextVar
 from typing import Any
 
@@ -873,7 +874,9 @@ def _uid(prefix: str = "id") -> str:
 
 
 def _esc(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Quotes too: many call sites put the result inside a ``title="..."``
+    # attribute, where an unescaped ``"`` in a user value ends the attribute.
+    return _html.escape(text, quote=True)
 
 
 def _fmt_time(t: float) -> str:

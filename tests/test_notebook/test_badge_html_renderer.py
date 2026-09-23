@@ -886,3 +886,43 @@ def test_the_row_code_cell_still_ellipsizes_long_lines() -> None:
     assert _code_cell_text(multiline_html) == display, (
         "restoring text-overflow must not re-collapse a multi-line statement onto one line"
     )
+
+
+def test_a_quote_in_a_loop_value_cannot_break_out_of_an_attribute() -> None:
+    """Loop values reach ``title="..."`` attributes. With only ``& < >``
+    escaped, a ``"`` in a value closed the attribute and the rest of the value
+    became a new attribute, here an event handler."""
+    from html.parser import HTMLParser
+
+    payload = 'x" onmouseover="alert(1)'
+    metrics = [
+        {
+            "code": "# __iteration_context__:loop1\ny = f(x)",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.01,
+            "loop_vars": {"x": payload},
+            "miss_reason": f"input changed: {payload}",
+        },
+        {
+            "code": "# __iteration_context__:loop1\ny = f(x)",
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.02,
+            "loop_vars": {"x": "plain"},
+        },
+    ]
+    html = render_html(build_interactive_badge(metrics))
+
+    attr_names: set[str] = set()
+    titles: list[str] = []
+
+    class _Attrs(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            for name, value in attrs:
+                attr_names.add(name)
+                if name == "title" and value:
+                    titles.append(value)
+
+    _Attrs().feed(html)
+    assert "onmouseover" not in attr_names
+    # The value is still shown, intact, inside the tooltip text.
+    assert any(payload in t for t in titles), titles
