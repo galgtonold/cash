@@ -69,287 +69,185 @@ class CashInstanceProtocol(Protocol):
 class TrackingState:
     """Shared mutable state for variable lineage and dependency tracking.
 
-    This dataclass is the **single owner** of the tracking dictionaries that
-    are shared between :class:`CashMagics`, :class:`StatementProcessor`, and
-    :class:`UpstreamChecker`.  By passing a single ``TrackingState`` instance
-    (rather than 6+ individual dicts) we:
-
-    * Document exactly which dicts are shared and what they contain.
-    * Give type checkers concrete types instead of ``dict[str, Any]``.
-    * Make it impossible to accidentally pass the wrong dict to the wrong slot.
-
-    All fields use ``default_factory`` so each ``TrackingState()`` starts empty.
-
-    **Initialization order**: ``CashMagics`` creates the ``TrackingState``
-    and passes the *same* instance to both ``StatementProcessor`` and
-    ``UpstreamChecker`` via ``set_tracking_state()``.  Because the three
-    components share mutable dict references, ``CashMagics`` **must** create
-    the instance before constructing the processors.
-
-    **Ownership summary** (W = writes, R = reads):
-
-    +------------------------------+-----------------+-------------------+-------------------+
-    | Field                        | CashMagics      | StatementProcessor| UpstreamChecker   |
-    +==============================+=================+===================+===================+
-    | executed_cell_codes          | —               | W (after exec)    | R (lineage check) |
-    | executed_cell_hashes         | —               | W (after exec)    | R (rarely)        |
-    | variable_lineage             | R (badge)       | W (after exec)    | R+W (reset/sync)  |
-    | executed_file_deps           | —               | W (after exec)    | R (stale check)   |
-    | simulated_lineage            | —               | R (ControlStruct) | W (after pass 1)  |
-    | rerun_bindings           | —               | R/W (classifier)  | W (after pass 1)  |
-    | module_generation            | —               | W (module inv.)   | R (incremental)   |
-    | variable_hashes              | R (badge)       | W (after exec)    | —                 |
-    | variable_sources             | R (badge)       | W (after exec)    | —                 |
-    | current_session_hashes       | —               | W (after exec)    | —                 |
-    | vars_with_mutation_lineage   | —               | W / ControlStruct | R (skip lineage)  |
-    | executed_input_lineages      | —               | W (after exec)    | R (lineage check) |
-    | granular_preserved_vars      | —               | W (lineage build) | R (module inv.)   |
-    | module_attribute_deps        | —               | W (lineage build) | R (module inv.)   |
-    | from_import_sources          | —               | W (lineage build) | R (module inv.)   |
-    +------------------------------+-----------------+-------------------+-------------------+
-
-    The last four fields used to live as instance attributes on
-    ``StatementProcessor`` and were threaded into ``StatementFileDeps`` /
-    ``StatementLineageBuilder`` by reference.  They were moved onto
-    ``TrackingState`` so the four siblings of ``StatementProcessor`` can
-    receive state as a method parameter rather than aliasing dict refs
-    in their own ``set_tracking_state`` (which no longer exists on those
-    siblings).
+    ``CashMagics`` creates one instance and hands the same object to the
+    ``StatementProcessor``, the ``UpstreamChecker`` and the ``Restorer``, so
+    every component reads and writes the same containers. Each field below
+    says who writes it and who reads it; keep that comment current when a
+    writer or reader is added. Lineage itself is written only through
+    :attr:`lineage` (see :mod:`cash.notebook.lineage_store`).
     """
 
-    # Written by StatementProcessor after each statement execution.
-    # Read by UpstreamChecker to compare simulated vs. executed statement code.
+    # Variable -> the code of the statement that last produced it.
+    # W: StatementLineageBuilder, both restorers, the simulator's restore drain.
+    # R: UpstreamChecker (simulated vs executed code), ModuleInvalidator, %cash_status.
     executed_cell_codes: dict[str, str] = field(default_factory=dict)
 
-    # Written by StatementProcessor after each statement execution.
-    # sha256 of the defining statement code, for fast change detection. A SET
-    # per variable, not one hash: a variable can be defined by more than one
-    # statement across a session (a re-run cell, a loop body, a restore from
-    # cache), and the checker asks whether the code it simulated is among them.
-    # Every writer builds it that way -- statement/lineage.py,
-    # statement/restore.py, restore.py and upstream/_types.py all do
-    # `[var] = set()` then `.add(...)`. This said `dict[str, str]` until a test
-    # fixture believed it, stored a bare string, and made `.add()` raise.
+    # Variable -> sha256 of every statement that defined it this session (a set:
+    # a re-run cell, a loop body and a restore can each define it).
+    # W: StatementLineageBuilder, both restorers, the simulator's restore drain.
+    # R: UpstreamChecker, the RNG lineage helpers.
     executed_cell_hashes: dict[str, set[str]] = field(default_factory=dict)
 
-    # Every variable's lineage hash. Written only through this store
-    # (StatementProcessor, ControlStructureProcessor for mutations, the
-    # restorers, ModuleInvalidator; UpstreamChecker resets entries when it
-    # resynchronises the simulation with memory). Read as ``variable_lineage``.
+    # Every variable's lineage hash; read it as ``variable_lineage``.
+    # W: StatementProcessor, StatementLineageBuilder, the control-structure
+    # handlers, both restorers, ModuleInvalidator, the upstream simulation
+    # (resynchronising with memory). R: nearly everything.
     lineage: LineageStore = field(default_factory=LineageStore)
 
-    # Written by StatementProcessor (via FileAccessTracker) after each execution.
-    # Read by UpstreamChecker to detect stale file dependencies.
+    # Variable -> the files its value was built from, read directly or inherited.
+    # W: StatementFileDeps, the control-structure helpers, the simulator's
+    # restore drain, ReexecutionPlanner. R: the upstream check, freshness
+    # checks, %cash_provenance.
     executed_file_deps: dict[str, set[str]] = field(default_factory=dict)
 
-    # Written by StatementProcessor after executing a statement with a
-    # file-WRITE side effect; read by ReexecutionPlanner.
-    # File writes have no variable edge, so this code-text record is how the
-    # simulation tells an edited/new writer statement from one that already
-    # ran in this session.
+    # Code of every statement that wrote a file this session. File writes have
+    # no variable edge, so this is how the simulation tells an edited or new
+    # writer from one that already ran.
+    # W: StatementProcessor, ControlStructureProcessor. R: ReexecutionPlanner.
     executed_write_stmt_codes: set[str] = field(default_factory=set)
 
-    # sha256 of every whole-CELL source that has executed this session. Written
-    # by the cell executor after a cell runs; read by the upstream checker to
-    # tell an edited-but-not-rerun seed() cell from one whose current source has
-    # actually run (ADR-017). Cell-granular on purpose — it matches the
-    # notebook view the checker compares against.
+    # sha256 of every whole-cell source that ran this session, to tell an
+    # edited-but-not-rerun seed() cell from one that ran (ADR-017).
+    # W: CellExecutor. R: UpstreamChecker.
     executed_cell_source_hashes: set[str] = field(default_factory=set)
 
-    # sha256(cell source) -> the global RNG state captured AFTER that cell ran.
-    # Lets the checker restore the position-correct RNG state before a downstream
-    # draw re-executes, instead of drawing from the last-left (wrong) live state
-    # . This is the concrete first step of ADR-018's
-    # position-aware-RNG model; the full model folds it into a virtual variable
-    # in the lineage graph. Keyed by CURRENT source, so an edited predecessor's
-    # stale post-state is never matched.
+    # sha256(cell source) -> the global RNG state after that cell ran, so a
+    # downstream draw can be restored to its position-correct state (ADR-018).
+    # W: CellExecutor. R: UpstreamChecker.
     rng_post_states: dict[str, Any] = field(default_factory=dict)
 
-    # sha256(cell source) -> RNG state as it stood JUST BEFORE that cell ran.
-    # The mirror of ``rng_post_states``, and what a re-executed draw actually
-    # needs: reproducing a draw means rewinding to where it STARTED, not where
-    # it finished. Without this, the restore path could only rewind to some
-    # upstream cell's post-state, which works when such a cell happens to have
-    # been recorded and silently does nothing when none has been -- leaving a
-    # re-executed draw to continue from the live stream and return a different
-    # value (a cheap draw is under the persistence floor, so it is re-executed,
-    # not served from cache). Only kept for cells that actually touched RNG.
+    # sha256(cell source) -> the RNG state just before that cell ran, with the
+    # seeds in force. Re-executing a draw reproduces it only by rewinding to
+    # where it started. Kept only for cells that touched an RNG.
+    # W: CellExecutor. R: UpstreamChecker.
     rng_pre_states: dict[str, Any] = field(default_factory=dict)
 
-    # sha256(cell source) -> set of RNG modules whose global state that cell
-    # CHANGED at runtime (observed by a before/after state diff). Catches draws
-    # that static analysis cannot see because they happen INSIDE a called
-    # function (``model.fit()``, a helper) — the ADR-018 runtime observer. Only
-    # known after the cell has run once, exactly like a file dependency.
+    # sha256(cell source) -> RNG modules the cell changed at runtime, including
+    # draws inside called functions that static analysis cannot see.
+    # W: CellExecutor. R: UpstreamChecker.
     observed_rng_cells: dict[str, set[str]] = field(default_factory=dict)
 
-    # sha256(STATEMENT source) -> RNG modules that statement drew from at runtime
-    # WITHOUT the draw being visible in its AST (``rf4.fit(X, y)``). The
-    # cell-level twin above drives the RNG rewind; this one drives the cache KEY:
-    # a hidden draw must read its module's virtual RNG variable, or a re-seed
-    # above it cannot reach it and its consumers keep hitting across a stream
-    # that no longer exists. Keyed by statement source hash, like
-    # ``mutation_verdicts``, so the simulation reproduces the runtime's decision.
-    # Only known after the statement has run once.
+    # sha256(statement source) -> RNG modules the statement drew from without
+    # the draw showing in its AST (``rf.fit(X, y)``). Makes the statement read
+    # its module's virtual RNG variable, so a re-seed above it re-keys it.
+    # W: StatementProcessor. R: the key and lineage builders on both engines.
     observed_rng_statement_draws: dict[str, set[str]] = field(default_factory=dict)
 
-    # Written by StatementProcessor; read by CashMagics for badge display.
-    # Accumulates all content hashes seen for a variable across executions.
+    # Variable -> every content hash seen for it.
+    # W: StatementLineageBuilder, both restorers. R: Restorer, UpstreamChecker.
     variable_hashes: dict[str, set[str]] = field(default_factory=dict)
 
-    # Written by StatementProcessor; read by CashMagics for badge display.
-    # Records the cache key that last produced each variable.
+    # Variable -> the cache key that last produced it.
+    # W: StatementLineageBuilder, StatementRestorer. R: Restorer, freshness
+    # checks, end-of-cell persistence, UpstreamChecker.
     variable_sources: dict[str, str] = field(default_factory=dict)
 
-    # Written by UpstreamChecker for the cell about to run; read by
-    # StatementProcessor.end_cell_persistence. The names the cells below it
-    # read: what a restart may need restored from this cell. None: not known
-    # (no notebook to read), and nothing is persisted ahead of need.
+    # The names the cells below the running one read: what a restart may need
+    # restored from this cell. None when there is no notebook to read, and
+    # then nothing is persisted ahead of need.
+    # W: UpstreamChecker (per cell). R: StatementProcessor.end_cell_persistence.
     read_by_later_cells: frozenset[str] | None = None
 
-    # The SIMULATION's lineage for every name, as of just before the current
-    # cell ran. Written by NotebookSimulator at the end of pass 1; read by
-    # ControlStructureProcessor, which uses it for one thing only: a name a
-    # control structure read that the runtime has no lineage for at all.
-    #
-    # That happens whenever a name is bound in the same cell as `%cash_on` --
-    # cash was not listening when that cell started, so nothing recorded what
-    # `DATA = Path(...)` produced, while the simulation, which reads that cell
-    # out of the .ipynb, has a lineage for it like any other. Recording the
-    # runtime's silence made `control_outcomes`'s entry lineages disagree with
-    # the simulation's FOREVER, so such a loop's outcome was never trusted and
-    # it re-ran, with everything below it, after every restart.
-    #
-    # Filling the gap from here rather than inventing a value keeps the
-    # comparison honest: an edit to that cell moves the simulated lineage, so
-    # the recorded outcome stops matching, exactly as a tracked name behaves.
+    # The simulation's lineage for every name as of just before the current
+    # cell ran. Used for one thing: a name a control structure read that the
+    # runtime has no lineage for (bound in the ``%cash_on`` cell, before cash
+    # was listening), so its recorded outcome can still match the simulation.
+    # W: NotebookSimulator. R: ControlStructureProcessor.
     simulated_lineage: dict[str, str] = field(default_factory=dict)
 
-    # Names in memory whose value can no longer be vouched for, and which must
-    # be re-bound under tracking before a cell uses them. Read and emptied by
-    # MismatchClassifier, which schedules the binding statement to re-run the
-    # first time a cell needs the name. Two writers:
-    #
-    # * NotebookSimulator, once per `%cash_on`: names bound untracked before
-    #   cash was listening by a statement that could have read something
-    #   (`df = pd.read_parquet(...)` in the `%cash_on` cell).
-    # * ModuleInvalidator, after an edit: every variable BUILT from the edited
-    #   module whose lineage it drops. Without this a cell below that only
-    #   reads such a variable never learned it was stale -- the upstream check
-    #   compares lineages, and a dropped one compares with nothing (r28s5).
-    #
-    # Never a from-imported name itself: its lineage is dropped so that its
-    # readers recompute, and re-running the import put back a key that served
-    # them the pre-edit value.
+    # Names in memory whose value can no longer be vouched for and must be
+    # re-bound under tracking before a cell uses them: names bound untracked
+    # before ``%cash_on`` by a statement that could have read something, and
+    # variables built from an edited module. Never a from-imported name itself:
+    # re-running the import would put back a key serving the pre-edit value.
+    # W: NotebookSimulator, ModuleInvalidator. R/emptied: MismatchClassifier.
     rerun_bindings: set[str] = field(default_factory=set)
 
-    # Bumped by ModuleInvalidator every time it reloads a tracked module. The
-    # upstream simulation caches its per-cell results keyed on each cell's TEXT
-    # and the files it read -- neither of which an edit to a helper module
-    # changes -- so without this it replayed the pre-edit simulation, found
-    # nothing stale, and a cell below the helper's caller printed and exported
-    # the pre-edit value (round 28, r28s5, 5/5; broken since before round 27).
+    # Bumped on every reload of a tracked module. The simulation caches per-cell
+    # results by cell text and files read, which a helper-module edit does not
+    # change, so this is part of that cache's key.
+    # W: ModuleInvalidator. R: VirtualLineage.
     module_generation: int = 0
-    # The names a notebook reaches a reloaded module through -- the module and
-    # its aliases, and every name from-imported from it. Written by
-    # ModuleInvalidator with each generation, consumed by the simulation:
-    # re-simulating from the first cell that reads one of them, or binds one
-    # by `from m import X`, not from the top. The binding cell once had to be
-    # kept out: replaying it restored the outcome recorded before the edit and
-    # X's readers were served the pre-edit value
-    # (test_a_from_imported_constant_that_changed). Imports are never restored
-    # now (b4f2539), and leaving it out kept X's pre-reload lineage in the
-    # simulation, keyed apart from a fresh kernel's (round 29, r29s1/r29s3).
+
+    # The names a notebook reaches a reloaded module through (the module, its
+    # aliases, every name from-imported from it). The simulation re-simulates
+    # from the first cell that reads or from-imports one of them.
+    # W: ModuleInvalidator (with each generation). R: VirtualLineage.
     reloaded_names: set[str] = field(default_factory=set)
 
-    # Written by StatementProcessor after each execution.
-    # Tracks the most recent content hash within the current session.
+    # Variable -> its most recent content hash this session.
+    # W: StatementLineageBuilder, StatementRestorer, StatementProcessor.
+    # R: StatementProcessor (observed mutations), UpstreamChecker.
     current_session_hashes: dict[str, str] = field(default_factory=dict)
 
-    # Written by StatementProcessor and ControlStructureProcessor for in-place
-    # mutations (e.g., list.append, dict[k] = v).
-    # Read by UpstreamChecker to skip lineage-based staleness checks for these vars.
+    # Variables mutated in place (``list.append``, ``d[k] = v``).
+    # W: StatementProcessor, the control-structure helpers, UpstreamChecker.
+    # R: the upstream check (skips lineage staleness for them).
     vars_with_mutation_lineage: set[str] = field(default_factory=set)
 
-    # Written by StatementProcessor; read by UpstreamChecker (Pass 1 lineage check).
-    # Stores the lineage snapshot of each input at the time of execution.
+    # Variable -> the lineage of each input when its statement last ran.
+    # W: StatementLineageBuilder, StatementRestorer, the simulator's restore
+    # drain. R: the upstream check, ModuleInvalidator, miss attribution.
     executed_input_lineages: dict[str, dict[str, str]] = field(default_factory=dict)
 
-    # Written by StatementLineageBuilder; read by VirtualLineage. Maps a
-    # statement's cache key -> (files, object-storage URLs) that statement ITSELF
-    # read on its last execution. The simulation must hash exactly these, with
-    # the same function, to arrive at the lineage the runtime recorded.
-    # ``executed_file_deps`` cannot stand in: it also holds what a variable
-    # inherited from its inputs, so ``df = clean(raw)`` got a file component in
-    # the simulation only, and everything downstream "changed" (round 21).
+    # Cache key -> (files, object-storage URLs) that statement itself read on
+    # its last run. The simulation hashes exactly these to reach the lineage
+    # the runtime recorded; ``executed_file_deps`` cannot stand in, because it
+    # also holds what a variable inherited from its inputs.
+    # W: StatementLineageBuilder. R: VirtualLineage, ControlStructureProcessor.
     statement_file_reads: dict[str, tuple[frozenset[str], frozenset[str]]] = field(default_factory=dict)
 
-    # Written by ControlStructureProcessor; read by VirtualLineage. Maps
     # sha256(``ast.unparse`` of a top-level if/for/while/with/try) ->
     # ({input: lineage at entry}, {var: lineage it left behind}, files behind
-    # those, ``compute_file_hash_component`` of them then). The runtime
-    # records a control structure's outputs by a VALUE-based formula
-    # (``update_mutated_variable_lineages``) the simulation cannot reproduce
-    # from code, so an untaken ``if FLAG: df = df.head(3)`` left ``df``
-    # disagreeing forever and every later reader re-ran df's producers
-    # (round 21). Reached again with the same input lineages and the same
-    # file state, the simulation takes what the runtime recorded; otherwise
-    # it re-plans.
+    # those, their file-hash component). The runtime derives a control
+    # structure's output lineages from values, which the simulation cannot
+    # reproduce from code; reached again with the same inputs and file state,
+    # the simulation takes what the runtime recorded.
+    # W: ControlStructureProcessor. R: VirtualLineage.
     control_outcomes: dict[str, tuple[dict[str, str], dict[str, str], frozenset[str], str]] = field(
         default_factory=dict
     )
 
-    # Written by StatementLineageBuilder when a tracked module is re-imported.
-    # Read by module_invalidator. Maps module_name -> {var_names} whose stored
-    # input lineages need refreshing once the import statement re-executes.
+    # Module name -> variables whose stored input lineages need refreshing once
+    # that module's import statement re-executes.
+    # W: StatementLineageBuilder, ModuleInvalidator. R: ModuleInvalidator.
     granular_preserved_vars: dict[str, set[str]] = field(default_factory=dict)
 
-    # Written by StatementLineageBuilder; read by module_invalidator.
-    # Per-variable record of which module attributes contributed: maps
-    # var_name -> {module_name -> {attr1, attr2, ...}}.
+    # Variable -> {module -> {attributes it read}}.
+    # W: StatementLineageBuilder, StatementProcessor.forget_variable.
+    # R: ModuleInvalidator, UpstreamChecker.
     module_attribute_deps: dict[str, dict[str, set[str]]] = field(default_factory=dict)
 
-    # Written by StatementLineageBuilder; read by module_invalidator.
-    # Maps var_name -> source_module_name for ``from X import Y`` bindings.
+    # Variable -> source module, for ``from X import Y`` bindings.
+    # W: StatementLineageBuilder. R: ModuleInvalidator, UpstreamChecker.
     from_import_sources: dict[str, str] = field(default_factory=dict)
 
-    # Written by StatementLineageBuilder; read by module_invalidator. The
-    # NARROWED source component (``:from_sym_src:``) a ``from X import Y``
-    # name's lineage was built with -- only what Y reaches inside X. On a
-    # reload of X the invalidator recomputes it against the new file and keeps
-    # Y's lineage when it is identical, instead of dropping every name X
-    # exported: that drop left `DATA = load(6)` "Input variable missing
-    # lineage" and uncached after an edit to an unrelated function in X.
+    # Variable -> the narrowed source component (only what Y reaches inside X)
+    # a ``from X import Y`` name's lineage was built with. On a reload of X the
+    # invalidator recomputes it and keeps Y's lineage when it is unchanged,
+    # instead of dropping every name X exported.
+    # W: StatementLineageBuilder, StatementProcessor.forget_variable.
+    # R: ModuleInvalidator.
     from_import_components: dict[str, str] = field(default_factory=dict)
 
-    # Written by StatementProcessor after observing a standalone method call;
-    # read by VirtualLineage (upstream simulation). Maps a statement's
-    # source_hash -> the set of receiver names that method call mutates (the
-    # broad-precise mutation verdict). Lets the simulation, which never executes
-    # user code, reproduce the runtime's mutation decision for a bare
-    # ``obj.method()`` whose method is not statically known to mutate.
+    # Statement source hash -> the receivers its bare method call mutates, so
+    # the simulation, which never executes user code, reproduces the runtime's
+    # mutation decision.
+    # W: StatementProcessor (observed), VirtualLineage (read back from the
+    # persisted verdict after a restart). R: both of them.
     mutation_verdicts: dict[str, set[str]] = field(default_factory=dict)
 
-    # Written by CellExecutor at each cell's ENTRY (after upstream resolution,
-    # before the cell body runs); read by NotebookSimulator. Maps
-    # var_name -> the ``consumables.consumable_state`` token that a consumable,
-    # unrestorable input (generator / queue / file handle) held when this cell
-    # last started. A consumable drains IN PLACE, so its identity — and hence
-    # ``compute_hash``'s identity fallback — is unchanged by being drained; this
-    # cell-entry token is the only way to tell "the producer just handed me a
-    # fresh object" (run_all) from "I am looking at my own previous run's
-    # leftovers" (isolated re-run). See ``consumables.py``.
+    # Variable -> the ``consumables.consumable_state`` token a consumable,
+    # unrestorable input (generator, queue, file handle) held when the reading
+    # cell last started. A consumable drains in place, so this is the only way
+    # to tell a fresh object from the reader's own leftovers (``consumables.py``).
+    # W: CellExecutor (cell entry). R: NotebookSimulator.
     consumable_bases: dict[str, Any] = field(default_factory=dict)
 
-    # Written by StatementLineageBuilder after detecting a live-alias derivation
-    # (numpy view -> base, pandas groupby/rolling ref-holder -> source frame);
-    # read by VirtualLineage (upstream simulation). Maps
-    # ``bump_source_var -> {vars to bump when that source var's lineage bumps
-    # due to an in-place mutation}``. Models the object graph that lineage alone
-    # cannot see: mutating a numpy view mutates its base; mutating a frame
-    # mutates the groupby that still holds a live reference to it. The runtime
-    # detects the edges (it can observe ``.base`` / ``.obj`` identity); the
-    # simulation only REPLAYS this recorded map.
+    # Source variable -> variables to bump when its lineage bumps through an
+    # in-place mutation (a numpy view of it, a groupby holding it). The runtime
+    # observes the object graph; the simulation only replays this map.
+    # W: StatementLineageBuilder (derivation_edges). R: VirtualLineage.
     derivation_edges: dict[str, set[str]] = field(default_factory=dict)
 
     @property
