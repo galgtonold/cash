@@ -101,7 +101,7 @@ flowchart TD
     I3 --> K3
 ```
 
-<!-- claim: cash/notebook/control_structures/processor.py:compute_context_hash @49280d7a, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @400a4a49 -->
+<!-- claim: cash/notebook/control_structures/processor.py:compute_context_hash @76c1166f, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @400a4a49 -->
 The mechanism is deliberately plain: the context hash is prepended to the body
 statement as a *comment*, so it flows into the ordinary statement cache key
 through the source hash — no special key format is needed.
@@ -109,7 +109,9 @@ through the source hash — no special key format is needed.
 ```python
 import hashlib
 
-# What compute_context_hash (module level, control_structures/processor.py) does:
+# What compute_context_hash (module level, control_structures/processor.py) does.
+# Primitive values go in as they are; any other value (a DataFrame, a user
+# object) goes in as its full content digest, never its str().
 context = {"ticker": "AAPL"}
 context_hash = hashlib.sha256(str(sorted(context.items())).encode("utf-8")).hexdigest()[:16]
 

@@ -195,6 +195,60 @@ class TestComputeContextHash:
         assert len(h) == 16  # Truncated to 16 chars
 
 
+class _Point:
+    """A plain user object: hashable by identity, repr carries its address."""
+
+    def __init__(self, x):
+        self.x = x
+
+
+class TestUserObjectLoopValue:
+    """A user object's str() holds its memory address, so hashing the context
+    by str() changed on every run and never on mutation."""
+
+    def _hash(self, value, digests=None):
+        return compute_context_hash(build_iteration_context(["p"], {"p": value}, None, digests))
+
+    def test_equal_content_in_a_new_object_gives_the_same_hash(self):
+        # A kernel restart builds a new object at a new address.
+        assert self._hash(_Point(1)) == self._hash(_Point(1))
+
+    def test_mutation_changes_the_hash(self):
+        p = _Point(1)
+        before = self._hash(p)
+        p.x = 2
+        assert self._hash(p) != before
+
+    def test_the_live_object_stays_in_the_context(self):
+        # loop_vars hands the object itself to call caching.
+        p = _Point(1)
+        ctx = build_iteration_context(["p"], {"p": p}, None)
+        assert ctx["p"] is p
+
+    def test_the_callers_digest_is_used(self, monkeypatch):
+        import cash.notebook.object_hashing as object_hashing
+
+        def _fail(value):
+            raise AssertionError("recomputed a digest the caller already had")
+
+        monkeypatch.setattr(object_hashing, "compute_hash_full", _fail)
+        p = _Point(1)
+        assert self._hash(p, {"p": "d1"}) != self._hash(p, {"p": "d2"})
+
+    def test_nested_loop_carries_the_outer_digest(self):
+        outer = build_iteration_context(["p"], {"p": _Point(1)}, None)
+        inner_a = build_iteration_context(["i"], {"i": 0}, outer)
+        other = build_iteration_context(["p"], {"p": _Point(2)}, None)
+        inner_b = build_iteration_context(["i"], {"i": 0}, other)
+        assert compute_context_hash(inner_a) != compute_context_hash(inner_b)
+
+    def test_primitives_hash_as_before(self):
+        import hashlib
+
+        expected = hashlib.sha256(str([("i", 3), ("s", "a")]).encode()).hexdigest()[:16]
+        assert compute_context_hash({"s": "a", "i": 3}) == expected
+
+
 class TestControlStructureResult:
     """Test the ControlStructureResult dataclass."""
 

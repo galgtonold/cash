@@ -247,6 +247,22 @@ def bind_target_values(target: ast.AST, value, user_ns: dict[str, Any]) -> dict[
     return bindings
 
 
+#: Types whose ``repr`` is their full value, stable across processes. Any
+#: other loop value goes into the context hash by content digest instead.
+_PRIMITIVE_TYPES = (bool, int, float, complex, str, bytes, type(None))
+
+#: Context entries under this prefix hold the content digest of a hashable,
+#: non-primitive loop value kept by value under its own name. The dunder
+#: prefix keeps them out of ``loop_vars``, like ``__iterable_lineage__``.
+_DIGEST_PREFIX = "__digest__:"
+
+
+def _is_primitive(value: Any) -> bool:
+    if type(value) in _PRIMITIVE_TYPES:
+        return True
+    return type(value) is tuple and all(_is_primitive(v) for v in value)
+
+
 def build_iteration_context(
     target_names: list[str],
     user_ns: dict[str, Any],
@@ -265,45 +281,67 @@ def build_iteration_context(
     measured at 164ms of a 328ms hashing bill on the demo tour's bootstrap
     cell (five ~200k-row groups), on a re-run where nothing recomputed.
 
-    The digest is only substituted where this function would have computed one
-    itself. A value that is plain ``hash()``-able still goes into the context
-    *by value*: swapping in a digest there would change the context hash and
-    invalidate every existing entry for no gain.
+    Primitive values go in by value. An unhashable value is replaced by its
+    digest. A hashable, non-primitive value (a user object, a numpy scalar)
+    stays by value, because ``loop_vars`` hands the live object to call
+    caching, and its digest rides alongside under ``__digest__:<name>`` for
+    :func:`compute_context_hash`. Its ``str()`` is no key: a default
+    ``repr`` carries the memory address, which changes every run and never
+    changes on mutation.
     """
     context = dict(parent_context) if parent_context else {}
     digests = loop_var_digests or {}
 
     for name in target_names:
-        if name in user_ns:
-            value = user_ns[name]
-            try:
-                hash(value)
-                context[name] = value
-            except TypeError:
-                # repr() TRUNCATES large numpy/pandas objects, so two
-                # iterations differing outside the repr window collided
-                # into one context hash. Hash the full content.
-                #
-                # Reuse the caller's digest when it has one: it is the same
-                # `compute_hash_full` of the same object, so this is shared
-                # rather than approximated. Do NOT weaken the fallback to
-                # `compute_hash` -- a sampled hash here is exactly the
-                # collision this branch exists to prevent.
-                cached = digests.get(name)
-                if cached is not None:
-                    context[name] = cached
-                    continue
-                from cash.notebook.object_hashing import compute_hash_full
+        if name not in user_ns:
+            continue
+        value = user_ns[name]
+        # A nested loop may rebind an outer loop's name; drop the outer digest.
+        context.pop(_DIGEST_PREFIX + name, None)
+        if _is_primitive(value):
+            context[name] = value
+            continue
+        # repr() TRUNCATES large numpy/pandas objects and embeds addresses for
+        # plain objects, so hash the full content. Reuse the caller's digest
+        # when it has one: it is the same `compute_hash_full` of the same
+        # object. Do NOT weaken the fallback to `compute_hash` -- a sampled
+        # hash here is exactly the collision this exists to prevent.
+        digest = digests.get(name)
+        if digest is None:
+            from cash.notebook.object_hashing import compute_hash_full
 
-                context[name] = compute_hash_full(value)
+            digest = compute_hash_full(value)
+        try:
+            hash(value)
+        except TypeError:
+            context[name] = digest
+        else:
+            context[name] = value
+            context[_DIGEST_PREFIX + name] = digest
 
     return context
 
 
 def compute_context_hash(context: dict[str, Any]) -> str:
-    """Compute a hash of the iteration context."""
-    items = sorted(context.items())
-    context_str = str(items)
+    """Compute a hash of the iteration context.
+
+    Primitive values are hashed by ``str()``; any other value by its content
+    digest, taken from the ``__digest__:`` entry
+    :func:`build_iteration_context` stored, or computed here if absent.
+    """
+    items = []
+    for key, value in context.items():
+        if key.startswith(_DIGEST_PREFIX):
+            continue
+        if not _is_primitive(value):
+            digest = context.get(_DIGEST_PREFIX + key)
+            if digest is None:
+                from cash.notebook.object_hashing import compute_hash_full
+
+                digest = compute_hash_full(value)
+            value = digest
+        items.append((key, value))
+    context_str = str(sorted(items))
     return hashlib.sha256(context_str.encode("utf-8")).hexdigest()[:16]
 
 
