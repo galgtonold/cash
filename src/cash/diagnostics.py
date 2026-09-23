@@ -309,23 +309,6 @@ def warn_diagnostic(
     _warn_at(instance, _user_frame_level(), None)
 
 
-def warn_diagnostic_explicit(
-    category: type[Warning],
-    code: str,
-    what: str,
-    fix: str,
-    *,
-    filename: str,
-    lineno: int,
-    registry: None = None,
-) -> None:
-    """``warn_diagnostic(..., location=(filename, lineno))`` under its old name.
-
-    Kept only for the notebook call sites that still use it.
-    """
-    warn_diagnostic(category, code, what, fix, location=(filename, lineno))
-
-
 def warn_diagnostic_message(
     category: type[Warning],
     code: str,

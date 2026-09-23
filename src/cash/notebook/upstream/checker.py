@@ -9,7 +9,7 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from ...diagnostics import log_diagnostic, warn_diagnostic_explicit
+from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import AmbiguousCellError, CashUpstreamSyntaxWarning, ForwardReferenceError, UpstreamStateError
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
@@ -1416,14 +1416,12 @@ class UpstreamChecker:
             # line); our own per-(idx, hash) ledger supplies the dedupe we
             # actually want, and this still consults the user's filters. Mirrors
             # randomness.py's established pattern.
-            warn_diagnostic_explicit(
+            warn_diagnostic(
                 CashUpstreamSyntaxWarning,
                 code="NOTEBOOK-CELL-SYNTAX",
                 what=what,
                 fix=fix,
-                filename="<cash>",
-                lineno=idx + 1,
-                registry=None,
+                location=("<cash>", idx + 1),
             )
 
         # Replace the ledger with exactly the current break set: a fixed cell

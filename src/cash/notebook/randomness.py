@@ -14,7 +14,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import NamedTuple
 
-from ..diagnostics import warn_diagnostic_explicit
+from ..diagnostics import warn_diagnostic
 from ..exceptions import CashWarning
 
 __all__ = [
@@ -1251,14 +1251,12 @@ def warn_stale_randomness(
         # ``code=`` by name, not position: ``code`` in this scope is the user's
         # source text, and a positional diagnostic code would silently become
         # a statement's worth of Python in the terminal.
-        warn_diagnostic_explicit(
+        warn_diagnostic(
             CashRandomnessWarning,
             code="RANDOM-REPLAYED",
             what=message,
             fix=_REPLAY_FIX,
-            filename="<cash>",
-            lineno=call.lineno,
-            registry=None,
+            location=("<cash>", call.lineno),
         )
 
 
@@ -1280,7 +1278,7 @@ def check_and_warn_randomness(
 
     Warnings are deduped *once per statement per session* via
     ``detector.mark_warned``, and raised with :func:`warnings.warn_explicit`
-    under a literal ``<cash>`` filename. That is a LABEL these warnings pass to
+    (``warn_diagnostic(..., location=...)``) under a literal ``<cash>`` filename. That is a LABEL these warnings pass to
     ``warn_explicit``, not the name a statement is compiled under: since
     ``notebook/compiled_source.py`` landed, each statement compiles as
     ``<cash-{digest}>`` so a traceback can resolve its source, and frame
@@ -1310,14 +1308,12 @@ def check_and_warn_randomness(
             if not detector.mark_warned(code, warning_msg):
                 continue
             # ``code=`` by name: see ``warn_stale_randomness``.
-            warn_diagnostic_explicit(
+            warn_diagnostic(
                 CashRandomnessWarning,
                 code="RANDOM-UNSEEDED",
                 what=warning_msg,
                 fix=_UNSEEDED_FIX,
-                filename="<cash>",
-                lineno=call.lineno,
-                registry=None,
+                location=("<cash>", call.lineno),
             )
 
     return unseeded_calls, has_seed_calls
@@ -1404,14 +1400,12 @@ def warn_unseeded_estimator_fit(
         if not detector.mark_warned(code, message):
             continue
         # ``code=`` by name: see ``warn_stale_randomness``.
-        warn_diagnostic_explicit(
+        warn_diagnostic(
             CashRandomnessWarning,
             code="RANDOM-UNSEEDED",
             what=message,
             fix=_UNSEEDED_FIT_FIX,
-            filename="<cash>",
-            lineno=0,
-            registry=None,
+            location=("<cash>", 0),
         )
 
 
@@ -1435,14 +1429,12 @@ def warn_stale_estimator_fit(
         if not detector.mark_warned(code, message):
             continue
         # ``code=`` by name: see ``warn_stale_randomness``.
-        warn_diagnostic_explicit(
+        warn_diagnostic(
             CashRandomnessWarning,
             code="RANDOM-REPLAYED",
             what=message,
             fix=_REPLAY_FIT_FIX,
-            filename="<cash>",
-            lineno=0,
-            registry=None,
+            location=("<cash>", 0),
         )
 
 

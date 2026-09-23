@@ -43,7 +43,7 @@ def test_doc_url_rejects_an_unregistered_code():
 
 import warnings
 
-from cash.diagnostics import format_diagnostic, warn_diagnostic, warn_diagnostic_explicit
+from cash.diagnostics import format_diagnostic, warn_diagnostic
 from cash.exceptions import CashCacheIneffectiveWarning
 
 
@@ -73,31 +73,18 @@ def test_an_unregistered_code_raises_rather_than_warning():
     assert caught == [], "nothing should have been emitted for a bad code"
 
 
-@pytest.mark.parametrize("old_name", [False, True])
-def test_an_explicit_location_keeps_both_the_location_and_the_code(old_name):
+def test_an_explicit_location_keeps_both_the_location_and_the_code():
     """These sites blame the user's cell on purpose; losing that is a
-    regression even though the text would still be correct. The old
-    ``warn_diagnostic_explicit`` spelling used to drop ``.code``."""
+    regression even though the text would still be correct."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        if old_name:
-            warn_diagnostic_explicit(
-                CashCacheIneffectiveWarning,
-                "CACHE-THRASH",
-                "the cache is full.",
-                "raise it.",
-                filename="<cash>",
-                lineno=42,
-                registry=None,
-            )
-        else:
-            warn_diagnostic(
-                CashCacheIneffectiveWarning,
-                "CACHE-THRASH",
-                "the cache is full.",
-                "raise it.",
-                location=("<cash>", 42),
-            )
+        warn_diagnostic(
+            CashCacheIneffectiveWarning,
+            "CACHE-THRASH",
+            "the cache is full.",
+            "raise it.",
+            location=("<cash>", 42),
+        )
     assert len(caught) == 1
     assert caught[0].filename == "<cash>"
     assert caught[0].lineno == 42

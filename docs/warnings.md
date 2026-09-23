@@ -1466,7 +1466,7 @@ actually read. If the cell is not really code — pasted output, a traceback,
 notes you were half-way through typing — delete it or turn it into a markdown
 cell. Markdown cells are not parsed and never trip this.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._warn_broken_upstream_cells @56405fa1 -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._warn_broken_upstream_cells @ef12eb7f -->
 The warning repeats when the break changes and stays quiet while it does not, so
 re-running cells *below* the broken one will not spam you; fixing it and later
 breaking it again will warn again. One gap in that promise: the scan only looks
