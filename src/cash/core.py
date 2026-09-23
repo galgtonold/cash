@@ -25,7 +25,7 @@ import threading
 import time
 import types
 import weakref
-from collections import Counter, OrderedDict
+from collections import Counter, OrderedDict, deque
 from collections.abc import Callable, Iterator, Sized
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
@@ -1318,10 +1318,17 @@ _STATE_STAGES = (
 #: were written by earlier runs.
 _PROCESS_STARTED = time.time()
 
-#: Set by `_log_raised` in this context (thread or asyncio task), consumed by the
-#: stats wrapper, so a call that raised is counted without re-counting the
-#: previous call's entry.
-_RAISE_LOGGED: "contextvars.ContextVar[bool]" = contextvars.ContextVar("_cash_raise_logged", default=False)
+#: The stats wrapper's slot for the call it is running: `_log_decorator_call`
+#: puts the call's entry there, and the stats wrapper counts it once the call
+#: returns or raises. Per context (thread or asyncio task), and set afresh by
+#: every cached call, so a nested call fills its own slot and never the
+#: caller's.
+_CALL_ENTRY: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("_cash_call_entry", default=None)
+
+#: How many call events `Cash._decorator_call_log` holds. The notebook drains it
+#: after every statement; nothing drains it in a script or a service, so it
+#: keeps only the most recent calls rather than one entry per call forever.
+_CALL_LOG_MAX = 10_000
 
 #: `_store_refusal` was not handed a capture watch (the streaming path).
 _NO_WATCH = object()
@@ -1936,9 +1943,10 @@ class Cash:
         # Decorator call log for notebook integration.
         # Each entry is a dict with: func_name, cache_hit (bool), execution_time,
         # args_hash, cache_key, timestamp.  The notebook statement processor
-        # drains this list after executing each statement so it can include
-        # decorator metrics in the badge.
-        self._decorator_call_log: list[dict[str, Any]] = []
+        # drains this after executing each statement so it can include
+        # decorator metrics in the badge. Bounded: outside a notebook nothing
+        # drains it, and a long-running process must not keep every call.
+        self._decorator_call_log: deque[dict[str, Any]] = deque(maxlen=_CALL_LOG_MAX)
         self._decorator_call_log_lock = threading.Lock()
         # Custom type hasher registry: maps type -> (callable(value) -> str, source hash).
         # The source hash is embedded in the args_hash composition so that
@@ -4883,10 +4891,10 @@ class Cash:
                 # tracker into each production step so the lazy file reads that
                 # motivated the old placement are still recorded.
                 if is_iter:
-                    # Logged HERE, not at exhaustion. `stats_wrapper` drains
-                    # this log the moment the wrapper returns, so an entry
-                    # written when the caller finishes iterating is never
-                    # counted -- and the next call re-counts the stale one.
+                    # Logged HERE, not at exhaustion. `stats_wrapper` counts
+                    # this call's entry the moment the wrapper returns, so an
+                    # entry written when the caller finishes iterating would
+                    # never be counted.
                     # The miss is a fact about the LOOKUP, which has already
                     # happened. The produce time still reaches the entry, via
                     # the manifest, which is what a later hit reports as saved.
@@ -5132,10 +5140,10 @@ class Cash:
                 # between `def` and `async def` for the same generator, which
                 # is exactly the kind of split nobody finds until it bites.
                 if is_iter:
-                    # Logged HERE, not at exhaustion. `stats_wrapper` drains
-                    # this log the moment the wrapper returns, so an entry
-                    # written when the caller finishes iterating is never
-                    # counted -- and the next call re-counts the stale one.
+                    # Logged HERE, not at exhaustion. `stats_wrapper` counts
+                    # this call's entry the moment the wrapper returns, so an
+                    # entry written when the caller finishes iterating would
+                    # never be counted.
                     # The miss is a fact about the LOOKUP, which has already
                     # happened. The produce time still reaches the entry, via
                     # the manifest, which is what a later hit reports as saved.
@@ -5257,8 +5265,9 @@ class Cash:
         """Wrap *wrapper* with hit/miss stat tracking and attach introspection API.
 
         Dispatches on whether *func* is a coroutine function so the stats
-        drain (reading ``_decorator_call_log`` for the just-finished call)
-        happens AFTER the await for async, and synchronously otherwise.
+        update (from the entry `_log_decorator_call` left in this call's
+        `_CALL_ENTRY` slot) happens AFTER the await for async, and
+        synchronously otherwise.
 
         Attaches the introspection API:
 
@@ -5291,33 +5300,27 @@ class Cash:
         # redefined function, which matches what `cache_info()` reports.
         self._function_stats[func_name] = _stats
 
-        def _drain_stats() -> None:
-            with self._decorator_call_log_lock:
-                for call in reversed(self._decorator_call_log):
-                    if call["func_name"] == func_name:
-                        if call["cache_hit"]:
-                            _stats["hits"] += 1
-                            _stats["total_time_saved"] += call.get("time_saved", 0.0)
-                            _stats["lookup_seconds"] += call.get("execution_time", 0.0)
-                        else:
-                            _stats["misses"] += 1
-                            _stats["miss_overhead_seconds"] += call.get("cash_seconds") or 0.0
-                            kind, detail = call.get("miss_reason") or (MISS_FIRST, "")
-                            _stats["miss_reasons"][kind] += 1
-                            if kind == MISS_CODE and _WHAT_CHANGED in detail:
-                                _stats["changed"][detail.split(_WHAT_CHANGED, 1)[1]] += 1
-                            if call.get("not_stored"):
-                                _stats["not_stored"][call["not_stored"]] += 1
-                            elif call.get("not_persisted"):
-                                _stats["not_persisted"][call["not_persisted"]] += 1
-                        break
-
-        def _drain_raised() -> None:
-            # Only when THIS call logged its raise: otherwise the last entry
-            # for this function is the previous call's, already counted.
-            if _RAISE_LOGGED.get():
-                _RAISE_LOGGED.set(False)
-                _drain_stats()
+        def _count(slot: list) -> None:
+            # The entry THIS call logged, if it logged one: a call that raised
+            # before its lookup, or went through uncounted, leaves it empty.
+            call = slot[0]
+            if call is None:
+                return
+            if call["cache_hit"]:
+                _stats["hits"] += 1
+                _stats["total_time_saved"] += call.get("time_saved", 0.0)
+                _stats["lookup_seconds"] += call.get("execution_time", 0.0)
+            else:
+                _stats["misses"] += 1
+                _stats["miss_overhead_seconds"] += call.get("cash_seconds") or 0.0
+                kind, detail = call.get("miss_reason") or (MISS_FIRST, "")
+                _stats["miss_reasons"][kind] += 1
+                if kind == MISS_CODE and _WHAT_CHANGED in detail:
+                    _stats["changed"][detail.split(_WHAT_CHANGED, 1)[1]] += 1
+                if call.get("not_stored"):
+                    _stats["not_stored"][call["not_stored"]] += 1
+                elif call.get("not_persisted"):
+                    _stats["not_persisted"][call["not_persisted"]] += 1
 
         def _bypass(args: tuple, kwargs: dict) -> Any:
             # A helper, not inline: a caller that captures this wrapper in a
@@ -5334,16 +5337,16 @@ class Cash:
                 if self.config.disable:
                     return await _bypass(args, kwargs)
                 token = ACTIVE_CONFIG.set(self.config)
+                slot: list = [None]
+                slot_token = _CALL_ENTRY.set(slot)
                 _enter_cached_call()
                 try:
                     result = await wrapper(*args, **kwargs)
-                except BaseException:
-                    _drain_raised()
-                    raise
                 finally:
                     _exit_cached_call()
+                    _CALL_ENTRY.reset(slot_token)
                     ACTIVE_CONFIG.reset(token)
-                _drain_stats()
+                    _count(slot)
                 self._warn_unseeded_estimator_result(func_name, result, allow_random)
                 return result
         else:
@@ -5357,16 +5360,16 @@ class Cash:
                 # This instance's settings for the file checks the call makes
                 # (`file_hash_full_max_bytes`); see ACTIVE_CONFIG.
                 token = ACTIVE_CONFIG.set(self.config)
+                slot: list = [None]
+                slot_token = _CALL_ENTRY.set(slot)
                 _enter_cached_call()
                 try:
                     result = wrapper(*args, **kwargs)
-                except BaseException:
-                    _drain_raised()
-                    raise
                 finally:
                     _exit_cached_call()
+                    _CALL_ENTRY.reset(slot_token)
                     ACTIVE_CONFIG.reset(token)
-                _drain_stats()
+                    _count(slot)
                 self._warn_unseeded_estimator_result(func_name, result, allow_random)
                 return result
 
@@ -9386,7 +9389,10 @@ class Cash:
 
         Thread-safe: uses a lock to protect concurrent appends.
         The notebook ``StatementProcessor`` drains this log after each
-        statement execution to include decorator call metrics in the badge.
+        statement execution to include decorator call metrics in the badge;
+        it keeps the last ``_CALL_LOG_MAX`` events, since nothing drains it
+        outside a notebook. The entry also goes to the running call's
+        `_CALL_ENTRY` slot, which is what ``cache_info()`` counts.
 
         ``execution_time`` is the wall-time of *this* operation - a lookup on a
         hit, the compute on a miss. ``time_saved`` is the compute a hit
@@ -9439,6 +9445,9 @@ class Cash:
             entry["not_stored"] = outcome.get("not_stored")
         with self._decorator_call_log_lock:
             self._decorator_call_log.append(entry)
+        slot = _CALL_ENTRY.get()
+        if slot is not None:
+            slot[0] = entry
         if self._per_call_lines():
             if file_deps:
                 # Only for the line: a hit pays nothing for it otherwise.
@@ -9509,7 +9518,6 @@ class Cash:
             cache_key="",
             miss_detail=f"{type(exc).__name__}: {str(exc)[:80]}",
         )
-        _RAISE_LOGGED.set(True)
 
     def _warn_cache_if_raised(
         self,

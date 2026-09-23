@@ -143,8 +143,11 @@ flowchart TD
     STMT --> SP --> WRAP --> DRAIN --> MERGE
 ```
 
-<!-- claim: cash/core.py:Cash._log_decorator_call @929cb7ab -->
-Every `@cash.cache` call appends an entry to `Cash._decorator_call_log`:
+<!-- claim: cash/core.py:Cash._log_decorator_call @7199cb42 -->
+Every `@cash.cache` call appends an entry to `Cash._decorator_call_log`, which
+keeps the most recent 10,000 (nothing drains it outside a notebook, so it must
+not keep every call of a long-running process). `cache_info()` counts each call
+from its own entry, not from this log:
 
 <!-- test:skip reason="illustrative dict literal at top level" -->
 ```python
