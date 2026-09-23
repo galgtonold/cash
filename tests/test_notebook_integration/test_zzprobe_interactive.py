@@ -6,33 +6,34 @@ Each test attacks one distinct mechanism:
     order [3,1,2], then run_all: outputs must be coherent.
 2.  test_reset_magic_no_phantom_restore -- %reset -f in a mid cell; downstream
     re-runs must not resurrect pre-reset cached values as phantom vars.
-3.  test_del_upstream_then_isolated_rerun_consumer -- del x in a later cell,
-    then isolated re-run of an x-consumer (interactive variant of the un-definition case).
-4.  test_cash_off_edit_cash_on_run_all -- %cash_off, edit + run while off,
+3.  test_cash_off_edit_cash_on_run_all -- %cash_off, edit + run while off,
     %cash_on, run_all: tracking must be coherent after the gap (no stale).
-5.  test_time_magic_assignment_invalidation -- %time / %%time wrapping cached
+4.  test_time_magic_assignment_invalidation -- %time / %%time wrapping cached
     assignments; upstream edit must invalidate through the timing magics.
-6.  test_shell_escape_output_replay -- !echo hi cell; side-effect output must
+5.  test_shell_escape_output_replay -- !echo hi cell; side-effect output must
     appear on re-run (executed or replayed), neighbours cached correctly.
-7.  test_exotic_cells_empty_comment_import_introspection -- empty cell,
+6.  test_exotic_cells_empty_comment_import_introspection -- empty cell,
     comment-only cell, import-only cell, obj? introspection; no crash, values ok.
-8.  test_display_repr_and_semicolon_suppression_on_rerun -- df.tail display
+7.  test_display_repr_and_semicolon_suppression_on_rerun -- df.tail display
     expression repr correct on cached re-run; trailing-semicolon suppression
     preserved (no phantom repr) on cached re-run.
-9.  test_duplicate_identical_cells_isolated_rerun_disambiguation -- two
+8.  test_duplicate_identical_cells_isolated_rerun_disambiguation -- two
     byte-identical `x = x + 1` cells; isolated re-run of EACH must reproduce
     that cell's own first-run value (cell-ID disambiguation).
-10. test_add_cell_mid_session_consumes_old_var -- add_cell mid-session
+9.  test_add_cell_mid_session_consumes_old_var -- add_cell mid-session
     consuming a var from before; runs and re-runs correctly.
-11. test_swap_cell_sources_values_follow_new_order -- swap two cells' sources
+10. test_swap_cell_sources_values_follow_new_order -- swap two cells' sources
     (reorder simulation) then run_all; final value follows the NEW order.
-12. test_restart_no_persist_full_recompute -- restart without persist: full
+11. test_restart_no_persist_full_recompute -- restart without persist: full
     recompute, correct values.
-13. test_restart_persist_then_edit_upstream_recomputes -- restart WITH persist,
+12. test_restart_persist_then_edit_upstream_recomputes -- restart WITH persist,
     then edit an upstream cell BEFORE the first post-restart run: downstream
     must recompute, not virtual-restore stale values (historically fragile).
-14. test_rapid_quadruple_rerun_idempotent -- same self-modifying cell re-run
+13. test_rapid_quadruple_rerun_idempotent -- same self-modifying cell re-run
     4x in a row: idempotent every time.
+
+The ``del x`` then isolated re-run of a consumer is in
+``test_del_upstream_liveness.py``.
 """
 
 import pytest
@@ -84,27 +85,6 @@ def test_reset_magic_no_phantom_restore(nb_runner):
     assert "a = 5" not in nb_runner.get_output(4), nb_runner.get_output(4)
     nb_runner.run_cell(3)
     assert "b 10" in nb_runner.get_output(3), nb_runner.get_output(3)
-
-
-# ---------------------------------------------------------------- 3
-def test_del_upstream_then_isolated_rerun_consumer(nb_runner):
-    nb_runner.create_notebook(
-        [
-            "x = 7",
-            "y = x * 3\nprint('y', y)",
-            "del x",
-        ]
-    )
-    nb_runner.start_kernel()
-    nb_runner.run_all()
-    assert "y 21" in nb_runner.get_output(2), nb_runner.get_output(2)
-
-    # x is deleted from the live namespace; re-running the consumer in
-    # isolation must equal running from the start: y == 21, no NameError.
-    nb_runner.run_cell(2)
-    out = nb_runner.get_output(2)
-    assert "y 21" in out, out
-    assert "NameError" not in nb_runner.get_raw_output(2), nb_runner.get_raw_output(2)
 
 
 # ---------------------------------------------------------------- 4

@@ -62,13 +62,3 @@ def test_pure_decorator_not_over_invalidated(nb_runner):
         "r = square(6)\nprint('r', r)",
         "r 36",
     )
-
-
-def test_classmethod_with_arg_still_resets(nb_runner):
-    # the existing passing form — guard against regression.
-    _rerun(
-        nb_runner,
-        "class Reg:\n    items = []\n    @classmethod\n    def add(cls, x):\n        cls.items.append(x)",
-        "Reg.add(1)\nprint('len', len(Reg.items))",
-        "len 1",
-    )

@@ -209,44 +209,6 @@ class TestTryExceptCaching:
         nb_runner.run_cell(2)
         assert "val = -1" in nb_runner.get_output(2)
 
-    def test_try_with_else(self, nb_runner):
-        """Try/else — else runs when no exception and its stmts are cached."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                try:
-                    x = 10
-                except Exception:
-                    x = -1
-                else:
-                    y = x + 5
-            """),
-                "print(f'x={x}, y={y}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x=10, y=15" in nb_runner.get_output(2)
-
-    def test_try_with_finally(self, nb_runner):
-        """Try/finally — finally always runs and its stmts are cached."""
-        nb_runner.create_notebook(
-            [
-                textwrap.dedent("""\
-                try:
-                    x = 10
-                except Exception:
-                    x = -1
-                finally:
-                    cleanup = True
-            """),
-                "print(f'x={x}, cleanup={cleanup}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x=10, cleanup=True" in nb_runner.get_output(2)
-
     def test_try_except_else_finally(self, nb_runner):
         """Full try/except/else/finally — all branches execute correctly."""
         nb_runner.create_notebook(

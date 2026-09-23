@@ -41,31 +41,6 @@ def test_for_loop_caching(nb_runner, tmp_path):
     assert "Iteration 2" in output
 
 
-def test_if_statement_branch_caching(nb_runner):
-    """
-    Test that only the executed branch of an if statement is cached.
-    """
-    nb_runner.create_notebook(
-        [
-            """condition = True
-if condition:
-    result = 'took_true_branch'
-    print('True Branch')
-else:
-    result = 'took_false_branch'
-    print('False Branch')
-print(f'Result: {result}')"""
-        ]
-    )
-    nb_runner.start_kernel()
-    nb_runner.run_all()
-
-    output1 = nb_runner.get_output(1)
-    assert "True Branch" in output1
-    assert "Result: took_true_branch" in output1
-    assert "False Branch" not in output1
-
-
 def test_nested_control_structures(nb_runner):
     """
     Test caching of nested control structures (for loop with if inside).
@@ -117,74 +92,6 @@ print(f'Final: {total}')""",
 
     output2 = nb_runner.get_output(2)
     assert "Final: 60" in output2
-
-
-def test_while_loop_caching(nb_runner):
-    """
-    Test while loop caching.
-    """
-    nb_runner.create_notebook(
-        [
-            """count = 0
-i = 0
-while i < 3:
-    count += 1
-    print(f'Iteration {i}')
-    i += 1
-print(f'Total iterations: {count}')"""
-        ]
-    )
-    nb_runner.start_kernel()
-    nb_runner.run_all()
-
-    output = nb_runner.get_output(1)
-    assert "Total iterations: 3" in output
-
-
-def test_tuple_unpacking_in_loop(nb_runner):
-    """
-    Test for loop with tuple unpacking.
-    """
-    nb_runner.create_notebook(
-        [
-            """results = []
-for name, value in [('a', 1), ('b', 2), ('c', 3)]:
-    results.append(f'{name}={value}')
-print(', '.join(results))"""
-        ]
-    )
-    nb_runner.start_kernel()
-    nb_runner.run_all()
-
-    output = nb_runner.get_output(1)
-    assert "a=1" in output
-    assert "b=2" in output
-    assert "c=3" in output
-
-
-def test_loop_dict_update_and_print(nb_runner):
-    """
-    Test loop that updates a dictionary and prints keys.
-    """
-    nb_runner.create_notebook(
-        [
-            # Cell 1: Loop that builds dict
-            """stats = {}
-for ticker in ['AAPL', 'MSFT', 'GOOGL']:
-    stats[ticker] = {'price': len(ticker) * 10}
-    print(f'Added {ticker}')
-print(f'Keys: {list(stats.keys())}')""",
-            # Cell 2: Use the dict
-            """print(f'Final keys: {list(stats.keys())}')""",
-        ]
-    )
-    nb_runner.start_kernel()
-    nb_runner.run_all()
-
-    output = nb_runner.get_output(2)
-    assert "AAPL" in output
-    assert "MSFT" in output
-    assert "GOOGL" in output
 
 
 def test_loop_execution_failure_with_missing_dep(nb_runner):

@@ -2,37 +2,32 @@
 
 Attack surface (each test = one distinct mechanism):
 
-1.  test_toplevel_await_selfmod_isolated_rerun_idempotent
-        x = await bump(x) — self-modifying reassignment through IPython
-        autoawait. Isolated re-run must print the same value (idempotence).
-2.  test_toplevel_await_cache_hit_second_run
+1.  test_toplevel_await_cache_hit_second_run
         Expensive top-level-await result: is it actually cached (CACHE_HIT
         on an identical second run_all) or does autoawait bypass caching?
-3.  test_await_cell_edit_invalidates_downstream
+2.  test_await_cell_edit_invalidates_downstream
         Edit the *await* cell (not the async def) — downstream must recompute.
-4.  test_async_def_edit_then_isolated_rerun_of_await_cell
-        Edit the async def cell, then isolated-re-run ONLY the awaiting cell:
-        must pick up the new function body (no stale 11).
-5.  test_asyncio_run_bridge_selfmod_rerun
-        total = <thread-bridged asyncio.run(add_ten(total))> — self-mod via a
-        sync bridge. Isolated re-run must be idempotent.
-6.  test_threadpool_map_cache_hit_and_unrelated_edit
+3.  test_threadpool_map_cache_hit_and_unrelated_edit
         Deterministic ThreadPoolExecutor.map sum: CACHE_HIT on identical
         second run; editing an unrelated cell must not CELL_CHANGED it.
-7.  test_threadpool_selfmod_accumulator_isolated_rerun
+4.  test_threadpool_selfmod_accumulator_isolated_rerun
         acc = acc + sum(ex.map(...)) inside a with-block — idempotent re-run.
-8.  test_background_thread_event_gated_list_isolated_rerun
+5.  test_background_thread_event_gated_list_isolated_rerun
         Thread started in cell A mutates a global list only when cell C sets
         an Event (deterministic). Isolated re-run of cell B (which read the
         list BEFORE the mutation) must reprint the pre-mutation value.
-9.  test_lock_unpicklable_restart_persist_graceful
+6.  test_lock_unpicklable_restart_persist_graceful
         threading.Lock crossing cells + kernel restart under persist:
         correct values, no traceback.
-10. test_future_var_crossing_cells_restart
+7.  test_future_var_crossing_cells_restart
         concurrent.futures.Future in a variable: re-run + restart correctness.
-11. test_queue_drain_isolated_rerun_idempotent
+8.  test_queue_drain_isolated_rerun_idempotent
         queue.Queue drained in a later cell; isolated re-run of the drain
         cell should reprint the drained items (stateful-consumable channel).
+
+The self-modifying ``x = await bump(x)`` and ``asyncio.run`` bridge re-runs,
+and the edited ``async def`` re-run from the awaiting cell, are in
+``test_toplevel_await_lineage.py``.
 """
 
 import textwrap
@@ -45,26 +40,6 @@ pytestmark = [pytest.mark.timeout(90)]
 # ---------------------------------------------------------------------------
 # 1. top-level await, self-modifying reassignment, isolated re-run
 # ---------------------------------------------------------------------------
-
-
-def test_toplevel_await_selfmod_isolated_rerun_idempotent(nb_runner):
-    nb_runner.create_notebook(
-        [
-            textwrap.dedent("""\
-            import asyncio
-            x = 1
-            async def bump(v):
-                await asyncio.sleep(0)
-                return v + 1
-        """),
-            "x = await bump(x)\nprint(f'x={x}')",
-        ]
-    )
-    nb_runner.start_kernel()
-    nb_runner.run_all()
-    assert "x=2" in nb_runner.get_output(2), f"first run: {nb_runner.get_output(2)!r}"
-    nb_runner.run_cell(2)
-    assert "x=2" in nb_runner.get_output(2), f"isolated re-run not idempotent: {nb_runner.get_output(2)!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -131,63 +106,9 @@ def test_await_cell_edit_invalidates_downstream(nb_runner):
 # ---------------------------------------------------------------------------
 
 
-def test_async_def_edit_then_isolated_rerun_of_await_cell(nb_runner):
-    nb_runner.create_notebook(
-        [
-            "import asyncio",
-            textwrap.dedent("""\
-            async def compute(x):
-                await asyncio.sleep(0)
-                return x + 1
-        """),
-            "result = await compute(10)\nprint(f'result={result}')",
-        ]
-    )
-    nb_runner.start_kernel()
-    nb_runner.run_all()
-    assert "result=11" in nb_runner.get_output(3)
-
-    nb_runner.set_cell_source(
-        2,
-        textwrap.dedent("""\
-        async def compute(x):
-            await asyncio.sleep(0)
-            return x + 100
-    """),
-    )
-    nb_runner.run_cell(3)
-    assert "result=110" in nb_runner.get_output(3), (
-        f"await cell used stale async def after upstream edit: {nb_runner.get_output(3)!r}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # 5. asyncio.run via thread bridge, self-modifying, isolated re-run
 # ---------------------------------------------------------------------------
-
-
-def test_asyncio_run_bridge_selfmod_rerun(nb_runner):
-    nb_runner.create_notebook(
-        [
-            textwrap.dedent("""\
-            import asyncio
-            from concurrent.futures import ThreadPoolExecutor
-            total = 5
-            async def add_ten(v):
-                return v + 10
-        """),
-            textwrap.dedent("""\
-            with ThreadPoolExecutor(max_workers=1) as _ex:
-                total = _ex.submit(asyncio.run, add_ten(total)).result()
-            print(f'total={total}')
-        """),
-        ]
-    )
-    nb_runner.start_kernel()
-    nb_runner.run_all()
-    assert "total=15" in nb_runner.get_output(2), f"first run: {nb_runner.get_output(2)!r}"
-    nb_runner.run_cell(2)
-    assert "total=15" in nb_runner.get_output(2), f"isolated re-run not idempotent: {nb_runner.get_output(2)!r}"
 
 
 # ---------------------------------------------------------------------------
