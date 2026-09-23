@@ -115,7 +115,7 @@ file read that only discovers the entry is a skip marker.
 `persist_all=True` — bypasses the compute floor entirely. It does not escape the
 per-tier size caps below.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.__init__ @48547719, cash/backends/persistence_policy.py:PersistencePolicy.decide @ab919a91 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.__init__ @48547719, cash/backends/persistence_policy.py:PersistencePolicy.decide @dfaf7643 -->
 All three gates are one object, `PersistencePolicy`, and every `TieredBackend`
 has one: the stack cash builds from config and a `TieredBackend([...])` you
 build by hand apply the same 0.1 s floor. An entry that carries no recorded

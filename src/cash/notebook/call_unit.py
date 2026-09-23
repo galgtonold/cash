@@ -2046,7 +2046,9 @@ class CallUnit:
         the explorer, eviction) already tolerate that sparse shape, and gain
         no new required field when these stay absent.
         """
-        metadata: dict[str, Any] = {"execution_time": elapsed, "timestamp": _time.time()}
+        # `referenced`: the statement holding this result decides whether it
+        # is worth its disk, and says so (`PersistencePolicy.decide`).
+        metadata: dict[str, Any] = {"execution_time": elapsed, "timestamp": _time.time(), "referenced": True}
         if function:
             # What `cash inspect` names the entry by: a call key is `call:<sha>`,
             # so every intercepted call used to be listed as "call" (r28s1).

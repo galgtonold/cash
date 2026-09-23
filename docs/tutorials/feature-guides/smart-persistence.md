@@ -53,7 +53,7 @@ def pays_to_restore(compute_s: float, size_bytes: int, type_name: str = "", back
     return compute_s - restore > min_savings_pct * compute_s
 ```
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @ab919a91, cash/cost_model.py:estimated_restore_time @19d51f03, cash/backends/value_policy.py:worth_its_bytes, cash/backends/value_policy.py:WORTH_CEILING_BYTES_PER_SECOND == 134217728, cash/backends/value_policy.py:WORTH_FLOOR_BYTES == 8388608 -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @dfaf7643, cash/cost_model.py:estimated_restore_time @19d51f03, cash/backends/value_policy.py:worth_its_bytes, cash/backends/value_policy.py:WORTH_CEILING_BYTES_PER_SECOND == 134217728, cash/backends/value_policy.py:WORTH_FLOOR_BYTES == 8388608 -->
 Three things gate the promotion:
 
 1. **Hard floor at 100 ms.** Anything that ran faster than `0.1 s` never reaches disk — the I/O alone would cost more than recomputing.

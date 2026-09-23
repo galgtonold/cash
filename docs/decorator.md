@@ -59,7 +59,7 @@ That's it. The default `Cash()` singleton writes a tiered RAM + disk
 cache under `./.cash/`. The next call with the same `n` (this run or
 next month) returns the stored value.
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @ab919a91, cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1 -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @dfaf7643, cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1 -->
 !!! note "A decorated result is written to disk however cheap it was"
     Decorating a function is the decision to cache it, so its result is not
     judged by the 0.1 s compute floor or the cost model that decide what a

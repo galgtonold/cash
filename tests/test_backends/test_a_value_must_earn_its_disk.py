@@ -119,11 +119,24 @@ class TestThroughABackend:
         holds -- not by what it takes in memory: a real result of 402 MiB
         pickled and 1.7 GiB in memory, as 3.7 million strings."""
         b = self._tiered(tmp_path)
-        kept = self._set(b, "call:kept", 200 * MIB, 1.2, value_bytes=100 * MIB, value_bytes_estimated=True)
-        refused = self._set(b, "call:refused", 20 * MIB, 1.2, value_bytes=300 * MIB, value_bytes_estimated=True)
+        kept = self._set(
+            b, "call:kept", 200 * MIB, 1.2, value_bytes=100 * MIB, value_bytes_estimated=True, referenced=True
+        )
+        refused = self._set(
+            b, "call:refused", 20 * MIB, 1.2, value_bytes=300 * MIB, value_bytes_estimated=True, referenced=True
+        )
         b.shutdown()
         assert "DISK" in (kept.get("storage") or []), kept
         assert "DISK" not in (refused.get("storage") or []), refused
+
+    def test_a_referenced_entry_is_left_to_its_referrer(self, tmp_path):
+        """An entry another one refers to is weighed with that referrer, not on
+        its own: refusing it alone would leave the referrer pointing at
+        nothing. Its key says nothing about that; its metadata does."""
+        b = self._tiered(tmp_path)
+        held = self._set(b, "any-key", 200 * MIB, 1.2, referenced=True)
+        b.shutdown()
+        assert "DISK" in (held.get("storage") or []), held
 
     def test_the_refusals_of_one_cell_are_said_once(self, tmp_path):
         """One notebook got about 30 of these warnings, 12 from one sweep cell,
@@ -151,7 +164,9 @@ class TestThroughABackend:
         b = self._tiered(tmp_path)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            self._set(b, "call:efa280", 20 * MIB, 1.2, value_bytes=300 * MIB, value_bytes_estimated=True)
+            self._set(
+                b, "call:efa280", 20 * MIB, 1.2, value_bytes=300 * MIB, value_bytes_estimated=True, referenced=True
+            )
         b.shutdown()
         assert not [w for w in caught if "CACHE-NOT-WORTH-BYTES" in str(w.message)]
 
