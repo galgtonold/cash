@@ -5,9 +5,7 @@ from __future__ import annotations
 import ast
 import logging
 import pickle
-import sys
 import time
-import traceback
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import Any
@@ -31,6 +29,12 @@ from cash.notebook.statement.call_routing import CallRouting
 from cash.notebook.statement.capture import display_execution_output, make_capture_ctx
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
+from cash.notebook.statement.imports import (
+    import_bindings_hold,
+    import_needs_reexecution,
+    import_source_modules,
+    redundant_import_names,
+)
 from cash.notebook.statement.lineage import StatementLineageBuilder
 from cash.notebook.statement.miss_guard import (
     GUARD_SKIP_REASON,
@@ -43,13 +47,29 @@ from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.notebook.statement.records import StatementRecords
 from cash.notebook.statement.restore import StatementRestorer
 from cash.notebook.statement.results import DecoratorCallMetric, ProcessResult
-from cash.notebook.statement.run import CodeRunner, StatementExecution, StatementRun
+from cash.notebook.statement.run import CodeRunner, StatementExecution, StatementRun, error_result
 from cash.notebook.statement.store import StatementStore
 from cash.purity import is_known_pure, is_stateful
 
-from ...analysis.cacheability import statement_writes_files
+from ...analysis.annotations import CacheAnnotation
+from ...analysis.cacheability import analyze_statement, statement_writes_files
+from ...analysis.cacheability_decision import (
+    decide_cacheability,
+    identity_coupled_reason,
+)
+from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.mutation_effects import (
+    StatementEffects,
+    live_function_source,
+    statement_effects,
+)
 from ...analysis.namespace_effects import statement_calls_user_writer
+from ...analytics import AnalyticsManager
+from ...tracking.file_tracker import FileAccessTracker
+from ...tracking.function_tracker import FunctionTracker
 from ..consumables import is_consumable_unrestorable
+from ..lineage_formula import key_hidden_reads
+from ..write_observer import observe_writes
 from .derivation_edges import is_uncacheable_alias
 
 __all__ = [
@@ -98,25 +118,6 @@ def is_control_body(code: str) -> bool:
     them to silently stop matching.
     """
     return has_marker(code)
-
-
-from ...analysis.annotations import CacheAnnotation
-from ...analysis.cacheability import analyze_statement
-from ...analysis.cacheability_decision import (
-    decide_cacheability,
-    identity_coupled_reason,
-)
-from ...analysis.code_analyzer import CodeAnalyzer
-from ...analysis.mutation_effects import (
-    StatementEffects,
-    live_function_source,
-    statement_effects,
-)
-from ...analytics import AnalyticsManager
-from ...tracking.function_tracker import FunctionTracker
-from ..compiled_source import is_cash_filename
-from ..lineage_formula import key_hidden_reads
-from ..write_observer import observe_writes
 
 
 class StatementProcessor:
@@ -738,7 +739,7 @@ class StatementProcessor:
                 code, run.cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time
             )
 
-        if cached_data and not self._import_needs_reexecution(tree):
+        if cached_data and not import_needs_reexecution(tree, self.shell.user_ns):
             hit_result = self._handle_cache_hit(run, cached_data, metadata)
             if hit_result is not None:
                 # The restore SUCCEEDED, so the value handed back is a replay.
@@ -801,7 +802,7 @@ class StatementProcessor:
                 self._randomness.observe_statement(pre_rng, code)
                 execution.result = ExecutionResult(success=True)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
-            execution.result = self._create_error_result(e)
+            execution.result = error_result(e)
         self._forget_file_answers_if_it_wrote(code, execution)
         execution.wall_time = time.time() - start_time
         execution.cost = self._calls.statement_cost(execution.wall_time, marks)
@@ -1322,20 +1323,6 @@ class StatementProcessor:
             logger.warning("%s Restoration failed (%s), falling back to execution.", _LOG_CACHE, e, exc_info=True)
             return None
 
-    @staticmethod
-    def _collect_import_source_modules(tree: ast.Module) -> set[str]:
-        """Return the set of top-level module names referenced by import nodes in *tree*."""
-        names: set[str] = set()
-        for node in tree.body:
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    names.add(alias.name)
-                    names.add(alias.name.split(".")[0])
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                names.add(node.module)
-                names.add(node.module.split(".")[0])
-        return names
-
     def _check_redundant_import(self, run: StatementRun) -> ProcessResult | None:
         """Detect redundant (already-imported) import statements.
 
@@ -1347,17 +1334,17 @@ class StatementProcessor:
         code, tree = run.code, run.tree
         try:
             tree_check = tree if tree is not None else ast.parse(code.strip())
-            import_names = self._get_redundant_import_names(tree_check)
+            import_names = redundant_import_names(tree_check)
             if not import_names:
                 return None
 
-            source_module_names = self._collect_import_source_modules(tree_check)
+            source_module_names = import_source_modules(tree_check)
             has_reloaded = bool((import_names | source_module_names) & self.recently_reloaded_modules)
             # Present is not enough: the name must hold what the import would
             # bind. `import array` then `from array import array` found `array`
             # present and skipped, leaving the module where the class belongs.
-            all_present = all(name in self.shell.user_ns for name in import_names) and self._import_bindings_hold(
-                tree_check
+            all_present = all(name in self.shell.user_ns for name in import_names) and import_bindings_hold(
+                tree_check, self.shell.user_ns
             )
 
             if has_reloaded:
@@ -1532,125 +1519,8 @@ class StatementProcessor:
             cache_check_time * 1000,
         )
 
-    def _import_needs_reexecution(self, tree: ast.Module | None) -> bool:
-        """True for a pure-import statement whose bound name(s) are absent from
-        ``user_ns``.
-
-        A cache hit for an import would take the restore path, but restoring
-        cannot rebind a *module* object (modules aren't cacheable values). On a
-        fresh kernel (e.g. after a restart) the bound name is therefore missing,
-        and a later statement in the same cell that uses it raises ``NameError``.
-        Forcing re-execution re-imports and rebinds the name (cheap, idempotent)
-        and re-stores the entry, so lineage tracking is preserved.
-        """
-        if tree is None:
-            return False
-        names = self._get_redundant_import_names(tree)
-        if not names:
-            return False
-        return not all(name in self.shell.user_ns for name in names)
-
-    def _import_bindings_hold(self, tree: ast.AST) -> bool:
-        """Does every name an import-only *tree* binds already hold the object
-        that import would bind? Answered from ``sys.modules`` without importing
-        anything; anything not already loaded, or relative, is "no"."""
-
-        missing = object()
-        ns = self.shell.user_ns
-        for node in tree.body:
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name not in sys.modules:
-                        return False
-                    name = alias.asname or alias.name.split(".")[0]
-                    expected = sys.modules.get(alias.name if alias.asname else name)
-                    if expected is None or ns.get(name, missing) is not expected:
-                        return False
-            elif isinstance(node, ast.ImportFrom):
-                if node.level or not node.module:
-                    return False
-                module = sys.modules.get(node.module)
-                if module is None:
-                    return False
-                for alias in node.names:
-                    expected = getattr(module, alias.name, missing)
-                    if expected is missing:
-                        expected = sys.modules.get(f"{node.module}.{alias.name}", missing)
-                    if expected is missing or ns.get(alias.asname or alias.name, missing) is not expected:
-                        return False
-        return True
-
-    def _get_redundant_import_names(self, tree: ast.AST) -> set[str] | None:
-        """
-        Check if AST represents ONLY imports and return the set of defined variable names.
-        Returns None if it contains non-import statements.
-        """
-        defined_names = set()
-
-        for node in tree.body:
-            if isinstance(node, (ast.Import, ast.ImportFrom)):
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        if alias.asname:
-                            defined_names.add(alias.asname)
-                        else:
-                            defined_names.add(alias.name.split(".")[0])
-                else:  # ImportFrom
-                    for alias in node.names:
-                        if alias.asname:
-                            defined_names.add(alias.asname)
-                        else:
-                            if alias.name == "*":
-                                return None
-                            defined_names.add(alias.name)
-
-            elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
-                continue
-            else:
-                return None
-
-        return defined_names
-
-    def _create_error_result(self, exception: Exception) -> Any:
-        """Create error result with cleaned traceback.
-
-        Filters out cash framework frames, keeping only user code frames.
-        The traceback starts from the first ``<cash>`` frame (where user
-        code is compiled and executed) and includes all subsequent frames
-        (e.g., user-defined function calls).
-        """
-
-        exc_type, exc_value, exc_tb = sys.exc_info()
-
-        # This preserves the user's call chain (e.g., user code calling
-        # a user-defined function) while dropping cash internals above.
-        clean_tb = None
-        tb = exc_tb
-        while tb is not None:
-            frame = tb.tb_frame
-            filename = frame.f_code.co_filename
-            if is_cash_filename(filename):
-                clean_tb = tb
-                break
-            tb = tb.tb_next
-
-        if clean_tb is None:
-            clean_tb = exc_tb
-
-        e_with_clean_tb = exc_value.with_traceback(clean_tb)
-        formatted_tb = "".join(traceback.format_exception(exc_type, exc_value, clean_tb))
-
-        return ExecutionResult(
-            success=False,
-            error=e_with_clean_tb,
-            tb_string=formatted_tb,
-        )
-
     def _handle_execution_error(self, result: Any, silent: bool) -> bool | None:
         if not silent:
             raise result.error from None
         logger.debug("[SILENT] Error in statement: %s", result.error)
         return False
-
-
-from ...tracking.file_tracker import FileAccessTracker

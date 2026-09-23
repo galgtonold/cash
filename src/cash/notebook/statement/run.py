@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import ast
 import inspect
+import sys
+import traceback
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from cash.notebook.compiled_source import register_cell_source
+from cash.notebook.cache_status import ExecutionResult
+from cash.notebook.compiled_source import is_cash_filename, register_cell_source
 from cash.notebook.statement.capture import NoCapture
 
 if TYPE_CHECKING:
@@ -22,10 +25,9 @@ if TYPE_CHECKING:
 
     from cash.analysis.annotations import CacheAnnotation
     from cash.analysis.cacheability import StatementAnalysis
-    from cash.notebook.cache_status import ExecutionResult
     from cash.notebook.statement.results import ProcessResult
 
-__all__ = ["CodeRunner", "StatementExecution", "StatementRun"]
+__all__ = ["CodeRunner", "StatementExecution", "StatementRun", "error_result"]
 
 
 @dataclass
@@ -162,3 +164,42 @@ class CodeRunner:
             from IPython.display import display
 
             display(value)
+
+
+def error_result(exception: Exception) -> ExecutionResult:
+    """The failed result for *exception*, raised by the statement's code, with
+    its traceback cleaned.
+
+    Called from the ``except`` block that caught *exception*.
+
+    Filters out cash framework frames, keeping only user code frames.
+    The traceback starts from the first ``<cash>`` frame (where user
+    code is compiled and executed) and includes all subsequent frames
+    (e.g., user-defined function calls).
+    """
+
+    exc_type, exc_value, exc_tb = sys.exc_info()
+
+    # This preserves the user's call chain (e.g., user code calling
+    # a user-defined function) while dropping cash internals above.
+    clean_tb = None
+    tb = exc_tb
+    while tb is not None:
+        frame = tb.tb_frame
+        filename = frame.f_code.co_filename
+        if is_cash_filename(filename):
+            clean_tb = tb
+            break
+        tb = tb.tb_next
+
+    if clean_tb is None:
+        clean_tb = exc_tb
+
+    e_with_clean_tb = exc_value.with_traceback(clean_tb)
+    formatted_tb = "".join(traceback.format_exception(exc_type, exc_value, clean_tb))
+
+    return ExecutionResult(
+        success=False,
+        error=e_with_clean_tb,
+        tb_string=formatted_tb,
+    )

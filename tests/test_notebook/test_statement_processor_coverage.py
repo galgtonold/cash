@@ -3,7 +3,7 @@ from cash.notebook.cache_status import CacheStatus
 """
 Tests for StatementProcessor methods that need additional coverage.
 
-Targets: _check_cache (stale format, file deps, TTL), _create_error_result,
+Targets: _check_cache (stale format, file deps, TTL), error_result,
          _update_mutation_lineages, _handle_execution_error,
          file dep propagation, module lineage, forbidden function scan error,
          lineage-exemption predicate (via cacheability_decision.is_lineage_exempt).
@@ -18,6 +18,7 @@ from traitlets.config.configurable import Configurable
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
+from cash.notebook.statement.run import error_result
 
 
 class MockShell(Configurable):
@@ -220,20 +221,20 @@ class TestIsLineageExempt:
 
 
 # ============================================================================
-# _create_error_result
+# error_result
 # ============================================================================
 
 
 class TestCreateErrorResult:
-    """Test _create_error_result method."""
+    """Test the error_result helper."""
 
     def test_basic_error_result(self, processor_fixture):
         processor, shell, _ = processor_fixture
-        # Test _create_error_result directly
+        # Test error_result directly
         try:
             raise ValueError("test error")
         except ValueError as e:
-            result = processor._create_error_result(e)
+            result = error_result(e)
             assert result.success is False
             assert isinstance(result.error, ValueError)
             assert "test error" in str(result.error)
@@ -248,7 +249,7 @@ class TestCreateErrorResult:
         try:
             inner()
         except RuntimeError as e:
-            result = processor._create_error_result(e)
+            result = error_result(e)
             assert result.success is False
             assert "inner error" in str(result.error)
 

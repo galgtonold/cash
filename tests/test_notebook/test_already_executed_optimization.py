@@ -29,6 +29,7 @@ from traitlets.config import Configurable
 from cash import Cash
 from cash.backends import InMemoryBackend
 from cash.notebook.ipython.magics import CashMagics
+from cash.notebook.statement.imports import redundant_import_names
 from tests._cell_driver import run_cash_cell
 
 # Force caching regardless of the 10 ms min-execution-time floor.
@@ -522,7 +523,7 @@ class TestSizeAwareEdgeCases:
 
 
 class TestGetRedundantImportNames:
-    """Tests for _get_redundant_import_names helper method."""
+    """Tests for the redundant_import_names helper."""
 
     def test_simple_import(self, processor_fixture):
         """Test that simple imports are recognized."""
@@ -530,7 +531,7 @@ class TestGetRedundantImportNames:
         import ast
 
         tree = ast.parse("import os")
-        names = processor._get_redundant_import_names(tree)
+        names = redundant_import_names(tree)
         assert names == {"os"}
 
     def test_from_import(self, processor_fixture):
@@ -539,7 +540,7 @@ class TestGetRedundantImportNames:
         import ast
 
         tree = ast.parse("from os.path import join, exists")
-        names = processor._get_redundant_import_names(tree)
+        names = redundant_import_names(tree)
         assert names == {"join", "exists"}
 
     def test_import_with_alias(self, processor_fixture):
@@ -548,7 +549,7 @@ class TestGetRedundantImportNames:
         import ast
 
         tree = ast.parse("import numpy as np")
-        names = processor._get_redundant_import_names(tree)
+        names = redundant_import_names(tree)
         assert names == {"np"}
 
     def test_mixed_code_returns_none(self, processor_fixture):
@@ -557,7 +558,7 @@ class TestGetRedundantImportNames:
         import ast
 
         tree = ast.parse("import os\nx = 1")
-        names = processor._get_redundant_import_names(tree)
+        names = redundant_import_names(tree)
         assert names is None
 
     def test_wildcard_import_returns_none(self, processor_fixture):
@@ -566,7 +567,7 @@ class TestGetRedundantImportNames:
         import ast
 
         tree = ast.parse("from os.path import *")
-        names = processor._get_redundant_import_names(tree)
+        names = redundant_import_names(tree)
         assert names is None
 
     def test_dotted_import(self, processor_fixture):
@@ -575,7 +576,7 @@ class TestGetRedundantImportNames:
         import ast
 
         tree = ast.parse("import os.path")
-        names = processor._get_redundant_import_names(tree)
+        names = redundant_import_names(tree)
         assert names == {"os"}
 
 
