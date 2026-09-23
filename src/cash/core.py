@@ -592,13 +592,10 @@ def _expose_script_function(func: Callable, wrapper: Callable) -> None:
         logger.debug("could not expose %s for pickling by name", name, exc_info=True)
 
 
-def _backend_cache_dir(backend: Any) -> str | None:
+def _backend_cache_dir(backend: CacheBackend | None) -> str | None:
     """The directory *backend* keeps entries in -- its disk tier's, if tiered."""
-    for tier in [backend, *getattr(backend, "backends", ())]:
-        directory = getattr(tier, "cache_dir", None)
-        if isinstance(directory, str) and directory:
-            return os.path.abspath(directory)
-    return None
+    directory = backend.local_dir if backend is not None else None
+    return os.path.abspath(directory) if directory else None
 
 
 class _StreamingCachedIterator:
@@ -3617,12 +3614,7 @@ class Cash:
 
     def _tier_default_ttl(self) -> int | None:
         """The ``default_ttl`` of the first tier that has one, as configured now."""
-        backend = self._backend
-        for tier in (*(getattr(backend, "backends", None) or ()), backend):
-            default = getattr(tier, "_default_ttl", None)
-            if default is not None:
-                return default
-        return None
+        return self._backend.default_ttl if self._backend is not None else None
 
     def _entry_ttl(self, ttl: int | None, metadata: Any) -> int | None:
         """The ttl a stored entry is judged by.
@@ -3841,13 +3833,11 @@ class Cash:
         never a configured path, so reading a miss reason cannot create a
         cache directory -- and only for a backend that has a local directory.
         """
-        backend = self._backend
-        for candidate in (backend, *getattr(backend, "backends", ())):
-            path = getattr(candidate, "cache_dir", None)
-            if isinstance(path, str) and path:
-                name = hashlib.sha256(func_name.encode("utf-8")).hexdigest()[:32]
-                return os.path.join(path, ".keys", f"{name}.json")
-        return None
+        path = self._backend.local_dir if self._backend is not None else None
+        if not path:
+            return None
+        name = hashlib.sha256(func_name.encode("utf-8")).hexdigest()[:32]
+        return os.path.join(path, ".keys", f"{name}.json")
 
     def _stored_doc(self, func_name: str) -> dict[str, dict[str, list]]:
         """What earlier runs recorded for *func_name*, oldest first per kind.
@@ -10265,11 +10255,9 @@ class Cash:
         creates a cache directory, and it runs from an ``atexit`` handler where
         building one is worse than saying nothing.
         """
-        backend = self._backend
-        for candidate in (backend, *getattr(backend, "backends", ())):
-            path = getattr(candidate, "cache_dir", None)
-            if isinstance(path, str) and path:
-                return path
+        path = self._backend.local_dir if self._backend is not None else None
+        if path:
+            return path
         configured = getattr(self.config, "cache_dir", None)
         return configured if isinstance(configured, str) and configured else None
 

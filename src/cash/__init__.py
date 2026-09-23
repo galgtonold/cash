@@ -336,21 +336,11 @@ def _change_affects_active_backend(c: Cash, changed: set[str]) -> bool:
     redis_fields = {"redis_host", "redis_port", "redis_db", "redis_password", "redis_prefix"}
     s3_fields = {"s3_bucket", "s3_region", "s3_prefix"}
 
-    def _has_tier_type(backend, type_name: str) -> bool:
-        if backend is None:
-            return False
-        class_name = type(backend).__name__.lower()
-        if class_name.startswith(type_name):
-            return True
-        # TieredBackend: walk children.
-        children = getattr(backend, "backends", None)
-        if children:
-            return any(_has_tier_type(child, type_name) for child in children)
-        return False
-
-    if changed & redis_fields and _has_tier_type(c.backend_if_built, "redis"):
+    backend = c.backend_if_built
+    labels = backend.tier_labels() if backend is not None else []
+    if changed & redis_fields and "REDIS" in labels:
         return True
-    if changed & s3_fields and _has_tier_type(c.backend_if_built, "s3"):
+    if changed & s3_fields and "S3" in labels:
         return True
     return False
 

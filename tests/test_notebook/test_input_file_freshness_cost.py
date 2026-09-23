@@ -8,6 +8,7 @@ with ``backend.get`` once PER FILE -- which deep-copies the cached frame. A
 
 import types
 
+from cash.backends import CacheBackend
 from cash.notebook.statement.freshness import CacheFreshnessChecker
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
@@ -63,11 +64,25 @@ def test_a_changed_file_is_still_caught(tmp_path):
 
 
 def test_a_backend_without_peek_still_works(tmp_path):
+    """A backend overriding only the required methods: the base class's
+    ``peek_metadata`` reads the metadata through its ``get``."""
     paths = _files(tmp_path, 3)
 
-    class _GetOnly:
+    class _GetOnly(CacheBackend):
         def get(self, key):
             return {"key": key, "file_dependencies": snapshot_file_deps(set(paths))}, "v"
+
+        def set(self, key, value, metadata=None, serializer=None):
+            raise NotImplementedError
+
+        def delete(self, key):
+            raise NotImplementedError
+
+        def clear(self):
+            raise NotImplementedError
+
+        def list_entries(self):
+            return []
 
     checker = CacheFreshnessChecker(_GetOnly())
     assert checker._invalidate_if_input_file_changed(_state(paths), {"raw"}, "payload") == "payload"

@@ -221,12 +221,26 @@ class TestStatementProcessorMetadataPersistence:
         assert retrieved["metadata_only"] is True
 
     def test_persist_metadata_only_noop_for_unsupported_backend(self):
-        """persist_metadata_only should be a no-op for backends without the method."""
+        """persist_metadata_only is a no-op for a backend that keeps the base
+        class's ``set_metadata_only``: nothing is written, nothing raises."""
+        from cash.backends import CacheBackend
         from cash.notebook.statement.restore import StatementRestorer
 
-        # A backend that doesn't support set_metadata_only
-        class DummyBackend:
-            pass
+        class DummyBackend(CacheBackend):
+            def get(self, key):
+                return None, None
+
+            def set(self, key, value, metadata=None, serializer=None):
+                raise AssertionError("a metadata-only persist wrote a value")
+
+            def delete(self, key):
+                raise AssertionError("a metadata-only persist deleted an entry")
+
+            def clear(self):
+                raise AssertionError("a metadata-only persist cleared the cache")
+
+            def list_entries(self):
+                return []
 
         # Should not raise
         StatementRestorer.persist_metadata_only(DummyBackend(), "key", {"execution_time": 1.0})

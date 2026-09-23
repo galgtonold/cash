@@ -2331,12 +2331,12 @@ class StatementProcessor:
         notebook, where a restart re-runs cells by their source.
         """
         backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
-        persist = getattr(backend, "persist_from_memory", None)
         last, self._cell_last_key = self._cell_last_key, {}
         later = self.tracking_state.read_by_later_cells
         self.tracking_state.read_by_later_cells = None
-        if persist is None or later is None:
+        if backend is None or later is None:
             return
+        persist = backend.persist_from_memory
         costs: dict[str, float] = {}
         for name, key in last.items():
             if name not in self.shell.user_ns:
@@ -3321,10 +3321,9 @@ class StatementProcessor:
             return frozenset()
         roots = set()
         backend = self.cash_instance.backend if self.cash_instance else None
-        for b in [backend, *getattr(backend, "backends", ())]:
-            root = getattr(b, "cache_dir", None)
-            if isinstance(root, (str, os.PathLike)):
-                roots.add(os.path.normcase(os.path.abspath(os.fspath(root))) + os.sep)
+        root = backend.local_dir if backend is not None else None
+        if isinstance(root, (str, os.PathLike)):
+            roots.add(os.path.normcase(os.path.abspath(os.fspath(root))) + os.sep)
         return frozenset(p for p in paths if not any(os.path.normcase(p).startswith(r) for r in roots))
 
     def persist_write_provenance(
@@ -4436,8 +4435,7 @@ class StatementProcessor:
         if key in memo:
             return memo[key]
         try:
-            peek = getattr(backend, "peek_metadata", None)
-            meta = peek(key) if peek is not None else backend.get(key)[0]
+            meta = backend.peek_metadata(key)
         except Exception:  # noqa: BLE001 - a snapshot it cannot read is taken afresh
             meta = None
         snaps = (meta or {}).get("file_dependencies") or {} if isinstance(meta, dict) else {}
@@ -4510,7 +4508,7 @@ class StatementProcessor:
 
         # For TieredBackend the first (fastest) tier determines the restore cost
         # because that's where the data will be read from on cache hit.
-        if backend_type == "TieredBackend" and hasattr(backend, "backends") and backend.backends:
+        if backend_type == "TieredBackend" and backend.backends:
             primary_backend_type = type(backend.backends[0]).__name__
         else:
             primary_backend_type = backend_type

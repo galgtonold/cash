@@ -1,6 +1,6 @@
 # Backend internals
 
-<!-- claim: cash/backends/_base.py:CacheBackend @6d0fb59e broad="the page documents the ABC as a whole contract" -->
+<!-- claim: cash/backends/_base.py:CacheBackend @18103315 broad="the page documents the ABC as a whole contract" -->
 This page is for users **writing their own backend** or contributing
 fixes to the bundled ones. End-users picking a backend should go to
 [Backends](backends.md) instead.
@@ -38,6 +38,15 @@ If your backend can count its entries without reading them, override
 `entry_count()`. `%cash_on` prints that number every time it runs, and the
 default counts `list_entries()`, which reads every entry's metadata — on a
 file cache of a few thousand entries that took 22.7 s on Windows.
+
+Every other method Cash calls on a backend has a default in `CacheBackend`,
+so a backend overrides only what it can do better. Set the class attribute
+`source_label` to the short name entries give as their source (`RAM`,
+`DISK`), and override `local_dir` when your entries live in a local
+directory: Cash keeps its per-function bookkeeping beside them, and does not
+count its own writes there as files a notebook statement wrote. If your
+backend takes a `default_ttl`, store it as `self._default_ttl`. Cash reads
+all of these through the base class, never by probing for an attribute.
 
 If your backend touches the network or disk, also pull in
 `PendingWrites` (below) so `set()` can return fast and the real I/O

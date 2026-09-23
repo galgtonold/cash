@@ -978,11 +978,9 @@ class CellExecutor:
         """The backend that batches this cell's warnings, if it does."""
         try:
             cash = self._statement_processor.get_cash_instance()
-            backend = getattr(cash, "backend", None)
+            return cash.backend if cash is not None else None
         except Exception:  # noqa: BLE001 - batching is cosmetic; never block a cell
             return None
-        begin = getattr(type(backend), "begin_cell_warnings", None)
-        return backend if callable(begin) else None
 
     def _execute_cell_pipeline(
         self,

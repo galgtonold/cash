@@ -803,6 +803,10 @@ class FileBackend(CacheBackend):
         safe_name = hashlib.sha256(key.encode("utf-8")).hexdigest()
         return os.path.join(self.cache_dir, f"{safe_name}{ENTRY_SUFFIX}")
 
+    @property
+    def local_dir(self) -> str:
+        return self.cache_dir
+
     def get_metadata(self, key: str) -> dict | None:
         """Get only metadata for a cache key without deserializing the value.
 

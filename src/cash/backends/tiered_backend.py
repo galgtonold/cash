@@ -112,10 +112,28 @@ class TieredBackend(CacheBackend):
         return None
 
     def set_metadata_only(self, key: str, metadata: dict) -> None:
-        """Persist metadata without data payload to all backends that support it."""
+        """Persist metadata without data payload to every tier that keeps it."""
         for backend in self.backends:
-            if hasattr(backend, "set_metadata_only"):
-                backend.set_metadata_only(key, metadata)
+            backend.set_metadata_only(key, metadata)
+
+    @property
+    def default_ttl(self) -> float | None:
+        """The first tier's ``default_ttl`` that is set: it belongs to the
+        entry, so every tier's copy expires together (see ``set``)."""
+        return next((t for t in (b.default_ttl for b in self.backends) if t is not None), None)
+
+    @property
+    def local_dir(self) -> str | None:
+        """The directory of the first tier that keeps entries on local disk."""
+        return next((d for d in (b.local_dir for b in self.backends) if d is not None), None)
+
+    def generation_token(self) -> tuple | None:
+        disk = self._disk_tier()
+        return disk.generation_token() if disk is not None else None
+
+    def _disk_tier(self) -> CacheBackend | None:
+        """The tier whose directory can be cleared under this process."""
+        return next((b for b in self.backends if b.local_dir is not None), None)
 
     def delete(self, key: str) -> None:
         for backend in self.backends:
@@ -440,7 +458,7 @@ class TieredBackend(CacheBackend):
             metadata = backend.peek_metadata(key)
             if metadata is not None:
                 metadata = dict(metadata)
-                metadata["source"] = getattr(type(backend), "source_label", None) or type(backend).__name__
+                metadata["source"] = backend.source_label
                 return metadata
         return None
 
@@ -460,7 +478,7 @@ class TieredBackend(CacheBackend):
         if now - self._generation_checked_at < self._GENERATION_CHECK_EVERY:
             return
         self._generation_checked_at = now
-        disk = next((b for b in self.backends if hasattr(b, "generation_token")), None)
+        disk = self._disk_tier()
         if disk is None:
             return
         try:
@@ -474,7 +492,7 @@ class TieredBackend(CacheBackend):
         # rewritten by `--function` -- for "still new": 5 of 5 kept serving
         # the pre-clear answer from RAM (round 19).
         known = self._generation
-        writes = getattr(disk, "stamp_writes", 0)
+        writes = disk.stamp_writes
         # This process writing the stamp AGAIN is itself the evidence: it
         # stamps a directory only when it finds none, so a second stamp means
         # the first was taken away in between -- by `cash clear --all`, while a
@@ -484,7 +502,7 @@ class TieredBackend(CacheBackend):
             self._stamp_writes_seen >= 1 or writes - self._stamp_writes_seen >= 2
         )
         if known in (_UNSEEN, None) and writes != self._stamp_writes_seen:
-            known = getattr(disk, "written_stamp", None)
+            known = disk.written_stamp
         self._stamp_writes_seen = writes
         if restamped or (known not in (_UNSEEN, None) and token != known):
             for faster in self.backends[: self.backends.index(disk)]:
@@ -523,7 +541,7 @@ class TieredBackend(CacheBackend):
                         )
 
                 # Inject source information
-                metadata["source"] = getattr(type(backend), "source_label", None) or type(backend).__name__
+                metadata["source"] = backend.source_label
 
                 return metadata, value
         return None, None
@@ -581,8 +599,7 @@ class TieredBackend(CacheBackend):
                     continue
             try:
                 backend.set(key, value, metadata, serializer)
-                _label = getattr(type(backend), "source_label", None) or type(backend).__name__
-                stored_destinations.append(_label)
+                stored_destinations.append(backend.source_label)
             except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
                 logger.warning("[TIERED] Failed to write to backend %s: %s", type(backend).__name__, e)
                 # And on the entry's metadata, which is how the caller hears
@@ -608,8 +625,7 @@ class TieredBackend(CacheBackend):
         """
         if len(self.backends) < 2:
             return False
-        peek = getattr(self.backends[0], "peek_entry", None)
-        entry = peek(key) if peek is not None else None
+        entry = self.backends[0].peek_entry(key)
         if entry is None:
             return False
         stored_metadata, value = entry
@@ -668,12 +684,8 @@ class TieredBackend(CacheBackend):
         # once, here, every tier's copy expires together. Left to the file tier
         # alone, a process kept serving the result from RAM long after the
         # disk copy had expired.
-        if metadata.get("ttl") is None:
-            for tier in self.backends:
-                default = getattr(tier, "_default_ttl", None)
-                if default is not None:
-                    metadata["ttl"] = default
-                    break
+        if metadata.get("ttl") is None and self.default_ttl is not None:
+            metadata["ttl"] = self.default_ttl
 
         # Always write to Tier 0 (Memory). It may refuse a value its cap could
         # never hold (`InMemoryBackend.set` returns False); then it is not a

@@ -23,13 +23,14 @@ import types
 
 import pytest
 
+from cash.backends import CacheBackend
 from cash.notebook.statement.freshness import CacheFreshnessChecker
 from cash.tracking.file_dep_snapshot import file_dep_is_fresh, snapshot_file_deps
 
 PHANTOM = "C:/nonexistent-dir-phantom/numpy-1.0.dist-info/direct_url.json"
 
 
-class _StubBackend:
+class _StubBackend(CacheBackend):
     """Returns one producer metadata dict for any key."""
 
     def __init__(self, metadata):
@@ -37,6 +38,18 @@ class _StubBackend:
 
     def get(self, key):
         return self._metadata, "cached-payload"
+
+    def set(self, key, value, metadata=None, serializer=None):
+        raise NotImplementedError
+
+    def delete(self, key):
+        raise NotImplementedError
+
+    def clear(self):
+        raise NotImplementedError
+
+    def list_entries(self):
+        return []
 
 
 @pytest.fixture

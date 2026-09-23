@@ -1829,7 +1829,7 @@ class ReexecutionPlanner:
             return written
         cash = getattr(self.virtual_lineage, "cash_instance", None)
         backend = getattr(cash, "backend", None) if cash is not None else None
-        if backend is None or not hasattr(backend, "get_metadata"):
+        if backend is None:
             return None
         try:
             record = backend.get_metadata(write_provenance_key(stmt_code))
@@ -2004,7 +2004,7 @@ class ReexecutionPlanner:
 
         cash = getattr(self.virtual_lineage, "cash_instance", None)
         backend = getattr(cash, "backend", None) if cash is not None else None
-        if backend is None or not hasattr(backend, "get_metadata"):
+        if backend is None:
             return "no backend"
         try:
             record = backend.get_metadata(write_provenance_key(stmt_code))

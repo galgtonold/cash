@@ -179,7 +179,7 @@ cold, which is correct but slow. Options, in increasing order of setup:
 
 ## Running as a service or a worker pool
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._drop_ram_if_cleared @eaca5300, cash/backends/factory.py:_build_tier @51fa5e30 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._drop_ram_if_cleared @2d8a0222, cash/backends/factory.py:_build_tier @51fa5e30 -->
 - **Clearing a live service.** `cash clear --all`, `--function` and `--entry`
   reach processes that are still running: each checks at most once a second
   whether its cache directory was cleared and, if so, drops what it holds in

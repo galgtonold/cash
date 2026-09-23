@@ -805,6 +805,67 @@ class CacheBackend(ABC):
     # Tier-promotion hint. See class docstring.
     max_size_bytes: int | None = None
 
+    #: The ttl an entry written without one gets; None never expires. Set by
+    #: backends that take a ``default_ttl``; read through :attr:`default_ttl`.
+    _default_ttl: float | None = None
+
+    #: How many times this process wrote the generation stamp, and the token
+    #: its last write left. Kept by a backend whose :meth:`generation_token`
+    #: can move (the file tier); see ``TieredBackend._drop_ram_if_cleared``.
+    stamp_writes: int = 0
+    written_stamp: tuple | None = None
+
+    @property
+    def source_label(self) -> str:
+        """What this tier is called where an entry says where it came from
+        (``RAM``, ``SQLITE``). Backends name themselves with a class
+        attribute; the default is the class name."""
+        return type(self).__name__
+
+    @property
+    def default_ttl(self) -> float | None:
+        """The ttl an entry written without one is stamped with, or None."""
+        return self._default_ttl
+
+    @property
+    def local_dir(self) -> str | None:
+        """The local directory this backend keeps its entries in, or None for
+        one that keeps them in memory or elsewhere (a server, a bucket)."""
+        return None
+
+    def generation_token(self) -> tuple | None:
+        """A token that moves when this backend's store is cleared from
+        outside the process, or None when it cannot tell."""
+        return None
+
+    def set_metadata_only(self, key: str, metadata: dict) -> None:  # noqa: B027 - intentional no-op default
+        """Keep *metadata* for *key* without a value, where the backend can.
+
+        Lets a notebook show what a statement cost after a restart even when
+        its value was not worth storing. The default keeps nothing.
+        """
+
+    def peek_entry(self, key: str) -> tuple[MetadataDict, Any] | None:
+        """``(metadata, value)`` for *key* without counting a use, or None.
+
+        Only a backend holding live values can answer cheaply (the RAM tier);
+        the default does not answer.
+        """
+        return None
+
+    def persist_from_memory(self, key: str, rebuild_seconds: float) -> bool:
+        """Write a value held only in a faster tier to a slower one when
+        rebuilding it would cost *rebuild_seconds*; True when it was written.
+        Only a tiered backend has tiers to move a value between."""
+        return False
+
+    def begin_cell_warnings(self) -> None:  # noqa: B027 - intentional no-op default
+        """Hold warnings about refused stores until `end_cell_warnings`, to say
+        them once for a notebook cell. The default holds nothing."""
+
+    def end_cell_warnings(self) -> None:  # noqa: B027 - intentional no-op default
+        """Say the warnings held since `begin_cell_warnings`."""
+
     @abstractmethod
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         """Retrieve (metadata, value) from the cache.
@@ -937,7 +998,7 @@ class CacheBackend(ABC):
         name as a fallback) — a single-tier label. ``TieredBackend``
         overrides it to return its children's labels in configured order.
         """
-        return [getattr(type(self), "source_label", None) or type(self).__name__]
+        return [self.source_label]
 
     def shutdown(self) -> None:  # noqa: B027 - intentional no-op default; subclasses override as needed
         """Perform any necessary cleanup before exit (e.g. waiting for async writes)."""

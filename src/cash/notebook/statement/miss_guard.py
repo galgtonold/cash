@@ -108,32 +108,17 @@ GUARD_SKIP_REASON = (
 
 
 def resolve_cache_dir(backend: Any) -> str | None:
-    """Find the on-disk cache directory behind *backend*, or None.
+    """The on-disk cache directory behind *backend* (``local_dir``), or None.
 
-    Walks a backend chain (``TieredBackend`` exposes ``.backends``)
-    breadth-first and returns the first real ``cache_dir``. None
-    means there is nowhere to persist — a pure in-memory backend, which has no
-    restart to survive anyway, so the guard degrades to session-scoped.
+    None means there is nowhere to persist — a pure in-memory backend, which
+    has no restart to survive anyway, so the guard degrades to session-scoped.
 
-    Deliberately duck-typed and defensive: ``cash_instance`` is a ``MagicMock``
-    in a good number of tests, and a mock answers every ``getattr`` with another
-    mock. The ``isinstance`` checks are what make that return None instead of a
-    mock masquerading as a path.
+    The ``isinstance`` check is for the ``MagicMock`` backends a good number of
+    tests use: a mock answers any attribute with another mock, which must not
+    pass for a path.
     """
-    seen: set[int] = set()
-    queue = [backend]
-    while queue:
-        current = queue.pop(0)
-        if current is None or id(current) in seen:
-            continue
-        seen.add(id(current))
-        cache_dir = getattr(current, "cache_dir", None)
-        if isinstance(cache_dir, str) and cache_dir:
-            return cache_dir
-        inner = getattr(current, "backends", None)
-        if isinstance(inner, (list, tuple)):
-            queue.extend(inner)
-    return None
+    cache_dir = backend.local_dir if backend is not None else None
+    return cache_dir if isinstance(cache_dir, str) and cache_dir else None
 
 
 @dataclass

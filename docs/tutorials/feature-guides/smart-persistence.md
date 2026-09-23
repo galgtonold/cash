@@ -75,7 +75,7 @@ The rate ceiling exists because the first two gates, on their own, filled five u
 > single-tier persistent backend (`Cash(backend=FileBackend(...))` or
 > `SQLiteBackend`), which writes every entry regardless of compute time.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.end_cell_persistence @ff62d1a9, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @b2f824c9 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.end_cell_persistence @72ff88af, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @d622e438 -->
 In a notebook, "cheaper to re-run" is judged once more at the end of each cell.
 A statement is often fast only because its inputs are there: `latest =
 sales['week'].max()` takes milliseconds, but after a restart `sales` is gone too,
@@ -145,7 +145,7 @@ notebook's own promotion gate reads the config live as well.
 
 ## Inspecting where a value actually landed
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @7be7be30, cash/backends/tiered_backend.py:TieredBackend.get @7e6b7128 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @0d6e63b2, cash/backends/tiered_backend.py:TieredBackend.get @1c90dca6 -->
 The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']`. This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (set in `TieredBackend.get`).
 
 When it went no further than RAM, `metadata['persist_skipped']` says why: `"size"` (a tier's size cap), `"bytes"` (the bytes-per-second-saved ceiling), `"compute"` (the notebook's compute floor or its cost model), or `"replaced_in_cell"` (a later statement of the same cell writes that name again, so the version the cell leaves is the one written). Only the first can happen to a `@cash.cache` result: decorating a function is the decision to cache it, so neither the floor nor the cost model is consulted on that path.
@@ -201,7 +201,7 @@ For a deep dive into the notebook filter and its skip-reason taxonomy, see [Cost
 
 Two override mechanisms exist, and they apply to different paths:
 
-<!-- claim: cash/analysis/annotations.py:CacheAnnotation.persist == False, cash/notebook/statement/processor.py:StatementProcessor._should_skip_large_object_caching @a0905cbf -->
+<!-- claim: cash/analysis/annotations.py:CacheAnnotation.persist == False, cash/notebook/statement/processor.py:StatementProcessor._should_skip_large_object_caching @74019274 -->
 - **Notebook `# @cash:persist` annotation.** When a `%%cash` cell carries a `# @cash:persist` comment, the parser sets `force_persist=True` on the entry's metadata. The notebook filter then bypasses its skip checks (`StatementProcessor._should_skip_large_object_caching` returns early), and the `TieredBackend` also reads `metadata['force_persist']` and bypasses its promotion policy (in `TieredBackend.set`). The annotation is the only way to force a single statement past both filters.
 - **`smart_persistence=False`.** Disables the policy for every call. Useful for benchmarking, debugging, or workloads where you've measured that the heuristic is wrong on your data.
 - **`%cash_persist on` / `cash.configure(persist_all=True)`.** Force-caches *every* statement, bypassing the cost-aware floors globally — the blanket equivalent of putting `# @cash:persist` on all of them. Good for reproducibility and benchmarking; wasteful for trivial statements in normal use.

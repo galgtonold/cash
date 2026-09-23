@@ -212,8 +212,7 @@ class CacheFreshnessChecker:
         source_cache_key = tracking_state.variable_sources.get(input_var)
         if not source_cache_key:
             return None
-        peek = getattr(self._backend, "peek_metadata", None)
-        raw_source_meta = peek(source_cache_key) if peek is not None else self._backend.get(source_cache_key)[0]
+        raw_source_meta = self._backend.peek_metadata(source_cache_key)
         if not raw_source_meta:
             return None
         return StatementCacheMetadata.from_dict(raw_source_meta).file_dependencies or {}

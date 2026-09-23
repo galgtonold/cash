@@ -1983,7 +1983,7 @@ class VirtualLineage:
         where the runtime overwrites it when the statement runs again.
         """
         backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
-        if backend is None or not hasattr(backend, "get_metadata"):
+        if backend is None:
             return None
 
         try:
@@ -2010,7 +2010,7 @@ class VirtualLineage:
         doubt returns None, and the loop is replayed.
         """
         backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
-        if backend is None or not hasattr(backend, "get_metadata"):
+        if backend is None:
             return None
 
         try:
@@ -2610,7 +2610,7 @@ class VirtualLineage:
             return memo[stmt_code]
         found: dict[str, dict] = {}
         backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
-        if backend is not None and hasattr(backend, "get_metadata"):
+        if backend is not None:
             try:
                 record = backend.get_metadata(import_bindings_key(stmt_code))
             except (OSError, TypeError, ValueError, AttributeError):

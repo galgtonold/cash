@@ -134,12 +134,11 @@ class StatementRestorer:
     ) -> None:
         """Persist only metadata (no data payload) to disk for badge display after restart.
 
-        Walks the backend chain to find backends that support metadata-only
-        writes (e.g. FileBackend).  Ensures timing info survives kernel
-        restarts even when the actual data was too large / too cheap to cache.
+        Only a tier that keeps metadata alone (e.g. FileBackend) writes it.
+        Ensures timing info survives kernel restarts even when the actual data
+        was too large / too cheap to cache.
         """
-        if hasattr(backend, "set_metadata_only"):
-            backend.set_metadata_only(cache_key, metadata)
+        backend.set_metadata_only(cache_key, metadata)
 
     def restore_from_cache(
         self,

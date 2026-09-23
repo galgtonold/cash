@@ -62,8 +62,9 @@ class TestTieredBackend:
         rehydrating costs more than recomputing and it stays RAM-only. A tiny
         result at the same compute time restores near-instantly and IS promoted.
         """
-        l1 = MagicMock()
-        l2 = MagicMock()
+        # Mock tiers, with the interface values a real tier has as values.
+        l1 = MagicMock(source_label="RAM", default_ttl=None, local_dir=None)
+        l2 = MagicMock(source_label="DISK", default_ttl=None, local_dir=None)
 
         # When getting from L1, return empty (simulating set flow check or just to satisfy protocol)
         # But set() uses the passed metadata.
@@ -145,3 +146,26 @@ class TestTieredBackend:
             assert val["data"] == "hello"
         finally:
             os.chdir(original_cwd)
+
+
+class TestWhatTheTiersSayAboutThemselves:
+    """A tiered backend answers from its tiers' public properties, so a tier
+    of any kind -- one it does not know -- is asked the same way."""
+
+    def test_directory_and_default_ttl_come_from_the_tiers(self, tmp_path):
+        disk = FileBackend(cache_dir=str(tmp_path), default_ttl=60)
+        tiered = TieredBackend([InMemoryBackend(), disk])
+        assert tiered.local_dir == str(tmp_path)
+        assert tiered.default_ttl == 60
+        assert tiered.tier_labels() == ["RAM", "DISK"]
+
+    def test_an_entry_without_a_ttl_is_stamped_with_the_default(self, tmp_path):
+        tiered = TieredBackend([InMemoryBackend(), FileBackend(cache_dir=str(tmp_path), default_ttl=60)])
+        tiered.set("k", 1, {"execution_time": 5.0})
+        assert tiered.get("k")[0]["ttl"] == 60
+
+    def test_memory_only_tiers_have_no_directory_and_no_default(self):
+        tiered = TieredBackend([InMemoryBackend(), InMemoryBackend()])
+        assert tiered.local_dir is None
+        assert tiered.default_ttl is None
+        assert tiered.generation_token() is None

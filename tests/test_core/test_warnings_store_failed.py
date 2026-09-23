@@ -5,9 +5,10 @@ from __future__ import annotations
 import warnings
 
 from cash import Cash, CashCacheStoreFailedWarning
+from cash.backends import CacheBackend
 
 
-class _BrokenBackend:
+class _BrokenBackend(CacheBackend):
     """Minimal in-memory backend whose set() always raises OSError."""
 
     def __init__(self):
@@ -21,6 +22,12 @@ class _BrokenBackend:
 
     def keys(self):
         return list(self._store.keys())
+
+    def list_entries(self):
+        return []
+
+    def clear(self):
+        self._store.clear()
 
     def delete(self, key):
         self._store.pop(key, None)
