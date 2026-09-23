@@ -20,11 +20,7 @@ from __future__ import annotations
 
 import warnings
 
-import pytest
-
 from cash import CashRandomnessWarning
-from cash.backends import InMemoryBackend
-from cash.core import Cash
 
 
 class _Estimator:
@@ -42,13 +38,6 @@ class _Deterministic:
 
     def get_params(self, deep=True):
         return {"fit_intercept": True}
-
-
-@pytest.fixture
-def cash_instance():
-    c = Cash(backend=InMemoryBackend(), register_magic=False)
-    yield c
-    c.backend.clear()
 
 
 def _warnings_from(fn, *args):

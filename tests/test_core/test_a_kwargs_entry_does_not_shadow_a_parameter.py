@@ -10,19 +10,9 @@ returned ``GET /a``. Same for a method whose caller passes ``self=`` through
 
 from __future__ import annotations
 
-import pytest
 
-from cash import Cash
-from cash.backends import InMemoryBackend
-
-
-@pytest.fixture
-def cash():
-    return Cash(backend=InMemoryBackend(), register_magic=False)
-
-
-def test_a_positional_only_parameter_is_not_shadowed(cash):
-    @cash.cache
+def test_a_positional_only_parameter_is_not_shadowed(cash_instance):
+    @cash_instance.cache
     def request(url, /, **params):
         return f"GET {url} ? {sorted(params.items())}"
 
@@ -30,12 +20,12 @@ def test_a_positional_only_parameter_is_not_shadowed(cash):
     assert request("/b", url="x") == "GET /b ? [('url', 'x')]"
 
 
-def test_a_kwargs_self_does_not_shadow_the_receiver(cash):
+def test_a_kwargs_self_does_not_shadow_the_receiver(cash_instance):
     class Client:
         def __init__(self, base):
             self.base = base
 
-        @cash.cache
+        @cash_instance.cache
         def fetch(self, /, **kw):
             return f"{self.base} ? {sorted(kw.items())}"
 
@@ -43,10 +33,10 @@ def test_a_kwargs_self_does_not_shadow_the_receiver(cash):
     assert Client("host2").fetch(self="q") == "host2 ? [('self', 'q')]"
 
 
-def test_the_same_call_still_hits(cash):
+def test_the_same_call_still_hits(cash_instance):
     ran = []
 
-    @cash.cache
+    @cash_instance.cache
     def request(url, /, **params):
         ran.append(url)
         return f"GET {url} ? {sorted(params.items())}"
@@ -56,10 +46,10 @@ def test_the_same_call_still_hits(cash):
     assert len(ran) == 1
 
 
-def test_spelling_a_call_two_ways_still_shares_an_entry(cash):
+def test_spelling_a_call_two_ways_still_shares_an_entry(cash_instance):
     ran = []
 
-    @cash.cache
+    @cash_instance.cache
     def add(a, b=2, **rest):
         ran.append((a, b))
         return a + b + sum(rest.values())

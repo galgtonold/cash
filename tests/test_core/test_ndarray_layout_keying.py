@@ -28,16 +28,6 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-
-
-@pytest.fixture
-def cash_instance():
-    c = Cash(backend=InMemoryBackend(), register_magic=False)
-    yield c
-    c.backend.clear()
-
 
 def _c_and_f():
     base = np.arange(12, dtype=np.float64).reshape(3, 4)

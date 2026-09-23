@@ -70,7 +70,7 @@ def test_cash_on_counts_without_listing(cash_magics, capsys, monkeypatch, n):
     cash_magics.cash_on("")
     out = capsys.readouterr().out
 
-    assert cash_magics._auto_cache_enabled is True
+    assert cash_magics.cash_status("dict")["auto_cache_enabled"] is True
     if n:
         assert f"Found existing cache with {n} entries." in out
     else:

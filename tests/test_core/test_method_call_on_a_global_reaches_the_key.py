@@ -32,17 +32,7 @@ import warnings
 
 import pytest
 
-from cash import Cash, InMemoryBackend
-
 from . import helper_registry
-
-
-@pytest.fixture
-def cash_instance():
-    c = Cash(backend=InMemoryBackend(), register_magic=False)
-    yield c
-    c.backend.clear()
-
 
 ALIASES = {"emea": "eu"}
 COUNTS = {"a": 1}

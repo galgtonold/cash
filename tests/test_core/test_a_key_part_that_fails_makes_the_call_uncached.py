@@ -15,22 +15,14 @@ from __future__ import annotations
 
 import warnings
 
-import pytest
-
-from cash import Cash, CashCacheIneffectiveWarning
-from cash.backends.memory_backend import InMemoryBackend
-
-
-@pytest.fixture
-def c():
-    return Cash(backend=InMemoryBackend(), register_magic=False)
+from cash import CashCacheIneffectiveWarning
 
 
 def _codes(caught):
     return [getattr(w.message, "code", None) for w in caught if issubclass(w.category, CashCacheIneffectiveWarning)]
 
 
-def test_a_resolver_that_raises_runs_the_call_uncached(c):
+def test_a_resolver_that_raises_runs_the_call_uncached(cash_instance):
     data = {"v": 1}
     state = {"broken": False}
 
@@ -39,7 +31,7 @@ def test_a_resolver_that_raises_runs_the_call_uncached(c):
             raise KeyError("gone")
         return []
 
-    @c.cache(dynamic_depends_on=resolver, assume_safe=True)
+    @cash_instance.cache(dynamic_depends_on=resolver, assume_safe=True)
     def f():
         return data["v"]
 
@@ -53,10 +45,10 @@ def test_a_resolver_that_raises_runs_the_call_uncached(c):
     assert "KEY-DYNAMIC-DEP-FAILED" in _codes(caught)
 
 
-def test_a_resolver_that_returns_no_data_source_runs_the_call_uncached(c):
+def test_a_resolver_that_returns_no_data_source_runs_the_call_uncached(cash_instance):
     runs = []
 
-    @c.cache(dynamic_depends_on=lambda: "data/input.csv", assume_safe=True)
+    @cash_instance.cache(dynamic_depends_on=lambda: "data/input.csv", assume_safe=True)
     def f():
         runs.append(1)
         return len(runs)
@@ -69,10 +61,10 @@ def test_a_resolver_that_returns_no_data_source_runs_the_call_uncached(c):
     assert _codes(caught).count("KEY-DYNAMIC-DEP-FAILED") == 1
 
 
-def test_a_resolver_returning_none_is_no_dependency(c):
+def test_a_resolver_returning_none_is_no_dependency(cash_instance):
     runs = []
 
-    @c.cache(dynamic_depends_on=lambda: None, assume_safe=True)
+    @cash_instance.cache(dynamic_depends_on=lambda: None, assume_safe=True)
     def f():
         runs.append(1)
         return 1
@@ -87,8 +79,8 @@ class Step:
         return 1
 
 
-def test_a_fold_that_raises_runs_the_call_uncached(c, monkeypatch):
-    @c.cache(assume_safe=True)
+def test_a_fold_that_raises_runs_the_call_uncached(cash_instance, monkeypatch):
+    @cash_instance.cache(assume_safe=True)
     def f(step):
         return step.run()
 
@@ -99,8 +91,8 @@ def test_a_fold_that_raises_runs_the_call_uncached(c, monkeypatch):
 
     # The fold that keys code passed as an argument used to swallow this and
     # key the call without the argument's code.
-    monkeypatch.setattr(c, "_code_ref_closure", broken)
-    c._code_surface_cache.clear()
+    monkeypatch.setattr(cash_instance, "_code_ref_closure", broken)
+    cash_instance._code_surface_cache.clear()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         assert f(Step()) == 1

@@ -26,18 +26,6 @@ on the decorated function itself, and it did return a wrong answer.
 
 from __future__ import annotations
 
-import pytest
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-
-
-@pytest.fixture
-def cash_instance():
-    c = Cash(backend=InMemoryBackend(), register_magic=False)
-    yield c
-    c.backend.clear()
-
 
 def test_two_factory_built_functions_do_not_share_a_cache_entry(cash_instance):
     """The reported shape: different captured lambdas, same source and qualname."""

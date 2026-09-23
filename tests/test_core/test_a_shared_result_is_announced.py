@@ -20,15 +20,8 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
-from cash import Cash
-from cash.backends import InMemoryBackend
 
 CONFIG: dict = {}
-
-
-@pytest.fixture
-def cash():
-    return Cash(backend=InMemoryBackend(), register_magic=False)
 
 
 def _warnings_of(fn, *args):
@@ -38,8 +31,8 @@ def _warnings_of(fn, *args):
     return [str(w.message) for w in seen if "CACHE-RESULT-SHARED" in str(w.message)]
 
 
-def test_a_view_of_an_argument_is_announced(cash):
-    @cash.cache
+def test_a_view_of_an_argument_is_announced(cash_instance):
+    @cash_instance.cache
     def window(base, lo, hi):
         return base[lo:hi]
 
@@ -48,40 +41,40 @@ def test_a_view_of_an_argument_is_announced(cash):
     assert "base" in said[0], said[0]
 
 
-def test_a_result_holding_an_argument_is_announced(cash):
-    @cash.cache
+def test_a_result_holding_an_argument_is_announced(cash_instance):
+    @cash_instance.cache
     def wrap(rows, tag):
         return {"data": rows, "tag": tag}
 
     assert _warnings_of(wrap, [1, 2, 3], "t")
 
 
-def test_a_returned_module_global_is_announced(cash):
-    @cash.cache
+def test_a_returned_module_global_is_announced(cash_instance):
+    @cash_instance.cache
     def config(n):
         return CONFIG
 
     assert _warnings_of(config, 1)
 
 
-def test_assume_safe_waives_it(cash):
-    @cash.cache(assume_safe=True)
+def test_assume_safe_waives_it(cash_instance):
+    @cash_instance.cache(assume_safe=True)
     def window(base, lo, hi):
         return base[lo:hi]
 
     assert not _warnings_of(window, np.arange(5), 1, 4)
 
 
-def test_an_independent_result_says_nothing(cash):
-    @cash.cache
+def test_an_independent_result_says_nothing(cash_instance):
+    @cash_instance.cache
     def copied(base, lo, hi):
         return base[lo:hi].copy()
 
-    @cash.cache
+    @cash_instance.cache
     def rebuilt(rows, tag):
         return {"data": list(rows), "tag": tag}
 
-    @cash.cache
+    @cash_instance.cache
     def snapshot(n):
         return dict(CONFIG)
 

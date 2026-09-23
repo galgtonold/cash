@@ -164,8 +164,9 @@ class TestCashStatus:
     def test_last_cell_metrics_empty_status_is_none(self, cash_magics):
         """A cell that produced no statement metrics yields overall status None (magics.py 778)."""
         cash_magics._update_last_cell_metrics([], 0.0)
-        assert cash_magics._last_cell_metrics["status"] is None
-        assert cash_magics._last_cell_metrics["statements"] == []
+        last_cell = cash_magics.cash_status("dict")["last_cell"]
+        assert last_cell["status"] is None
+        assert last_cell["statements"] == []
 
 
 # ============================================================================

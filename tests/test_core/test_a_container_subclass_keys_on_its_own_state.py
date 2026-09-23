@@ -12,19 +12,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-import pytest
 
-from cash import Cash
-from cash.backends import InMemoryBackend
-
-
-@pytest.fixture
-def cash():
-    return Cash(backend=InMemoryBackend(), register_magic=False)
-
-
-def test_a_defaultdict_factory_is_part_of_the_key(cash):
-    @cash.cache
+def test_a_defaultdict_factory_is_part_of_the_key(cash_instance):
+    @cash_instance.cache
     def bucket(mapping, key):
         missing = mapping[key] if key in mapping else mapping.default_factory()
         return f"{type(missing).__name__}: {missing!r}"
@@ -33,13 +23,13 @@ def test_a_defaultdict_factory_is_part_of_the_key(cash):
     assert bucket(defaultdict(set, {"a": 1}), "new") == "set: set()"
 
 
-def test_a_dict_subclasss_attributes_are_part_of_the_key(cash):
+def test_a_dict_subclasss_attributes_are_part_of_the_key(cash_instance):
     class Config(dict):
         def __init__(self, source, **kw):
             super().__init__(**kw)
             self.source = source
 
-    @cash.cache
+    @cash_instance.cache
     def where_from(cfg):
         return f"{cfg.source} {dict(cfg)!r}"
 
@@ -47,13 +37,13 @@ def test_a_dict_subclasss_attributes_are_part_of_the_key(cash):
     assert where_from(Config("staging", x=1)) == "staging {'x': 1}"
 
 
-def test_a_list_subclasss_attributes_are_part_of_the_key(cash):
+def test_a_list_subclasss_attributes_are_part_of_the_key(cash_instance):
     class Rows(list):
         def __init__(self, label, items):
             super().__init__(items)
             self.label = label
 
-    @cash.cache
+    @cash_instance.cache
     def describe(rows):
         return f"{rows.label}:{len(rows)}"
 
@@ -61,10 +51,10 @@ def test_a_list_subclasss_attributes_are_part_of_the_key(cash):
     assert describe(Rows("b", [1, 2])) == "b:2"
 
 
-def test_equal_plain_containers_still_share_an_entry(cash):
+def test_equal_plain_containers_still_share_an_entry(cash_instance):
     ran = []
 
-    @cash.cache
+    @cash_instance.cache
     def total(values):
         ran.append(1)
         return sum(values.values()) if isinstance(values, dict) else sum(values)
@@ -76,10 +66,10 @@ def test_equal_plain_containers_still_share_an_entry(cash):
     assert len(ran) == 2, "an equal plain dict/list must keep sharing its entry"
 
 
-def test_a_defaultdict_with_the_same_factory_still_hits(cash):
+def test_a_defaultdict_with_the_same_factory_still_hits(cash_instance):
     ran = []
 
-    @cash.cache
+    @cash_instance.cache
     def size(mapping):
         ran.append(1)
         return len(mapping)

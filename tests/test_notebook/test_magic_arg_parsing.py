@@ -111,7 +111,7 @@ def test_badge_mode_with_trailing_comment_is_applied(cash_magics, capsys):
 def test_cash_on_ttl_with_trailing_comment_is_parsed(cash_magics, capsys):
     cash_magics.cash_on("ttl=3600  # one hour")
 
-    assert cash_magics._auto_cache_enabled is True
+    assert cash_magics.cash_status("dict")["auto_cache_enabled"] is True
     assert cash_magics.global_ttl == 3600
 
 
@@ -124,5 +124,5 @@ def test_cash_on_rejects_a_bad_ttl_visibly(cash_magics, capsys):
     cash_magics.cash_on("ttl=one-hour")
     out = capsys.readouterr().out
 
-    assert cash_magics._auto_cache_enabled is False
+    assert cash_magics.cash_status("dict")["auto_cache_enabled"] is False
     assert "NOT enabled" in out

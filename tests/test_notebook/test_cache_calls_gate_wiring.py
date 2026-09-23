@@ -135,7 +135,7 @@ def test_the_gate_is_given_variable_lineage(cash_magics, monkeypatch):
     assert "variable_lineage" in captured_kwargs, (
         "the gate never passes variable_lineage, even though a real lineage table is in scope at this call site"
     )
-    assert captured_kwargs["variable_lineage"] is cash_magics._statement_processor.tracking_state.variable_lineage, (
+    assert captured_kwargs["variable_lineage"] is cash_magics.tracking_state.variable_lineage, (
         "the gate passed SOME variable_lineage, but not the processor's own "
         "live table -- a fabricated stand-in would satisfy 'is it passed' "
         "without actually wiring in the real lineage"

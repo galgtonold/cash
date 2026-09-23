@@ -113,5 +113,5 @@ def test_configure_flips_it_at_runtime(tmp_path):
 def test_cash_on_declines_when_disabled(cash_magics, capsys):
     cash_magics._cash_instance.config.disable = True
     cash_magics.cash_on("")
-    assert not cash_magics._auto_cache_enabled
+    assert not cash_magics.cash_status("dict")["auto_cache_enabled"]
     assert "caching is disabled" in capsys.readouterr().out
