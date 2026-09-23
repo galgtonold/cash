@@ -54,7 +54,7 @@ nb = nbformat.read("notebook.ipynb", as_version=4)
 
 preprocessor = CashStripPreprocessor(
     strip_badges=True,    # remove the cell-status badge HTML outputs
-    strip_debug=True,     # remove [UPSTREAM_DEBUG] / [LINEAGE_DEBUG] / … lines
+    strip_debug=True,     # remove cash log records and [UPSTREAM] / [TIMING_PROXY] / … lines
     strip_magics=False,   # set True to also strip %cash_on / %cash_off / … from cell source
 )
 nb, _ = preprocessor.preprocess(nb, {})

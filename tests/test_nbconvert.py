@@ -39,14 +39,23 @@ class TestCashStripPreprocessor:
         result, _ = preprocessor.preprocess_cell(cell, {}, 0)
         assert result.source == "# Title"
 
-    def test_strip_badge_outputs(self, preprocessor):
+    @pytest.mark.parametrize("status", ["DONE", "RUNNING"])
+    def test_strip_badge_outputs(self, preprocessor, status):
+        """The badge cash actually renders, done or in progress, is removed."""
+        from cash.notebook.badge_renderer._badge import render_interactive_badge
+
+        badge = render_interactive_badge(
+            [{"status": "COMPUTED", "code": "x = 1", "execution_time": 0.2}],
+            "html",
+            status=status,
+            current_step=1,
+            total_steps=2,
+        )
+        assert badge, "the renderer produced no badge"
         outputs = [
             _make_output(
                 "display_data",
-                data={
-                    "text/html": '<div class="cash-badge">COMPUTED</div>',
-                    "text/plain": "<IPython.core.display.HTML object>",
-                },
+                data={"text/html": badge, "text/plain": "<IPython.core.display.HTML object>"},
             ),
             _make_output("stream", text="Hello world\n"),
         ]
@@ -73,6 +82,47 @@ class TestCashStripPreprocessor:
         assert "%cash_debug" not in result.source
         assert "x = 42" in result.source
 
+    def test_a_users_own_html_display_is_kept(self, preprocessor):
+        """``display(HTML(...))`` from any library has this text/plain; only
+        the badge markup marks a badge."""
+        outputs = [
+            _make_output(
+                "display_data",
+                data={
+                    "text/html": "<b>Model trained: COMPUTED 3 folds</b>",
+                    "text/plain": "<IPython.core.display.HTML object>",
+                },
+            ),
+        ]
+        cell = _make_cell("display(HTML(summary))", outputs)
+        result, _ = preprocessor.preprocess_cell(cell, {}, 0)
+        assert len(result.outputs) == 1
+
+    def test_a_users_printed_lines_are_kept(self, preprocessor):
+        text = "DEBUG mode is on\nCash: 1,200 EUR\nlevel=DEBUG\ncash: caching disabled\n"
+        outputs = [_make_output("stream", text=text)]
+        cell = _make_cell("report()", outputs)
+        result, _ = preprocessor.preprocess_cell(cell, {}, 0)
+        assert result.outputs[0]["text"] == text
+
+    def test_cash_log_records_are_stripped(self, preprocessor):
+        text = "before\ncash.core: [CACHE] miss for f\n[cash.notebook.magics] debug on\n[TIMING_PROXY] Badge init: 1.0ms\nafter\n"
+        outputs = [_make_output("stream", text=text)]
+        cell = _make_cell("f()", outputs)
+        result, _ = preprocessor.preprocess_cell(cell, {}, 0)
+        assert result.outputs[0]["text"] == "before\nafter\n"
+
+    def test_every_registered_magic_is_stripped(self, preprocessor):
+        from cash.notebook.ipython.magics import CashMagics
+
+        preprocessor.strip_magics = True
+        names = sorted(CashMagics.magics["line"])
+        assert "cash_badge" in names  # positive control: a magic the old hand-kept list lacked
+        source = "\n".join(f"%{name} on" for name in names) + "\n%%cash\n%load_ext cash\nx = 1\n%cash_onward = 2"
+        cell = _make_cell(source)
+        result, _ = preprocessor.preprocess_cell(cell, {}, 0)
+        assert result.source == "x = 1\n%cash_onward = 2"
+
     def test_preserve_non_badge_html(self, preprocessor):
         outputs = [
             _make_output(
@@ -92,3 +142,17 @@ class TestCashStripPreprocessor:
         cell = _make_cell("%cash_on\nx = 42")
         result, _ = preprocessor.preprocess_cell(cell, {}, 0)
         assert "%cash_on" in result.source  # Not stripped by default
+
+
+def test_the_documented_options_are_constructor_arguments():
+    """The docs construct it as ``CashStripPreprocessor(strip_magics=True)``;
+    the options were plain class attributes, which nbconvert's base class
+    does not take as arguments."""
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        preprocessor = CashStripPreprocessor(strip_badges=False, strip_magics=True)
+    assert preprocessor.strip_badges is False
+    assert preprocessor.strip_magics is True
+    assert CashStripPreprocessor().strip_magics is False

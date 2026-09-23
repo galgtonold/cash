@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from .notebook.cache_status import CacheStatus
+import re
+from functools import cache
 
 try:
     from nbconvert.preprocessors import Preprocessor
+    from traitlets import Bool
 
     HAS_NBCONVERT = True
 except ImportError:
@@ -15,11 +17,31 @@ except ImportError:
     class Preprocessor:
         """Dummy base class when nbconvert is not installed."""
 
+        def __init__(self, **options):
+            for name, value in options.items():
+                if not hasattr(type(self), name):
+                    raise TypeError(f"{type(self).__name__} has no option {name!r}")
+                setattr(self, name, value)
+
         def preprocess(self, nb, resources):
+            for index, cell in enumerate(nb.cells):
+                nb.cells[index], resources = self.preprocess_cell(cell, resources, index)
             return nb, resources
 
         def preprocess_cell(self, cell, resources, index):
             return cell, resources
+
+    def Bool(default, **_kwargs):  # noqa: N802 - stands in for traitlets.Bool
+        return _Plain(default)
+
+    class _Plain:
+        """A default value that ``.tag(config=True)`` leaves as it is."""
+
+        def __init__(self, value):
+            self.value = value
+
+        def tag(self, **_kwargs):
+            return self.value
 
 
 class CashStripPreprocessor(Preprocessor):
@@ -27,9 +49,14 @@ class CashStripPreprocessor(Preprocessor):
     Preprocessor that strips cash-specific outputs from notebook cells.
 
     This removes:
-    - HTML badge outputs (cache status badges)
-    - Debug output lines ([UPSTREAM_DEBUG], [LINEAGE_DEBUG], etc.)
-    - Cash magic commands from cell source (%cash_on, %cash_debug, etc.)
+    - the cell badges cash displays (HTML outputs carrying the badge markup)
+    - cash's debug lines from stream outputs: its log records
+      (``cash.<module>: ...`` / ``[cash.<module>] ...``) and its tagged debug
+      prints (``[UPSTREAM] ...``, ``[TIMING_PROXY] ...``, ...)
+    - optionally, cash magic commands from cell source (``%cash_on``, ...)
+
+    Every other output is left exactly as it was: a user's own HTML, and
+    printed lines that merely mention "DEBUG" or "Cash:", are kept.
 
     Usage:
         jupyter nbconvert --to html \\
@@ -37,75 +64,72 @@ class CashStripPreprocessor(Preprocessor):
             notebook.ipynb
     """
 
-    # Debug output markers
-    DEBUG_MARKERS = ["[TIMING", "[UPSTREAM", "[LINEAGE", "[ALREADY", "[CACHE", "[CONTROL", "DEBUG", "Cash:"]
+    #: What every badge's HTML contains right after its ``<style>`` block
+    #: (``cash.notebook.badge_renderer.renderers.html.render_html``).
+    BADGE_MARKUP = '<div class="c3-wrap"><details class="c3-card"'
 
-    # Cash magic commands to strip
-    CASH_MAGICS = [
-        "%cash_on",
-        "%cash_off",
-        "%cash_debug",
-        "%cash_verify",
-        "%cash_repair",
-        "%cash_stats",
-        "%cash_export",
-        "%cash_import",
-        "%load_ext cash",
-    ]
+    #: A line cash's own logging or debug printing produced: a log record
+    #: formatted as ``cash.x: msg`` or ``[cash.x] msg`` (a bare ``cash: ...``
+    #: line is a summary meant for the reader, not debug output), or a tagged debug
+    #: print such as ``[UPSTREAM] ...`` or ``[TIMING_PROXY] ...``.
+    DEBUG_LINE = re.compile(
+        r"^(?:cash(?:\.\w+)+: |\[cash(?:\.\w+)*\] |\[(?:TIMING|UPSTREAM|LINEAGE|ALREADY|CACHE|CONTROL)(?:_[A-Z_]+)?\] )"
+    )
 
-    strip_badges = True
-    strip_debug = True
-    strip_magics = False  # Off by default - user may want to show magics in docs
+    strip_badges = Bool(True, help="Remove the cell badges cash displays.").tag(config=True)
+    strip_debug = Bool(True, help="Remove cash's debug lines from stream outputs.").tag(config=True)
+    # Off by default: a user may want to show the magics in docs.
+    strip_magics = Bool(False, help="Remove cash magic commands from cell source.").tag(config=True)
 
     def preprocess_cell(self, cell, resources, index) -> tuple:
         """Process a single cell."""
         if cell.cell_type != "code":
             return cell, resources
 
-        # Strip badge HTML outputs
         if self.strip_badges:
             cell.outputs = [output for output in cell.outputs if not self._is_badge_output(output)]
 
-        # Strip debug lines from stream outputs
         if self.strip_debug:
             for output in cell.outputs:
                 if output.get("output_type") == "stream":
                     output["text"] = self._filter_debug_lines(output.get("text", ""))
 
-        # Strip cash magic commands from source
         if self.strip_magics:
             cell.source = self._strip_magic_commands(cell.source)
 
         return cell, resources
 
     def _is_badge_output(self, output) -> bool:
-        """Check if an output is a cash badge (HTML display)."""
-        if output.get("output_type") in ("display_data", "execute_result"):
-            data = output.get("data", {})
-            html = data.get("text/html", "")
-            if (
-                "cash-badge" in html
-                or CacheStatus.COMPUTED.value in html
-                or CacheStatus.RESTORED.value in html
-                or CacheStatus.SKIPPED.value in html
-            ):
-                return True
-            text = data.get("text/plain", "")
-            if "<IPython.core.display.HTML object>" in text:
-                return True
-        return False
+        """Is *output* a cash cell badge?"""
+        if output.get("output_type") not in ("display_data", "execute_result"):
+            return False
+        html = output.get("data", {}).get("text/html", "")
+        if isinstance(html, list):  # nbformat may store multi-line strings split
+            html = "".join(html)
+        return html.startswith("<style>") and self.BADGE_MARKUP in html
 
     def _filter_debug_lines(self, text: str) -> str:
-        """Remove debug output lines."""
+        """Remove the lines cash's debug output produced."""
+        if isinstance(text, list):
+            text = "".join(text)
         lines = text.split("\n")
-        filtered = [line for line in lines if not any(marker in line for marker in self.DEBUG_MARKERS)]
-        return "\n".join(filtered)
+        return "\n".join(line for line in lines if not self.DEBUG_LINE.match(line))
 
     def _strip_magic_commands(self, source: str) -> str:
         """Remove cash magic commands from cell source."""
-        lines = source.split("\n")
-        filtered = [line for line in lines if not any(line.strip().startswith(magic) for magic in self.CASH_MAGICS)]
+        pattern = _magic_line_pattern()
+        filtered = [line for line in source.split("\n") if not pattern.match(line)]
         # Remove leading blank lines
         while filtered and not filtered[0].strip():
             filtered.pop(0)
         return "\n".join(filtered)
+
+
+@cache
+def _magic_line_pattern() -> re.Pattern[str]:
+    """A source line that invokes a cash magic, built from the registered set."""
+    from .notebook.ipython.magics import CashMagics
+
+    line = "|".join(sorted(map(re.escape, CashMagics.magics["line"]), key=len, reverse=True))
+    cell = "|".join(sorted(map(re.escape, CashMagics.magics["cell"]), key=len, reverse=True))
+    return re.compile(rf"^\s*(?:%(?:{line})|%%(?:{cell})|%load_ext\s+cash)(?:\s|$)")
