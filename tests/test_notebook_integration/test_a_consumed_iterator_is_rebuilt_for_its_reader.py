@@ -54,12 +54,19 @@ def test_re_running_only_the_reader_reads_the_data_again(nb_runner):
     assert "R ['a', 'b', 'c']" in nb_runner.get_output(3), nb_runner.get_raw_output(3)
 
 
-def test_a_slow_open_is_not_served_to_the_next_run(nb_runner):
+@pytest.mark.parametrize(
+    "producer",
+    [
+        "fh = open('probe_lines.txt')",
+        "def handle(p):\n    return open(p)\nfh = handle('probe_lines.txt')",
+    ],
+)
+def test_a_slow_open_is_not_served_to_the_next_run(nb_runner, producer):
     """With the cost floors at zero every call is worth storing, as ``open``
     was on a loaded machine: the first run stored the handle as an
     intercepted call and the second Run All served it, drained, to the reader.
     """
-    _nb(nb_runner, "fh = open('probe_lines.txt')", setup=CASH_TEST_PIN_THRESHOLDS)
+    _nb(nb_runner, producer, setup=CASH_TEST_PIN_THRESHOLDS)
     nb_runner.run_all()
     assert "R ['a', 'b', 'c']" in nb_runner.get_output(3), nb_runner.get_raw_output(3)
     nb_runner.run_all()

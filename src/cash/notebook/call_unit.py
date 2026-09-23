@@ -57,6 +57,7 @@ from cash.notebook.call_refs import (
     UNHASHED_PREFIX,
     digest_and_size,
 )
+from cash.notebook.consumables import is_consumable_unrestorable
 from cash.object_hashing import (
     compute_hash,
     compute_hash_full,
@@ -1897,7 +1898,7 @@ class CallUnit:
     def _storable(self, result, args, kwargs) -> bool:
         """Refuse values whose *identity* is load-bearing.
 
-        Two families, both of which the statement path already refuses in its
+        Three families, all of which the statement path already refuses in its
         own vocabulary:
 
         1. **The result IS one of the arguments.** ``def f(d): d['k']=1;
@@ -1920,6 +1921,11 @@ class CallUnit:
            re-registers the COPY as the current figure, so a later bare
            ``plt.savefig()`` writes the cache's snapshot. Refusing here lands
            BEFORE the write, which is what stops the copy being made at all.
+
+        3. **A consumable the store cannot copy** -- an open file, a
+           generator. The RAM tier keeps it by reference, so a hit hands back
+           the very object a reader already drained. The statement path
+           refuses such an output for the same reason.
 
         A caching optimisation must never be why user code fails. The two
         ``is`` loops above cannot themselves raise -- identity comparison
@@ -1944,7 +1950,9 @@ class CallUnit:
                 if result is arg:
                     return False
         try:
-            return identity_coupled_reason("<intercepted call>", result) is None
+            return identity_coupled_reason("<intercepted call>", result) is None and not is_consumable_unrestorable(
+                result
+            )
         except Exception:  # noqa: BLE001 - never let the predicate break the call
             return True
 

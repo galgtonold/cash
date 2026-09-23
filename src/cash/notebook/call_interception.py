@@ -52,6 +52,7 @@ from typing import Any
 
 from ..analysis.cacheability_decision import identity_coupled_reason
 from .cache_key import CacheKeyContext, is_cash_instrumentation
+from .consumables import is_consumable_unrestorable
 
 __all__ = [
     "eligible_call_nodes",
@@ -249,11 +250,12 @@ def _is_storable(result) -> bool:
     a post-check so the refusal lands *before* the write, which is what stops
     the deep copy from being made at all.
 
-    Deliberately narrow: only the identity-coupled family. Everything else the
-    decorator would cache is still cached.
+    Nor a consumable the store cannot copy (an open file, a generator): the RAM
+    tier keeps it by reference, so a hit would hand back the object a reader
+    already drained. Everything else the decorator would cache is still cached.
     """
     try:
-        return identity_coupled_reason("<intercepted call>", result) is None
+        return identity_coupled_reason("<intercepted call>", result) is None and not is_consumable_unrestorable(result)
     except Exception:  # noqa: BLE001 - never let the predicate break the call
         return True
 
