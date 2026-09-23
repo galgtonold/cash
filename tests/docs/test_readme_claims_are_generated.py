@@ -11,7 +11,7 @@ So neither is hand-written:
 
 * the badge is a PNG built from committed badge HTML by
   ``scripts/build_badge_images.py``. This test checks the README points at a
-  PNG that exists; ``tests/test_docs/test_badge_images_fresh.py`` checks that
+  PNG that exists; ``tests/docs/test_badge_images_fresh.py`` checks that
   PNG still matches its HTML, and ``test_badge_examples_fresh`` checks that
   HTML still matches the renderer.
 * the restore cost is pinned to the same frozen matrix that

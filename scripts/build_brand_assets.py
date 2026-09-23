@@ -16,7 +16,7 @@ is seen constantly and therefore stops being read. Nothing you look at day to
 day would be wrong.
 
 Hence the same chain of custody the badge images use: each PNG is a build
-product of committed HTML, and ``tests/test_docs/test_brand_assets_fresh.py``
+product of committed HTML, and ``tests/docs/test_brand_assets_fresh.py``
 fails if the HTML moves without the picture being rebuilt.
 
 The stamp function is IMPORTED from build_badge_images rather than copied. It

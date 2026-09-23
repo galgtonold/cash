@@ -31,7 +31,7 @@ import re
 
 import pytest
 
-from tests.docs._claims import (
+from tools.claims.anchors import (
     _CLAIM_RE,
     REPO_ROOT,
     Problem,
@@ -99,7 +99,7 @@ def test_no_fingerprint_drift():
 
 def test_manifest_covers_every_published_page():
     """A new page must be triaged, not land unanchored and unnoticed."""
-    from tests.docs._claims import REPO_ROOT, load_manifest
+    from tools.claims.anchors import REPO_ROOT, load_manifest
 
     manifest = set(load_manifest())
     actual = {p.relative_to(REPO_ROOT).as_posix() for p in published_pages()}

@@ -20,7 +20,7 @@ from dataclasses import fields
 from pathlib import Path
 
 from cash.config import CashConfig, TierConfig
-from tests.docs._claims import published_pages, strip_code_fences
+from tools.claims.anchors import published_pages, strip_code_fences
 
 
 def slugify(value: str, separator: str = "-") -> str:
@@ -39,7 +39,7 @@ def slugify(value: str, separator: str = "-") -> str:
 DOCS_ROOT = Path(__file__).resolve().parents[2] / "docs"
 # The set of pages mkdocs actually builds -- ``superpowers/`` internal
 # planning docs and mkdocs.yml's ``exclude_docs`` entries are out of scope.
-# ``_claims.py::published_pages`` is the single definition; this used to be a
+# ``tools/claims/anchors.py::published_pages`` is the single definition; this used to be a
 # byte-equivalent second copy of the same comprehension, which is exactly the
 # kind of duplication an anti-drift mechanism shouldn't itself have.
 ALL_MD = published_pages()

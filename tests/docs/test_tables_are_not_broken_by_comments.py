@@ -30,7 +30,7 @@ import pathlib
 
 import pytest
 
-from tests.docs._claims import published_pages
+from tools.claims.anchors import published_pages
 
 DOCS = pathlib.Path(__file__).resolve().parents[2] / "docs"
 

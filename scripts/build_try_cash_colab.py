@@ -11,7 +11,7 @@ Workflow: edit ``examples/try_cash_binder.ipynb``, then run::
 
     python scripts/build_try_cash_colab.py
 
-``tests/test_docs/test_try_cash_notebooks_in_sync.py`` fails if the committed
+``tests/docs/test_try_cash_notebooks_in_sync.py`` fails if the committed
 Colab notebook doesn't match what this script would produce.
 """
 

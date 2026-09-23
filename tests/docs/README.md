@@ -52,20 +52,24 @@ under `tests/docs/_fixtures/`.
 
 ## CI status
 
-PR1 ships with `continue-on-error: true` in `.github/workflows/ci.yml`
-so the docs-parity job's red builds don't block other PRs while the
-harness stabilizes. Flip to `false` after ~2 weeks of green runs.
+The `docs-parity` job in `.github/workflows/ci.yml` runs this whole folder on
+every push and pull request and blocks the merge when a test fails. Claim
+drift is the one exception: see [When a claim drifts](#when-a-claim-drifts).
 
-## Scope rollout
+## What else lives here
 
-- **PR1 (this PR):** harness + 3 proof-of-harness pages (Custom
-  Hashers, Dynamic Dependencies, Async Caching). All plain Python; no
-  external-service mocks needed.
-- **PR2 (next):** expand to all 13 feature guides. Add `numpy` /
-  pandas / file fixtures as needed.
-- **PR3 (later):** use cases. Add `mock_anthropic`, `mock_openai`,
-  `mock_redis_backend`, `mock_s3`, `sample_customers_csv` fixtures.
-  Wire nb-cell pages through `tests/test_notebook_integration/conftest.py::KernelPool`.
+- **Drift tests for generated doc assets**: `test_badge_examples_fresh.py`,
+  `test_badge_images_fresh.py`, `test_brand_assets_fresh.py` and
+  `test_try_cash_notebooks_in_sync.py` fail when a committed file under
+  `docs/` or `examples/` no longer matches the script that builds it. Each
+  names the script to re-run.
+- **Page-level checks**: `test_doc_claims.py` (env vars, config defaults,
+  magics, internal links, cited line numbers and test names),
+  `test_api_references_resolve.py`, `test_mermaid_diagrams.py` and the other
+  `test_*.py` files lint the published pages without executing them.
+- **The claim-anchor library** is not here: it lives in `tools/claims/`
+  (`anchors.py` and `claim_manifest.json`), so `scripts/claims.py` can use it
+  without importing from `tests/`.
 
 ## Authoring conventions
 
@@ -93,7 +97,7 @@ The general lesson, learned the expensive way: `tests/docs/` is not the only
 suite that reads `docs/`. Before pushing a docs change, run
 
 ```bash
-pytest tests/docs/ tests/test_docs/ tests/test_core/test_agent_guide_sync.py -n0 -o addopts=""
+pytest tests/docs/ tests/test_core/test_agent_guide_sync.py -n0 -o addopts=""
 ```
 
 A green `tests/docs/` alone let an anchor through that reddened all 15

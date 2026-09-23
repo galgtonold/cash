@@ -1,9 +1,9 @@
-"""Fixtures for docs feature-parity tests.
+"""Fixtures for the docs tests.
 
-PR1: minimal conftest. PR3 will add autouse fixtures that monkeypatch SDK
-boundaries (Anthropic, OpenAI, Redis, S3) based on what each doc page
-imports. For now the 3 PR1 pages have no external deps so no fixtures
-are needed.
+Every fixture here is autouse: each test gets a fresh Cash instance with its
+own cache directory, runs inside a ``tmp_path`` holding the data files the
+pages read, and sees stubs for the SDKs the pages import (anthropic, openai,
+httpx, requests, aiohttp, pyarrow) when the real package is missing.
 """
 
 from __future__ import annotations

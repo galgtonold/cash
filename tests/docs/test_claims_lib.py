@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.docs._claims import AnchorError, Target, parse_anchors, published_pages
+from tools.claims.anchors import AnchorError, Target, parse_anchors, published_pages
 
 FIXTURES = Path(__file__).parent / "_fixtures" / "claims"
 # clean.md's fingerprint anchors are pinned against this synthetic tree, not
@@ -101,7 +101,7 @@ def test_published_pages_excludes_superpowers_and_unbuilt_adr():
 # --------------------------------------------------------------------------- #
 import ast  # noqa: E402
 
-from tests.docs._claims import fingerprint, normalize, resolve  # noqa: E402
+from tools.claims.anchors import fingerprint, normalize, resolve  # noqa: E402
 
 
 def test_resolves_a_method_through_its_class():
@@ -199,7 +199,7 @@ def test_hash_of_a_known_string_is_pinned():
 # --------------------------------------------------------------------------- #
 # Value anchors                                                               #
 # --------------------------------------------------------------------------- #
-from tests.docs._claims import literal_value, values_match  # noqa: E402
+from tools.claims.anchors import literal_value, values_match  # noqa: E402
 
 
 def test_literal_value_reads_a_plain_assignment():
@@ -278,7 +278,7 @@ def test_a_non_literal_documented_value_is_an_error_not_a_mismatch():
 # --------------------------------------------------------------------------- #
 # Page checking                                                               #
 # --------------------------------------------------------------------------- #
-from tests.docs._claims import anchor_count, check_page  # noqa: E402
+from tools.claims.anchors import anchor_count, check_page  # noqa: E402
 
 
 def test_a_clean_page_reports_nothing():
@@ -331,8 +331,8 @@ def test_broad_justification_does_not_suppress_drift_detection():
 # --------------------------------------------------------------------------- #
 import json  # noqa: E402
 
-from tests.docs import _claims  # noqa: E402
-from tests.docs._claims import Problem, check_manifest  # noqa: E402
+from tools.claims import anchors as _claims  # noqa: E402
+from tools.claims.anchors import Problem, check_manifest  # noqa: E402
 
 
 def _write_manifest(path, data):
@@ -791,7 +791,7 @@ def test_accept_does_not_repin_a_fenced_example_anchor(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 # Display: full claim text stored, ellipsized only where shown                #
 # --------------------------------------------------------------------------- #
-from tests.docs._claims import ellipsize  # noqa: E402
+from tools.claims.anchors import ellipsize  # noqa: E402
 
 
 def test_claim_text_is_stored_in_full_not_truncated(tmp_path):
@@ -927,7 +927,7 @@ def test_value_anchor_on_a_class_still_needs_broad_justification(tmp_path):
 # The two fixtures below are those two shapes, reduced. Each needs a DIFFERENT #
 # rule to reach it, which is why check_unanchored has two.                    #
 # --------------------------------------------------------------------------- #
-from tests.docs._claims import check_unanchored, mention_pattern  # noqa: E402
+from tools.claims.anchors import check_unanchored, mention_pattern  # noqa: E402
 
 
 def _page(tmp_path, name, body):
