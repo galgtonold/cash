@@ -350,177 +350,6 @@ def _file_part(issues: list[PurityIssue]) -> str:
     return f" ({name})" if name else ""
 
 
-# Names of constructors/methods that return a *freshly-allocated* mutable
-# object. A local bound only to one of these (or to a mutable literal /
-# comprehension) cannot alias caller-visible state, so mutating it in place
-# is pure - see ``_compute_local_owned``.
-_FRESH_CONSTRUCTOR_NAMES: frozenset[str] = frozenset(
-    {
-        "list",
-        "dict",
-        "set",
-        "bytearray",
-        "defaultdict",
-        "OrderedDict",
-        "Counter",
-        "deque",
-        # Builtins that BUILD a new object from an iterable: `sorted(rows)` is the
-        # common one -- a parser sorting its rows and then touching one warned
-        # about a side effect on its own list.
-        "sorted",
-        "frozenset",
-        "bytes",
-        "tuple",
-    }
-)
-_FRESH_CONSTRUCTOR_ATTRS: frozenset[str] = frozenset(
-    {
-        # numpy fresh-array factories
-        "zeros",
-        "empty",
-        "ones",
-        "full",
-        "array",
-        "asarray",
-        "zeros_like",
-        "empty_like",
-        "ones_like",
-        "full_like",
-        "arange",
-        "linspace",
-        # pandas
-        "DataFrame",
-        "Series",
-        # generic "make me a fresh copy"
-        "copy",
-        "deepcopy",
-        "fromkeys",
-        # Aggregations and reshapes that return a NEW frame/array/scalar. Missing
-        # these made ordinary pandas -- `g = df.groupby(...).sum()` then
-        # `g["col"] = ...` -- read as a mutation of caller state (found attacking
-        # the decorator before round 26).
-        "sum",
-        "mean",
-        "median",
-        "min",
-        "max",
-        "std",
-        "var",
-        "count",
-        "size",
-        "nunique",
-        "quantile",
-        "agg",
-        "aggregate",
-        "transform",
-        "apply",
-        "first",
-        "last",
-        "unique",
-        "value_counts",
-        "to_dict",
-        "to_list",
-        "tolist",
-        # numpy builders, spelled as module attributes
-        "concatenate",
-        "stack",
-        "hstack",
-        "vstack",
-        "dstack",
-        "column_stack",
-        "tile",
-        "repeat",
-        "where",
-        "clip",
-        "round",
-        "argsort",
-    }
-)
-
-# Mutable-literal AST nodes (a fresh container by construction).
-_FRESH_LITERAL_NODES = (ast.List, ast.Dict, ast.Set, ast.ListComp, ast.DictComp, ast.SetComp)
-
-
-def _is_fresh_alloc(node: ast.AST | None) -> bool:
-    """True when *node* evaluates to a brand-new mutable object.
-
-    Conservative: a bare name, attribute, subscript, or any expression we
-    don't recognise as a fresh allocation returns False (so the binding is
-    treated as a possible alias and mutations to it stay flagged).
-    """
-    if node is None:
-        return False
-    if isinstance(node, _FRESH_LITERAL_NODES):
-        return True
-    if isinstance(node, ast.Call):
-        f = node.func
-        if isinstance(f, ast.Name) and f.id in _FRESH_CONSTRUCTOR_NAMES:
-            return True
-        if isinstance(f, ast.Attribute) and f.attr in _FRESH_CONSTRUCTOR_ATTRS:
-            return True
-    return False
-
-
-def _iter_scope_statements(func_def: ast.AST):
-    """Yield nodes in *func_def*'s own scope, NOT descending into nested
-    function/lambda bodies (separate scopes with their own locals)."""
-    for child in ast.iter_child_nodes(func_def):
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            continue
-        yield child
-        yield from _iter_scope_statements(child)
-
-
-def _compute_local_owned(func_def: ast.AST, param_names: frozenset[str]) -> frozenset[str]:
-    """Return names that are *fresh locals* of *func_def*: assigned only to
-    freshly-allocated objects, never declared ``global``/``nonlocal``, and not
-    parameters. Mutating such a name in place (``x[i] = ...``, ``x.append(...)``)
-    is pure - it can't reach caller-visible state, and returning it just hands
-    the caller a new object. This is the escape analysis that distinguishes a
-    local accumulator from a mutation of shared state.
-    """
-    escaped: set[str] = set()  # names declared global/nonlocal
-    bound: dict[str, bool] = {}  # name -> every binding so far is fresh
-
-    for node in _iter_scope_statements(func_def):
-        if isinstance(node, (ast.Global, ast.Nonlocal)):
-            escaped.update(node.names)
-        elif isinstance(node, ast.Assign):
-            fresh = _is_fresh_alloc(node.value)
-            for tgt in node.targets:
-                if isinstance(tgt, ast.Name):
-                    bound[tgt.id] = bound.get(tgt.id, True) and fresh
-        elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name):
-                fresh = _is_fresh_alloc(node.value)
-                bound[node.target.id] = bound.get(node.target.id, True) and fresh
-
-    # Every OTHER way to bind a name hands it an object the function did not
-    # make: a loop's elements, a context manager's value, an unpacked tuple's
-    # parts, a walrus. `x = []` followed by `for x in groups: x.append(1)`
-    # counted as a fresh local and hid a mutation of the caller's lists.
-    # (Tuple unpacking of fresh literals is recognised by the flow pass in
-    # `purity_flow`, which is per point rather than per name.)
-    for node in _iter_scope_statements(func_def):
-        bound_elsewhere: set[str] = set()
-        if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
-            _collect_bound_names(node.target, bound_elsewhere)
-        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
-            _collect_bound_names(node.optional_vars, bound_elsewhere)
-        elif isinstance(node, ast.Assign):
-            for tgt in node.targets:
-                if not isinstance(tgt, ast.Name):
-                    _collect_bound_names(tgt, bound_elsewhere)
-        elif isinstance(node, ast.NamedExpr):
-            _collect_bound_names(node.target, bound_elsewhere)
-        for name in bound_elsewhere:
-            bound[name] = False
-
-    return frozenset(
-        name for name, all_fresh in bound.items() if all_fresh and name not in param_names and name not in escaped
-    )
-
-
 class _PurityVisitor(ast.NodeVisitor):
     """Single-function-body visitor that collects :class:`PurityIssue`s.
 
@@ -535,7 +364,6 @@ class _PurityVisitor(ast.NodeVisitor):
         "_param_names",
         "_qualname",
         "_line_offset",
-        "_local_owned",
         "read_names",
         "_assign_kinds",
         "_name_call_nodes",
@@ -551,7 +379,6 @@ class _PurityVisitor(ast.NodeVisitor):
         qualname: str,
         param_names: frozenset[str],
         line_offset: int = 0,
-        local_owned: frozenset[str] = frozenset(),
         fresh_nodes: frozenset[int] = frozenset(),
         log_only: frozenset[int] = frozenset(),
         namespace: dict[str, Any] | None = None,
@@ -594,7 +421,6 @@ class _PurityVisitor(ast.NodeVisitor):
         # as-is - the qualname tells the user where to look.
         self._line_offset = line_offset
         # Fresh locals: in-place mutation of these is pure (escape analysis).
-        self._local_owned = local_owned
         # The same question per POINT (`purity_flow.fresh_name_nodes`): ids of
         # the Name nodes that hold an object this function made, where read.
         self._fresh_nodes = fresh_nodes
@@ -979,7 +805,7 @@ class _PurityVisitor(ast.NodeVisitor):
             if (
                 isinstance(func_node, ast.Attribute)
                 and reported_method
-                and not self._receiver_is_local_owned(func_node.value)
+                and not self._receiver_is_fresh(func_node.value)
                 and not self._is_module_function_named_like_a_mutator(func_node)
             ):
                 base = get_base_name(func_node.value)
@@ -1006,7 +832,7 @@ class _PurityVisitor(ast.NodeVisitor):
             if (
                 isinstance(func_node, ast.Attribute)
                 and func_node.attr in PANDAS_INPLACE_METHODS
-                and not self._receiver_is_local_owned(func_node.value)
+                and not self._receiver_is_fresh(func_node.value)
             ):
                 for kw in node.keywords:
                     if kw.arg == "inplace" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
@@ -1164,24 +990,23 @@ class _PurityVisitor(ast.NodeVisitor):
             self._maybe_flag_mutation_target(target, node.lineno)
         self.generic_visit(node)
 
-    def _receiver_is_local_owned(self, value: ast.AST) -> bool:
+    def _receiver_is_fresh(self, value: ast.AST) -> bool:
         """True when *value* holds an object this function made -- mutating
-        it in place is pure (escape analysis).
+        it in place is pure (escape analysis, `purity_flow`).
 
-        A bare fresh local, or anything the flow pass shows is fresh at this
-        point: a view of one (``inner = u[1:-1]``), a name rebound to a copy
-        (``df = df.merge(...)``), an unpacked fresh literal. An ELEMENT of a
-        fresh container is not: ``d["k"]`` may be anyone's object.
+        Whatever the flow pass shows is fresh at this point: a local bound to
+        a new object (``rows = []``), a view of one (``inner = u[1:-1]``), a
+        name rebound to a copy (``df = df.merge(...)``), an unpacked fresh
+        literal. An ELEMENT of a fresh container is not: ``d["k"]`` may be
+        anyone's object.
         """
-        if isinstance(value, ast.Name) and value.id in self._local_owned:
-            return True
         return receiver_is_fresh(value, self._fresh_nodes)
 
     def _maybe_flag_mutation_target(self, target: ast.AST, line: int) -> None:
         # Mutating a fresh local (``pos[i] = ...`` where ``pos = np.zeros(n)``)
         # is pure: the object can't reach caller-visible state and returning it
         # just hands the caller a new object. Skip those.
-        if isinstance(target, (ast.Attribute, ast.Subscript)) and self._receiver_is_local_owned(target.value):
+        if isinstance(target, (ast.Attribute, ast.Subscript)) and self._receiver_is_fresh(target.value):
             return
         if isinstance(target, ast.Attribute):
             base = get_base_name(target.value)
@@ -2090,7 +1915,6 @@ class PurityAnalyzer:
             if func_def.args.kwarg:
                 param_names = param_names | {func_def.args.kwarg.arg}
 
-            local_owned = _compute_local_owned(func_def, param_names)
             own_issues_from = len(all_issues)
             # What the body's names are bound to: the callee resolution below,
             # and aliased ambient reads, both need it. Imports written inside
@@ -2105,7 +1929,6 @@ class PurityAnalyzer:
             visitor = _PurityVisitor(
                 qualname=qualname,
                 param_names=param_names,
-                local_owned=local_owned,
                 fresh_nodes=fresh_name_nodes(func_def),
                 log_only=_log_only_ambient_reads(func_def, func, namespace),
                 namespace=namespace,
