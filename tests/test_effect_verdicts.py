@@ -55,6 +55,15 @@ ROWS = [
     # the decorator saw os.popen only by watching the first call spawn it.
     ("os.popen('true')", "refuse", "impure_call"),
     ("subprocess.getoutput('true')", "refuse", "impure_call"),
+    # The network, named in full: the decorator named requests.get but not
+    # requests.head or urlopen; the notebook refused requests.post but not the
+    # same POST spelled requests.request("POST", ...) or urlopen(url, data).
+    # A read is cached in a notebook, like reading a file.
+    ("requests.head(u)", "cache", "impure_call"),
+    ("urllib.request.urlopen(u)", "cache", "impure_call"),
+    ("requests.request('GET', u)", "cache", "impure_call"),
+    ("requests.request('POST', u)", "refuse", "impure_call"),
+    ("urllib.request.urlopen(u, b'x=1')", "refuse", "impure_call"),
 ]
 
 

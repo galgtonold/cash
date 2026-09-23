@@ -493,15 +493,7 @@ _NOTEBOOK_LABELS: dict[EffectKind, str] = {
 #: on its own, with a test of the new verdict on both paths.
 _NOT_YET_REFUSED: frozenset[str] = frozenset(
     {
-        # the network: the generic request forms, and writes through a client
-        "requests.request",
-        "httpx.post",
-        "httpx.put",
-        "httpx.patch",
-        "httpx.delete",
-        "httpx.request",
-        "urllib.request.urlopen",
-        "urlopen",
+        # the network: writes through a client object
         "post",
         "put",
         "patch",

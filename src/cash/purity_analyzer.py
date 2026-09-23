@@ -171,19 +171,6 @@ _AMBIENT_KINDS = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT})
 #: on both paths.
 _NOT_YET_REPORTED: frozenset[str] = frozenset(
     {
-        # network reads not named alongside `requests.get`
-        "requests.head",
-        "requests.options",
-        "httpx.get",
-        "httpx.head",
-        "httpx.options",
-        "httpx.post",
-        "httpx.put",
-        "httpx.patch",
-        "httpx.delete",
-        "httpx.request",
-        "urllib.request.urlopen",
-        "urlopen",
         # database writes through a frame
         "to_sql",
         "to_gbq",

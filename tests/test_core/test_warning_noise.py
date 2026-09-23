@@ -72,13 +72,16 @@ def url():
     server.shutdown()
 
 
+# Through an opener, so no name reaches the read: `urlopen` itself is a named
+# network read now, and a static finding about it would stand in for the
+# observed one this section is about.
 def _fetch(url):
-    with urllib.request.urlopen(url, timeout=10) as response:
+    with urllib.request.build_opener().open(url, timeout=10) as response:
         return int(response.read())
 
 
 def _fetch_audited(url):
-    with urllib.request.urlopen(url, timeout=10) as response:  # @cash:assume-safe
+    with urllib.request.build_opener().open(url, timeout=10) as response:  # @cash:assume-safe
         return int(response.read())
 
 
