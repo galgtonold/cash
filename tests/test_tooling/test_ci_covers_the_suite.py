@@ -20,12 +20,16 @@ pin both.
 
 This file is deliberately dependency-free — it parses the workflow as text
 rather than importing a YAML library, so it cannot itself be skipped in an
-environment that is missing something.
+environment that is missing something. The one exception collects the core set
+with pytest itself, which CI installs for every job that runs this file.
 """
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -35,6 +39,7 @@ REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.
 CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 NIGHTLY_YML = REPO_ROOT / ".github" / "workflows" / "nightly.yml"
 CORE_SET = REPO_ROOT / "tools" / "test_selection" / "core_set.txt"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
 INTEGRATION = "tests/test_notebook_integration"
 TESTS_DIR = REPO_ROOT / "tests"
 
@@ -55,7 +60,7 @@ def unit_step() -> str:
     assert CI_YML.is_file(), f"missing workflow: {CI_YML}"
     text = CI_YML.read_text(encoding="utf-8")
     m = re.search(
-        r"- name: Run unit tests\s*\n\s*run: \|(?P<body>.*?)(?=\n\s*(?:- name:|[a-z-]+:contentReference)|\n\s*- name:|\n\n\s*#|\n  [a-z-]+:)",
+        r"- name: Run unit tests\s*\n\s*run: \|(?P<body>.*?)(?=\n\s*- name:|\n\n\s*#|\n  [a-z-]+:)",
         text,
         re.DOTALL,
     )
@@ -149,11 +154,30 @@ class TestExclusionsAreHonest:
         directory exists that CI neither runs nor names.
         """
         on_disk = {p.name for p in TESTS_DIR.iterdir() if p.is_dir() and not p.name.startswith("__")}
+        holding_tests = {name for name in on_disk if any((TESTS_DIR / name).rglob("test_*.py"))}
         unaccounted = on_disk - _ignored_paths(unit_step)
-        # Everything not ignored IS run, because the step targets tests/.
-        # So this only checks the inverse: nothing is ignored that isn't real.
-        assert _ignored_paths(unit_step) <= on_disk, (
-            f"ci.yml ignores directories that do not exist: {sorted(_ignored_paths(unit_step) - on_disk)}"
+        # One direction: nothing is ignored that isn't a real directory of tests.
+        assert _ignored_paths(unit_step) <= holding_tests, (
+            f"ci.yml ignores directories that do not exist or hold no tests: "
+            f"{sorted(_ignored_paths(unit_step) - holding_tests)}"
+        )
+        # The other: every directory of tests the step does not ignore is run.
+        # The step targets tests/, so only pytest's own configuration could
+        # still hide one from it.
+        pytest_config = PYPROJECT.read_text(encoding="utf-8").split("[tool.pytest.ini_options]", 1)[1]
+        pytest_config = pytest_config.split("\n[", 1)[0]
+        hiding = [
+            re.search(r"norecursedirs|--ignore|--deselect", pytest_config) and "pyproject.toml",
+            *(
+                str(c.relative_to(REPO_ROOT))
+                for c in TESTS_DIR.rglob("conftest.py")
+                if re.search(r"collect_ignore|pytest_ignore_collect", c.read_text(encoding="utf-8"))
+            ),
+        ]
+        hiding = [h for h in hiding if h]
+        assert not hiding, (
+            f"{hiding} can hide test directories from `pytest tests/`, so the unit "
+            "step may not run everything it does not ignore. Exclude in ci.yml instead."
         )
         # Sanity: the directories we expect to be covered really are.
         for name in ("test_core", "test_backends", "test_ui", "test_notebook"):
@@ -187,6 +211,46 @@ class TestTheIntegrationSuiteRuns:
         outside = [e for e in entries if not e.startswith(INTEGRATION + "/")]
         assert not missing, "core_set.txt names test files that do not exist:\n" + "\n".join(missing)
         assert not outside, "core_set.txt names tests outside the integration suite:\n" + "\n".join(outside)
+
+    @pytest.mark.timeout(180)
+    def test_every_core_set_entry_is_a_test_pytest_collects(self):
+        """pytest exits 4 without running anything when one `@file` entry names
+        no test, so a renamed test or parametrize id fails every integration-core
+        job. Checking only the file part misses that; collecting does not."""
+        entries = {line.strip() for line in CORE_SET.read_text(encoding="utf-8").splitlines() if line.strip()}
+        env = {k: v for k, v in os.environ.items() if not k.startswith("PYTEST_")}
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "--collect-only",
+                "-q",
+                "-n",
+                "0",
+                "-p",
+                "no:randomly",
+                "-p",
+                "no:cacheprovider",
+                "@" + str(CORE_SET.relative_to(REPO_ROOT)),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=170,
+        )
+        # One node id per line, then a blank line and the summary. Ids may hold spaces.
+        collected = {line for line in proc.stdout.splitlines() if line.startswith("tests/")}
+        # A missing node id makes pytest stop with "ERROR: not found: <id>".
+        assert proc.returncode == 0, (
+            f"pytest cannot collect core_set.txt (exit {proc.returncode}); "
+            "rename the entry with the test or re-pick the core set.\n" + proc.stdout[-3000:] + proc.stderr[-3000:]
+        )
+        assert collected == entries, (
+            f"entries pytest did not collect: {sorted(entries - collected)}\n"
+            f"collected but not listed: {sorted(collected - entries)}"
+        )
 
     def test_the_nightly_workflow_is_scheduled_and_can_be_run_by_hand(self):
         text = NIGHTLY_YML.read_text(encoding="utf-8")
