@@ -60,10 +60,8 @@ class CacheFreshnessChecker:
     def __init__(
         self,
         backend: Any,
-        debug: bool = False,
     ) -> None:
         self._backend = backend
-        self.debug = debug
         self.last_miss_reason: str | None = None
         self._memo = FreshnessMemo()
         #: Dependency sets verified fresh whole, while the answers above last.
@@ -167,8 +165,7 @@ class CacheFreshnessChecker:
         if ttl_expired(metadata.timestamp, ttl):
             age = time.time() - (metadata.timestamp or 0)
             self.last_miss_reason = f"cache TTL expired ({age:.0f}s old, limit {ttl}s)"
-            if self.debug:
-                logger.debug("[CACHE DEBUG] Cache expired (TTL)")
+            logger.debug("[CACHE DEBUG] Cache expired (TTL)")
             return None
         return cached_data
 
@@ -194,8 +191,7 @@ class CacheFreshnessChecker:
                 self.last_miss_reason = f"file changed (size): {stale.resolved}"
             else:
                 self.last_miss_reason = f"file changed: {stale.resolved or stale.path}"
-            if self.debug:
-                logger.debug("[CACHE DEBUG] File dependency stale: %s", stale)
+            logger.debug("[CACHE DEBUG] File dependency stale: %s", stale)
             return None
         self._remember_fresh(file_deps)
         return cached_data
@@ -261,8 +257,7 @@ class CacheFreshnessChecker:
         else:
             size_note = " (size)" if stale.reason == "size" else ""
             self.last_miss_reason = f"file changed{size_note} via input '{input_var}': {stale.resolved}"
-        if self.debug:
-            logger.debug("[CACHE DEBUG] Input '%s' source file stale: %s", input_var, stale)
+        logger.debug("[CACHE DEBUG] Input '%s' source file stale: %s", input_var, stale)
         return True
 
     def _invalidate_if_input_file_changed(

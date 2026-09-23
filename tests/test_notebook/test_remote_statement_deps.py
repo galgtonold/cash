@@ -138,7 +138,6 @@ class TestThroughARealStatement:
         backend = FileBackend(cache_dir=str(tmp_path))
         cash_instance = Cash(backend=backend, register_magic=False)
         proc = StatementProcessor(MockShell(), cash_instance)
-        proc.debug = False
         return proc
 
     def test_a_changed_object_forces_the_statement_to_recompute(self, processor, origin):

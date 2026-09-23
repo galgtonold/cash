@@ -121,7 +121,6 @@ class StatementProcessor:
     Attributes:
         shell: IPython shell instance
         cash_instance: Cash backend for cache storage
-        debug: Enable debug output
         compute_hash_fn: Function to compute variable hashes
     """
 
@@ -129,14 +128,12 @@ class StatementProcessor:
         self,
         shell: ShellProtocol,
         cash_instance: CashInstanceProtocol,
-        debug: bool = False,
         compute_hash_fn: Callable[[Any], str] | None = None,
         tracking_state: TrackingState | None = None,
         function_tracker: FunctionTracker | None = None,
     ) -> None:
         self.shell: ShellProtocol = shell
         self.cash_instance: CashInstanceProtocol = cash_instance
-        self.debug = debug
         # When True, force-persist every statement (bypass the cost-aware
         # floors), as if every statement carried ``# @cash:persist``. Seeded
         # from config; flippable at runtime (``%cash_persist`` magic). Read
@@ -176,7 +173,6 @@ class StatementProcessor:
         # Stateless w.r.t. tracking state — receives it per call.
         self._freshness = CacheFreshnessChecker(
             backend=cash_instance.backend if cash_instance is not None else None,
-            debug=debug,
         )
 
         # Perpetual-miss guard: learns which statements can never hit
@@ -193,7 +189,7 @@ class StatementProcessor:
 
         # Statement-level file-dep tracker. Stateless w.r.t. tracking state —
         # receives it per call. ``executed_file_deps`` lives on TrackingState.
-        self._file_deps = StatementFileDeps(debug=debug)
+        self._file_deps = StatementFileDeps()
 
         # Statement-level cache restorer. Hydrates outputs from a cached
         # payload + replays stdout/stderr/rich-outputs.  Distinct from the
@@ -203,7 +199,6 @@ class StatementProcessor:
         self._stmt_restorer = StatementRestorer(
             shell=shell,
             compute_hash=compute_hash_fn,
-            debug=debug,
             rng_seed_epochs=self._randomness.seed_epochs,
         )
         self._records = StatementRecords(
@@ -224,7 +219,6 @@ class StatementProcessor:
             function_tracker=self.function_tracker,
             file_deps=self._file_deps,
             compute_hash=compute_hash_fn,
-            debug=debug,
         )
         self._hits = CacheHitServer(self.tracking_state, self._stmt_restorer, self._rebuild_cost)
         self._store = StatementStore(
@@ -726,9 +720,7 @@ class StatementProcessor:
         self._observe_miss_guard(run.skip_cache, code, run.source_hash, run.cache_key, cached_data, inputs)
 
         if logger.isEnabledFor(logging.DEBUG):
-            self._print_cache_debug(
-                code, run.cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time
-            )
+            self._log_cache_lookup(code, run.cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
 
         if cached_data and not import_needs_reexecution(tree, self.shell.user_ns):
             hit_result = self._hits.serve(run, cached_data, metadata)
@@ -1395,7 +1387,7 @@ class StatementProcessor:
         hash_time = time.time() - t2
         return effects, source_hash, cache_key, analysis_time, hash_time
 
-    def _print_cache_debug(
+    def _log_cache_lookup(
         self,
         code: str,
         cache_key: str,

@@ -175,7 +175,7 @@ def _bare_statement_processor():
     cash = Cash(backend=backend, register_magic=False)
     shell = MagicMock()
     shell.user_ns = {}
-    return StatementProcessor(cash_instance=cash, shell=shell, debug=False)._calls
+    return StatementProcessor(cash_instance=cash, shell=shell)._calls
 
 
 def test_loop_vars_scope_pops_even_when_the_body_raises():

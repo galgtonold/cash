@@ -43,7 +43,6 @@ def magics_fixture():
     magics = CashMagics(shell, cash)
     magics._auto_cache_enabled = True
     magics._debug = True
-    magics._statement_processor.debug = True
 
     yield magics, shell, backend
 

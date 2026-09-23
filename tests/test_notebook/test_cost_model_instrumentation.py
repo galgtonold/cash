@@ -47,7 +47,7 @@ def processor():
     backend = InMemoryBackend()
     cash = Cash(backend=backend, register_magic=False)
     shell = MockShell()
-    proc = StatementProcessor(shell=shell, cash_instance=cash, debug=False)
+    proc = StatementProcessor(shell=shell, cash_instance=cash)
     yield proc
     backend.clear()
 

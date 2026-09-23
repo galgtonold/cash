@@ -150,18 +150,11 @@ def read_module_source_hash(mod_file: str, dep_files: set[str] | None = None) ->
 
 
 class StatementFileDeps:
-    """Stateful per-statement file-dependency tracker.
+    """Per-statement file-dependency tracker.
 
-    Stateless apart from a ``debug`` flag.  All :class:`TrackingState`
-    access happens through the ``tracking_state`` method parameter, which
-    owns ``executed_file_deps``.
+    Stateless: all :class:`TrackingState` access happens through the
+    ``tracking_state`` method parameter, which owns ``executed_file_deps``.
     """
-
-    def __init__(
-        self,
-        debug: bool = False,
-    ) -> None:
-        self.debug = debug
 
     def update_for_var(
         self,
@@ -217,14 +210,13 @@ class StatementFileDeps:
                 if var_name not in executed_file_deps:
                     executed_file_deps[var_name] = set()
                 executed_file_deps[var_name].update(executed_file_deps[input_var])
-                if self.debug:
-                    logger.debug(
-                        "[CACHE DEBUG] Propagated file deps from '%s' to '%s': %s",
-                        input_var,
-                        var_name,
-                        executed_file_deps[input_var],
-                    )
-        elif self.debug and any(iv in executed_file_deps for iv in inputs):
+                logger.debug(
+                    "[CACHE DEBUG] Propagated file deps from '%s' to '%s': %s",
+                    input_var,
+                    var_name,
+                    executed_file_deps[input_var],
+                )
+        elif logger.isEnabledFor(logging.DEBUG) and any(iv in executed_file_deps for iv in inputs):
             logger.debug(
                 "[FILE_DEPS] Skipping file dep propagation for scalar '%s' (type: %s)",
                 var_name,

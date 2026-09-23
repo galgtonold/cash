@@ -77,12 +77,10 @@ class StatementRestorer:
         self,
         shell: "ShellProtocol",
         compute_hash: Callable[[Any], str] | None = None,
-        debug: bool = False,
         rng_seed_epochs: dict[str, str] | None = None,
     ) -> None:
         self.shell = shell
         self.compute_hash = compute_hash
-        self.debug = debug
         # SHARED with the processor's ledger (same dict object), so a seed
         # statement executed after construction is visible here.
         self._rng_seed_epochs = rng_seed_epochs if rng_seed_epochs is not None else {}
@@ -107,11 +105,10 @@ class StatementRestorer:
         """
         for module, epoch in payload["rng_epochs"].items():
             if self._rng_seed_epochs.get(module, epoch) != epoch:
-                if self.debug:
-                    logger.debug(
-                        "[CACHE DEBUG] Skipping RNG replay for %s: re-seeded since caching",
-                        module,
-                    )
+                logger.debug(
+                    "[CACHE DEBUG] Skipping RNG replay for %s: re-seeded since caching",
+                    module,
+                )
                 return False
         return True
 
@@ -156,8 +153,7 @@ class StatementRestorer:
                 rich_outputs = payload.get("rich_outputs", [])
                 rng_state = payload.get("rng_state")
                 if rng_state and self._rng_replay_is_current(payload):
-                    if self.debug:
-                        logger.debug("[CACHE DEBUG] Restoring RNG state")
+                    logger.debug("[CACHE DEBUG] Restoring RNG state")
                     restore_rng_state(rng_state)
                 # Absent on older entries — restore_object_rng_states
                 # treats None/{} as a no-op, so old cache entries load unchanged.
@@ -180,7 +176,7 @@ class StatementRestorer:
             # canonical post-state rather than whatever ordering the dict
             # happened to have.
             if object_rng_states:
-                if self.debug:
+                if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
                         "[CACHE DEBUG] Restoring object RNG state for %s",
                         ", ".join(sorted(object_rng_states)),
@@ -196,7 +192,7 @@ class StatementRestorer:
             restore_time = time.time() - t_restore
             total_time = time.time() - process_start
 
-            if self.debug:
+            if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
                     "[TIMING] Var restore: %.1fms | Output: %.1fms", var_restore_time * 1000, output_replay_time * 1000
                 )
@@ -204,8 +200,7 @@ class StatementRestorer:
                 logger.debug("[CACHE DEBUG] ✓ Restored from cache")
 
         except (KeyError, TypeError, ValueError, AttributeError, OSError) as e:
-            if self.debug:
-                logger.debug("[CACHE DEBUG] Error restoring cache: %s", e)
+            logger.debug("[CACHE DEBUG] Error restoring cache: %s", e)
             raise
 
     # ------------------------------------------------------------------
@@ -254,12 +249,11 @@ class StatementRestorer:
                     self._transfer_state_in_place(existing, value)
                     return
                 except Exception as e:  # noqa: BLE001 -- never crash a restore
-                    if self.debug:
-                        logger.debug(
-                            "[CACHE DEBUG] In-place restore of '%s' failed (%s); rebinding",
-                            var_name,
-                            e,
-                        )
+                    logger.debug(
+                        "[CACHE DEBUG] In-place restore of '%s' failed (%s); rebinding",
+                        var_name,
+                        e,
+                    )
         self.shell.user_ns[var_name] = value
 
     @staticmethod

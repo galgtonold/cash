@@ -51,7 +51,6 @@ def processor_with_pandas():
 
     magics = CashMagics(shell, cash)
     processor = magics._statement_processor
-    processor.debug = True
 
     yield processor, shell, backend
 

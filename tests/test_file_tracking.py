@@ -22,9 +22,7 @@ class TestFileTracking(unittest.TestCase):
         self.cash.backend.get.side_effect = lambda k: self._cache_storage.get(k, (None, None))
         self.cash.backend.set.side_effect = self._mock_set
 
-        self.processor = StatementProcessor(
-            self.mock_shell, self.cash, debug=True, compute_hash_fn=lambda x: str(hash(x))
-        )
+        self.processor = StatementProcessor(self.mock_shell, self.cash, compute_hash_fn=lambda x: str(hash(x)))
 
         # Create a temp file
         with tempfile.NamedTemporaryFile(delete=False, mode="w+") as tf:

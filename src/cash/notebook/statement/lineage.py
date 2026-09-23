@@ -70,13 +70,11 @@ class StatementLineageBuilder:
         function_tracker: "FunctionTracker",
         file_deps: "StatementFileDeps",
         compute_hash: Callable[[Any], str] | None = None,
-        debug: bool = False,
     ) -> None:
         self.shell = shell
         self.function_tracker = function_tracker
         self._file_deps = file_deps
         self.compute_hash = compute_hash
-        self.debug = debug
 
     # ------------------------------------------------------------------
     # Public entries
@@ -268,10 +266,9 @@ class StatementLineageBuilder:
                 pv_inputs = tracking_state.executed_input_lineages.get(pv)
                 if pv_inputs is not None and var_name in pv_inputs:
                     pv_inputs[var_name] = output_lineage_hash
-                    if self.debug:
-                        logger.debug(
-                            "[GRANULAR] Deferred update: '%s'.'%s' -> %s...", pv, var_name, output_lineage_hash[:12]
-                        )
+                    logger.debug(
+                        "[GRANULAR] Deferred update: '%s'.'%s' -> %s...", pv, var_name, output_lineage_hash[:12]
+                    )
 
     def _update_module_attribute_deps(
         self,
@@ -327,8 +324,7 @@ class StatementLineageBuilder:
                 tracking_state.variable_hashes[var_name].add(content_hash)
                 tracking_state.current_session_hashes[var_name] = content_hash
             except (TypeError, ValueError, AttributeError, pickle.PicklingError) as e:
-                if self.debug:
-                    logger.debug("[CACHE DEBUG] Could not hash captured variable '%s': %s", var_name, e)
+                logger.debug("[CACHE DEBUG] Could not hash captured variable '%s': %s", var_name, e)
 
     def lineage_if_rerun(self, tracking_state: "TrackingState", var_name: str, value: Any, code: str) -> str:
         """The lineage *var_name* would get if *code* ran again now: the same

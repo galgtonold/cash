@@ -249,7 +249,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._statement_processor = StatementProcessor(
             shell,
             cash_instance,
-            debug=self._debug,
             compute_hash_fn=compute_hash,
             tracking_state=self.tracking_state,
             function_tracker=function_tracker,
@@ -622,8 +621,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # Also set local logger
         logger.setLevel(logging.DEBUG if self._debug else logging.INFO)
 
-        # Propagate to components
-        self._statement_processor.debug = self._debug
         self._cash_instance.debug = self._debug
 
     @staticmethod

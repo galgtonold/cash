@@ -99,7 +99,7 @@ def test_cost_model_is_called_from_statement_processor_decision(monkeypatch, tmp
     cash = Cash(backend=backend, register_magic=False)
     shell = MagicMock()
     shell.user_ns = {}
-    proc = StatementProcessor(cash_instance=cash, shell=shell, debug=False)
+    proc = StatementProcessor(cash_instance=cash, shell=shell)
 
     # Moderate object — just enough that the cost_model is consulted.
     # We don't assert skip=True (depends on fitted constants); the

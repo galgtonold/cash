@@ -53,7 +53,6 @@ class TestSizeAwareCachingWithFileDeps:
         cash_instance = Cash(backend=backend, register_magic=False)
         shell = MockShell()
         processor = StatementProcessor(shell, cash_instance)
-        processor.debug = False
         yield processor
 
     def test_skip_large_object_without_file_deps(self, processor):
@@ -116,7 +115,6 @@ class TestBackendAwareCaching:
         cash_instance = Cash(backend=backend, register_magic=False)
         shell = MockShell()
         processor = StatementProcessor(shell, cash_instance)
-        processor.debug = False
         yield processor
         backend.clear()
 
@@ -132,7 +130,6 @@ class TestBackendAwareCaching:
         cash_instance = Cash(backend=backend, register_magic=False)
         shell = MockShell()
         processor = StatementProcessor(shell, cash_instance)
-        processor.debug = False
         yield processor
         backend.clear()
         import shutil

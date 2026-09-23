@@ -276,13 +276,14 @@ class TestHandleExecutionError:
         ret = processor._handle_execution_error(result, silent=True)
         assert ret is False
 
-    def test_silent_debug_output(self, processor_fixture, capsys):
+    def test_silent_debug_output(self, processor_fixture, caplog):
         processor, _, _ = processor_fixture
-        processor.debug = True
+        caplog.set_level("DEBUG", logger="cash")
         result = MagicMock()
         result.error = ValueError("debug error")
         ret = processor._handle_execution_error(result, silent=True)
         assert ret is False
+        assert "debug error" in caplog.text
 
 
 # ============================================================================
