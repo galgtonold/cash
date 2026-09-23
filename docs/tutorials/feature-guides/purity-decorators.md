@@ -646,17 +646,20 @@ won't flag on it, and any function whose body calls
 
 ### What the analyzer looks at
 
-<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @3eb3f833 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @a557e11f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
+<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @bbacfc10 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @a557e11f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
 The decorator-side analyzer walks the function body AND
 **module-bounded helpers** (functions defined in the same top-level
 package, or any non-installed-library code) and any **closure-bound
 helpers** reachable through `__globals__` / `__closure__`. For each,
 it flags:
 
-- **Impure calls** — `requests.post`, `os.system`, file writes, a `print` to
-  stdout, pandas `inplace=True`, … Log lines — `print(..., file=sys.stderr)`,
-  `logging.*`, `logger.info(...)` — are not: a hit skipping them is what
-  caching means.
+- **Impure calls** — `requests.post`, `os.system`, file writes, database
+  writes, a `print` to stdout, drawing on pyplot's current figure
+  (`plt.plot`, `plt.show`), pandas `inplace=True`, … The names come from the
+  same table the notebook path uses to decide which statements run every time
+  (`cash.effects`), so the two paths agree on what counts. Log lines —
+  `print(..., file=sys.stderr)`, `logging.*`, `logger.info(...)` — are not: a
+  hit skipping them is what caching means.
 - **Dynamic patterns** — code chosen at runtime, which cash cannot fold
   into the key. Two severities, because two different things are at stake:
     - **Raises** (see the warning box above): `eval`/`exec`/`compile`,

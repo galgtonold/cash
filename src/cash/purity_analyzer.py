@@ -195,7 +195,7 @@ _DISCARD_REPORTED_BUILTINS = frozenset(name for name in MODULE_CALLS if "." not 
 def decorator_effect(call: ast.Call, namespace: dict[str, Any] | None = None) -> Effect | None:
     """The effect *call* has, as the decorator path judges it, or None."""
     effect = classify_call(call, namespace)
-    if effect is None or effect.name in _NOT_YET_REPORTED or effect.kind is EffectKind.DISPLAY:
+    if effect is None or effect.name in _NOT_YET_REPORTED:
         return None
     return effect
 
@@ -908,10 +908,15 @@ class _PurityVisitor(ast.NodeVisitor):
                 and DECORATOR_POLICY[effect.kind] is Action.WARN
                 and not effect.method
             ):
+                what = (
+                    "draws on pyplot's current figure, which a hit does not redraw"
+                    if effect.kind is EffectKind.DISPLAY
+                    else "known I/O / side-effecting"
+                )
                 self.issues.append(
                     PurityIssue(
                         kind=ISSUE_IMPURE_CALL,
-                        description=f"{dotted}() - known I/O / side-effecting",
+                        description=f"{dotted}() - {what}",
                         where=self._qualname,
                         line=line,
                         effect_kind=effect.kind,
@@ -998,6 +1003,11 @@ class _PurityVisitor(ast.NodeVisitor):
     #: round 19 reported "np.sort() - write method". A module's real writes
     #: (`np.save`, `plt.savefig`, `os.write`) keep being reported.
 
+    def _reports_effect(self, call: ast.Call) -> bool:
+        """Is *call* reported by the effect rule (`plt.plot(...)`, say)?"""
+        effect = decorator_effect(call, self._namespace)
+        return effect is not None and DECORATOR_POLICY[effect.kind] is Action.WARN
+
     def _is_module_function_named_like_a_mutator(self, func_node: ast.Attribute) -> bool:
         if func_node.attr not in MUTATOR_METHODS or not self._namespace:
             return False
@@ -1057,7 +1067,11 @@ class _PurityVisitor(ast.NodeVisitor):
                 # impure module calls), it's recorded by _record_call. The
                 # discarded-return flag here adds nothing useful - skip to
                 # avoid double-counting. Skip known-pure idioms too.
-                if method not in REPORTED_METHODS and method not in PANDAS_INPLACE_METHODS:
+                if (
+                    method not in REPORTED_METHODS
+                    and method not in PANDAS_INPLACE_METHODS
+                    and not self._reports_effect(call)
+                ):
                     base = get_base_name(func_node.value)
                     base_str = f"{base}." if base else ""
                     self.issues.append(

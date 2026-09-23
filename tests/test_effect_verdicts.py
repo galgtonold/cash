@@ -81,6 +81,10 @@ ROWS = [
     ("time.process_time()", "refuse", "ambient_read"),
     ("time.localtime(1.0)", "cache", "silent"),
     ("time.strftime('%Y', time.localtime(1.0))", "cache", "silent"),
+    # pyplot's current figure: a notebook statement drawing on it runs every
+    # time, and a decorated function that draws on it was silent.
+    ("plt.plot([1, 2])", "refuse", "impure_call"),
+    ("plt.show()", "refuse", "impure_call"),
 ]
 
 
@@ -163,3 +167,15 @@ def test_a_pandas_clock_read_is_refused_and_reported(tmp_path):
     assert decorator_verdict(module.f)[0] == "ambient_read"
     verdict, reasons = notebook_verdict("r = pd.Timestamp.now()", {"pd": pd})
     assert verdict == "refuse" and reasons == ["Timestamp.now"]
+
+
+def test_a_discarded_pyplot_call_is_reported_once(tmp_path):
+    path = tmp_path / "_effect_verdicts_plot.py"
+    path.write_text("def f(plt):\n    plt.title('t')\n    return 1\n")
+    spec = importlib.util.spec_from_file_location("_effect_verdicts_plot", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert decorator_verdict(module.f) == (
+        "impure_call",
+        ["plt.title() - draws on pyplot's current figure, which a hit does not redraw"],
+    )
