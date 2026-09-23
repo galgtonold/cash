@@ -17,8 +17,8 @@ was used.
 This closes that class from the other side. While the body of a *missing* call
 runs, cash watches for effects it can see regardless of where the code lives:
 
-* a file opened for writing (recorded by :class:`FileAccessTracker`, which
-  already wraps ``open`` for read-tracking and now keeps the write side too)
+* a file opened for writing (reported by the file tracker's ``open`` audit
+  consumer, which sees reads and writes alike)
 * an outbound socket connection
 * a subprocess being spawned
 
@@ -54,26 +54,20 @@ import functools
 import linecache
 import logging
 import os
-import socket
-import subprocess
 import sys
 from typing import Any
 
 from .install_paths import is_user_path
+from .tracking import io_watch
 
 logger = logging.getLogger(__name__)
 
 #: The observer whose block is currently executing, per thread and per
 #: asyncio Task. Mirrors ``file_tracker.active_tracker`` on purpose: same
-#: install-once-dispatch-dynamically shape, same isolation properties.
+#: dispatch-dynamically shape, same isolation properties.
 active_observer: contextvars.ContextVar["EffectObserver | None"] = contextvars.ContextVar(
     "_cash_active_observer", default=None
 )
-
-#: Patches are installed at most once per process and never removed. With no
-#: active observer each wrapper is one ``ContextVar.get()`` and an ``is None``
-#: test before delegating, which is why leaving them in place costs nothing.
-_PATCHED = False
 
 
 def _record(kind: str, detail: str) -> None:
@@ -98,51 +92,24 @@ def line_waived(filename: str, lineno: int) -> bool:
     return above.lstrip().startswith("#") and bool(ASSUME_SAFE_RE.search(above))
 
 
-def _install_patches() -> None:
-    global _PATCHED
-    if _PATCHED:
-        return
-    _PATCHED = True
+def _on_connect(args: tuple) -> None:
+    """The ``socket.connect`` audit event: ``(socket, address)``."""
+    if active_observer.get() is not None:
+        _record("network", f"socket connect to {_describe_address(args[1])}")
 
-    original_connect = socket.socket.connect
 
-    # Both wrappers are signature-TRANSPARENT (`*a, **kw`) and forward
-    # unchanged. Naming a parameter would break any caller that passes it by
-    # keyword, and these sit on paths -- kernel launch, every outbound
-    # connection -- where a signature mismatch is a hard failure a long way
-    # from here. Recording is also wrapped: observing an effect must never be
-    # able to break the call that performed it.
-    @functools.wraps(original_connect)
-    def _tracked_connect(self, *a, **kw):
-        try:
-            _record("network", f"socket connect to {_describe_address(a[0] if a else None)}")
-        except Exception:  # noqa: BLE001
-            pass
-        return original_connect(self, *a, **kw)
+def _on_spawn(args: tuple) -> None:
+    """The ``subprocess.Popen`` audit event: ``(executable, args, cwd, env)``."""
+    if active_observer.get() is not None:
+        _record("subprocess", f"spawned {_describe_argv(args[1])}")
 
-    original_popen_init = subprocess.Popen.__init__
 
-    @functools.wraps(original_popen_init)
-    def _tracked_popen_init(self, *a, **kw):
-        try:
-            _record("subprocess", f"spawned {_describe_argv(a[0] if a else kw.get('args'))}")
-        except Exception:  # noqa: BLE001
-            pass
-        return original_popen_init(self, *a, **kw)
-
-    for owner, name, wrapper, original in (
-        (socket.socket, "connect", _tracked_connect, original_connect),
-        (subprocess.Popen, "__init__", _tracked_popen_init, original_popen_init),
-    ):
-        try:
-            wrapper._cash_effect_patch = True  # type: ignore[attr-defined]
-            wrapper._original_func = original  # type: ignore[attr-defined]
-            setattr(owner, name, wrapper)
-        except (AttributeError, TypeError) as exc:
-            # A hardened runtime may refuse to patch a builtin type. Degrading
-            # to "this effect class is unobserved" is correct: the static pass
-            # still runs and nothing else changes.
-            logger.debug("[EFFECTS] could not patch %s.%s: %s", owner, name, exc)
+# Audit events rather than wrappers on `socket.socket.connect` and
+# `Popen.__init__`: they see every connection and spawn whatever reference the
+# caller holds, and with no observer open nothing on those paths (kernel
+# launch, every outbound connection) runs through cash's code at all.
+io_watch.subscribe("socket.connect", _on_connect)
+io_watch.subscribe("subprocess.Popen", _on_spawn)
 
 
 def _describe_address(address: Any) -> str:
@@ -151,8 +118,14 @@ def _describe_address(address: Any) -> str:
     return str(address)[:80]
 
 
+#: What ``shell=True`` puts in front of the command on POSIX.
+_SHELLS = ("/bin/sh", "/system/bin/sh")
+
+
 def _describe_argv(args: Any) -> str:
     if isinstance(args, (list, tuple)) and args:
+        if len(args) >= 3 and args[0] in _SHELLS and args[1] == "-c":
+            return str(args[2])[:80]  # `shell=True`: the command, not the shell
         return str(args[0])[:80]
     return str(args)[:80]
 
@@ -161,7 +134,7 @@ def _describe_argv(args: Any) -> str:
 #: Only its movement across a body is read, so a lost increment between two
 #: threads cannot hide one.
 _mock_calls = 0
-_mock_hooked = False
+_mock_patches = io_watch.Patches()
 
 
 def _hook_mock_calls() -> None:
@@ -173,14 +146,12 @@ def _hook_mock_calls() -> None:
     the key reads can show those (round 20), but a mock that RAN cannot hide
     that it did: every call on one goes through
     ``CallableMixin._increment_mock_call``. Never imports ``unittest.mock``
-    itself -- a program that has not imported it has no mocks.
+    itself -- a program that has not imported it has no mocks. Installed
+    while an observer is open, like the rest of cash's I/O watch.
     """
-    global _mock_hooked
-    if _mock_hooked:
-        return
     module = sys.modules.get("unittest.mock")
     real = getattr(getattr(module, "CallableMixin", None), "_increment_mock_call", None)
-    if real is None:
+    if real is None or getattr(real, "_cash_effect_patch", False):
         return
 
     @functools.wraps(real)
@@ -191,8 +162,10 @@ def _hook_mock_calls() -> None:
 
     counted._cash_effect_patch = True  # type: ignore[attr-defined]
     counted._original_func = real  # type: ignore[attr-defined]
-    module.CallableMixin._increment_mock_call = counted
-    _mock_hooked = True
+    _mock_patches.replace(module.CallableMixin, "_increment_mock_call", counted)
+
+
+io_watch.add_patcher(_hook_mock_calls, _mock_patches.restore)
 
 
 class EffectObserver:
@@ -224,8 +197,8 @@ class EffectObserver:
 
     # -- lifecycle ---------------------------------------------------------
     def __enter__(self) -> "EffectObserver":
-        _install_patches()
-        _hook_mock_calls()
+        io_watch.hold()
+        _hook_mock_calls()  # `unittest.mock` may have been imported since the first hold
         self._mock_calls_at.append(_mock_calls)
         self._tokens.append(active_observer.set(self))
         self._outer.append(sys._getframe(1))
@@ -234,6 +207,7 @@ class EffectObserver:
     def __exit__(self, *exc_info: Any) -> bool:
         if self._tokens:
             active_observer.reset(self._tokens.pop())
+            io_watch.release()
         if self._outer:
             self._outer.pop()  # a frame must not outlive its call
         if self._mock_calls_at and self._mock_calls_at.pop() != _mock_calls:

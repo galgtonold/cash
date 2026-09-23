@@ -2,26 +2,25 @@
 
 ``Path.open`` reaches the filesystem differently across versions:
 
-    3.11+   Path.open -> io.open(self, ...)          — the io.open patch sees it
+    3.11+   Path.open -> io.open(self, ...)
     3.10    Path.open -> Path._accessor.open(...)     — and _NormalAccessor.open
                                                         was bound to the ORIGINAL
                                                         io.open when pathlib was
                                                         first imported
 
-So on 3.10 the io.open patch never reached pathlib, and a cell reading a file
-through ``Path.read_text()`` recorded no dependency at all — it kept restoring
-from cache after the file changed. Nothing failed loudly; the cache was just
-wrong.
+So on 3.10 a patch on ``io.open`` never reached pathlib, and a cell reading a
+file through ``Path.read_text()`` recorded no dependency at all — it kept
+restoring from cache after the file changed. Nothing failed loudly; the cache
+was just wrong. Reads now arrive as the ``open`` audit event, which the C
+``io.open`` raises whoever holds a reference to it.
 
-These tests assert the OUTCOME (the path is tracked) rather than which
-attribute got patched, so they stay meaningful when pathlib is restructured
-again.
+These tests assert the OUTCOME (the path is tracked) rather than how the read
+was seen, so they stay meaningful when pathlib is restructured again.
 """
 
 from __future__ import annotations
 
 import pathlib
-import sys
 
 import pytest
 
@@ -93,38 +92,10 @@ class TestPathlibStillWorks:
             with pytest.raises(FileNotFoundError):
                 pathlib.Path(tmp_path / "nope.txt").read_text()
 
-    @pytest.mark.skipif(
-        not hasattr(pathlib, "_NormalAccessor"),
-        reason="accessor indirection only exists on Python 3.10 and earlier",
-    )
-    def test_accessor_patch_is_a_staticmethod(self):
-        """The 3.10 accessor holds a builtin, which does not bind.
-
-        Installing a plain function would make ``acc.open`` a bound method and
-        shift every argument by one, so pathlib would pass the accessor where
-        it means to pass the path.
-        """
-        FileAccessTracker()._apply_patches()
-        raw = pathlib._NormalAccessor.__dict__.get("open")
-        assert isinstance(raw, staticmethod), (
-            f"accessor.open must be a staticmethod, got {type(raw).__name__}; "
-            "a bound method would swallow the path argument"
-        )
-
-    def test_patch_is_idempotent(self, data_file):
-        """Repeated trackers must not stack wrappers on the accessor."""
+    def test_repeated_trackers_each_see_the_read(self, data_file):
+        """Repeated trackers each record the read, however it was seen."""
         for _ in range(3):
             tracker = FileAccessTracker()
             with tracker:
                 pathlib.Path(data_file).read_text()
             assert str(data_file).replace("\\", "/").lower() in _tracked(tracker)
-
-
-def test_version_assumption_holds():
-    """Document the branch: only 3.10 has the accessor indirection."""
-    has_accessor = hasattr(pathlib, "_NormalAccessor")
-    if sys.version_info >= (3, 11):
-        assert not has_accessor, (
-            "pathlib grew an accessor again — _patch_pathlib_accessor's "
-            "'3.11+ needs nothing' assumption needs rechecking"
-        )

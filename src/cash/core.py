@@ -519,9 +519,9 @@ def _has_main_guard(path: str) -> bool:
         return known
     found = False
     try:
-        # FileIO, not `open`: cash reading the script is nobody's input, and
-        # a cached call this runs inside would have recorded it as one.
-        with io.FileIO(path, "rb") as fh:
+        # Untracked: cash reading the script is nobody's input, and a cached
+        # call this runs inside would have recorded it as one.
+        with untracked(), io.FileIO(path, "rb") as fh:
             tree = ast.parse(fh.read())
         for node in tree.body:
             test = getattr(node, "test", None) if isinstance(node, ast.If) else None

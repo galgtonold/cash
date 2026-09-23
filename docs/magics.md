@@ -41,7 +41,7 @@ parsed flag, and a working example. Behaviour is derived directly from
 ## Enabling and configuring (user-facing)
 
 ### `%cash_on`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @6a93be44 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @08a46796 -->
 
 Enable automatic caching for every subsequent cell.
 
@@ -83,7 +83,7 @@ that it did nothing and leaves every cell running uncached — see
 ```
 
 ### `%cash_off`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_off @2c0450cd -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_off @34cb0527 -->
 
 Disable automatic caching. Subsequent cells run uncached until you call
 `%cash_on` again.

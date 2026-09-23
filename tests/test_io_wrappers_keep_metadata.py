@@ -1,20 +1,18 @@
 """cash's I/O wrappers must look like the functions they wrap.
 
-While cash watches reads and side effects it replaces ``json.load``,
-``pandas.read_csv``, ``socket.socket.connect`` and friends with wrappers. A
-wrapper that does not carry its original's metadata turns
-``inspect.signature(json.load)`` into ``(*args, **kwargs)`` and empties
-``help(pd.read_csv)`` and Jupyter's shift-tab tooltip, for the whole process.
+While cash watches reads and side effects it replaces ``pandas.read_csv``,
+``pyarrow.parquet.read_table``, ``sqlite3.connect`` and friends with wrappers.
+A wrapper that does not carry its original's metadata turns
+``inspect.signature(pd.read_csv)`` into ``(*args, **kwargs)`` and empties
+``help(pd.read_csv)`` and Jupyter's shift-tab tooltip. ``open``, ``json.load``,
+``os.listdir``, ``socket.connect`` and ``Popen`` are not wrapped at all: cash
+sees them through audit events.
 """
 
 from __future__ import annotations
 
-import builtins
 import inspect
-import json
 import os
-import pickle
-import socket
 import subprocess
 import sys
 import textwrap
@@ -26,38 +24,29 @@ from cash.tracking.file_tracker import FileAccessTracker
 
 
 def _targets():
-    import glob
-    import io
+    import concurrent.futures
     import linecache
     import pathlib
+    import sqlite3
 
-    import numpy
     import pandas
 
     targets = [
-        (builtins, "open"),
-        (io, "open"),
-        (json, "load"),
-        (pickle, "load"),
-        (os, "listdir"),
-        (os, "scandir"),
         (os.path, "exists"),
-        (glob, "glob"),
+        (os.path, "isfile"),
         (linecache, "getlines"),
+        (sqlite3, "connect"),
         (pandas, "read_csv"),
         (pandas, "read_parquet"),
-        (numpy, "load"),
-        (numpy, "loadtxt"),
         (pathlib.Path, "stat"),
-        (socket.socket, "connect"),
-        (subprocess.Popen, "__init__"),
+        (concurrent.futures.ThreadPoolExecutor, "submit"),
     ]
-    try:
-        import pyarrow.parquet
-
-        targets.append((pyarrow.parquet, "read_table"))
-    except ImportError:
-        pass
+    for module_name, name in (("pyarrow.parquet", "read_table"), ("polars", "read_csv")):
+        try:
+            module = __import__(module_name, fromlist=["_"])
+        except ImportError:
+            continue
+        targets.append((module, name))
     return targets
 
 
@@ -83,13 +72,13 @@ def test_a_wrapped_callable_keeps_its_signature_and_docs(index):
         current = getattr(owner, name)
         original = getattr(current, "_original_func", None)
         if original is None:
-            pytest.skip(f"{name} is not wrapped in this configuration")
+            pytest.fail(f"{name} is not wrapped while a tracker is open")
         assert _metadata(current) == _metadata(original)
         assert getattr(current, "__wrapped__", None) is original
 
 
 def test_help_and_signature_are_unchanged_by_cash_in_a_fresh_process():
-    """The user's view, end to end: the same answers before and after cash watches."""
+    """The user's view, end to end: the same answers before, during and after."""
     script = textwrap.dedent(
         """
         import inspect, json, pydoc
@@ -100,6 +89,7 @@ def test_help_and_signature_are_unchanged_by_cash_in_a_fresh_process():
                 str(inspect.signature(json.load)),
                 str(inspect.signature(pd.read_csv)),
                 pydoc.render_doc(json.load, renderer=pydoc.plaintext),
+                pydoc.render_doc(pd.read_csv, renderer=pydoc.plaintext),
             ]
 
         before = view()
@@ -109,6 +99,7 @@ def test_help_and_signature_are_unchanged_by_cash_in_a_fresh_process():
         from cash.tracking.file_tracker import FileAccessTracker
 
         with FileAccessTracker(), EffectObserver():
+            assert getattr(pd.read_csv, "_is_file_tracker_patch", False)
             during = view()
         after = view()
         assert before == during == after, (before, during, after)

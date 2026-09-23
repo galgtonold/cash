@@ -380,10 +380,13 @@ def file_content_hash(
             full_hash_max = full_hash_max_bytes()
         h = hashlib.sha256()
         h.update(str(size).encode("ascii"))
-        # FileIO, not `open`: cash's own read of a file must not be tracked as
-        # a read by the cached call it is checking on behalf of (which then
-        # hashed the file a second time to fingerprint that "read").
-        with io.FileIO(path, "rb") as f:
+        # Untracked: cash's own read of a file must not be tracked as a read
+        # by the cached call it is checking on behalf of (which then hashed
+        # the file a second time to fingerprint that "read").
+        # Local: import cycle tracking.file_dep_snapshot -> tracking.file_tracker -> tracking.file_dep_snapshot.
+        from cash.tracking.file_tracker import untracked
+
+        with untracked(), io.FileIO(path, "rb") as f:
             if size <= full_hash_max:
                 # ``FileIO.read(n)`` allocates n bytes before it reads, so a
                 # 2 KB file read in 1 MiB chunks cost two 1 MiB allocations:
@@ -630,22 +633,24 @@ def stats_from_listings(paths: Iterable[str]) -> dict[str, os.stat_result]:
     hashes in full, where content decides and a lagging size or time can at
     most reuse a digest within the window it already reuses one.
 
-    Through the unpatched ``os.scandir``: the file tracker records a directory
-    listed while it is active as a read, and this one is cash's, not the user's.
+    Listed untracked: the file tracker records a directory listed while it is
+    active as a read, and this one is cash's, not the user's.
     """
     if os.name != "nt":
         return {}
+    # Local: import cycle tracking.file_dep_snapshot -> tracking.file_tracker -> tracking.file_dep_snapshot.
+    from cash.tracking.file_tracker import untracked
+
     by_dir: dict[str, dict[str, str]] = {}
     for path in paths:
         directory, name = os.path.split(path)
         by_dir.setdefault(directory, {})[os.path.normcase(name)] = path
-    scandir = getattr(os.scandir, "_original_func", os.scandir)
     found: dict[str, os.stat_result] = {}
     for directory, wanted in by_dir.items():
         if len(wanted) < LISTING_MIN_FILES:
             continue
         try:
-            with scandir(directory or ".") as entries:
+            with untracked(), os.scandir(directory or ".") as entries:
                 for entry in entries:
                     path = wanted.get(os.path.normcase(entry.name))
                     if path is not None:

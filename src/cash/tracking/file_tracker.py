@@ -1,14 +1,15 @@
-"""File-read interception for tracking data file dependencies.
+"""File-read tracking for data file dependencies.
 
-Monkey-patches common I/O functions (``open``, ``pandas.read_csv``,
-``numpy.load``, etc.) to record which files each statement reads.
-File hashes are incorporated into cache keys so that changed data
-automatically invalidates dependent cached results.
+Records which files each cached call or notebook statement reads. Python-level
+opens and directory listings arrive as audit events through
+:mod:`cash.tracking.io_watch`; readers that open files in C (pyarrow, polars,
+sqlite3, some pandas readers), existence probes and ``Path.stat`` are wrapped
+while a tracker is open. File hashes are incorporated into cache keys so that
+changed data automatically invalidates dependent cached results.
 """
 
 from __future__ import annotations
 
-import builtins
 import concurrent.futures
 import concurrent.futures.thread as cf_thread
 import contextvars
@@ -29,6 +30,7 @@ from typing import Any, Optional
 
 from cash._clock import perf_counter as _perf_counter
 from cash.install_paths import installed_roots, interpreter_roots, is_user_path, norm_dir, normcase_path, site_roots
+from cash.tracking import io_watch
 from cash.utils import is_remote_url, normalize_path
 
 # A remote URL handed to a reader (``pd.read_parquet("s3://bucket/key")``)
@@ -87,15 +89,11 @@ class untracked:
         active_tracker.reset(self._token)
 
 
-# Per-target install lock: the dispatcher wrappers are installed once
-# per (module/dict, attr-name) pair for the lifetime of the process.
-# Subsequent ``__enter__`` calls skip already-installed targets (cheap
-# attribute-sentinel check). New targets — i.e. modules imported after
-# the first tracker entered, or new handlers registered via
-# :func:`cash.register_file_handler` — are still picked up because
-# ``_apply_patches`` runs on every ``__enter__`` and only the
-# already-installed wrappers are no-op skipped.
-_install_lock = threading.Lock()
+# The wrappers installed while a tracker is open (see `_install_patches`),
+# and the lock that serialises installing and removing them with the post-
+# import hook patching a module that was imported meanwhile.
+_patches = io_watch.Patches()
+_install_lock = threading.RLock()
 
 # Kernel pseudo-filesystems are never data dependencies, and recording one is
 # actively harmful: ``/proc/meminfo`` reports live memory and so changes on
@@ -514,15 +512,15 @@ def tracking_seconds() -> float:
     return _TRACKING_SECONDS[0]
 
 
-def _note_untracked_read(path: Any) -> None:
+def _note_untracked_read(path: Any, frame: Any) -> None:
     """A read made outside every cached call, credited to the user code on the stack.
 
-    Only a read that user code started: a read by cash itself or by a library
-    with no user frame above it (an import, a font cache) is nobody's input.
-    Never raises -- it runs inside every ``open`` in the process.
+    *frame* is the frame that asked for the read. Only a read that user code
+    started: a read by cash itself or by a library with no user frame above it
+    (an import, a font cache) is nobody's input. Never raises -- it runs inside
+    every ``open`` in the process.
     """
     try:
-        frame = sys._getframe(2)
         codes = []
         depth = 0
         while frame is not None and depth < 64:
@@ -579,15 +577,147 @@ def credited_reads(code: Any) -> dict[str, Any] | None:
 
 
 def install_read_watch() -> None:
-    """Install the read patches now rather than at the first cached call.
+    """Watch reads from now on, not only inside cached calls.
 
     A memo is usually filled before any cached call runs -- ``main()`` logging
-    its settings -- and a read the patches were not there to see is a read no
-    entry can depend on. Called when a function is decorated.
+    its settings -- and a read nobody was watching is a read no entry can
+    depend on. Called when a function is decorated. It turns on the ``open``
+    audit event outside tracker scopes and installs no patch: a read through
+    a C-level reader outside every cached call is not seen.
     """
-    with _install_lock:
-        FileAccessTracker()._apply_patches()
-    _ensure_import_hook_installed()
+    io_watch.watch_outside_scopes()
+
+
+#: Callers whose opens and listings are the interpreter's, not a read of data:
+#: the import system (a module's source and bytecode, the ``sys.path``
+#: directories it lists) and the source readers behind ``inspect.getsource``
+#: and tracebacks, which the ``linecache`` wrappers below cover instead.
+_NOT_A_READ = frozenset(
+    {
+        "_frozen_importlib",
+        "_frozen_importlib_external",
+        "importlib._bootstrap",
+        "importlib._bootstrap_external",
+        "zipimport",
+        "tokenize",
+        "linecache",
+    }
+)
+
+
+def _audited_caller() -> Any:
+    """The frame that made the audited call, seen from an audit consumer."""
+    # +1: this helper's own frame.
+    return sys._getframe(io_watch.CALLER_DEPTH + 1)
+
+
+def _is_read_mode(mode: str) -> bool:
+    # `w+` and `x+` start from an empty file, so nothing the code reads back
+    # existed before it: a write, not an input. Pillow saves every image with
+    # "w+b", and round 21 found each `savefig` recorded as a dependency on its
+    # own output.
+    return "r" in mode or ("+" in mode and "w" not in mode and "x" not in mode)
+
+
+def _on_open(args: tuple) -> None:
+    """The ``open`` audit event: a read is a dependency, a write an effect.
+
+    ``mode`` is the raw mode (``r``, ``w+``, ...) of any Python-level open;
+    ``os.open`` reports None there and is not watched, and an integer "path"
+    is a descriptor being wrapped, which names no file.
+    """
+    path, mode, _flags = args
+    if not isinstance(mode, str) or not isinstance(path, (str, bytes, os.PathLike)):
+        return
+    caller = _audited_caller()
+    if caller.f_globals.get("__name__") in _NOT_A_READ:
+        return
+    if _is_read_mode(mode):
+        tracker = active_tracker.get()
+        if tracker is None:
+            _note_untracked_read(path, caller)
+            return
+        tracker._track_path(path)
+        if "a" not in mode:
+            # A file that was not there is an input too, and the docs say so --
+            # but only the `os.path.exists` spelling recorded it.
+            # `try: open(p) except FileNotFoundError:` kept serving its default
+            # after the file appeared (found attacking the decorator before
+            # round 26). The event comes before the open, so ask the disk.
+            try:
+                os.stat(path)
+            except FileNotFoundError:
+                tracker._track_absent(path)
+            except (OSError, ValueError):
+                pass
+    elif any(ch in mode for ch in "wax"):
+        # Not a dependency -- a WRITE is an effect, not an input, and folding
+        # it into the key would invalidate a function on its own output. It is
+        # recorded for the effect observer instead: a cache hit skips this
+        # write, and if the analyzer said nothing (the write happened inside a
+        # library it does not walk into) that is a silent behaviour change the
+        # user should hear about. See cash.effect_observer.
+        observer = _active_effect_observer.get()
+        if observer is not None and not _is_cash_internal(path):
+            observer.record_write(path)
+
+
+def _on_listing(args: tuple) -> None:
+    """``os.listdir`` / ``os.scandir``: the listed directory is a dependency.
+
+    Listing a directory is how a new file matching a pattern becomes visible:
+    a cell that enumerates a directory and reads the matches gets file deps
+    only for the files READ on the first run, so a NEW matching file would be
+    invisible. Adding or removing an entry bumps the directory's own mtime on
+    local filesystems, so the existing freshness check invalidates the
+    reader. ``pathlib``'s ``glob`` / ``iterdir`` list through these too.
+    """
+    tracker = active_tracker.get()
+    if tracker is None:
+        return
+    path = args[0]
+    if path is None:
+        path = "."
+    elif not isinstance(path, (str, bytes, os.PathLike)):
+        return  # a descriptor
+    if _audited_caller().f_globals.get("__name__") in _NOT_A_READ:
+        return
+    tracker._track_path(path)
+
+
+def _on_glob(args: tuple) -> None:
+    """``glob.glob`` / ``glob.iglob``: track the directory the pattern enumerates."""
+    tracker = active_tracker.get()
+    if tracker is None:
+        return
+    base = _glob_base_dir(args[0])
+    if base is not None:
+        tracker._track_path(base)
+
+
+def _glob_base_dir(pattern: Any) -> str | None:
+    """Return the longest leading, magic-free directory of a glob *pattern*.
+
+    ``gdir/*.num`` → ``gdir``; ``a/b*/c`` → ``a`` (deepest stable ancestor).
+    The directory's mtime is what we track for membership changes.
+    """
+
+    try:
+        parts = (os.fsdecode(pattern) if isinstance(pattern, bytes) else str(pattern)).replace("\\", "/").split("/")
+    except (TypeError, ValueError):
+        return None
+    base: list[str] = []
+    for p in parts[:-1]:  # exclude the filename component
+        if glob_module.has_magic(p):
+            break
+        base.append(p)
+    return "/".join(base) or "."
+
+
+io_watch.subscribe("open", _on_open, outside_scopes=True)
+io_watch.subscribe("os.listdir", _on_listing)
+io_watch.subscribe("os.scandir", _on_listing)
+io_watch.subscribe("glob.glob", _on_glob)
 
 
 def _dispatch_track(path: Any) -> None:
@@ -604,127 +734,72 @@ def _dispatch_track(path: Any) -> None:
         _tracker._track_path(path)
 
 
+#: (module id, pattern) -> (size of the module's namespace, names it matched):
+#: `dir()` of pandas on every tracker that opens would be most of its cost.
+_TARGETS: dict[tuple[int, str], tuple[int, list[str]]] = {}
+
+
 def _find_patch_targets(func_pattern: str, module_obj: Any) -> list:
     """Return the list of attribute names to patch on *module_obj*."""
     if func_pattern.endswith("*"):
+        namespace = getattr(module_obj, "__dict__", None)
+        size = len(namespace) if isinstance(namespace, dict) else -1
+        key = (id(module_obj), func_pattern)
+        cached = _TARGETS.get(key)
+        if cached is not None and size >= 0 and cached[0] == size:
+            return cached[1]
         prefix = func_pattern[:-1]
-        return [name for name in dir(module_obj) if name.startswith(prefix)]
+        found = [name for name in dir(module_obj) if name.startswith(prefix)]
+        _TARGETS[key] = (size, found)
+        return found
     if hasattr(module_obj, func_pattern):
         return [func_pattern]
     return []
 
 
-def _install_module_patches(module_name: str, module_obj: Any) -> None:
-    """Install dispatcher patches on a module. Idempotent — skips any
-    target whose current attribute is already a dispatcher wrapper.
+#: (owner id, name, kind) -> (original, wrapper). Trackers open and close
+#: around every cached call, so a wrapper is built once per original and only
+#: set again after that.
+_WRAPPERS: dict[tuple[int, str, Any], tuple[Any, Any]] = {}
 
-    Called from :meth:`FileAccessTracker._apply_patches` and from
-    :class:`_PatchingLoader.exec_module` (post-import). The dispatcher
-    wrappers route via ``active_tracker`` so they're tracker-agnostic
-    — one install serves all trackers.
+
+def _install_wrapper(owner: Any, name: str, original: Any, kind: Any, make: Callable[[Any], Any]) -> None:
+    """Set ``owner.name`` to cash's wrapper of *original*, made by *make*."""
+    key = (id(owner), name, kind)
+    cached = _WRAPPERS.get(key)
+    if cached is not None and cached[0] is original:
+        wrapper = cached[1]
+    else:
+        wrapper = make(original)
+        wrapper._is_file_tracker_patch = True
+        wrapper._original_func = original
+        _WRAPPERS[key] = (original, wrapper)
+    if not _patches.replace(owner, name, wrapper):
+        logger.debug("[FILE_TRACKER] Failed to patch %r.%s", owner, name)
+
+
+def _install_module_patches(module_name: str, module_obj: Any) -> None:
+    """Install dispatcher patches on a module while a tracker is open.
+    Idempotent — skips any target whose current attribute is already a
+    dispatcher wrapper.
+
+    Called from `_install_patches`, from :class:`_PatchingLoader.exec_module`
+    (post-import) and when a handler is registered. The dispatcher wrappers
+    route via ``active_tracker`` so they're tracker-agnostic — one install
+    serves all trackers.
     """
     registry = FileDependencyRegistry()
     handlers = registry.get_handlers_for_module(module_name)
 
-    for func_pattern, factory in handlers:
-        targets = _find_patch_targets(func_pattern, module_obj)
-        for name in targets:
-            if not hasattr(module_obj, name):
-                continue
-            original_func = getattr(module_obj, name)
-
-            # Install-once skip.
-            if getattr(original_func, "_is_file_tracker_patch", False):
-                continue
-
-            real_original = original_func
-            if not callable(real_original):
-                continue
-
-            wrapper = factory(real_original, _dispatch_track)
-            wrapper._is_file_tracker_patch = True
-            wrapper._original_func = real_original
-            try:
-                setattr(module_obj, name, wrapper)
-            except (AttributeError, TypeError) as e:
-                logger.debug("[FILE_TRACKER] Failed to patch %s.%s: %s", module_name, name, e)
-
-
-def _patch_pathlib_accessor() -> None:
-    """Route pathlib's own opener through the tracker on Python 3.10.
-
-    On 3.11+ ``Path.open`` calls ``io.open`` directly, so the ``io.open`` patch
-    covers pathlib. On 3.10 it goes through ``Path._accessor.open``, and
-    ``_NormalAccessor.open = io.open`` captures the ORIGINAL at class-definition
-    time — when ``pathlib`` is first imported, long before cash patches
-    anything. Patching ``io.open`` therefore never reached pathlib there, and
-    every pathlib read was invisible: a cell doing ``Path(p).read_text()``
-    recorded no file dependency at all and was never invalidated when ``p``
-    changed. Silent staleness, not a visible error.
-
-    The accessor attribute holds a BUILTIN, which has no descriptor protocol,
-    so pathlib calls it as ``acc.open(path, ...)``. A plain Python function
-    installed in its place would bind as a method and swallow ``path`` as
-    ``self`` — hence ``staticmethod``.
-    """
-    accessor = getattr(pathlib, "_NormalAccessor", None)
-    if accessor is None:
-        return  # 3.11+: patching io.open already covers pathlib
-
-    original = getattr(accessor, "open", None)
-    if original is None or getattr(original, "_is_file_tracker_patch", False):
-        return
-
-    real_original = original
-    if not callable(real_original):
-        return
-
-    wrapper = FileDependencyRegistry()._create_open_handler(real_original, _dispatch_track)
-    wrapper._is_file_tracker_patch = True
-    wrapper._original_func = real_original
-    try:
-        accessor.open = staticmethod(wrapper)
-    except (AttributeError, TypeError) as e:
-        logger.debug("[FILE_TRACKER] Failed to patch pathlib accessor: %s", e)
-
-
-def _patch_pathlib_listing() -> None:
-    """Track the directories ``Path.glob`` / ``rglob`` / ``iterdir`` list.
-
-    Listing a directory is how a new file matching a pattern becomes visible
-    (see the ``os.scandir`` registration). pathlib mostly calls
-    ``os.scandir`` at call time, which that patch covers -- but not on two
-    versions: on 3.10 it lists through ``_NormalAccessor.scandir`` /
-    ``.listdir``, and on 3.13 ``Path.glob`` goes through ``glob._Globber`` /
-    ``glob._StringGlobber``, whose ``scandir`` holds the ORIGINAL
-    ``os.scandir``, captured when the module was imported. A notebook reading
-    ``sorted(Path("ledger").glob("*.csv"))`` recorded no directory there, and
-    a new month's file was never seen: the concat was served from the cache
-    without it (round 22, 3/3).
-    """
-
-    targets = [(getattr(pathlib, "_NormalAccessor", None), ("scandir", "listdir"))]
-    targets += [(getattr(glob_module, name, None), ("scandir",)) for name in ("_Globber", "_StringGlobber")]
-    factory = FileDependencyRegistry()._create_listdir_handler
-    for owner, names in targets:
-        if owner is None:
-            continue
-        for name in names:
-            original = owner.__dict__.get(name)
-            if isinstance(original, staticmethod):
-                original = original.__func__
-            if original is None or getattr(original, "_is_file_tracker_patch", False):
-                continue
-            real_original = original
-            if not callable(real_original):
-                continue
-            wrapper = factory(real_original, _dispatch_track)
-            wrapper._is_file_tracker_patch = True
-            wrapper._original_func = real_original
-            try:
-                setattr(owner, name, staticmethod(wrapper))
-            except (AttributeError, TypeError) as e:
-                logger.debug("[FILE_TRACKER] Failed to patch %s.%s: %s", owner.__name__, name, e)
+    with _install_lock:
+        if not io_watch.holding():
+            return  # an import finishing after the last tracker closed
+        for func_pattern, factory in handlers:
+            for name in _find_patch_targets(func_pattern, module_obj):
+                original = getattr(module_obj, name, None)
+                if original is None or not callable(original) or getattr(original, "_is_file_tracker_patch", False):
+                    continue
+                _install_wrapper(module_obj, name, original, factory, lambda o, f=factory: f(o, _dispatch_track))
 
 
 def _track_regular_file(path: Any) -> None:
@@ -761,21 +836,19 @@ def _patch_pathlib_stat() -> None:
         return
     original = owner.__dict__["stat"]
     if getattr(original, "_is_file_tracker_patch", False) or not callable(original):
-        return
+        return  # still installed: something wrapped it, so it was not put back
 
-    @functools.wraps(original)
-    def tracked_path_stat(self, *args, **kwargs):
-        result = original(self, *args, **kwargs)
-        if active_tracker.get() is not None and stat.S_ISREG(result.st_mode):
-            _track_regular_file(self)
-        return result
+    def make(original):
+        @functools.wraps(original)
+        def tracked_path_stat(self, *args, **kwargs):
+            result = original(self, *args, **kwargs)
+            if active_tracker.get() is not None and stat.S_ISREG(result.st_mode):
+                _track_regular_file(self)
+            return result
 
-    tracked_path_stat._is_file_tracker_patch = True
-    tracked_path_stat._original_func = original
-    try:
-        setattr(owner, "stat", tracked_path_stat)
-    except (AttributeError, TypeError) as e:
-        logger.debug("[FILE_TRACKER] Failed to patch %s.stat: %s", owner.__name__, e)
+        return tracked_path_stat
+
+    _install_wrapper(owner, "stat", original, "stat", make)
 
 
 def _patch_thread_pool_submit() -> None:
@@ -797,15 +870,16 @@ def _patch_thread_pool_submit() -> None:
     if original is None or getattr(original, "_is_file_tracker_patch", False):
         return
 
-    @functools.wraps(original)
-    def submit(self, fn, /, *args, **kwargs):
-        if active_tracker.get() is None or getattr(self, "_cash_internal", False):
-            return original(self, fn, *args, **kwargs)
-        return original(self, contextvars.copy_context().run, fn, *args, **kwargs)
+    def make(original):
+        @functools.wraps(original)
+        def submit(self, fn, /, *args, **kwargs):
+            if active_tracker.get() is None or getattr(self, "_cash_internal", False):
+                return original(self, fn, *args, **kwargs)
+            return original(self, contextvars.copy_context().run, fn, *args, **kwargs)
 
-    submit._is_file_tracker_patch = True
-    submit._original_func = original
-    pool.submit = submit
+        return submit
+
+    _install_wrapper(pool, "submit", original, "submit", make)
 
 
 class _WorkerReads:
@@ -877,36 +951,37 @@ def _patch_process_pool_submit() -> None:
     if original is None or getattr(original, "_is_file_tracker_patch", False):
         return
 
-    @functools.wraps(original)
-    def submit(self, fn, /, *args, **kwargs):
-        tracker = active_tracker.get()
-        if tracker is None or getattr(self, "_cash_internal", False):
-            return original(self, fn, *args, **kwargs)
-        inner = original(self, _ReadsInWorker(fn), *args, **kwargs)
-        outer = _RelayFuture(inner)
+    def make(original):
+        @functools.wraps(original)
+        def submit(self, fn, /, *args, **kwargs):
+            tracker = active_tracker.get()
+            if tracker is None or getattr(self, "_cash_internal", False):
+                return original(self, fn, *args, **kwargs)
+            inner = original(self, _ReadsInWorker(fn), *args, **kwargs)
+            outer = _RelayFuture(inner)
 
-        def relay(done: concurrent.futures.Future) -> None:
-            if done.cancelled():
-                outer.cancel()
-                return
-            error = done.exception()
-            if error is not None:
-                outer.set_exception(error)
-                return
-            result = done.result()
-            if isinstance(result, _WorkerReads):
-                for path in result.files:
-                    tracker.add_tracked(path)
-                tracker.absent_files.update(result.absent)
-                result = result.value
-            outer.set_result(result)
+            def relay(done: concurrent.futures.Future) -> None:
+                if done.cancelled():
+                    outer.cancel()
+                    return
+                error = done.exception()
+                if error is not None:
+                    outer.set_exception(error)
+                    return
+                result = done.result()
+                if isinstance(result, _WorkerReads):
+                    for path in result.files:
+                        tracker.add_tracked(path)
+                    tracker.absent_files.update(result.absent)
+                    result = result.value
+                outer.set_result(result)
 
-        inner.add_done_callback(relay)
-        return outer
+            inner.add_done_callback(relay)
+            return outer
 
-    submit._is_file_tracker_patch = True
-    submit._original_func = original
-    pool.submit = submit
+        return submit
+
+    _install_wrapper(pool, "submit", original, "submit", make)
 
 
 class FileDependencyRegistry:
@@ -925,14 +1000,16 @@ class FileDependencyRegistry:
         return cls._instance
 
     def _initialize_defaults(self):
-        """Initialize default handlers for common libraries."""
-        # Builtins
-        self.register("builtins", "open", self._create_open_handler)
+        """Initialize default handlers for readers no audit event reports.
 
-        # io (used by pathlib)
-        self.register("io", "open", self._create_open_handler)
-
-        # Pandas
+        ``open`` itself, and every reader that opens its file through it
+        (``json``/``pickle``/``joblib``/``numpy`` loaders, ``Path.read_text``),
+        arrive as the ``open`` audit event instead (see `_on_open`), as do
+        ``os.listdir``, ``os.scandir`` and ``glob``. What is left here opens
+        files in C, or answers from a cache or a stat that raises no event.
+        """
+        # Pandas: several readers go to C libraries (read_hdf, read_orc,
+        # read_spss), and a remote URL is recorded here before any fetch.
         self.register("pandas", "read_*", self._create_path_arg_handler)
 
         # Polars
@@ -948,8 +1025,7 @@ class FileDependencyRegistry:
         self.register("polars", "scan_ipc", self._create_path_arg_handler)
         self.register("polars", "scan_ndjson", self._create_path_arg_handler)
 
-        # Numpy
-        # pyarrow reads in C++, so nothing passes through a patched open(): a
+        # pyarrow reads in C++, so nothing passes through Python's open(): a
         # cached function that switched to pyarrow.csv for speed recorded no
         # file dependency at all, and a whole new export returned yesterday's
         # numbers (CAS-115). Path-taking readers only -- a class such as
@@ -963,22 +1039,18 @@ class FileDependencyRegistry:
         self.register("pyarrow.feather", "read_feather", self._create_path_arg_handler)
         self.register("pyarrow.json", "read_json", self._create_path_arg_handler)
 
-        self.register("numpy", "load", self._create_path_arg_handler)
-        self.register("numpy", "loadtxt", self._create_path_arg_handler)
-        self.register("numpy", "genfromtxt", self._create_path_arg_handler)
-        self.register("numpy", "fromfile", self._create_path_arg_handler)
-
         # pyarrow.dataset reads in C++ like the rest of pyarrow; `read_table`
         # was registered and `dataset()` was not, so one entry point of an
         # otherwise-covered library went stale (found attacking the decorator
         # before round 26).
         self.register("pyarrow.dataset", "dataset", self._create_path_arg_handler)
 
-        # linecache reads through `tokenize._builtin_open`, a reference taken
-        # at import time, so the patched `open` never sees it. Source files are
-        # left out: linecache is what `inspect.getsource` (and every traceback)
-        # reads with, and recording those made a module's own source a data
-        # dependency of the functions in it.
+        # linecache answers from its own cache, so a file read once is not
+        # opened again and no audit event reports the next lookup. Source files
+        # are left out: linecache is what `inspect.getsource` (and every
+        # traceback) reads with, and recording those made a module's own source
+        # a data dependency of the functions in it. The opens it does make are
+        # skipped by `_on_open` for the same reason.
         self.register("linecache", "getline", self._create_source_reader_handler)
         self.register("linecache", "getlines", self._create_source_reader_handler)
 
@@ -991,26 +1063,6 @@ class FileDependencyRegistry:
         self.register("sqlite3", "connect", self._create_path_arg_handler)
         self.register("sqlite3.dbapi2", "connect", self._create_path_arg_handler)
 
-        # Joblib
-        self.register("joblib", "load", self._create_path_arg_handler)
-
-        # Pickle
-        self.register("pickle", "load", self._create_path_arg_handler)
-
-        # Json
-        self.register("json", "load", self._create_path_arg_handler)
-
-        # Directory listing: a cell that enumerates a directory and
-        # reads the matches gets file-deps only for the files READ on the first
-        # run, so a NEW matching file is invisible. Track the enumerated
-        # directory itself as a dependency - adding/removing an entry bumps the
-        # directory's own mtime on local filesystems, so the existing mtime
-        # freshness check invalidates the reader.
-        self.register("glob", "glob", self._create_glob_dir_handler)
-        self.register("glob", "iglob", self._create_glob_dir_handler)
-        self.register("os", "listdir", self._create_listdir_handler)
-        self.register("os", "scandir", self._create_listdir_handler)
-
         # Existence probes: "is there a config here?" The ABSENCE of a file is
         # an input -- it selects the defaults branch -- and it was the only
         # input cash could not see, because a file that is never opened
@@ -1018,11 +1070,13 @@ class FileDependencyRegistry:
         # nothing recorded no dependencies at all, so it looked valid
         # everywhere: a round-16 tester got directory B's answer in directory
         # A, silently, 4/4. Only a NEGATIVE result is recorded; a probe that
-        # says yes is followed by the read that tracks it properly.
+        # says yes is followed by the read that tracks it properly. `os.stat`
+        # raises no audit event.
         self.register("os.path", "exists", self._create_exists_handler)
         self.register("os.path", "isfile", self._create_exists_handler)
         self.register("genericpath", "exists", self._create_exists_handler)
         self.register("genericpath", "isfile", self._create_exists_handler)
+        self._ready = True
 
     def register(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]):
         """
@@ -1037,6 +1091,12 @@ class FileDependencyRegistry:
         if module_name not in self.handlers:
             self.handlers[module_name] = []
         self.handlers[module_name].append((func_name, handler_factory))
+        self._revision = getattr(self, "_revision", 0) + 1
+        # Registered while a tracker is open: wrap the module now, as opening
+        # the next tracker would, rather than miss the reads of this one.
+        module = sys.modules.get(module_name)
+        if module is not None and getattr(self, "_ready", False) and io_watch.holding():
+            _install_module_patches(module_name, module)
 
     def get_handlers_for_module(self, module_name: str) -> list[tuple[str, Callable[..., Any]]]:
         return self.handlers.get(module_name, [])
@@ -1044,67 +1104,18 @@ class FileDependencyRegistry:
     # --- Standard Handler Factories ---
 
     @staticmethod
-    def _create_open_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
-        """Handler for open()-like functions.
-
-        ``track_callback`` is part of the user-facing handler factory
-        signature (see :meth:`FileDependencyRegistry.register`) so
-        custom factories can record the access. The built-in handlers
-        ignore the argument and consult ``active_tracker`` directly —
-        that way one patch serves any number of concurrent trackers.
-        """
-
-        @functools.wraps(original_func)
-        def tracked_open(file, *args, **kwargs):
-            mode = args[0] if args else kwargs.get("mode", "r")
-            # `w+` and `x+` start from an empty file, so nothing the code reads
-            # back existed before it: a write, not an input. Pillow saves every
-            # image with "w+b", and round 21 found each `savefig` recorded as a
-            # dependency on its own output.
-            if "r" in mode or ("+" in mode and "w" not in mode and "x" not in mode):
-                _tracker = active_tracker.get()
-                if _tracker is not None:
-                    _tracker._track_path(file)
-                    try:
-                        return original_func(file, *args, **kwargs)
-                    except FileNotFoundError:
-                        # A file that was not there is an input too, and the
-                        # docs say so -- but only the `os.path.exists` spelling
-                        # recorded it. `try: open(p) except FileNotFoundError:`
-                        # kept serving its default after the file appeared
-                        # (found attacking the decorator before round 26).
-                        if isinstance(file, (str, bytes, os.PathLike)):
-                            _tracker._track_absent(file)
-                        raise
-                elif isinstance(file, (str, bytes, os.PathLike)):
-                    _note_untracked_read(file)
-            elif any(ch in mode for ch in ("w", "a", "x")):
-                # Not a dependency -- a WRITE is an effect, not an input, and
-                # folding it into the key would invalidate a function on its
-                # own output. It is recorded for the effect observer instead:
-                # a cache hit skips this write, and if the analyzer said
-                # nothing (the write happened inside a library it does not walk
-                # into) that is a silent behaviour change the user should hear
-                # about. See cash.effect_observer.
-                _observer = _active_effect_observer.get()
-                if _observer is not None and not _is_cash_internal(file):
-                    _observer.record_write(file)
-            return original_func(file, *args, **kwargs)
-
-        return tracked_open
-
-    @staticmethod
     def _create_path_arg_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
         """Generic handler for functions where the first argument is a path.
 
-        ``track_callback`` is part of the user-facing factory signature
-        — see :meth:`_create_open_handler`. The built-in wrapper
-        consults ``active_tracker`` directly.
+        ``track_callback`` is part of the user-facing handler factory
+        signature (see :meth:`FileDependencyRegistry.register`) so custom
+        factories can record the access. The built-in handlers ignore the
+        argument and consult ``active_tracker`` directly — that way one patch
+        serves any number of concurrent trackers.
         """
 
         # Positional OR keyword. The wrapper used to demand the path as its
-        # first positional parameter, and these wrappers are installed once,
-        # process-wide, on the first cached call -- so from then on
+        # first positional parameter, so while it was installed
         # `pd.read_csv(filepath_or_buffer=p)`, `np.load(file=p)` or
         # `pq.read_table(source=p)` raised TypeError EVERYWHERE in the process,
         # inside cached code or not. Measured while adding the pyarrow readers.
@@ -1116,29 +1127,10 @@ class FileDependencyRegistry:
                 if _tracker is not None:
                     _tracker._track_path(target)
                 else:
-                    _note_untracked_read(target)
+                    _note_untracked_read(target, sys._getframe(1))
             return original_func(*args, **kwargs)
 
         return tracked_func
-
-    @staticmethod
-    def _glob_base_dir(pattern: Any) -> str | None:
-        """Return the longest leading, magic-free directory of a glob *pattern*.
-
-        ``gdir/*.num`` → ``gdir``; ``a/b*/c`` → ``a`` (deepest stable ancestor).
-        The directory's mtime is what we track for membership changes.
-        """
-
-        try:
-            parts = str(pattern).replace("\\", "/").split("/")
-        except (TypeError, ValueError):
-            return None
-        base: list[str] = []
-        for p in parts[:-1]:  # exclude the filename component
-            if glob_module.has_magic(p):
-                break
-            base.append(p)
-        return "/".join(base) or "."
 
     @staticmethod
     def _create_exists_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
@@ -1206,43 +1198,14 @@ class FileDependencyRegistry:
 
         return tracked_source_reader
 
-    @staticmethod
-    def _create_glob_dir_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
-        """Track the directory a ``glob`` pattern enumerates."""
-
-        @functools.wraps(original_func)
-        def tracked_glob(pathname, *args, **kwargs):
-            _tracker = active_tracker.get()
-            if _tracker is not None:
-                base = FileDependencyRegistry._glob_base_dir(pathname)
-                if base is not None:
-                    _tracker._track_path(base)
-            return original_func(pathname, *args, **kwargs)
-
-        return tracked_glob
-
-    @staticmethod
-    def _create_listdir_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
-        """Track the directory passed to ``os.listdir`` / ``os.scandir``."""
-
-        @functools.wraps(original_func)
-        def tracked_listdir(path=".", *args, **kwargs):
-            if isinstance(path, (str, bytes, os.PathLike)):
-                _tracker = active_tracker.get()
-                if _tracker is not None:
-                    _tracker._track_path(path)
-            return original_func(path, *args, **kwargs)
-
-        return tracked_listdir
-
 
 class PostImportHook(importlib.abc.MetaPathFinder):
     """Intercepts imports of registered modules to patch them after loading.
 
-    A single shared hook is installed once on ``sys.meta_path`` (see
-    ``_shared_import_hook`` below). Module patching is tracker-agnostic
-    — :func:`_install_module_patches` routes file reads via
-    ``active_tracker`` so the same patches serve every tracker.
+    A single shared hook sits on ``sys.meta_path`` while a tracker is open
+    (see `_install_patches`). Module patching is tracker-agnostic —
+    :func:`_install_module_patches` routes file reads via ``active_tracker``
+    so the same patches serve every tracker.
     """
 
     def __init__(self) -> None:
@@ -1290,46 +1253,76 @@ class _PatchingLoader:
         self.original_loader.exec_module(module)
 
         # Now patch it via the module-level dispatcher installer —
-        # tracker-agnostic, install-once-per-target.
+        # tracker-agnostic, install-once-per-target, and only while a
+        # tracker is still open.
         _install_module_patches(self.fullname, module)
 
 
-# Shared meta_path hook — installed at most once for the lifetime of
-# the process by :meth:`FileAccessTracker.__enter__`. Tracker-agnostic.
-_shared_import_hook: Optional[PostImportHook] = None
-_shared_import_hook_lock = threading.Lock()
+# Shared meta_path hook, on ``sys.meta_path`` while a tracker is open.
+_shared_import_hook = PostImportHook()
 
 
-def _ensure_import_hook_installed() -> None:
-    global _shared_import_hook
-    with _shared_import_hook_lock:
-        if _shared_import_hook is None:
-            _shared_import_hook = PostImportHook()
+#: What the last full install was computed from (see `_install_patches`).
+_installed_for: Any = None
+
+
+def _install_patches() -> None:
+    """Wrap the readers no audit event reports; run when the first tracker opens."""
+    global _installed_for
+    with _install_lock:
+        registry = FileDependencyRegistry()
+        # A cached call opens and closes a tracker every time it misses: while
+        # the handlers and the imported modules are the ones the last install
+        # saw, put the same wrappers back without looking anything up.
+        basis = (id(registry), registry._revision, tuple(id(sys.modules.get(name)) for name in registry.handlers))
+        if basis != _installed_for or not _patches.reinstall():
+            for mod_name in registry.handlers:
+                module = sys.modules.get(mod_name)
+                if module is not None:
+                    _install_module_patches(mod_name, module)
+            _patch_pathlib_stat()
+            # Work handed to a thread pool runs under the submitter's tracker, and
+            # work handed to a process pool reports what it read back to it.
+            _patch_thread_pool_submit()
+            _patch_process_pool_submit()
+            _installed_for = basis
+        if _shared_import_hook not in sys.meta_path:
             sys.meta_path.insert(0, _shared_import_hook)
+
+
+def _remove_patches() -> None:
+    """Put the originals back; run when the last tracker closes."""
+    with _install_lock:
+        try:
+            sys.meta_path.remove(_shared_import_hook)
+        except ValueError:
+            pass
+        _patches.restore()
+
+
+io_watch.add_patcher(_install_patches, _remove_patches)
 
 
 class FileAccessTracker:
     """Context manager that intercepts file I/O to record which files a
     statement reads.
 
-    **ContextVar dispatch (current design)**: On the first
-    ``__enter__`` ever, install once-permanently dispatcher wrappers on
-    ``builtins.open``, registered pandas/polars/numpy/joblib/pickle/json
-    I/O functions, the user namespace ``open``, and a meta-path import
-    hook for libraries loaded later. The wrappers consult a
-    ``ContextVar`` (``active_tracker``) at *call* time to decide
-    whether to record the access. ``__enter__`` sets that ContextVar
-    to ``self`` and stores the token; ``__exit__`` ``reset()``s it.
+    **ContextVar dispatch**: Python-level opens and directory listings
+    arrive as audit events (:mod:`cash.tracking.io_watch`); readers that open
+    in C, existence probes and ``Path.stat`` get dispatcher wrappers, plus a
+    meta-path import hook for libraries loaded later. Both consult a
+    ``ContextVar`` (``active_tracker``) at *call* time to decide whether to
+    record the access. ``__enter__`` sets that ContextVar to ``self`` and
+    stores the token; ``__exit__`` ``reset()``s it.
 
     Because ``ContextVar`` values are isolated per ``asyncio.Task`` and
     per ``threading.Thread`` by default, concurrent trackers — e.g. two
     coroutines under ``asyncio.gather``, or two worker threads — each
     see only their own block's reads.
 
-    **No per-tracker unpatching**: the wrappers stay installed for the
-    lifetime of the process. With no active tracker the dispatcher is a
-    single ``ContextVar.get()`` + ``is None`` check before falling
-    through to the original — sub-microsecond.
+    **Installed while in use**: the first tracker to open installs the
+    wrappers and the last one to close puts the originals back, so with no
+    tracker open ``pd.read_csv`` is pandas' own function again.
 
     **Writes are not dependencies.** A file opened for writing is never
     recorded as an input: a statement's output is hashed directly, and keying
@@ -1397,16 +1390,8 @@ class FileAccessTracker:
         self.stale_memo_reads: set[str] = set()
 
     def __enter__(self):
-        # Install permanent dispatcher patches. Each (module/dict, name)
-        # target is patched only once for the lifetime of the process —
-        # ``_apply_patches`` self-skips targets whose current attribute
-        # already carries the ``_is_file_tracker_patch`` sentinel. This
-        # is cheap on the hot path (a single ``getattr`` per registered
-        # target) and lets newly-imported modules and newly-registered
-        # handlers be picked up on the next ``__enter__``.
-        with _install_lock:
-            self._apply_patches()
-        _ensure_import_hook_installed()
+        # The first open tracker installs the wrappers (see `_install_patches`).
+        io_watch.hold()
         # Capture the enclosing tracker (if any) BEFORE we become active, so a
         # read inside this block also registers with the outer tracker(s).
         self._parent_stack.append(active_tracker.get())
@@ -1416,6 +1401,7 @@ class FileAccessTracker:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self._token_stack:
             active_tracker.reset(self._token_stack.pop())
+            io_watch.release()
         if self._parent_stack:
             self._parent_stack.pop()
 
@@ -1423,8 +1409,7 @@ class FileAccessTracker:
         """Stop tracking until :meth:`resume`, restoring the enclosing tracker.
 
         For a streaming cached generator: production is tracked, the caller's
-        loop body is not. `__enter__` cannot be used per item -- it reinstalls
-        patches and re-checks the import hook every time, measured at 5.1us
+        loop body is not. `__enter__` cannot be used per item -- it took 5.1us
         against 0.15us for the ContextVar swap alone, which on a 200k-item
         iterator is over a second of pure bookkeeping.
         """
@@ -1673,55 +1658,3 @@ class FileAccessTracker:
         parent = self._parent_stack[-1] if self._parent_stack else None
         if parent is not None and parent is not self:
             parent.add_tracked_remote(url)
-
-    def _apply_patches(self):
-        # 1. Patch Builtins
-        _install_module_patches("builtins", builtins)
-
-        # 2. Patch User Namespace (for interactive sessions showing 'open')
-        self._patch_user_ns()
-
-        # 2b. Python 3.10 only: pathlib captured io.open at import time, so the
-        # io.open patch above misses every pathlib read. See the function.
-        _patch_pathlib_accessor()
-        _patch_pathlib_listing()
-        _patch_pathlib_stat()
-
-        # 2c. Work handed to a thread pool runs under the submitter's tracker,
-        # and work handed to a process pool reports what it read back to it.
-        _patch_thread_pool_submit()
-        _patch_process_pool_submit()
-
-        # 3. Patch Loaded Modules
-        # Iterate over registered modules
-        for mod_name in self.registry.handlers:
-            if mod_name == "builtins":
-                continue
-
-            if mod_name in sys.modules:
-                module = sys.modules[mod_name]
-                _install_module_patches(mod_name, module)
-
-    def _patch_user_ns(self):
-        """Patch open in user namespace (IPython specific)."""
-        # Handle user_ns['open'] — skip if dispatcher already installed.
-        if "open" in self.user_ns and not getattr(self.user_ns["open"], "_is_file_tracker_patch", False):
-            real_open = self.user_ns["open"]
-            factory = self.registry._create_open_handler
-            wrapper = factory(real_open, _dispatch_track)
-            wrapper._is_file_tracker_patch = True
-            wrapper._original_func = real_open
-
-            self.user_ns["open"] = wrapper
-
-        # Handle user_ns['__builtins__']['open'] (if dict)
-        if "__builtins__" in self.user_ns:
-            bs = self.user_ns["__builtins__"]
-            if isinstance(bs, dict) and "open" in bs and not getattr(bs["open"], "_is_file_tracker_patch", False):
-                real_open = bs["open"]
-                factory = self.registry._create_open_handler
-                wrapper = factory(real_open, _dispatch_track)
-                wrapper._is_file_tracker_patch = True
-                wrapper._original_func = real_open
-
-                bs["open"] = wrapper

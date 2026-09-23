@@ -33,8 +33,8 @@ class TestFileTrackingExtensibility(unittest.TestCase):
         registry = FileDependencyRegistry()
 
         # Check defaults
-        handlers = registry.get_handlers_for_module("builtins")
-        self.assertTrue(any(h[0] == "open" for h in handlers))
+        handlers = registry.get_handlers_for_module("sqlite3")
+        self.assertTrue(any(h[0] == "connect" for h in handlers))
 
         handlers = registry.get_handlers_for_module("pandas")
         self.assertTrue(any(h[0] == "read_*" for h in handlers))

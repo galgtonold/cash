@@ -107,23 +107,26 @@ def test_a_sampled_file_gets_a_stat_of_its_own(tmp_path, monkeypatch, per_file_s
     assert len(set(per_file_stats)) == N
 
 
-def test_cash_lists_through_the_unpatched_scandir(tmp_path, monkeypatch):
+def test_cash_own_listing_is_not_the_users_dependency(tmp_path):
     """The file tracker records a directory listed while it is active; a
     listing cash takes for itself must not become the user's dependency."""
+    from cash.tracking.file_tracker import FileAccessTracker
+
     paths = _inputs(tmp_path, n=20)
-    real = os.scandir
-
-    def tracked(*_a, **_k):
-        raise AssertionError("listed through the tracked os.scandir")
-
-    tracked._original_func = real
-    monkeypatch.setattr(os, "scandir", tracked)
-    listed = stats_from_listings(paths)
+    tracker = FileAccessTracker()
+    with tracker:
+        listed = stats_from_listings(paths)
     if os.name == "nt":
         assert set(listed) == set(paths)
         assert all(listed[p].st_size == os.stat(p).st_size for p in paths)
     else:
         assert listed == {}
+    assert tracker.get_accessed_files() == set()
+
+    control = FileAccessTracker()  # the same listing by the user IS a dependency
+    with control, os.scandir(tmp_path) as entries:
+        list(entries)
+    assert control.get_accessed_files()
 
 
 def test_a_sparse_directory_is_not_listed(tmp_path):

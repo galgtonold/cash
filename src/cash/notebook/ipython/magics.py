@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import traceback
+import weakref
 
 # Any is used at IPython API boundaries where types come from the shell's dynamic
 # namespace (user_ns, execution info objects).  These cannot be typed more precisely
@@ -25,6 +26,7 @@ from ...backends._base import all_pending_writes
 from ...core import Cash
 from ...logging import setup_logging
 from ...object_hashing import compute_hash
+from ...tracking import io_watch
 from ...utils import safe_text
 from .. import badge_renderer as _badge
 from .. import compute_baselines
@@ -208,6 +210,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         # Auto-caching mode state
         self._auto_cache_enabled = False
+        # Releases the I/O observation scope held while %cash_on is on (see
+        # `cash_on`); also run if this instance goes away still holding it.
+        self._io_release: weakref.finalize | None = None
         self.global_ttl = None
         # 'Persist everything' mode (config / %cash_persist). Seeded from config;
         # the statement processor reads the same flag from config in its own
@@ -530,6 +535,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         _reset_live_cells()
 
         self._auto_cache_enabled = True
+        # Keep cash's I/O watch installed between statements rather than
+        # installing and removing it around each one. A `from json import load`
+        # run in a cell binds whatever is installed at that moment.
+        if self._io_release is None or not self._io_release.alive:
+            io_watch.hold()
+            self._io_release = weakref.finalize(self, io_watch.release)
         self.global_ttl = ttl
         ttl_msg = f" (TTL: {ttl}s)" if ttl is not None else ""
         # ASCII, like the text badge: this line lands in the .ipynb and is read
@@ -579,6 +590,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         Usage: %cash_off
         """
         self._auto_cache_enabled = False
+        if self._io_release is not None:
+            self._io_release()  # releases once, however often %cash_off runs
         self.global_ttl = None
         print("[OK] Auto-caching disabled")
 

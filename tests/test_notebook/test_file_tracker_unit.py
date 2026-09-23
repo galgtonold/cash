@@ -29,15 +29,17 @@ class TestFileDependencyRegistry:
 
     def test_has_default_handlers(self):
         registry = FileDependencyRegistry()
-        assert "builtins" in registry.handlers
         assert "pandas" in registry.handlers
+        assert "sqlite3" in registry.handlers
+        # `open` arrives as an audit event, so nothing wraps it.
+        assert "builtins" not in registry.handlers
 
     def test_get_handlers_for_module(self):
         registry = FileDependencyRegistry()
-        builtins_handlers = registry.get_handlers_for_module("builtins")
-        assert len(builtins_handlers) >= 1
-        func_names = [name for name, _ in builtins_handlers]
-        assert "open" in func_names
+        sqlite_handlers = registry.get_handlers_for_module("sqlite3")
+        assert len(sqlite_handlers) >= 1
+        func_names = [name for name, _ in sqlite_handlers]
+        assert "connect" in func_names
 
     def test_get_handlers_for_unknown_module(self):
         registry = FileDependencyRegistry()
@@ -173,40 +175,28 @@ class TestUserNamespacePatching:
 
 
 # ---------------------------------------------------------------------------
-# FileAccessTracker — self-healing of leaked wrappers
+# FileAccessTracker — wrappers installed only while a tracker is open
 # ---------------------------------------------------------------------------
 
 
-class TestPermanentInstallSemantics:
-    """After the ContextVar refactor the per-tracker
-    install/unpatch dance is replaced by an install-once-permanently
-    dispatcher that consults ``active_tracker``. This eliminates the
-    leaked-wrapper class of bug entirely — once installed, the wrapper
-    stays in place but is a no-op when no tracker is active. These
-    tests pin the new contract.
-    """
+class TestInstalledWhileInUse:
+    """The wrappers consult ``active_tracker`` at call time, so one install
+    serves every tracker; the first tracker to open installs them and the
+    last one to close puts the originals back."""
 
     def test_wrapper_is_noop_when_no_tracker_active(self, tmp_path: Path):
-        """With patches installed but no active tracker, reads must not
-        be recorded anywhere — there's no tracker to record into."""
-        import builtins
+        """Read through a wrapper bound while a tracker was open, after it
+        closed: nothing is recorded, and the read passes through."""
+        import sqlite3
 
-        # Trigger the install-once if some other test in this file
-        # hasn't already.
-        with FileAccessTracker():
-            pass
+        db = tmp_path / "stray.db"
+        tracker = FileAccessTracker()
+        with tracker:
+            connect = sqlite3.connect
+            assert getattr(connect, "_is_file_tracker_patch", False)
 
-        # Patches are permanent — the wrapper is on builtins.open.
-        assert getattr(builtins.open, "_is_file_tracker_patch", False), (
-            "Expected the dispatcher wrapper to be permanently installed."
-        )
-
-        # Now do a read with no active tracker: nothing tracks it.
-        test_file = tmp_path / "stray.txt"
-        test_file.write_text("x")
-        # The dispatcher should pass through cleanly.
-        with open(str(test_file), "r") as f:
-            assert f.read() == "x"
+        connect(str(db)).close()
+        assert tracker.get_accessed_files() == set()
 
     def test_sequential_trackers_are_isolated(self, tmp_path: Path):
         """Two trackers used back-to-back must each see only their own

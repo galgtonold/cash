@@ -410,7 +410,7 @@ used to count.
 
 ### File reads are tracked automatically
 
-<!-- claim: cash/tracking/file_tracker.py:_install_module_patches @f95eedc5, cash/tracking/file_tracker.py:FileDependencyRegistry @0748485a broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
+<!-- claim: cash/tracking/file_tracker.py:_install_module_patches @55da05c3, cash/tracking/file_tracker.py:FileDependencyRegistry @4ec7e6ca broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
 You usually don't need to declare files at all: cash intercepts file reads
 *inside* a cached function — `pd.read_csv`, `np.load`, `open()`, `joblib.load`,
 … — and folds each file's fingerprint into the entry, so changing the file on
@@ -431,7 +431,7 @@ coming back False is an input — it chose the defaults branch — so the entry 
 produced stops being valid once that file appears, including when the same
 relative name resolves into a directory that has one.
 
-<!-- claim: cash/tracking/file_tracker.py:_patch_thread_pool_submit @3168a570 -->
+<!-- claim: cash/tracking/file_tracker.py:_patch_thread_pool_submit @baf38f87 -->
 Reads in a **thread pool** the function starts count too:
 `ThreadPoolExecutor(4).map(np.load, shards)` records every shard, the same as a
 serial loop would — it used to record none of them. A thread you start
@@ -439,7 +439,7 @@ yourself with `threading.Thread(target=...)` begins with nothing cash can see,
 so a file read only there is not tracked; read it in the function, hand the work
 to a `ThreadPoolExecutor`, or name the file with `file_depends_on=`.
 
-<!-- claim: cash/tracking/file_tracker.py:_patch_process_pool_submit @1d42b2f6, cash/tracking/file_tracker.py:_ReadsInWorker.__call__ @288a0a53 -->
+<!-- claim: cash/tracking/file_tracker.py:_patch_process_pool_submit @12fc907b, cash/tracking/file_tracker.py:_ReadsInWorker.__call__ @288a0a53 -->
 A **`ProcessPoolExecutor`** the function starts reads in other processes, and
 cash brings those reads back: each task runs in its worker under a tracker of
 its own and returns what it read with its result, so `ex.map(read_region,
@@ -459,10 +459,13 @@ them without it reading, adds what it read then — just `path`, when the memo i
 keyed by a path this call was given. The second consumer used to record
 no file at all and kept its result after the file changed.
 
-<!-- claim: cash/tracking/file_tracker.py:_note_untracked_read @4251648f, cash/tracking/file_tracker.py:install_read_watch @16286f03 -->
+<!-- claim: cash/tracking/file_tracker.py:_note_untracked_read @b8616e9b, cash/tracking/file_tracker.py:install_read_watch @78c9aa62 -->
 That holds wherever the memo was filled: in a cached call, or before any ran —
 `main()` printing its settings through the memo at start-up — because cash
-watches your reads from the moment a function is decorated. And cash remembers
+watches your `open()` reads from the moment a function is decorated. (A memo
+filled before any cached call through a reader that opens its file in C, such
+as `pl.read_csv` or `pyarrow`, is not seen: those readers are only wrapped while
+a cached call runs.) And cash remembers
 which *version* of the file the memo read. In a long-running process whose
 memo still holds an older version after the file changed, a cached call that
 uses it returns what the memo gives, as the program would without cash, but its

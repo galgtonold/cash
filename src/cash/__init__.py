@@ -141,11 +141,11 @@ def reset_session() -> None:
 
     * It doesn't clear the on-disk cache directory — that's a separate
       operation (``cash clear --all`` on the command line).
-    * It doesn't touch the ``FileAccessTracker`` dispatcher wrappers
-      installed on ``builtins.open``, ``pandas.read_csv``, and other
-      tracked I/O entry points. Those are permanent for the process
-      lifetime and tracker-agnostic — they no-op when no tracker is
-      active (see ``cash.tracking.file_tracker.active_tracker``).
+    * It doesn't touch cash's I/O watch (``cash.tracking.io_watch``): the
+      audit hook, and the reader wrappers on ``pandas.read_csv`` and other
+      tracked entry points, which are installed while a tracker is open
+      and are tracker-agnostic (see
+      ``cash.tracking.file_tracker.active_tracker``).
     """
     global _global_cash
     _global_cash = None

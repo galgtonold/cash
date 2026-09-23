@@ -541,7 +541,7 @@ both raises `ValueError` at decoration time.
 
 ### Observed effects — what the first call actually did { #observed-effects-what-the-first-call-actually-did }
 
-<!-- claim: cash/effect_observer.py:EffectObserver @1b22d83c broad="the observed-effect contract is the class as a whole", cash/core.py:Cash._report_observed_effects @60289c7d -->
+<!-- claim: cash/effect_observer.py:EffectObserver @6d4062c5 broad="the observed-effect contract is the class as a whole", cash/core.py:Cash._report_observed_effects @60289c7d -->
 Static analysis stops at library boundaries, so an effect *inside* a library is
 reachable only by the method's name — and a name cannot reach everything.
 `session.get(url)` is a network call, but `get` cannot go in the write-method

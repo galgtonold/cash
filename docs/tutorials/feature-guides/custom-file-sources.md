@@ -10,7 +10,8 @@ Without file tracking, every CSV/parquet load you make from a cached function wo
 
 The fingerprint is `(mtime, size, hash)`, and **content is authoritative whenever the size matches**. The cheap size check runs first — a differing size proves staleness without reading a byte of data — and only when the size is equal does Cash hash the file to decide. The mtime is recorded but no longer arbitrates: a touch that leaves the bytes alone is a **hit**, and a same-size edit under an indistinguishable mtime is still a **miss**.
 
-The mechanism is a one-time monkey-patch of the popular reader functions: when a `@cash.cache` function executes, Cash installs `FileAccessTracker` around the call, intercepts reads from `builtins.open`, pandas, polars, numpy, joblib, json, and pickle, and stores the resulting file dictionary in the cache metadata. On the next lookup, Cash re-checks every recorded file and re-runs the function if the contents moved.
+<!-- claim: cash/tracking/io_watch.py:hold @fcfb42b4, cash/tracking/file_tracker.py:_on_open @cf213c2f -->
+The mechanism has two parts. Every Python-level `open()` — `builtins.open`, `io.open`, `pathlib`, and every library that opens its file through them (`json`, `pickle`, `joblib`, `numpy`) — and every directory listing reaches cash as a Python audit event (`sys.addaudithook`), whoever calls it and however it was imported. Readers that open files in C, C++ or Rust (pyarrow, polars, sqlite3, some pandas readers), and the calls that raise no event (`os.path.exists`, `Path.stat`), are wrapped. When a `@cash.cache` function executes, Cash opens a `FileAccessTracker` around the call, which records both kinds of read; the first tracker to open installs the wrappers and the last one to close restores the originals, so outside a cached call (and outside `%cash_on`) `pd.read_csv` is pandas' own function. The resulting file dictionary goes into the cache metadata. On the next lookup, Cash re-checks every recorded file and re-runs the function if the contents moved.
 
 ## Quick start
 
@@ -33,33 +34,31 @@ No decorator argument, no manual registration. Cash sees the `read_csv` call, re
 
 ## What's automatically tracked
 
-<!-- claim: cash/tracking/file_tracker.py:FileDependencyRegistry._initialize_defaults @f91131ed, cash/tracking/file_tracker.py:_find_patch_targets @001fdd80 -->
-The default handler set is registered in `FileDependencyRegistry._initialize_defaults`:
+<!-- claim: cash/tracking/file_tracker.py:FileDependencyRegistry._initialize_defaults @b63601b2, cash/tracking/file_tracker.py:_find_patch_targets @ae820c32, cash/tracking/file_tracker.py:_on_listing @3c97d75d -->
+The `open` and listing audit events are handled by `_on_open` and `_on_listing`; the wrapped readers are registered in `FileDependencyRegistry._initialize_defaults`:
 
 | Module | Functions |
 |---|---|
-| `builtins` | `open()` (any read mode — `'r'`, `'r+'`, `'rb'`, `'r+b'`, …) |
-| `io` | `open()` (alias of the built-in `open`) |
+| `builtins`, `io` | `open()` (any read mode — `'r'`, `'r+'`, `'rb'`, `'r+b'`, …), seen as the `open` audit event, including through a reference taken before cash was imported. `os.open` is not tracked. |
 | `pandas` | `read_*` — every reader: `read_csv`, `read_parquet`, `read_excel`, `read_json`, `read_pickle`, `read_feather`, `read_hdf`, `read_orc`, `read_sas`, `read_spss`, `read_stata`, `read_table`, `read_xml`, `read_html`, `read_fwf`, `read_clipboard`, `read_sql*` |
 | `polars` | `read_csv`, `read_parquet`, `read_json`, `read_ndjson`, `read_ipc`, `read_avro`, `read_excel`, plus the lazy variants `scan_csv`, `scan_parquet`, `scan_ipc`, `scan_ndjson` |
 | `pyarrow` | `csv.read_csv`, `csv.open_csv`, `parquet.read_table`, `parquet.read_pandas`, `feather.read_table`, `feather.read_feather`, `json.read_json` |
-| `numpy` | `load`, `loadtxt`, `genfromtxt`, `fromfile`; `memmap` too, which opens its file through `open()` |
-| `joblib` | `load` |
-| `pickle` | `load` |
-| `json` | `load` |
-| `glob` | `glob`, `iglob` — tracks the *directory* enumerated (see below) |
-| `os` | `listdir`, `scandir` — tracks the *directory* enumerated (see below) |
+| `sqlite3` | `connect` — the database file |
+| `numpy` | `load`, `loadtxt`, `genfromtxt`, `fromfile`, `memmap`, which open their file through `open()` |
+| `joblib`, `pickle`, `json` | `joblib.load(path)`, and `pickle.load(f)` / `json.load(f)` of a file opened with `open()` |
+| `glob` | `glob`, `iglob` — tracks the *directory* enumerated (see below); seen as the `glob.glob` audit event |
+| `os` | `listdir`, `scandir` — tracks the *directory* enumerated (see below); seen as audit events, as is every `pathlib` `glob` / `iterdir` that lists through them |
 | `os.path` | `exists`, `isfile` (and their `genericpath` originals) — records a path that was looked for and was **not** there (see below) |
-| `pathlib` | `Path.read_text()`, `read_bytes()` and `open()`, which read through `open()`; and `Path.stat()` on a regular file — so `p.stat().st_size` or `.st_mtime` shown after the file changed is the new value, not the cached one |
+| `pathlib` | `Path.read_text()`, `read_bytes()` and `open()`, which read through `open()`; and `Path.stat()` on a regular file (wrapped) — so `p.stat().st_size` or `.st_mtime` shown after the file changed is the new value, not the cached one |
 
-The pandas entry is the glob `read_*`, expanded by `_find_patch_targets` against the live `pandas` module — so any reader pandas adds in a future release is picked up too. Both top-level reads (`pd.read_csv`) and submodule reads (`pd.read_csv` via the `pandas.io.parsers` shim) flow through the patched attribute.
+The pandas entry is the glob `read_*`, expanded by `_find_patch_targets` against the live `pandas` module — so any reader pandas adds in a future release is picked up too. Both top-level reads (`pd.read_csv`) and submodule reads (`pd.read_csv` via the `pandas.io.parsers` shim) flow through the patched attribute. A reader that opens its file through `open()` is tracked through the audit event even where no wrapper reaches it.
 
-A reader may be given its path positionally or by keyword — `pd.read_csv(filepath_or_buffer=p)`, `np.load(file=p)`, `pq.read_table(source=p)` — and both are tracked. pyarrow reads files in C++, so none of its reads pass through `open()`; before its readers were registered, a function that switched to `pyarrow.csv` for speed recorded no dependency at all and kept returning the old file's answer. `pyarrow.parquet.ParquetFile` and `pyarrow.dataset` are not wrapped (one is a class, the other enumerates directories); read through them and name the files with `file_depends_on=`.
+A reader may be given its path positionally or by keyword — `pd.read_csv(filepath_or_buffer=p)`, `np.load(file=p)`, `pq.read_table(source=p)` — and both are tracked. pyarrow reads files in C++, so none of its reads pass through `open()`; before its readers were registered, a function that switched to `pyarrow.csv` for speed recorded no dependency at all and kept returning the old file's answer. `pyarrow.parquet.ParquetFile` is not wrapped (it is a class, and replacing it with a function would break `isinstance` checks), and `pyarrow.dataset.dataset` records only the path it was given; read through them and name the files with `file_depends_on=`.
 
-<!-- claim: cash/tracking/file_tracker.py:FileDependencyRegistry._create_open_handler @46f65ded -->
-For `open()`, the wrapper records the path as a *dependency* only when the call can read what was there before: a mode containing `'r'`, or `'+'` without `'w'` or `'x'` (`'r+'`, `'a+'`) — see `_create_open_handler`. An `open(path, 'w')` for output does **not** become a dependency, which is what you want: folding a file the function writes into its own cache key would invalidate the entry on its own output. Nor does `'w+'` / `'x+'`, which start from an empty file — Pillow saves every image with `'w+b'`, so a `savefig` used to depend on the PNG it had just written.
+<!-- claim: cash/tracking/file_tracker.py:_is_read_mode @238e2cb8, cash/tracking/file_tracker.py:_on_open @cf213c2f -->
+For `open()`, cash records the path as a *dependency* only when the call can read what was there before: a mode containing `'r'`, or `'+'` without `'w'` or `'x'` (`'r+'`, `'a+'`) — see `_is_read_mode`. An `open(path, 'w')` for output does **not** become a dependency, which is what you want: folding a file the function writes into its own cache key would invalidate the entry on its own output. Nor does `'w+'` / `'x+'`, which start from an empty file — Pillow saves every image with `'w+b'`, so a `savefig` used to depend on the PNG it had just written.
 
-A write is not ignored, though — it is an *effect*, and it is reported as one. The same wrapper hands a write-mode open to the [effect observer](purity-decorators.md#observed-effects-what-the-first-call-actually-did), which warns once if the first call wrote a file the static analyzer never saw. That matters because every cache hit from then on skips the write.
+A write is not ignored, though — it is an *effect*, and it is reported as one. The same `open` event handler hands a write-mode open to the [effect observer](purity-decorators.md#observed-effects-what-the-first-call-actually-did), which warns once if the first call wrote a file the static analyzer never saw. That matters because every cache hit from then on skips the write.
 
 ### A file that was not there is a dependency too
 
@@ -122,12 +121,13 @@ The `file_changed` reason and the `changed_files` dict are emitted by `Cash._exp
 
 ## What's NOT tracked
 
-The patch set is a curated list. Reads that go through anything else slip past the tracker:
+Anything that opens a file through Python's `open()` is seen. Reads that go through anything else slip past the tracker unless their reader is in the wrapped list above:
 
-- **Direct `pyarrow` / `fastparquet` calls** — `pyarrow.parquet.read_table('data.parquet')` is not patched. `pd.read_parquet(...)` (which calls pyarrow internally) *is* — the patch is at the pandas entry point.
-- **Specialized format libraries** — `feather.read_dataframe`, `h5py.File`, `netCDF4.Dataset`, custom binary readers in vendored utilities.
-- **C extensions and subprocesses** — anything that opens a file descriptor outside the Python-level `open()` (e.g. a C library called via `ctypes`, a `subprocess.run` that reads the file) is invisible. The monkey-patch only intercepts Python-side dispatch.
-- **Database files** — `sqlite3.connect('db.sqlite')` or a SQLAlchemy engine pointed at a file URL doesn't open the file via the patched readers. The query itself goes through the driver and Cash sees nothing.
+- **`fastparquet` and `pyarrow.parquet.ParquetFile`** (see above).
+- **Specialized format libraries that open files in C** — `h5py.File`, `netCDF4.Dataset`, custom binary readers in vendored utilities.
+- **C extensions, `os.open` and subprocesses** — anything that opens a file descriptor without Python's `open()` (e.g. a C library called via `ctypes`, `os.open`/`os.read`, a `subprocess.run` that reads the file) is invisible.
+- **Database engines other than `sqlite3.connect`** — a SQLAlchemy engine pointed at a file URL goes through the driver and Cash sees nothing.
+- **C-level readers outside every cached call** — a memo filled through `pl.read_csv` before the first cached call is not seen, because the wrappers are only installed while a cached call runs; one filled through `open()` is (see [the decorator guide](../../decorator.md#file-reads-are-tracked-automatically)).
 - **Lazy scans you don't materialize** — `polars.scan_csv(...)` *is* tracked at scan time.
 
 ### Reads that are ignored on purpose
@@ -262,7 +262,7 @@ A declared file that does not exist yet is recorded as *absent*, like a lookup f
 
 ## Escape hatch 2: registering a custom file source for auto-tracking
 
-<!-- claim: cash/core.py:Cash.register_file_handler @3285c27b, cash/tracking/file_tracker.py:_install_module_patches @f95eedc5 -->
+<!-- claim: cash/core.py:Cash.register_file_handler @3285c27b, cash/tracking/file_tracker.py:_install_module_patches @55da05c3 -->
 For libraries you use across many cached functions, manually adding `file_depends_on=` to each decorator is repetitive. `Cash.register_file_handler` lets you teach the auto-tracker about a new reader once and have every subsequent call site picked up automatically:
 
 <!-- test:skip reason="illustrative — the handler wraps `my_lib`, which does not exist; executing it only proves a def parses, while shadowing the real load_features above" -->
@@ -287,11 +287,11 @@ def load_features():
     # ^ now auto-tracked, no file_depends_on= needed
 ```
 
-The handler is a factory: Cash calls it with the original function and a `track_callback(path)` shim; your wrapper records and forwards. `func_name` supports glob patterns (`"read_*"` catches every reader in one call), and `module_name` may be dotted (`"my_lib.io"`). The wrapper is installed on the live module via the same `_install_module_patches` path used for the built-ins.
+The handler is a factory: Cash calls it with the original function and a `track_callback(path)` shim; your wrapper records and forwards. `func_name` supports glob patterns (`"read_*"` catches every reader in one call), and `module_name` may be dotted (`"my_lib.io"`). The wrapper is installed on the live module via the same `_install_module_patches` path used for the built-ins, while a cached call runs (or `%cash_on` is on), and the original is put back afterwards.
 
 Two caveats from the docstring:
 
-- The wrapper replaces the attribute on the module object, so existing imports (`from my_lib import read_data`) still see the original unwrapped version. Track via the module namespace (`my_lib.read_data(...)`) or import after registering.
+- The wrapper replaces the attribute on the module object, so imports that bound the function itself (`from my_lib import read_data`) see whatever was there when they ran — usually the original. Track via the module namespace (`my_lib.read_data(...)`).
 - Pass an absolute or resolvable path to `track_callback`. Relative paths are resolved against `os.getcwd()` at tracking time by `_track_path`.
 
 ## Staleness detection
@@ -308,7 +308,7 @@ A matching size *and* a matching content hash is fresh, **regardless of the mtim
 
 ### Large files are sampled, not fully hashed
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @3dd62608, cash/tracking/file_dep_snapshot.py:file_content_hash @ec8b7dbd, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/tracking/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @3dd62608, cash/tracking/file_dep_snapshot.py:file_content_hash @8404c5db, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/tracking/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
 Hashing a multi-GB parquet on every lookup would defeat the point of caching, so the hash is size-bounded (`file_content_hash`), at a threshold you can move (`file_hash_full_max_bytes`):
 
 - Files **≤ 256 MiB** (`_HASH_FULL_MAX_BYTES`) are hashed **in full**.
@@ -396,7 +396,7 @@ The tracker records full absolute paths and stats them on every lookup. There's 
 | `c.register_file_handler(module, func, factory)` | `Cash` method | Register a wrapper factory for an additional reader. Catches every subsequent call to `module.func` from cached code. Glob wildcard supported in *func*. |
 | `cash.FileDataSource(path)` | Public class | mtime-based change detection for a single file. Use in `depends_on=[...]` for advanced cases or subclass for content-hashing. |
 | `f.explain(*args).reason == 'file_changed'` | Diagnostic | Explanation reason emitted when one or more recorded files changed. `details['changed_files']` maps each path to `'content changed'`, `'size changed'`, or `'file missing'`. |
-| `FileAccessTracker` | Internal | Context manager that drives the monkey-patch. Auto-installed around the body by `Cash._body_scope`; not intended for direct use. |
+| `FileAccessTracker` | Internal | Context manager that records a block's reads, installing the reader wrappers while it is open. Auto-installed around the body by `Cash._body_scope`; not intended for direct use. |
 | `FileDependencyRegistry` | Internal | Singleton holding the registered handler factories. Accessed through `register_file_handler`; direct use is unsupported. |
 
 ## Related

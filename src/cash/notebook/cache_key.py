@@ -12,6 +12,7 @@ import builtins
 import dis
 import hashlib
 import logging
+import sys
 import types
 from dataclasses import dataclass, field
 
@@ -208,33 +209,45 @@ class CacheKeyResult(NamedTuple):
 
 
 def is_cash_instrumentation(val: object) -> bool:
-    """True when *val* is one of cash's own I/O-tracking wrappers.
+    """True when *val* is I/O instrumentation rather than a notebook value:
+    one of cash's own I/O-tracking wrappers, or the ``open`` IPython puts in
+    ``user_ns``.
 
-    ``FileAccessTracker._patch_user_ns`` replaces ``user_ns['open']`` with a
-    dispatcher wrapper so file reads can be tracked. That wrapper is a closure,
-    so it cannot be pickled, so ``compute_hash`` falls back to
+    While a tracker is open the file tracker replaces readers such as
+    ``pd.read_parquet`` with dispatcher wrappers, and a name bound to one (a
+    ``from pandas import read_parquet`` run meanwhile) keeps it. A wrapper is a
+    closure, so it cannot be pickled, so ``compute_hash`` falls back to
     ``sha256(str(id(obj)))`` -- a memory address that is different in every
-    kernel.
+    kernel. IPython's ``open`` (a wrapper of ``io.open`` that refuses the
+    standard streams' descriptors) cannot be pickled either: it claims to be
+    ``io.open`` and is not.
 
-    Any statement mentioning ``open`` therefore got a per-session cache key, its
-    output lineage inherited that volatility, and every downstream key drifted
-    with it: nothing restored after a restart and ``.cash`` grew a duplicate
-    copy each time.
+    Any statement mentioning such a name therefore got a per-session cache
+    key, its output lineage inherited that volatility, and every downstream key
+    drifted with it: nothing restored after a restart and ``.cash`` grew a
+    duplicate copy each time. It first happened with ``open``: every ``def``
+    that writes a log line reads it.
 
-    Skipping is not merely a workaround, it restores the truth: with cash NOT
-    installed, ``user_ns.get('open')`` is ``None`` (builtins do not live in
-    ``user_ns``) and contributes nothing to the key. Cash's own instrumentation
-    must be invisible to the key it computes.
+    Skipping is not merely a workaround, it restores the truth: in a plain
+    interpreter ``open`` is a builtin, which is not an input, and a wrapped
+    reader stands for the library's own function, which is code. Cash's own
+    instrumentation must be invisible to the key it computes.
 
     Tested with ``is True``, not truthiness: any object with a permissive
     ``__getattr__`` (``MagicMock``, RPC/ORM proxies) auto-creates a truthy
     attribute for ANY name, and treating those as instrumentation would drop a
     real input from the key -- trading this over-invalidation bug for an
     under-invalidation one, which is far worse. The wrapper sets the marker to
-    literal ``True`` (``file_tracker.py`` ``_patch_user_ns``), so an identity
-    test is both sufficient and safe.
+    literal ``True`` (``file_tracker.py`` ``_install_module_patches``), so an
+    identity test is both sufficient and safe.
     """
-    return getattr(val, "_is_file_tracker_patch", False) is True
+    if getattr(val, "_is_file_tracker_patch", False) is True:
+        return True
+    shell = sys.modules.get("IPython.core.interactiveshell")
+    return shell is not None and val is getattr(shell, "_modified_open", _NO_SHELL_OPEN)
+
+
+_NO_SHELL_OPEN = object()
 
 
 def is_module_like(var_name: str, val: object, virtual_modules: set[str]) -> bool:

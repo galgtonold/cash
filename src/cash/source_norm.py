@@ -47,6 +47,7 @@ import types
 
 from .analysis.annotations import ANNOTATION_PATTERN
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
+from .tracking.file_tracker import untracked
 from .value_types import IMMUTABLE_PRIMS
 
 __all__ = [
@@ -819,9 +820,10 @@ def read_code_file(path: str) -> bytes:
     became a raw-bytes input and a comment added to it re-ran the work. The
     memos in front of these reads hid it once a file had settled; for two
     seconds after a save (`stat_has_settled`) every key re-read the file.
-    ``io.FileIO`` is not patched.
+    The tracker sees every Python-level open, ``io.FileIO`` included, so the
+    read runs :class:`untracked`.
     """
-    with io.FileIO(path, "rb") as fh:
+    with untracked(), io.FileIO(path, "rb") as fh:
         return fh.readall()
 
 
@@ -878,11 +880,12 @@ def _pyc_proves_unchanged(path: str, st: object) -> bool:
         pyc = importlib.util.cache_from_source(path)
         if os.stat(pyc).st_mtime > started:
             return False
-        # FileIO, not `open`: read through `open` inside a cached call's body --
-        # a nested cached call's key being built -- the module's .pyc became
-        # that call's input, and editing ANY function in the module re-ran it
-        # (round 20: a 25 s step on every deploy).
-        with io.FileIO(pyc, "rb") as fh:
+        # Untracked: read inside a cached call's body -- a nested cached
+        # call's key being built -- the module's .pyc became that call's
+        # input, and editing ANY function in the module re-ran it (round 20: a
+        # 25 s step on every deploy). The file tracker sees every Python-level
+        # open, FileIO included.
+        with untracked(), io.FileIO(pyc, "rb") as fh:
             header = fh.read(16)
     except (OSError, ValueError, NotImplementedError):
         return False
