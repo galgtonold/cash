@@ -33,8 +33,6 @@ import ast
 import contextlib
 import hashlib
 import logging
-import random
-import sys
 import types
 from typing import TYPE_CHECKING, Any
 
@@ -44,6 +42,7 @@ from ...analysis.cacheability import (
     statement_writes_files,
 )
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...tracking.randomness import capture_rng_state, rng_carrier_kind, rng_modules_changed
 from ..cache_key import called_function_globals, control_outcome_key
 from ..cache_status import CacheStatus
 from ..lineage_formula import statement_environment_reads
@@ -66,19 +65,6 @@ if TYPE_CHECKING:
 __all__ = ["ControlStructureProcessor"]
 
 logger = logging.getLogger(__name__)
-
-
-def _global_rng_fingerprint() -> tuple:
-    """The state of ``random``'s and numpy's global generators, comparable with ``==``."""
-    np = sys.modules.get("numpy")
-    numpy_state: tuple | None = None
-    if np is not None:
-        try:
-            kind, keys, pos, has_gauss, gauss = np.random.get_state()
-            numpy_state = (kind, keys.tobytes(), pos, has_gauss, gauss)
-        except Exception:  # noqa: BLE001 - an unreadable state is not the same state
-            numpy_state = (object(),)
-    return (random.getstate(), numpy_state)
 
 
 def _status(metric: Any) -> Any:
@@ -133,14 +119,6 @@ def _entry_lineages(
             if name not in entry and name in simulated:
                 entry[name] = simulated[name]
     return entry
-
-
-def _holds_rng_state(value: Any) -> bool:
-    """A generator object: drawing from it inside a loop changes it in place."""
-    if isinstance(value, random.Random):
-        return True
-    module = type(value).__module__ or ""
-    return module.startswith("numpy.random") and type(value).__name__ in ("Generator", "RandomState")
 
 
 class ControlStructureProcessor:
@@ -234,7 +212,7 @@ class ControlStructureProcessor:
         entry = _entry_lineages(reads, lineage, getattr(state, "simulated_lineage", None))
         before = dict(lineage)
         reads_before = dict(state.statement_file_reads)
-        rng_before = _global_rng_fingerprint() if isinstance(node, ast.For) else None
+        rng_before = capture_rng_state() if isinstance(node, ast.For) else None
 
         sp = self.statement_processor
         begin_cost = getattr(sp, "begin_structure_cost", None)
@@ -352,7 +330,8 @@ class ControlStructureProcessor:
         None -- replay, never trust -- unless the loop's outcome is all it did:
 
         * a ``for`` loop (the shape that is expensive to replay);
-        * the global RNG where it was: a draw is the loop's effect on every
+        * every global RNG where it was (``random``, numpy, torch -- the
+          capture a cache hit replays): a draw is the loop's effect on every
           draw after it, and a record would skip it;
         * no file written, by its text or by a function it calls: skipping
           the loop would skip the write;
@@ -370,13 +349,13 @@ class ControlStructureProcessor:
         """
         if not isinstance(node, ast.For) or rng_before is None:
             return None
-        if rng_before != _global_rng_fingerprint():
+        if rng_modules_changed(rng_before, capture_rng_state()):
             return None
 
         user_ns = self.shell.user_ns
         if statement_writes_files(code) or statement_calls_user_writer(code, user_ns):
             return None
-        if any(_holds_rng_state(user_ns.get(name)) for name in reads):
+        if any(rng_carrier_kind(user_ns.get(name)) is not None for name in reads):
             return None
         callee_names = called_function_globals(reads, user_ns)
         resolve = getattr(self.statement_processor, "_resolve_live_function_source", None)

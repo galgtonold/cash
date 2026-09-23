@@ -192,7 +192,7 @@ MODULE_ALIASES = {
 # The three kinds below are the single taxonomy of "what is an RNG object" for
 # this package.  They are consumed by TWO channels that see different things:
 #
-# * ``_classify_rng_carrier`` (in :mod:`.state`) classifies a **live value**
+# * ``rng_carrier_kind`` (in :mod:`.state`) classifies a **live value**
 #   by ``isinstance``.  It runs at store/restore time, when the object exists.
 # * The tables here classify a **constructor call in source**.  Detection has to
 #   run on the AST because the warning fires *before* the statement executes —

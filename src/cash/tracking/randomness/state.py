@@ -136,7 +136,7 @@ def restore_rng_state(state: dict) -> None:
 # on what an RNG is.  See the "RNG carriers" section there.
 
 
-def _classify_rng_carrier(obj: object) -> str | None:
+def rng_carrier_kind(obj: object) -> str | None:
     """Return the carrier kind for ``obj``, or ``None`` if it isn't one.
 
     Objects owned by the RNG *module globals* are deliberately excluded: the
@@ -197,7 +197,7 @@ def capture_object_rng_states(
             continue
 
         try:
-            kind = _classify_rng_carrier(obj)
+            kind = rng_carrier_kind(obj)
             if kind is None:
                 continue
             if kind == _KIND_NP_GENERATOR:
@@ -249,7 +249,7 @@ def restore_object_rng_states(
             continue
 
         # Type match: only write the state back onto the same carrier kind.
-        if _classify_rng_carrier(obj) != kind:
+        if rng_carrier_kind(obj) != kind:
             continue
 
         try:

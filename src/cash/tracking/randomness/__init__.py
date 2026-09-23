@@ -39,6 +39,7 @@ from .state import (
     capture_rng_state,
     restore_object_rng_states,
     restore_rng_state,
+    rng_carrier_kind,
     rng_modules_changed,
 )
 
@@ -60,6 +61,7 @@ __all__ = [
     "publish_seed_epochs",
     "restore_object_rng_states",
     "restore_rng_state",
+    "rng_carrier_kind",
     "rng_lineage_fingerprint",
     "rng_modules_changed",
     "rng_virtual_var",
