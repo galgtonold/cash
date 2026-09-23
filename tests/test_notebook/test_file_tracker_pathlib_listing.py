@@ -32,3 +32,17 @@ def test_listing_records_the_directory(tmp_path, listing):
         LISTINGS[listing](str(tmp_path))
     listed = {os.path.normcase(os.path.abspath(p)).rstrip("\\/") for p in tracker.get_accessed_files()}
     assert os.path.normcase(str(tmp_path)) in listed, sorted(listed)
+
+
+@pytest.mark.parametrize("module", ["coverage.files", "coverage"])
+def test_a_listing_by_coverage_is_not_a_read(tmp_path, module):
+    """coverage's tracer lists a traced file's directory from inside the
+    trace function (on Windows); that is not the running statement reading it."""
+    ns = {"__name__": module, "os": os}
+    exec("def list_it(d):\n    return os.listdir(d)\n", ns)
+    with FileAccessTracker({}) as tracker:
+        ns["list_it"](str(tmp_path))
+        LISTINGS["os.listdir"](str(tmp_path / ".."))
+    listed = {os.path.normcase(os.path.abspath(p)).rstrip("\\/") for p in tracker.get_accessed_files()}
+    assert os.path.normcase(str(tmp_path)) not in listed, sorted(listed)
+    assert os.path.normcase(str(tmp_path.parent)) in listed, sorted(listed)

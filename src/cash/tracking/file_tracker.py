@@ -604,6 +604,21 @@ _NOT_A_READ = frozenset(
     }
 )
 
+#: Packages whose every open and listing is a tool's, never the notebook's.
+#: coverage's tracer lists the directory of each source file it first meets
+#: (on Windows, to learn the path's case), from inside the trace function, so
+#: the statement running at that moment got the directory as an input. Which
+#: directories that is depends on coverage's per-process cache: the same
+#: import keyed differently in the next kernel, and the two lineage engines
+#: disagreed on it.
+_TOOL_PACKAGES = frozenset({"coverage"})
+
+
+def _not_a_read(frame: Any) -> bool:
+    """Whether the call *frame* made is the interpreter's or a tool's, not the user's."""
+    name = frame.f_globals.get("__name__") or ""
+    return name in _NOT_A_READ or name.partition(".")[0] in _TOOL_PACKAGES
+
 
 def _audited_caller() -> Any:
     """The frame that made the audited call, seen from an audit consumer."""
@@ -630,7 +645,7 @@ def _on_open(args: tuple) -> None:
     if not isinstance(mode, str) or not isinstance(path, (str, bytes, os.PathLike)):
         return
     caller = _audited_caller()
-    if caller.f_globals.get("__name__") in _NOT_A_READ:
+    if _not_a_read(caller):
         return
     if _is_read_mode(mode):
         tracker = active_tracker.get()
@@ -680,7 +695,7 @@ def _on_listing(args: tuple) -> None:
         path = "."
     elif not isinstance(path, (str, bytes, os.PathLike)):
         return  # a descriptor
-    if _audited_caller().f_globals.get("__name__") in _NOT_A_READ:
+    if _not_a_read(_audited_caller()):
         return
     tracker._track_path(path)
 
