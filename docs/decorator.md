@@ -357,7 +357,7 @@ to a `unittest.mock` object has no code to key, so a call that reaches one runs
 uncached, and a call during which any mock was called, however deep, is not
 stored. See [mocking in tests](tutorials/feature-guides/testing-your-code.md#mocking-and-monkeypatching).
 
-<!-- claim: cash/purity_analyzer.py:callable_layers @856b9999 -->
+<!-- claim: cash/purity_analyzer.py:callable_layers @d507a38c -->
 **A decorated helper is every function it runs.** Behind `@timed def clean(x)`
 there are two: the decorator's wrapper and `clean` itself, and both are followed —
 edit either body and the entry invalidates, whether or not the decorator uses
@@ -393,7 +393,7 @@ read by the wrapper. If the first call reaches cash before the body has made tha
 imports a module of *yours* itself to read it; a library you deliberately import
 inside a function to defer its cost is never imported early.
 
-<!-- claim: cash/analysis/code_analyzer.py:CodeAnalyzer.find_called_functions @a30bf619, cash/analysis/code_analyzer.py:CodeAnalyzer._referenced_function @54c5c19c -->
+<!-- claim: cash/analysis/code_analyzer.py:CodeAnalyzer.find_called_functions @628ebd74, cash/analysis/code_analyzer.py:CodeAnalyzer._referenced_function @54c5c19c -->
 **Another cached function counts whether you call it or hand it on.** Calling
 `inner(n)` makes `inner` part of the caller's key, and so does passing it as a
 value — `map(inner, xs)`, `pool.map(inner, xs)`, `joblib.delayed(inner)`,

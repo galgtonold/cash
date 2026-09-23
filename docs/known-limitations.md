@@ -115,7 +115,7 @@ These all share one shape: a cell changes an object through a path cash does not
 
 ### Mutating through an alias
 
-<!-- claim: cash/analysis/aliases.py:bare_alias_targets @63962a47, cash/analysis/aliases.py:reference_alias_targets @0e0de16b -->
+<!-- claim: cash/analysis/aliases.py:bare_alias_targets @63962a47, cash/analysis/aliases.py:reference_alias_targets @f052d224 -->
 Cash tracks mutation through the name an object was bound to. Reach the same object through a different name and the mutation is invisible — re-running the cell applies it twice:
 
 <!-- test:skip reason="illustrative: alias-mutation shapes, need isolated cell re-runs" -->
@@ -139,7 +139,7 @@ Literal unpacking — flat (`(y,) = (x,)`) *and* nested (`(p, (q,)) = (x, (y,))`
 
 ### Mutating global state inside a function
 
-<!-- claim: cash/analysis/callee_effects.py:callee_global_mutations @8b0847b6 -->
+<!-- claim: cash/analysis/callee_effects.py:callee_global_mutations @08706d29 -->
 Cash analyses what a *statement* reads and writes, and it tracks the **arguments**
 a called function mutates — including imported helpers and bare calls (`proc(df)`
 that mutates `df`). It also tracks a function mutating a **global** it wasn't
@@ -407,7 +407,7 @@ for i, base in enumerate([[1], [1]]):
 
 > Ambiguous cell execution! The current cell content appears 2 times in the notebook and no cell ID could be resolved.
 
-<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2, cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @30310186 broad="the claim is about when this exception type exists to be raised at all" -->
+<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2, cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @328f2f5e broad="the claim is about when this exception type exists to be raised at all" -->
 Raised when two cells have **byte-identical content** *and* cash cannot resolve a cell ID. Cash fails loudly here rather than guessing, because guessing wrong would silently serve one cell's result for the other.
 
 In JupyterLab and VS Code with IPython ≥ 8.3, cell IDs normally resolve and this does not occur. It shows up in environments that do not supply them.

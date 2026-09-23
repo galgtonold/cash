@@ -263,10 +263,11 @@ not, and the entries are still missing from disk afterwards.
 ```
 
 ### `%cash_debug`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @5f76702f -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @a6c43007 -->
 
-Toggle or configure debug logging. Levels propagate to the global `cash` logger
-and to the statement processor, upstream checker, and core Cash instance.
+Toggle or configure debug logging. Levels propagate to the global `cash` logger,
+which the upstream checker logs through, and to the statement processor and the
+core Cash instance.
 
 **Signature:** `%cash_debug [on|off|json|file <path>]`
 

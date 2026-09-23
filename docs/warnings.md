@@ -855,7 +855,7 @@ much to care:
   (`df = load(p); df = df[mask]; df["x"] = ...`). The same frame changed
   *before* the copy is still flagged: it may be the helper's own object.
 
-<!-- claim: cash/purity_flow.py:_FreshFlow._check_insertion @70874c70, cash/purity_flow.py:_FreshFlow._loop_targets @bd0ebd1c, cash/purity_flow.py:is_log_line @9b6ff1b9, cash/effects.py:is_read_only_sql @1d849155 -->
+<!-- claim: cash/purity_flow.py:_FreshFlow._check_insertion @70874c70, cash/purity_flow.py:_FreshFlow._loop_targets @bd0ebd1c, cash/purity_flow.py:is_log_line @15e399e4, cash/effects.py:is_read_only_sql @1d849155 -->
   The same goes for the elements of a container the function built and filled
   only with objects of its own — the per-key accumulator every parser writes:
   `by_user[k].append(x)` on a local `defaultdict(list)`,
@@ -974,7 +974,7 @@ notebook statement does the same with the reads written in it.
 out, which is when they read the clock; `time.strftime("%Y-%m", t)` and
 `time.localtime(ts)` only format or convert the time you give them.
 
-<!-- claim: cash/purity_analyzer.py:_ambient_call @7f70a878, cash/effects.py:_canonical_names @e0692d46 -->
+<!-- claim: cash/purity_analyzer.py:_ambient_call @9ee41b73, cash/effects.py:_canonical_names @e0692d46 -->
 It is recognised by what the names refer to, not by how they are spelled:
 `import datetime as _dt; _dt.datetime.now()`, `from datetime import datetime as
 DateTime; DateTime.now()`, `import time as _time` and `from time import time as
@@ -991,7 +991,7 @@ dict or list on the way (`logger.info(json.dumps({"ts": time.time()}))`).
 the value is returned, stored, tested in a condition or passed to any other
 call, it is reported.
 
-<!-- claim: cash/purity_analyzer.py:_clock_helper_read @b5b5fbdf -->
+<!-- claim: cash/purity_analyzer.py:_clock_helper_read @e08307ae -->
 The same holds for a timing helper of your own whose body is log lines and a
 `return` of the clock — `def mark(name): print(..., file=sys.stderr); return
 time.perf_counter()`. Calling it counts as reading the clock where it is called,
@@ -1575,7 +1575,7 @@ actually read. If the cell is not really code — pasted output, a traceback,
 notes you were half-way through typing — delete it or turn it into a markdown
 cell. Markdown cells are not parsed and never trip this.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._warn_broken_upstream_cells @34c3c6c3 -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._warn_broken_upstream_cells @62677e0c -->
 The warning repeats when the break changes and stays quiet while it does not, so
 re-running cells *below* the broken one will not spam you; fixing it and later
 breaking it again will warn again. One gap in that promise: the scan only looks
@@ -1632,7 +1632,7 @@ edited cell depends on, and the plan contained a bare `plt.savefig(path)` whose
 figure is *not* being redrawn in the same pass. It dropped that write from the
 plan instead of performing it. The file on disk is untouched.
 
-<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._warn_orphaned_figure_write @9385cd93 -->
+<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._warn_orphaned_figure_write @9973d398 -->
 **Why it matters.** The refusal is the protection. `plt.savefig(path)` saves
 pyplot's *current* figure, which it looks up in a process-global registry — it
 has no link to any variable, so there is nothing for Cash to follow back to the

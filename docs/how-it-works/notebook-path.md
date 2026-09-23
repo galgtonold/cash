@@ -176,7 +176,7 @@ Conditionals work the same way with a different marker: `if`/`elif`/`else` and
 `# control_context:` branch hash, so only the branch that actually ran is
 cached and unused branches never pollute the key space.
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @22090a80, cash/notebook/control_structures/common.py:get_control_structure_type @a07b3e05 -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @b6c569ea, cash/notebook/control_structures/common.py:get_control_structure_type @a07b3e05 -->
 `while` and `with` are the exception — they are executed as a **single cacheable
 unit** through the statement processor rather than decomposed, because neither
 has an enumerable iteration space to key on.
@@ -237,7 +237,7 @@ else, and the loop runs again. The loop's own variables (`parts`, `d` in
 `for f in files: d = read(f); parts.append(d)`) are not stored anywhere a
 restart can bring them back from: a cell that reads them runs the loop.
 
-<!-- claim: cash/analysis/mutations.py:module_setting_receivers @8c05daa7 -->
+<!-- claim: cash/analysis/mutations.py:module_setting_receivers @2a5a82f5 -->
 A setting kept on a module, such as `plt.rcParams.update({...})`, `plt.style.use("ggplot")`,
 `pd.set_option(...)`, `np.seterr(...)` or `warnings.filterwarnings(...)`, lives
 in the library and not in any variable Cash stores. A top-level call like these
@@ -245,7 +245,7 @@ counts as a change to the module, so after a restart a cell that uses the
 module runs the setting line again before it draws or prints. Before this, a
 chart drawn after a restart silently lost the notebook's style.
 
-<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writer_output_already_fresh @c847d626, cash/notebook/write_observer.py:observe_writes @41f55ba6, cash/notebook/carrier_history.py:carrier_history_fingerprint @0ef3e0bc -->
+<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writer_output_already_fresh @982cbefa, cash/notebook/write_observer.py:observe_writes @41f55ba6, cash/notebook/carrier_history.py:carrier_history_fingerprint @0ef3e0bc -->
 A cell that writes files (`df.to_csv(...)`, a loop saving one chart per kind)
 is not re-run after a restart just because it ran in an earlier kernel. When it
 runs, Cash records the files it actually wrote, whether the path is in the code or
@@ -264,7 +264,7 @@ line of the chart, or an upstream edit to the data it writes. Writes a C
 extension makes without going through Python's `open` are not seen; such a
 writer is re-run as before.
 
-<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner.find_stale_file_writer_indices @5ec0087d, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._note_stale_exports @24c428be -->
+<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner.find_stale_file_writer_indices @42142a9a, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._note_stale_exports @cbaec54b -->
 A writer whose file the cell you run does not read is left alone, as a plain
 kernel leaves a cell you did not run. "Does not read" has to be provable: a
 path in the code, a name bound to one, or a list of paths a loop or

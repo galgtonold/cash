@@ -253,7 +253,7 @@ An unseeded opted-in fit warns that the cached model is a frozen replay (the
 
 ### `# @cash:assume-safe`
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6, cash/analysis/annotations.py:leading_cell_annotation @06896efb -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
 Cash runs a statement with a side effect every time, because a cache hit would
 skip it: a file write, a subprocess, a write to a database, drawing on pyplot's
 current figure, or a request that sends something — `requests.post(...)`,
@@ -368,7 +368,7 @@ run as one unit. The badge's `sub-call` line counts those calls too and says
 how many ran plain. A call that does real work, like fitting a model per
 element, is never re-run to be timed.
 
-<!-- claim: cash/notebook/call_unit.py:_keys_by_content @f28dca7c, cash/notebook/call_unit.py:call_cache_key @cadcbc40, cash/notebook/call_unit.py:_CONTENT_KEY_MAX_BYTES == 67108864, cash/notebook/call_unit.py:_NAME_CONTENT_MAX_BYTES == 1048576 -->
+<!-- claim: cash/notebook/call_unit.py:_keys_by_content @f28dca7c, cash/notebook/call_unit.py:call_cache_key @8d42ec2d, cash/notebook/call_unit.py:_CONTENT_KEY_MAX_BYTES == 67108864, cash/notebook/call_unit.py:_NAME_CONTENT_MAX_BYTES == 1048576 -->
 **The key holds what the call receives.** When everything a call reads is plain
 data — numbers, strings, dates, numpy arrays, pandas frames, and lists or dicts
 of those — its key is the function it calls and the values it is handed. An

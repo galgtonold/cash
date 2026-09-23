@@ -53,7 +53,7 @@ The split looks arbitrary until you write the two forms side by side.
 statement's outputs; `d.update(o)` is a bare expression with no target at all.
 The first can be re-derived from the statement that made it; the second cannot.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @30310186, cash/analysis/mutations.py:selfref_inplace_write_vars @f9e28262 -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @328f2f5e, cash/analysis/mutations.py:selfref_inplace_write_vars @f9e28262 -->
 !!! note "…but only when the base was made in the same cell"
     The **Cached** verdicts above are this classifier's per-statement decision.
     A separate rule sits on top, in the upstream checker: a variable the cell
@@ -74,7 +74,7 @@ The first can be re-derived from the statement that made it; the second cannot.
 has no store target to give the receiver a fresh lineage. So Cash classifies
 method-call receivers in tiers, in this order:
 
-<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @704f9e6f, cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @716a2694, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:standalone_method_call_inner_methods @4a62a44e, cash/analysis/mutations.py:chain_is_pure @530e6134, cash/analysis/mutations.py:RECEIVER_READONLY_WRITE_METHODS @697bbf7a, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @1cca2d82 -->
+<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @704f9e6f, cash/notebook/statement/processor.py:StatementProcessor._classify_method_mutations @716a2694, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:standalone_method_call_inner_methods @4a62a44e, cash/analysis/mutations.py:chain_is_pure @96104373, cash/analysis/mutations.py:RECEIVER_READONLY_WRITE_METHODS @697bbf7a, cash/notebook/statement/processor.py:StatementProcessor._receiver_observable @1cca2d82 -->
 
 - **Excluded outright.** A module receiver is a plain function call, not a
   mutation: `np.foo()`, `time.sleep()`, `plt.title()`. The exception is a

@@ -39,7 +39,7 @@ Five details of that formula are load-bearing:
   `input_lineages` and routed to the module component instead. Hashing a module object
   would fall back to its memory address, which is fresh in every kernel and would make
   every downstream key drift across a restart.
-  <!-- claim: cash/notebook/lineage_formula.py:module_read_lineage @e20cbd4a -->
+  <!-- claim: cash/notebook/lineage_formula.py:module_read_lineage @1bde3c78 -->
   The module component is not the whole module when it need not be. A statement
   that only reads attributes of a local module — `helpers.load(x)` — is keyed on
   what those attributes reach inside it, so editing `helpers.report` leaves it alone.
@@ -67,7 +67,7 @@ already loaded, and otherwise from what that import bound when it last ran, whic
 Cash records. Without them the key never matched, and every statement that called
 a notebook function was re-run after a restart, along with everything it needed.
 
-<!-- claim: cash/notebook/upstream/virtual_lineage.py:VirtualLineage._propagate_import_lineage @0fbd7dde -->
+<!-- claim: cash/notebook/upstream/virtual_lineage.py:VirtualLineage._propagate_import_lineage @f4ee5f5c -->
 A module's lineage is the lineage of the import that bound it. Some imports run
 without Cash: the cell that turns Cash on is already running when `%cash_on`
 executes, so the imports after it in that cell run uncached. The upstream check
