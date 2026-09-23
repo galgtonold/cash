@@ -2,7 +2,7 @@
 
 ``wrap_eligible_calls``'s ``gate`` parameter (Task 4) was tested at the AST
 level but never wired into ``statement/processor.py``'s
-``_code_and_tree_for_execution`` (Task 4 landed the function, not the wiring —
+``CallRouting.code_and_tree_for_execution`` (Task 4 landed the function, not the wiring —
 confirmed by ``grep -rn "gate=" src/`` returning zero hits before this change).
 Structural eligibility alone (the free-variable rule in
 ``eligible_call_nodes``) says nothing about whether a call is *substantively*
@@ -27,7 +27,7 @@ ever was.
 
 Not exercised via ``nb_runner`` (no real kernel needed): this is the
 synchronous statement path, and ``CashMagics`` + a mock shell reaches
-``_code_and_tree_for_execution`` directly.
+``CallRouting.code_and_tree_for_execution`` directly.
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ def _spy_on_wrap_eligible_calls(monkeypatch):
     """Patch ``wrap_eligible_calls`` to pass through but record the sites it
     returned, so a test can assert on how many call sites survived the gate.
     """
-    import cash.notebook.statement.processor as processor_module
+    import cash.notebook.statement.call_routing as processor_module
 
     captured = {}
     real = processor_module.wrap_eligible_calls
@@ -125,7 +125,7 @@ def test_a_gate_exception_fails_closed_instead_of_crashing_the_cell(magics_fixtu
     that tuple is the sharpest way to prove the gate itself fails closed
     rather than relying on that narrower, pre-existing except clause.
     """
-    import cash.notebook.statement.processor as processor_module
+    import cash.notebook.statement.call_routing as processor_module
 
     def _raise(*args, **kwargs):
         raise RuntimeError("boom from inside the gate")
@@ -153,7 +153,7 @@ def test_the_gate_is_given_variable_lineage(magics_fixture, monkeypatch):
     construct a statement whose gate verdict differs only by this one
     argument.
     """
-    import cash.notebook.statement.processor as processor_module
+    import cash.notebook.statement.call_routing as processor_module
 
     captured_kwargs = {}
     real = processor_module.call_site_is_cacheable
@@ -189,7 +189,7 @@ def test_a_no_cache_statement_never_reaches_the_gate(magics_fixture, monkeypatch
 
     There are genuinely two independent enforcement layers for "no-cache
     wins over interception": the outer clause in
-    ``_code_and_tree_for_execution`` (this task's own code, checked here),
+    ``CallRouting.code_and_tree_for_execution`` (this task's own code, checked here),
     and ``cacheability_decision.decide_cacheability``'s pre-existing
     ``annotation.no_cache`` short-circuit, reached transitively through
     ``call_site_is_cacheable``. An integration test that only counts
@@ -201,7 +201,7 @@ def test_a_no_cache_statement_never_reaches_the_gate(magics_fixture, monkeypatch
     outer clause did its job by never letting ``wrap_eligible_calls`` reach
     the gate at all, rather than reaching it and having it refuse.
     """
-    import cash.notebook.statement.processor as processor_module
+    import cash.notebook.statement.call_routing as processor_module
 
     captured_calls = []
     real = processor_module.call_site_is_cacheable
@@ -218,7 +218,7 @@ def test_a_no_cache_statement_never_reaches_the_gate(magics_fixture, monkeypatch
 
     assert captured_calls == [], (
         "the gate was invoked for a no-cache statement -- "
-        "_code_and_tree_for_execution's outer no_cache clause must return "
+        "code_and_tree_for_execution's outer no_cache clause must return "
         "before wrap_eligible_calls ever calls the gate, not rely on "
         "decide_cacheability's downstream no-cache check to save it: "
         f"{captured_calls!r}"
@@ -257,7 +257,7 @@ def test_identity_contract_holds_on_the_no_eligible_call_and_opt_out_branches(ma
     # Branch 1: no eligible call anywhere in the statement.
     code = "out.append(1)"
     tree = ast.parse(code)
-    result_code, result_tree = processor._code_and_tree_for_execution(code, tree, None)
+    result_code, result_tree = processor._calls.code_and_tree_for_execution(code, tree, None)
     assert result_code is code, "the no-eligible-call branch built a NEW string object"
     assert result_tree is tree, "the no-eligible-call branch built a NEW tree object"
 
@@ -268,7 +268,7 @@ def test_identity_contract_holds_on_the_no_eligible_call_and_opt_out_branches(ma
     code = "out.append(compute(x))"
     tree = ast.parse(code)
     opted_out = types.SimpleNamespace(no_cache_calls=True, no_cache=False)
-    result_code, result_tree = processor._code_and_tree_for_execution(code, tree, opted_out)
+    result_code, result_tree = processor._calls.code_and_tree_for_execution(code, tree, opted_out)
     assert result_code is code, "the no_cache_calls opt-out branch built a NEW string object"
     assert result_tree is tree, "the no_cache_calls opt-out branch built a NEW tree object"
 
@@ -276,7 +276,7 @@ def test_identity_contract_holds_on_the_no_eligible_call_and_opt_out_branches(ma
     # string -- proving the two assertions above are discriminating, not
     # trivially true because nothing here is ever eligible for rewriting.
     not_opted_out = types.SimpleNamespace(no_cache_calls=False, no_cache=False)
-    control_code, _ = processor._code_and_tree_for_execution(code, tree, not_opted_out)
+    control_code, _ = processor._calls.code_and_tree_for_execution(code, tree, not_opted_out)
     assert control_code is not code, (
         "the control did not rewrite -- these statements are not actually "
         "exercising the branches this test claims to pin"

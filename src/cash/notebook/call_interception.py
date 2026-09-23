@@ -440,11 +440,11 @@ class CallCache:
                 wrapper = self._call_unit.wrap(fn, site)
             else:
                 # No site registered for this index -- CallCache is being used
-                # outside the ``_code_and_tree_for_execution`` rewrite pipeline
+                # outside the ``CallRouting.code_and_tree_for_execution`` rewrite pipeline
                 # (e.g. called directly, as every pre-Task-5 unit test does).
                 # In production ``set_sites`` is always called with a non-empty
                 # list before ``__cash_call__`` is ever bound into ``user_ns``
-                # (``_code_and_tree_for_execution`` returns early when
+                # (``CallRouting.code_and_tree_for_execution`` returns early when
                 # ``wrap_eligible_calls`` finds nothing), so this branch is not
                 # reachable from real notebook execution. Keep the previously-
                 # shipped decorator-based wrapping here rather than passing the

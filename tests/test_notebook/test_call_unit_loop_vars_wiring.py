@@ -4,8 +4,8 @@
 (`test_call_unit_key.py`) -- given a dict, it discriminates correctly. What
 was NOT covered until this file: whether the production pipeline ever
 actually PRODUCES that dict and gets it to the call at invocation time. The
-route is a stack-shaped attribute on `StatementProcessor`
-(`_call_unit_loop_vars`), pushed/popped by `ForLoopHandler._process_one_iteration`
+route is a stack-shaped attribute on the processor's `CallRouting`
+(`_loop_vars`), pushed/popped by `ForLoopHandler._process_one_iteration`
 around each iteration's body statements and read by `CallUnit._build_key`
 through the `loop_vars_provider` callable threaded via `CallCache`.
 
@@ -175,7 +175,7 @@ def _bare_statement_processor():
     cash = Cash(backend=backend, register_magic=False)
     shell = MagicMock()
     shell.user_ns = {}
-    return StatementProcessor(cash_instance=cash, shell=shell, debug=False)
+    return StatementProcessor(cash_instance=cash, shell=shell, debug=False)._calls
 
 
 def test_loop_vars_scope_pops_even_when_the_body_raises():
@@ -185,7 +185,7 @@ def test_loop_vars_scope_pops_even_when_the_body_raises():
     kernel -- another cell -- must not inherit a stale loop context).
 
     Mutation that must make this fail: dropping `finally` in
-    `StatementProcessor.loop_vars_scope` (a bare pop after `yield`, unreached
+    `CallRouting.loop_vars_scope` (a bare pop after `yield`, unreached
     on an exception): the key-build reader then still returns `{'0:t': 1}`
     instead of `{}` after the `with` block exits via the exception.
     """
@@ -239,7 +239,7 @@ def test_loop_var_digests_scope_pops_in_lockstep_with_loop_vars():
     mechanism that could desync from it.
 
     Mutation that must make this fail: in `loop_vars_scope`'s `finally`,
-    drop the `self._call_unit_loop_var_digests.pop()` line (keep the values
+    drop the `self._loop_var_digests.pop()` line (keep the values
     pop): the digest reader then still returns `{'0:t': 'digest-A'}` instead
     of `{}` after the exception propagates out of the `with` block.
     """

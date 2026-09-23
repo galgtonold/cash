@@ -76,7 +76,7 @@ def test_cash_tracking_time_is_not_counted_as_the_statements(magics_fixture, mon
         clock[0] += 0.45
         return clock[0]
 
-    monkeypatch.setattr("cash.notebook.statement.processor.tracking_seconds", tracked)
+    monkeypatch.setattr("cash.notebook.statement.call_routing.tracking_seconds", tracked)
     run_cash_cell(magics, "import time\nx = (time.sleep(0.5), 7)[1]")
     assert shell.user_ns["x"] == 7
     assert _cost_of(backend, "time.sleep(0.5)") < 0.4

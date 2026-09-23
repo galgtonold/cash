@@ -476,7 +476,7 @@ expensive work often lives in a **call entry** of its own. Those are two
 different cache entries, so "does this directive reach the call?" is a real
 question with a per-directive answer:
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.current_call_ttl @d31c17fa, cash/notebook/statement/processor.py:StatementProcessor.current_call_persist @e00d6e61 -->
+<!-- claim: cash/notebook/statement/call_routing.py:CallRouting.current_call_ttl @936edf75, cash/notebook/statement/call_routing.py:CallRouting.current_call_persist @accdde94 -->
 | Directive | Reaches the intercepted call? |
 |---|---|
 | `# @cash:no-cache` | Yes — it switches interception off entirely, so there is no call entry to miss |

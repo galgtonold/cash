@@ -150,7 +150,7 @@ def _is_dunder_loop_var(name: str) -> bool:
     every direct caller/test that predates CAS-257's depth-keying, e.g.
     `test_call_unit_key.py`'s hand-built dicts) and a depth-prefixed one
     (`"0:x"` -- the production path,
-    `StatementProcessor.current_loop_vars_for_call_key`). A depth-prefixed
+    `CallRouting.current_loop_vars_for_call_key`). A depth-prefixed
     dunder (`"0:__iterable_lineage__"`) no longer starts with `"__"` itself
     once the prefix is on -- checking the combined string, as this used to,
     would silently stop catching it and turn the enforced CAS-242 guard back
@@ -217,7 +217,7 @@ def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, st
     INNER loop's last `t` for a call that runs after the inner loop has
     already ended, back in the OUTER iteration. First-run wrongness, found
     live via a real-kernel repro. `loop_var_digests` instead travels through
-    `StatementProcessor.loop_vars_scope`'s push/pop stack -- the SAME stack
+    `CallRouting.loop_vars_scope`'s push/pop stack -- the SAME stack
     `loop_vars` (values) already uses, which correctly nests because it is
     popped when an iteration's body finishes, restoring whatever level was
     beneath it. Sourcing the digest from that stack, rather than from a
@@ -227,7 +227,7 @@ def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, st
     **The fallback.** A name absent from `loop_var_digests` (a loop var whose
     binding didn't go through `for_handler.py`'s own per-iteration push, or
     one bound by an ancestor loop several levels up whose own digest wasn't
-    carried this far down -- see `StatementProcessor._depth_keyed_loop_scope`)
+    carried this far down -- see `CallRouting._depth_keyed_loop_scope`)
     computes `compute_hash_full(value)` directly. This MUST stay the full
     hash. Do not "simplify" it to `compute_hash` -- that would silently
     reintroduce the exact sampled-collision bug this function exists to
@@ -368,7 +368,7 @@ def call_cache_key(
 
     **Entry names carry an optional depth prefix (CAS-257 defect 1).** In
     production, ``loop_vars``/``loop_var_digests`` arrive from
-    ``StatementProcessor.current_loop_vars_for_call_key`` /
+    ``CallRouting.current_loop_vars_for_call_key`` /
     ``current_loop_var_digests_for_call_key``, whose entries are keyed
     ``"{depth}:{name}"`` rather than bare ``name`` — a name reused by a
     nested loop (``for q in A: for q in B: acc.append(pull(handle))``) would
@@ -426,7 +426,7 @@ def call_cache_key(
     **loop_var_digests** (optional) short-circuits the per-loop-var hashing
     :func:`_loop_var_digest` would otherwise do from scratch: a precomputed,
     already-correctly-scoped ``{name: full_hash}`` map, sourced from
-    ``StatementProcessor``'s ``loop_vars_scope`` push/pop stack rather than
+    ``CallRouting``'s ``loop_vars_scope`` push/pop stack rather than
     the flat, never-popped ``variable_lineage`` dict (see
     :func:`_loop_var_digest`'s docstring for why that distinction is
     load-bearing, not cosmetic). Omitting it (``None``, the default) is
@@ -1761,8 +1761,8 @@ class CallUnit:
     def _current_loop_vars(self) -> dict[str, object]:
         """The live enclosing loop's non-dunder iteration vars, or ``{}``.
 
-        Wired to ``StatementProcessor.current_loop_vars_for_call_key`` (see that class's
-        ``_call_unit_loop_vars`` stack, pushed/popped by
+        Wired to ``CallRouting.current_loop_vars_for_call_key`` (see that class's
+        ``_loop_vars`` stack, pushed/popped by
         ``ForLoopHandler._process_one_iteration`` around each iteration's body)
         via ``CallCache``'s ``loop_vars_provider``. Guarded independently of
         ``_build_key``'s own try/except: a provider failure should degrade to
@@ -1779,9 +1779,9 @@ class CallUnit:
     def _current_loop_var_digests(self) -> Mapping[str, str]:
         """The live enclosing loop's precomputed loop-var digests, or ``{}``.
 
-        Wired to ``StatementProcessor.current_loop_var_digests_for_call_key`` (see that
-        class's ``_call_unit_loop_var_digests`` stack -- pushed/popped in
-        lockstep with ``_call_unit_loop_vars``, by the same
+        Wired to ``CallRouting.current_loop_var_digests_for_call_key`` (see that
+        class's ``_loop_var_digests`` stack -- pushed/popped in
+        lockstep with ``_loop_vars``, by the same
         ``loop_vars_scope`` call) via ``CallCache``'s
         ``loop_var_digests_provider``. Guarded independently of
         ``_build_key``'s own try/except, same reasoning as
