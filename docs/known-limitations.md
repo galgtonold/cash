@@ -115,7 +115,7 @@ These all share one shape: a cell changes an object through a path cash does not
 
 ### Mutating through an alias
 
-<!-- claim: cash/analysis/cacheability.py:bare_alias_targets @63962a47, cash/analysis/cacheability.py:reference_alias_targets @0e0de16b -->
+<!-- claim: cash/analysis/aliases.py:bare_alias_targets @63962a47, cash/analysis/aliases.py:reference_alias_targets @0e0de16b -->
 Cash tracks mutation through the name an object was bound to. Reach the same object through a different name and the mutation is invisible — re-running the cell applies it twice:
 
 <!-- test:skip reason="illustrative: alias-mutation shapes, need isolated cell re-runs" -->
@@ -132,14 +132,14 @@ y = x if flag else z   # ternary: two possible sources
 y.append(3)
 ```
 
-<!-- claim: cash/analysis/cacheability.py:_literal_unpack_aliases @2c6e633d -->
+<!-- claim: cash/analysis/aliases.py:_literal_unpack_aliases @2c6e633d -->
 Literal unpacking — flat (`(y,) = (x,)`) *and* nested (`(p, (q,)) = (x, (y,))`) — is **not** in this list: cash recognises every leaf of a 1:1 literal unpack as a pointer copy, at any nesting depth, and refuses to cache the statement. A later `q.append(9)` is therefore not double-applied. One `*rest` or one computed element (`b, c = a, f()`) opts the whole statement back out, since that element may be real work worth caching.
 
 **What to do:** mutate through the original name (`x.append(99)`), or rebind rather than mutate (`x = x + [99]`).
 
 ### Mutating global state inside a function
 
-<!-- claim: cash/analysis/cacheability.py:callee_global_mutations @8b0847b6 -->
+<!-- claim: cash/analysis/callee_effects.py:callee_global_mutations @8b0847b6 -->
 Cash analyses what a *statement* reads and writes, and it tracks the **arguments**
 a called function mutates — including imported helpers and bare calls (`proc(df)`
 that mutates `df`). It also tracks a function mutating a **global** it wasn't

@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 from cash.control_markers import iteration_digest, mark_iteration
 
-from ...analysis.cacheability import accumulator_loop_body_shape, cacheable_accumulator_loop
+from ...analysis.mutations import accumulator_loop_body_shape, cacheable_accumulator_loop
 from ...lineage_tag import own_tag
 from ...object_hashing import compute_hash_full
 from ...tracking.file_tracker import FileAccessTracker

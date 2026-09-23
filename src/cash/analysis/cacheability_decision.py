@@ -44,7 +44,8 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from cash.analysis.annotations import CacheAnnotation
-from cash.analysis.cacheability import StatementAnalysis, user_callee_writing_files
+from cash.analysis.cacheability import StatementAnalysis
+from cash.analysis.namespace_effects import user_callee_writing_files
 from cash.value_types import BUILTIN_NAMES, mro_kind
 
 logger = logging.getLogger(__name__)

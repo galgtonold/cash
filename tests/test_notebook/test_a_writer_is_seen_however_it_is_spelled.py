@@ -37,10 +37,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import _writer_lib  # noqa: E402
 
-from cash.analysis.cacheability import (  # noqa: E402
-    statement_calls_user_writer,
-    user_callee_writing_files,
-)
+from cash.analysis.namespace_effects import statement_calls_user_writer, user_callee_writing_files
 
 
 @pytest.fixture

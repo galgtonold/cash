@@ -26,15 +26,11 @@ from typing import TYPE_CHECKING, Any
 from cash.control_markers import iteration_digest, strip_markers
 
 from ...analysis.ast_util import called_names, parse_cached
-from ...analysis.cacheability import (
-    analyze_statement,
-    bare_call_argument_names,
-    bare_call_arguments,
-    selfref_reassignment_targets,
-    statement_writes_files,
-)
+from ...analysis.cacheability import analyze_statement, statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
 from ...analysis.mutation_effects import classify_receivers, live_function_source, statement_effects
+from ...analysis.mutations import selfref_reassignment_targets
+from ...analysis.namespace_effects import bare_call_argument_names, bare_call_arguments
 from ...source_norm import source_identity_digest
 from ...tracking import file_dep_snapshot as _fds
 from ...tracking.file_dep_snapshot import LISTING_MIN_FILES, FreshnessMemo, snapshot_is_fresh, stats_from_listings

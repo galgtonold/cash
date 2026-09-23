@@ -25,8 +25,9 @@ from ...analysis.annotations import (
     get_statement_annotations,
     parse_annotations_in_range,
 )
-from ...analysis.cacheability import analyze_statement, selfref_reassignment_targets
+from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.mutations import selfref_reassignment_targets
 from ..cache_status import CacheStatus
 from ..compiled_source import is_cash_filename
 from .common import extract_target_names, is_control_structure

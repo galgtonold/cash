@@ -26,15 +26,11 @@ from typing import Any
 from cash.control_markers import strip_markers
 
 from ...analysis.ast_util import parse_cached, resolve_callee
-from ...analysis.cacheability import (
-    analyze_statement,
-    consumed_input_names,
-    resolve_literal_path,
-    resolve_path_list,
-    statement_read_paths,
-)
+from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
 from ...analysis.mutation_effects import CellEffects
+from ...analysis.mutations import consumed_input_names
+from ...analysis.namespace_effects import resolve_literal_path, resolve_path_list, statement_read_paths
 from ...tracking.function_tracker import FunctionTracker, is_local_module
 from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState

@@ -36,12 +36,10 @@ import logging
 import types
 from typing import TYPE_CHECKING, Any
 
-from ...analysis.cacheability import (
-    callee_global_mutations,
-    statement_calls_user_writer,
-    statement_writes_files,
-)
+from ...analysis.cacheability import statement_writes_files
+from ...analysis.callee_effects import callee_global_mutations
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.namespace_effects import statement_calls_user_writer
 from ...tracking.randomness import capture_rng_state, rng_carrier_kind, rng_modules_changed
 from ..cache_key import called_function_globals, control_outcome_key
 from ..cache_status import CacheStatus
@@ -162,7 +160,7 @@ class ControlStructureProcessor:
             prev_node: The top-level statement just before this one in the
                 cell, or ``None``. The for-loop's single-unit branch needs an
                 ``out = []`` seed there to compute ``force_outputs`` (see
-                ``cacheability.cacheable_accumulator_loop``).
+                ``mutations.cacheable_accumulator_loop``).
 
         Returns:
             ControlStructureResult with metrics

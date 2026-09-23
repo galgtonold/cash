@@ -11,7 +11,7 @@ the same call was a side effect in a notebook and silent in a function.
 
 So this module says only *what* a call is, as an :class:`EffectKind`, and each
 path keeps a policy table next to its own code saying what it does about each
-kind (``NOTEBOOK_POLICY`` in :mod:`cash.analysis.cacheability`,
+kind (``NOTEBOOK_POLICY`` in :mod:`cash.analysis.file_effects`,
 ``DECORATOR_POLICY`` in :mod:`cash.purity_analyzer`). A test asserts that both
 tables cover every kind, so adding a kind forces a decision in both paths.
 

@@ -9,7 +9,7 @@ STALE value after the mutation was edited. (In normal use the consumer is
 usually sub-cost-floor and recomputes, so the bug only bit when the consumer was
 genuinely cached -- ``%cash_persist`` here forces that.)
 
-THE FIX (``cacheability.standalone_method_mutation_receivers``): the receiver of
+THE FIX (``mutations.standalone_method_mutation_receivers``): the receiver of
 a top-level bare-``Expr`` mutating method call is routed into the statement's
 *output* set in BOTH the runtime (``StatementProcessor.process_statement``) and
 the upstream simulation (``VirtualLineage._update_virtual_lineage``). Both engines

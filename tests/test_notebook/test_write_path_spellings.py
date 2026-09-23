@@ -8,7 +8,7 @@ chart nothing reads was re-drawn for every downstream cell.
 import os
 from pathlib import Path
 
-from cash.analysis.cacheability import statement_read_paths, statement_written_paths
+from cash.analysis.namespace_effects import statement_read_paths, statement_written_paths
 
 NS = {"OUT": Path("out"), "DATA": Path("data"), "name": "x.csv", "k": 3, "REGION": None}
 

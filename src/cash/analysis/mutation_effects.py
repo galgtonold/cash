@@ -4,7 +4,7 @@ The upstream checker needs to know everything a cell writes, split by the
 channel an isolated re-run resets it through (:class:`CellEffects`); the
 statement processor and the upstream simulator need to know what one statement
 reads and writes (:class:`StatementEffects`). Each used to chain the analyses
-in ``cacheability`` by hand. They now ask :func:`cell_effects` and
+in the statement analyses by hand. They now ask :func:`cell_effects` and
 :func:`statement_effects`, so a new mutation channel is added in one place.
 
 Functions called by name are resolved through a ``name -> source`` callable
@@ -23,37 +23,38 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .aliases import aliased_sources
 from .annotations import extract_annotations_for_statements
 from .ast_util import called_names
-from .cacheability import (
-    RECEIVER_READONLY_WRITE_METHODS,
-    alias_mutation_sources,
-    aliased_sources,
-    analyze_statement,
-    assigned_method_call_receivers,
+from .cacheability import alias_mutation_sources, analyze_statement
+from .cacheability_decision import receiver_is_identity_coupled
+from .callee_effects import (
     callee_global_mutations,
-    chain_is_pure,
-    crossref_reassigned_vars,
-    fits_its_receiver,
     function_arg_mutations,
-    is_pandas_plot_call,
-    module_setting_receivers,
     mutating_partials,
-    object_protocol_mutations,
     partial_arg_mutations,
     reduce_free_mutations,
-    selfref_inplace_write_vars,
     standalone_call_arg_targets,
+    stateful_closure_vars,
+    stateful_self_functions,
+)
+from .code_analyzer import CodeAnalyzer
+from .mutations import (
+    RECEIVER_READONLY_WRITE_METHODS,
+    assigned_method_call_receivers,
+    chain_is_pure,
+    crossref_reassigned_vars,
+    is_pandas_plot_call,
+    module_setting_receivers,
+    selfref_inplace_write_vars,
     standalone_method_call_inner_methods,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
-    stateful_closure_vars,
-    stateful_self_functions,
     subscript_view_bindings,
     top_level_call_argument_bases,
 )
-from .cacheability_decision import receiver_is_identity_coupled
-from .code_analyzer import CodeAnalyzer
+from .namespace_effects import fits_its_receiver
+from .object_protocol import object_protocol_mutations
 
 __all__ = [
     "CellEffects",

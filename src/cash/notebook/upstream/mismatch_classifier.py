@@ -16,9 +16,10 @@ from dataclasses import dataclass, field
 
 from cash.control_markers import strip_markers
 
-from ...analysis.cacheability import analyze_statement, is_estimator
+from ...analysis.cacheability import analyze_statement
 from ...analysis.cacheability_decision import is_lineage_exempt, receiver_is_identity_coupled
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.namespace_effects import is_estimator
 from ...value_types import BUILTIN_NAMES
 from .._protocols import TrackingState
 from .._trace import trace_event

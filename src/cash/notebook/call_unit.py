@@ -42,8 +42,10 @@ from typing import Any
 
 from cash._clock import perf_counter as _perf_counter
 from cash.analysis.annotations import CacheAnnotation
-from cash.analysis.cacheability import analyze_statement, capturable_globals, source_global_mutations
+from cash.analysis.cacheability import analyze_statement
 from cash.analysis.cacheability_decision import decide_cacheability, identity_coupled_reason
+from cash.analysis.callee_effects import source_global_mutations
+from cash.analysis.namespace_effects import capturable_globals
 from cash.backends._base import ttl_expired
 from cash.backends.value_policy import worth_its_bytes
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -254,7 +256,7 @@ def callee_mutated_globals(fn) -> tuple[str, ...]:
     """Names in *fn*'s own globals that calling *fn* mutates in place, sorted.
 
     The same analysis the statement path applies to a callee it finds by name
-    (:func:`~cash.analysis.cacheability.source_global_mutations`), read from
+    (:func:`~cash.analysis.callee_effects.source_global_mutations`), read from
     the live function object instead. Never raises: a callee whose source
     cannot be read (a C builtin, an ``exec``'d string, a partial) yields
     ``()``, so its writes are not captured -- as for any call cash cannot see
@@ -436,7 +438,7 @@ def call_cache_key(
     post-state would be served over a prefix that never produced it: two calls
     that agree on arguments but enter with a different accumulator get the same
     key, and the second is handed the first's absolute end state. That is the
-    partial-accumulator hazard ``cacheability.cacheable_accumulator_loop``'s
+    partial-accumulator hazard ``mutations.cacheable_accumulator_loop``'s
     requirement (2) refuses outright, and that CAS-261's split tail had to
     satisfy by keying on the accumulator's post-head lineage.
 

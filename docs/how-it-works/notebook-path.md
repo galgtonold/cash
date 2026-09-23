@@ -237,7 +237,7 @@ else, and the loop runs again. The loop's own variables (`parts`, `d` in
 `for f in files: d = read(f); parts.append(d)`) are not stored anywhere a
 restart can bring them back from: a cell that reads them runs the loop.
 
-<!-- claim: cash/analysis/cacheability.py:module_setting_receivers @8c05daa7 -->
+<!-- claim: cash/analysis/mutations.py:module_setting_receivers @8c05daa7 -->
 A setting kept on a module, such as `plt.rcParams.update({...})`, `plt.style.use("ggplot")`,
 `pd.set_option(...)`, `np.seterr(...)` or `warnings.filterwarnings(...)`, lives
 in the library and not in any variable Cash stores. A top-level call like these

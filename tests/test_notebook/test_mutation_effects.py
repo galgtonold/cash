@@ -193,7 +193,7 @@ def test_live_function_source():
 
 
 def test_is_estimator():
-    from cash.analysis.cacheability import is_estimator
+    from cash.analysis.namespace_effects import is_estimator
 
     class Est:
         def fit(self, x):

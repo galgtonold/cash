@@ -52,7 +52,8 @@ from cash.object_hashing import estimate_object_size, mutation_fingerprint
 from cash.purity import is_known_pure, is_stateful
 from cash.tracking.file_dep_snapshot import snapshot_dependencies, snapshot_file_deps
 
-from ...analysis.cacheability import statement_calls_user_writer, statement_writes_files, statement_written_paths
+from ...analysis.cacheability import statement_writes_files
+from ...analysis.namespace_effects import statement_calls_user_writer, statement_written_paths
 from ...backends.adaptive_caps import human_bytes
 from ...diagnostics import warn_diagnostic
 from ...tracking import file_dep_snapshot
@@ -503,15 +504,7 @@ def capture_output(stdout: bool = True, stderr: bool = True, display: bool = Tru
 
 
 from ...analysis.annotations import CacheAnnotation
-from ...analysis.cacheability import (
-    StatementAnalysis,
-    analyze_statement,
-    assigned_method_call_receivers,
-    bare_call_arguments,
-    fits_its_receiver,
-    is_estimator,
-    standalone_method_call_receivers,
-)
+from ...analysis.cacheability import StatementAnalysis, analyze_statement
 from ...analysis.cacheability_decision import (
     decide_cacheability,
     identity_coupled_reason,
@@ -525,6 +518,8 @@ from ...analysis.mutation_effects import (
     live_function_source,
     statement_effects,
 )
+from ...analysis.mutations import assigned_method_call_receivers, standalone_method_call_receivers
+from ...analysis.namespace_effects import bare_call_arguments, fits_its_receiver, is_estimator
 from ...analytics import AnalyticsManager
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import (
@@ -3511,7 +3506,7 @@ class StatementProcessor:
         return pre_route - outputs, observe, assumed, record_verdict
 
     def _bare_call_arguments(self, tree: ast.Module | None, outputs: set[str]) -> set[str]:
-        """See ``cacheability.bare_call_arguments`` (shared with the simulation)."""
+        """See ``namespace_effects.bare_call_arguments`` (shared with the simulation)."""
         return set(bare_call_arguments(tree, self.shell.user_ns)) - outputs
 
     def _resolve_live_function_source(self, name: str) -> str | None:

@@ -3,7 +3,7 @@
 import json
 import shutil
 
-from cash.analysis.cacheability import user_callee_writing_files
+from cash.analysis.namespace_effects import user_callee_writing_files
 from cash.purity import pure
 
 

@@ -56,12 +56,8 @@ from typing import Any
 
 from ._annotation_refs import annotation_referents
 from .analysis.ast_util import called_names, resolve_callee
-from .analysis.cacheability import (
-    PANDAS_INPLACE_METHODS,
-    get_base_name,
-    get_call_module,
-    get_call_name,
-)
+from .analysis.file_effects import get_base_name, get_call_module, get_call_name
+from .analysis.mutations import PANDAS_INPLACE_METHODS
 from .effects import (
     CLOCK_WHEN_ARG_CALLS,
     ENVIRON_NAMES,
@@ -172,7 +168,7 @@ _DYNAMIC_BUILTIN_NAMES = frozenset({"eval", "exec", "compile", "__import__"})
 
 #: What a ``@cash.cache`` function's first call does about each kind of effect
 #: its body has. What a kind IS lives in :mod:`cash.effects`, shared with the
-#: notebook, whose own table is ``cash.analysis.cacheability.NOTEBOOK_POLICY``.
+#: notebook, whose own table is ``cash.analysis.file_effects.NOTEBOOK_POLICY``.
 #: A decorated function is always cached -- refusing would cost the user the
 #: compute and prevent nothing, since the body has run -- so the choice here is
 #: only what to say. A test keeps this covering every kind.

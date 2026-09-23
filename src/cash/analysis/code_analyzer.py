@@ -23,7 +23,8 @@ from typing import Any
 from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from .ast_util import parse_cached
-from .cacheability import NOTEBOOK_POLICY, SCANNED_KINDS, callee_global_mutations
+from .callee_effects import callee_global_mutations
+from .file_effects import NOTEBOOK_POLICY, SCANNED_KINDS
 
 __all__ = ["CodeAnalyzer", "clean_cell_source", "parse_cell_source"]
 

@@ -11,31 +11,30 @@ import ast
 
 import pytest
 
-from cash.analysis.cacheability import (
-    KNOWN_PURE_METHODS,
-    StatementAnalysis,
-    alias_mutation_sources,
-    aliased_sources,
-    analyze_statement,
-    assigned_method_call_receivers,
-    bare_alias_targets,
+from cash.analysis.aliases import aliased_sources, bare_alias_targets
+from cash.analysis.cacheability import StatementAnalysis, alias_mutation_sources, analyze_statement
+from cash.analysis.callee_effects import (
     callee_global_mutations,
-    crossref_reassigned_vars,
     function_arg_mutations,
     mutating_partials,
-    object_protocol_mutations,
     params_mutated_in_function,
     partial_arg_mutations,
     reduce_free_mutations,
-    selfref_inplace_write_vars,
     source_global_mutations,
     standalone_call_arg_targets,
-    standalone_method_call_receivers,
-    standalone_method_mutation_receivers,
     stateful_closure_vars,
     stateful_self_functions,
+)
+from cash.analysis.mutations import (
+    KNOWN_PURE_METHODS,
+    assigned_method_call_receivers,
+    crossref_reassigned_vars,
+    selfref_inplace_write_vars,
+    standalone_method_call_receivers,
+    standalone_method_mutation_receivers,
     subscript_view_bindings,
 )
+from cash.analysis.object_protocol import object_protocol_mutations
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -483,7 +482,8 @@ class TestSideEffects:
     def test_pathlib_mkdir(self):
         # `OUT.mkdir(exist_ok=True)` restored from the cache left an
         # emptied output folder missing; it must run like any other write.
-        from cash.analysis.cacheability import statement_write_repeatability, statement_writes_files
+        from cash.analysis.cacheability import statement_writes_files
+        from cash.analysis.file_effects import statement_write_repeatability
 
         a = _analyze("OUT.mkdir(exist_ok=True)")
         assert any(e.kind == "file_write" for e in a.side_effects)
@@ -547,7 +547,7 @@ class TestSideEffects:
         # `statement_writes_files` answers "does this write?"; the
         # planner also needs "is repeating it safe?", because re-firing a
         # mode='a' append DUPLICATES the payload on disk.
-        from cash.analysis.cacheability import statement_write_repeatability as verdict
+        from cash.analysis.file_effects import statement_write_repeatability as verdict
 
         # ACCUMULATING -- re-firing duplicates data.
         assert verdict("open(p, 'a').write(x)") == "accumulating"
@@ -577,14 +577,14 @@ class TestSideEffects:
         handle still makes the statement a writer, so collapsing those two
         would silently classify a possible append as safe to repeat.
         """
-        from cash.analysis.cacheability import statement_write_repeatability as verdict
+        from cash.analysis.file_effects import statement_write_repeatability as verdict
 
         assert verdict("open(p, m).write(x)") == "unknown"
         assert verdict("open(p, mode=m).write(x)") == "unknown"
 
     def test_to_hdf_is_not_treated_as_truncating(self):
         """pandas defaults `to_hdf` to mode='a', unlike its `to_*` siblings."""
-        from cash.analysis.cacheability import statement_write_repeatability as verdict
+        from cash.analysis.file_effects import statement_write_repeatability as verdict
 
         assert verdict("df.to_hdf('store.h5', key='k')") != "replacing"
 
@@ -597,7 +597,7 @@ class TestSideEffects:
         refused to re-fire it, the edited payload never reached the file and the
         reader served stale data -- breaking two stale-writer scheduling tests.
         """
-        from cash.analysis.cacheability import statement_write_repeatability as verdict
+        from cash.analysis.file_effects import statement_write_repeatability as verdict
 
         assert verdict("import pickle\nwith open(p, 'wb') as f:\n    pickle.dump(o, f)") == "replacing"
         assert verdict("import json\nwith open(p, 'w') as f:\n    json.dump(o, f)") == "replacing"
@@ -705,7 +705,7 @@ class TestStatementWrittenPaths:
     """
 
     def _paths(self, code, namespace=None):
-        from cash.analysis.cacheability import statement_written_paths
+        from cash.analysis.namespace_effects import statement_written_paths
 
         return statement_written_paths(code, None, namespace)
 

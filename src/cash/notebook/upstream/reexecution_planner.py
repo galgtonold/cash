@@ -14,18 +14,16 @@ from typing import TYPE_CHECKING
 from cash.control_markers import iteration_digest
 
 from ...analysis.ast_util import called_names
-from ...analysis.cacheability import (
-    REPEATABILITY_ACCUMULATING,
-    REPEATABILITY_REPLACING,
-    consumed_input_names,
+from ...analysis.cacheability import statement_writes_files
+from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.file_effects import REPEATABILITY_ACCUMULATING, REPEATABILITY_REPLACING, statement_write_repeatability
+from ...analysis.mutations import consumed_input_names
+from ...analysis.namespace_effects import (
     resolve_literal_path,
     statement_calls_user_writer,
     statement_saves_current_pyplot_figure,
-    statement_write_repeatability,
-    statement_writes_files,
     statement_written_paths,
 )
-from ...analysis.code_analyzer import CodeAnalyzer
 from ...diagnostics import warn_diagnostic
 from ...exceptions import CashWarning
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
@@ -1114,7 +1112,7 @@ class ReexecutionPlanner:
     def _receiver_bound_figure_write(code: str) -> str | None:
         """Receiver name for a ``fig.savefig(...)``, or ``None``.
 
-        The module-level ``plt.savefig()`` twin lives in ``cacheability`` and is
+        The module-level ``plt.savefig()`` twin lives in ``namespace_effects`` and is
         handled by :meth:`_guard_global_figure_writes`; this is the form that
         one deliberately does not flag.
         """
