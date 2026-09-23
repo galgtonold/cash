@@ -49,7 +49,6 @@ BLOCKED_MODULES = [
     "redis",
     "boto3",
     "psutil",
-    "cloudpickle",
     "ipynbname",
 ]
 

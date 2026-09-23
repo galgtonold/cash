@@ -86,7 +86,6 @@ pandas = ["pandas", "pyarrow>=13.0"]
 ipynbname = ["ipynbname>=0.1"]
 redis = ["redis>=4.0,<6"]
 s3 = ["boto3>=1.26,<2"]
-cloudpickle = ["cloudpickle>=2.0,<4"]
 polars = ["polars>=1.0,<3"]
 notebook = ["ipython>=8.0,<10"]
 viz = [
@@ -98,7 +97,7 @@ toml = ["tomli>=1.1; python_version < '3.11'"]
 # Composed from the other extras, so each version bound is declared once. The
 # contributor extras (dev, docs, docs-test) stay out.
 all = [
-    "cash-lib[cloudpickle,ipynbname,memory,notebook,pandas,polars,redis,s3,toml,viz]",
+    "cash-lib[ipynbname,memory,notebook,pandas,polars,redis,s3,toml,viz]",
 ]
 docs = [
     "mkdocs>=1.5",

@@ -281,7 +281,6 @@ def warn_diagnostic(
     what: str,
     fix: str,
     *,
-    stacklevel: int | None = None,
     location: tuple[str, int] | None = None,
 ) -> None:
     """Emit *category* carrying *code*, its rendered message, and ``.code``.
@@ -297,11 +296,9 @@ def warn_diagnostic(
     to the handler: a caller can test ``w.message.code == "CACHE-THRASH"``
     instead of matching prose that is free to be reworded.
 
-    **The blamed frame is resolved at emit time.** Leave *stacklevel* at
-    ``None`` and the warning names the nearest frame outside Cash, whatever the
-    call depth -- see ``_stacklevel_of_first_user_frame``. Pass an integer only
-    to override that, counted from this function's caller as before; no site
-    needs to today.
+    **The blamed frame is resolved at emit time**: without *location*, the
+    warning names the nearest frame outside Cash, whatever the call depth --
+    see ``_stacklevel_of_first_user_frame``.
 
     Raises ``KeyError`` before emitting anything if *code* is unregistered.
     """
@@ -311,7 +308,7 @@ def warn_diagnostic(
     if location is not None:
         warnings.warn_explicit(instance, category, filename=location[0], lineno=location[1], registry=None)
         return
-    _warn_at(instance, _user_frame_level() if stacklevel is None else stacklevel + 1, None)
+    _warn_at(instance, _user_frame_level(), None)
 
 
 def warn_diagnostic_explicit(

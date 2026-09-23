@@ -55,8 +55,8 @@ src/cash/
 ├── __main__.py         # CLI entry point (python -m cash)
 │
 ├── backends/           # Pluggable storage: _base.py (abstract CacheBackend),
-│                       #   memory / file / cascading / tiered / sqlite / redis /
-│                       #   s3, plus serialization and lazy (LazyProxy)
+│                       #   memory / file / tiered / sqlite / redis / s3, plus
+│                       #   serialization and the on-disk entry format
 ├── notebook/           # Jupyter integration
 │   ├── ipython/        #   magics, cell executor, argument parsing
 │   ├── statement/      #   statement-level caching

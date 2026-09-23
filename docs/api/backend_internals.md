@@ -13,7 +13,6 @@ from cash.backends._base import PendingWrites
 from cash.backends.serialization import (
     Serializer,
     PickleSerializer,
-    CloudPickleSerializer,
     ParquetSerializer,
     get_serializer,
 )
@@ -181,10 +180,6 @@ caller picks) or hard-wire one (e.g. a Parquet-only backend).
         - deserialize
 
 ::: cash.backends.serialization.PickleSerializer
-    options:
-      members: false
-
-::: cash.backends.serialization.CloudPickleSerializer
     options:
       members: false
 

@@ -98,7 +98,7 @@ def _disk_cap_is_adaptive(config: "CashConfig") -> bool:
     return config.max_cache_size is None
 
 
-def _resolve_ram_cap(config: "CashConfig") -> int:
+def _resolve_ram_cap() -> int:
     """Byte cap for the RAM tier — always its own modest, machine-scaled cap.
 
     Independent of ``max_cache_size`` (which caps disk): a user pinning the
@@ -159,7 +159,7 @@ def _build_single_backend(backend_type: str, config: "CashConfig") -> CacheBacke
 def _build_default_tiered(config: "CashConfig") -> TieredBackend:
     ram = InMemoryBackend(
         max_entries=config.max_memory_entries,
-        max_size_bytes=_resolve_ram_cap(config),
+        max_size_bytes=_resolve_ram_cap(),
     )
     disk = FileBackend(
         cache_dir=config.cache_dir,
@@ -287,7 +287,7 @@ def _build_tier(tier: "TierConfig", config: "CashConfig") -> CacheBackend:
     if t == "memory":
         return InMemoryBackend(
             max_entries=tier.max_entries if tier.max_entries is not None else config.max_memory_entries,
-            max_size_bytes=tier.max_size_bytes if tier.max_size_bytes is not None else _resolve_ram_cap(config),
+            max_size_bytes=tier.max_size_bytes if tier.max_size_bytes is not None else _resolve_ram_cap(),
         )
     if t == "file":
         return FileBackend(

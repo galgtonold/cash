@@ -358,13 +358,6 @@ class SQLiteBackend(CacheBackend):
             cursor = self._conn.execute("SELECT COUNT(*) FROM cache_entries")
             return cursor.fetchone()[0]
 
-    def total_size(self) -> int:
-        """Get total data size in bytes."""
-        self._writes.wait_all()
-        with self._lock:
-            cursor = self._conn.execute("SELECT COALESCE(SUM(size_bytes), 0) FROM cache_entries")
-            return cursor.fetchone()[0]
-
     def shutdown(self) -> None:
         """Wait for pending writes, then close the database connection."""
         self._writes.shutdown(wait=True)

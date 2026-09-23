@@ -155,13 +155,6 @@ class TestSQLiteBackend:
         assert db.entry_count() == 1
         db.shutdown()
 
-    def test_total_size(self, tmp_path):
-        db = SQLiteBackend(str(tmp_path / "cache.db"))
-        assert db.total_size() == 0
-        db.set("k1", "x" * 1000)
-        assert db.total_size() > 0
-        db.shutdown()
-
     def test_access_count_updates(self, tmp_path):
         db = SQLiteBackend(str(tmp_path / "cache.db"))
         db.set("k1", "v1")

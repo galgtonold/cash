@@ -13,7 +13,7 @@ To write your own backend or contribute fixes, see
 !!! danger "Cached values are pickled — loading a cache runs code"
     Every persistent backend (`FileBackend`, `SQLiteBackend`,
     `RedisBackend`, `S3Backend`) serializes values with **`pickle`**
-    (or `cloudpickle`). Deserialization executes arbitrary code embedded
+    (a DataFrame may go through Parquet instead). Deserialization executes arbitrary code embedded
     in the payload, so **reading from a cache is only as safe as the party
     that wrote it.**
 

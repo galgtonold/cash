@@ -20,7 +20,7 @@ Handlers can branch on the code rather than the wording, which is free to change
     if any(getattr(w.message, "code", None) == "CACHE-THRASH" for w in caught):
         ...
 
-<!-- claim: cash/diagnostics.py:warn_diagnostic_explicit @69c6c3a8, cash/diagnostics.py:warn_diagnostic @cdab5bf2 -->
+<!-- claim: cash/diagnostics.py:warn_diagnostic_explicit @69c6c3a8, cash/diagnostics.py:warn_diagnostic @ba5feec8 -->
 **That recipe does not reach every warning.** `.code` is an attribute set on a
 warning *object*, and the three notebook-side diagnostics are raised through
 `warn_diagnostic_explicit`, which hands `warnings.warn_explicit` a message

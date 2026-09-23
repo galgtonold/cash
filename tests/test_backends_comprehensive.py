@@ -5,7 +5,7 @@ import time
 
 from cash.backends import FileBackend, InMemoryBackend
 from cash.backends.entry_format import read_entry
-from cash.backends.serialization import CloudPickleSerializer, PickleSerializer, get_serializer
+from cash.backends.serialization import PickleSerializer, get_serializer
 
 
 class TestInMemoryBackendAdvanced:
@@ -245,14 +245,6 @@ class TestSerializers:
         """PickleSerializer serialize/deserialize roundtrip."""
         s = PickleSerializer()
         data = {"key": [1, 2, 3], "nested": {"a": "b"}}
-        serialized = s.serialize(data)
-        result = s.deserialize(serialized)
-        assert result == data
-
-    def test_cloudpickle_serializer_roundtrip(self):
-        """CloudPickleSerializer handles lambdas."""
-        s = CloudPickleSerializer()
-        data = {"value": 42}
         serialized = s.serialize(data)
         result = s.deserialize(serialized)
         assert result == data

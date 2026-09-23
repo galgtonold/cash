@@ -194,7 +194,7 @@ cache with results nobody will ask for again (see
 
 ## Turning objects into bytes
 
-<!-- claim: cash/backends/serialization.py:get_serializer @76cf2c1b, cash/backends/serialization.py:ParquetSerializer, cash/backends/serialization.py:PickleSerializer, cash/backends/serialization.py:CloudPickleSerializer -->
+<!-- claim: cash/backends/serialization.py:get_serializer @76cf2c1b, cash/backends/serialization.py:ParquetSerializer, cash/backends/serialization.py:PickleSerializer -->
 To persist a value, Cash serializes it. A small factory — `get_serializer` —
 picks the strategy from the data's type:
 
@@ -204,11 +204,7 @@ picks the strategy from the data's type:
 | Everything else | `PickleSerializer` | The general-purpose default |
 
 If a `DataFrame` has no parquet engine installed, the factory falls back to
-`PickleSerializer`, so persistence always works — just less optimally. Cash also
-ships a `CloudPickleSerializer` for objects plain pickle can't handle (lambdas,
-closures, dynamically-defined classes); the factory doesn't select it
-automatically, but it's available when you need it and itself falls back to
-standard `pickle` if `cloudpickle` isn't installed.
+`PickleSerializer`, so persistence always works — just less optimally.
 
 !!! warning "Pickle executes code on load — only trust caches you created"
     The default serializers are built on Python's `pickle`, and
@@ -234,34 +230,6 @@ bytes from disk costs, which is why it is unconditional rather than an option.
 It detects damage, not tampering: a cache is as trusted as whoever can write to
 it (see the pickle warning above). An entry with no checksum at all is treated
 the same way: it is not a readable entry, and the value is recomputed.
-
-## Deciding before you deserialize
-
-<!-- claim: cash/backends/lazy.py:LazyProxy @33f4359b, cash/backends/lazy.py:make_lazy_loader @11b3e48d broad="the defer-until-touched contract is the class as a whole" -->
-Deserializing a multi-gigabyte object only to discover you wanted its size is
-wasted work. `LazyProxy` exists for that: a handle that carries the entry's
-metadata but defers `backend.get` until you reach for the value.
-
-Be clear about what this is and isn't. It is **not** on the automatic read
-path — `backend.get(key)` always returns a real value, never a proxy, at any
-size. `make_lazy_loader` is a tool you call yourself when you are writing code
-*over* a cache (an inspector, a migration script, a size audit) and want to look
-before you load:
-
-<!-- test:skip reason="requires a live backend instance — illustrative" -->
-```python
-from cash.backends.lazy import make_lazy_loader
-
-proxy = make_lazy_loader(backend, cache_key)   # None if the key is absent
-
-print(proxy.metadata)   # read from backend.get_metadata — no deserialization
-print(proxy.is_resolved)  # False
-df = proxy.value        # backend.get happens here, once, on first access
-```
-
-The metadata read goes through `backend.get_metadata`, which is cheap on every
-backend precisely so existence and size can be established without touching the
-payload. `resolve()` is idempotent: the loader runs at most once.
 
 ??? question "How does cache metadata stay typed without locking the backends in?"
     <!-- claim: cash/backends/_base.py:CacheMetadata @381f348f, cash/notebook/statement/_metadata.py:StatementCacheMetadata @cd79d868 broad="the frozen-dataclass-in, dict-on-the-wire contract is a property of both classes" -->

@@ -1,7 +1,7 @@
 """Serialization strategies for cache value persistence.
 
-Provides `Serializer` (abstract base), `PickleSerializer`,
-`JSONSerializer`, and `CloudPickleSerializer`.
+Provides `Serializer` (abstract base), `PickleSerializer` and
+`ParquetSerializer`, and `get_serializer`, which picks between them.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import sys
 from abc import ABC, abstractmethod
 from typing import Any
 
-__all__ = ["Serializer", "PickleSerializer", "CloudPickleSerializer", "ParquetSerializer"]
+__all__ = ["Serializer", "PickleSerializer", "ParquetSerializer", "get_serializer"]
 
 
 class Serializer(ABC):
@@ -34,26 +34,6 @@ class PickleSerializer(Serializer):
         return pickle.dumps(data)
 
     def deserialize(self, data: bytes) -> Any:
-        return pickle.loads(data)
-
-
-class CloudPickleSerializer(Serializer):
-    """Serializer using cloudpickle for lambda functions, closures, and dynamic classes.
-
-    Requires: pip install cloudpickle
-    Falls back to standard pickle if cloudpickle is not installed.
-    """
-
-    def serialize(self, data: Any) -> bytes:
-        try:
-            import cloudpickle
-
-            return cloudpickle.dumps(data)
-        except ImportError:
-            return pickle.dumps(data)
-
-    def deserialize(self, data: bytes) -> Any:
-        # cloudpickle-serialized data can be deserialized with standard pickle
         return pickle.loads(data)
 
 

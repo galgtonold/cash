@@ -42,9 +42,6 @@ c = cash.Cash()
 # After registering some cached functions...
 c.graph.get_dependencies("my_module.feature")
 # {'my_module.load_raw_data'}
-
-c.graph.get_dependents("my_module.load_raw_data")
-# {'my_module.feature', 'my_module.summary'}
 ```
 
 ::: cash.graph.DependencyGraph
