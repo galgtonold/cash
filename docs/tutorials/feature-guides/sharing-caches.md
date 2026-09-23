@@ -6,8 +6,8 @@ second person's run hits an entry the first person's run stored.
 
 This guide is about making that work, and being clear-eyed about when it can't.
 The short version: **point everyone at a shared backend, and put the expensive
-work behind [`@cash.cache`](../../decorator.md).** Exporting cache files by hand
-is a different tool for a different job — see [the end of this page](#when-a-file-handoff-is-the-right-tool).
+work behind [`@cash.cache`](../../decorator.md).** Cash has no export file
+format: a cache is shared by sharing its backend.
 
 ---
 
@@ -167,38 +167,10 @@ stays local, which is usually what you want anyway.
 
 ---
 
-## When a file handoff is the right tool
-
-[`%cash_export`](../../magics.md#cash_export) and
-[`%cash_import`](../../magics.md#cash_import) move cache entries as a file.
-They are a **point-in-time snapshot**, not a sharing mechanism: the moment
-either side edits code, the exported entries stop matching. For a team, prefer a
-shared backend.
-
-They earn their place in narrower situations:
-
-- **Attaching a cache to a bug report** — so someone else can reproduce the
-  exact state you saw.
-- **Archiving a run** for reproducibility, alongside the code that produced it.
-- **No shared infrastructure**, and a one-off handoff is genuinely simpler than
-  standing up Redis.
-
-<!-- test:skip reason="IPython magic commands — require kernel context" -->
-```python
-%cash_export handoff.cache          # write entries + lineage to a file
-%cash_import handoff.cache --merge  # on the other side; --merge keeps existing entries
-```
-
-The same portability rules apply — an exported cache is subject to every row of
-the table above, so a file-reading notebook statement won't hit after the move
-either.
-
----
-
 ## Related
 
 - [Choosing a backend](choosing-a-backend.md) — Redis vs S3 vs tiered, and the latency trade-offs.
 - [Where your cache lives](../../how-it-works/storage.md) — tiers, promotion, and the pickle trust model.
 - [Cache keys, lineage & hashing](../../how-it-works/cache-keys-and-lineage.md) — what actually goes into a key.
 - [Production transition](production-transition.md) — moving notebook work into modules, which is also what makes it shareable.
-- [Troubleshooting & debugging](debugging-and-monitoring.md) — including `%cash_diff` for "why does my session differ from yours?".
+- [Troubleshooting & debugging](debugging-and-monitoring.md) — finding out why a run missed.

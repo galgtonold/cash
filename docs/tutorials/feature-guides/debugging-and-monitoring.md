@@ -2,7 +2,7 @@
 
 When Cash isn't behaving the way you expect — missing when you thought it'd hit, hitting when you expected fresh — there are five tools for figuring out why: `CASH_SUMMARY` and `CASH_DEBUG` for a script you would rather not edit, `f.explain()` for per-call introspection, `%cash_debug` for verbose tracing in a notebook, `%cash_stats` / `cache_info()` for aggregate health, and the `cash` CLI for inspecting on-disk state.
 
-This guide walks through all four, plus the common diagnostic patterns and the cache-management commands you reach for once you've found the problem.
+This guide walks through all four, plus the common diagnostic patterns and how to clear the cache once you've found the problem.
 
 ## Why this exists
 
@@ -254,31 +254,7 @@ The output gives the entry count, the total size, and a **per-function table sor
     To stop recording, set `analytics = false` in the config, or
     `CASH_ANALYTICS=0`; no file is created then.
 
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_export @d9f6e534, cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_import @70b97111 -->
-## Cache management — export, import, clear
-
-When diagnosis is done and you need to *act*, two notebook magics and one CLI command cover the lifecycle:
-
-### Export
-
-```python { .nb-cell }
-%cash_export project_cache.cache                       # all cached data (pickle)
-%cash_export model_cache.cache --vars model,features   # specific variables only
-%cash_export lineage.json --json                       # lineage graph as JSON
-```
-
-The `.cache` file is a portable bundle; the `--json` variant is human-readable and useful for code review or dependency-graph inspection.
-
-### Import
-
-```python { .nb-cell }
-%cash_import project_cache.cache              # restore from file
-%cash_import teammate_cache.cache --merge     # merge with the current cache instead of replacing
-```
-
-Use `--merge` when pulling in a teammate's cache without losing your own entries.
-
-### Clear
+## Clearing the cache
 
 Clearing is the CLI's job. Run it from a terminal, or from a notebook cell
 with a leading `!`; restart the kernel afterwards so no in-memory lineage
@@ -322,8 +298,6 @@ For anything that needs to survive a version bump, stick to `f.explain()` and `%
 | `f.cache_clear()` | Decorator | attribute on `@cash.cache`-wrapped function | Wipes backend entries for this function; resets stats + warnings. |
 | `%cash_stats` | Notebook | line magic | Session-wide aggregate counters. `json` → dict, `reset` → zero. |
 | `%cash_debug on/off/json/file <path>` | Notebook | line magic | Toggles DEBUG-level cash logging with five labelled prefixes. |
-| `%cash_export <file> [--vars X,Y] [--json]` | Notebook | line magic | Dump cache (or lineage) to a portable file. |
-| `%cash_import <file> [--merge]` | Notebook | line magic | Load cache from a file; `--merge` preserves existing entries. |
 | `cash inspect [path]` | CLI | shell command | Summarise a cache dir or notebook's sibling `.cash`. Read-only. |
 | `cash clear [path] [--all]` | CLI | shell command | Delete a cache directory. **No confirmation prompt.** |
 | `CacheExplanation` | Type | `from cash import CacheExplanation` | Frozen dataclass returned by `explain()`. Fields: `would_hit`, `reason`, `func_name`, `cache_key`, `details`, `cache_dir`. |

@@ -1,8 +1,8 @@
 # Magic Commands
 
-Cash registers a suite of IPython magic commands that control caching, inspect
-session state, and move cache data between sessions. This page is the canonical
-reference for all **13** magics — each entry lists the exact signature, every
+Cash registers a small set of IPython magic commands that control caching and
+inspect session state. This page is the canonical
+reference for all **10** magics — each entry lists the exact signature, every
 parsed flag, and a working example. Behaviour is derived directly from
 `src/cash/notebook/ipython/magics.py` and `src/cash/notebook/ipython/admin.py`.
 
@@ -27,9 +27,6 @@ parsed flag, and a working example. Behaviour is derived directly from
 | [`%cash_debug`](#cash_debug) | Toggle / configure debug logging. |
 | [`%%cash`](#cash-cell) | Cache a single cell explicitly. |
 | [`%cash_provenance`](#cash_provenance) | Variable computation history. |
-| [`%cash_diff`](#cash_diff) | Diff current session against an exported cache file. |
-| [`%cash_export`](#cash_export) | Serialize cache (and/or lineage) to a file. |
-| [`%cash_import`](#cash_import) | Load cache from a file written by `%cash_export`. |
 
 ---
 
@@ -366,79 +363,4 @@ it, and (optionally) a dependency graph or timeline.
 %cash_provenance df --graph --time
 %cash_provenance df --json
 %cash_provenance --clear
-```
-
-### `%cash_diff`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_diff @a925419e -->
-
-Compare the current session's lineage with a cache file produced by
-[`%cash_export`](#cash_export). Reports per-bucket counts (only-current,
-only-other, changed, identical) and optionally per-variable detail.
-
-**Signature:** `%cash_diff <cache_file> [--vars]`
-
-**Arguments:**
-
-- `<cache_file>` — *Required, positional.* Path to a `%cash_export` file.
-  Auto-detects JSON first, then pickle.
-- `--vars` — Print per-variable detail for each diff bucket.
-
-**Example:**
-
-```python
-%cash_diff teammate_session.cache
-%cash_diff teammate_session.cache --vars
-```
-
----
-
-## Moving data between sessions
-
-### `%cash_export`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_export @d9f6e534 -->
-
-Serialize the cache to a file. Default is a pickle that contains backend
-entries plus lineage and cell-code metadata; `--json` writes a lineage-only
-JSON file suitable for [`%cash_diff`](#cash_diff).
-
-**Signature:** `%cash_export <filename> [--vars x,y,z] [--json]`
-
-**Arguments:**
-
-- `<filename>` — *Required, positional.* Output path.
-- `--vars x,y,z` — Comma-separated list of variable names to restrict the
-  export to. Without it, all entries / all lineage are exported.
-- `--json` — Write JSON (lineage + cell codes only, no backend values). The
-  default format is pickle (full entries).
-
-**Example:**
-
-```python
-%cash_export results.cache
-%cash_export results.cache --vars df,agg,model
-%cash_export lineage.json --json
-```
-
-### `%cash_import`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_import @70b97111 -->
-
-Load cache entries from a file written by `%cash_export`. **Pickle only** —
-JSON exports are lineage-only and cannot be re-imported as cache entries.
-
-**Signature:** `%cash_import <filename> [--merge]`
-
-**Arguments:**
-
-- `<filename>` — *Required, positional.* Path to a pickle export.
-- `--merge` — Skip entries whose key already exists in the backend and lineage
-  entries for variables already tracked. Without `--merge`, existing keys are
-  overwritten.
-
-Prints a warning if the export version isn't `1`.
-
-**Example:**
-
-```python
-%cash_import results.cache
-%cash_import results.cache --merge
 ```

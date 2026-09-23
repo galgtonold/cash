@@ -1,6 +1,4 @@
-"""Tests for %cash_stats, %cash_export, %cash_import magics."""
-
-from pathlib import Path
+"""Tests for the %cash_stats magic."""
 
 
 class TestCashStats:
@@ -52,81 +50,6 @@ class TestCashStats:
         # "Cache entries:" was removed in the 2026-05-18 overhead pass;
         # the command now refers users to %cash_admin for backend info.
         assert "Tracked variables:" in captured.out
-
-
-class TestCashExport:
-    """Test %cash_export magic."""
-
-    def test_export_creates_file(self, cash_magics, tmp_path):
-        cash_magics.cash("", "x = 42")
-        export_path = str(tmp_path / "test.cache")
-        cash_magics.cash_export(export_path)
-        assert Path(export_path).exists()
-
-    def test_export_no_args(self, cash_magics, capsys):
-        cash_magics.cash_export("")
-        captured = capsys.readouterr()
-        assert "Usage:" in captured.out
-
-    def test_export_success_message(self, cash_magics, tmp_path, capsys):
-        cash_magics.cash("", "x = 42")
-        export_path = str(tmp_path / "test.cache")
-        cash_magics.cash_export(export_path)
-        captured = capsys.readouterr()
-        assert "Exported" in captured.out
-
-    def test_export_import_roundtrip(self, cash_magics, cash_instance, tmp_path):
-        # @cash:persist keeps this trivial statement above the 10 ms floor
-        cash_magics.cash("", "# @cash:persist\nx = 42")
-        export_path = str(tmp_path / "test.cache")
-        cash_magics.cash_export(export_path)
-
-        # Clear cache
-        cash_instance.backend.clear()
-        entries_before = cash_instance.backend.list_entries()
-        assert len(entries_before) == 0
-
-        # Import
-        cash_magics.cash_import(export_path)
-
-        entries_after = cash_instance.backend.list_entries()
-        assert len(entries_after) > 0
-
-
-class TestCashImport:
-    """Test %cash_import magic."""
-
-    def test_import_nonexistent(self, cash_magics, capsys):
-        cash_magics.cash_import("/nonexistent/file.cache")
-        captured = capsys.readouterr()
-        assert "not found" in captured.out
-
-    def test_import_no_args(self, cash_magics, capsys):
-        cash_magics.cash_import("")
-        captured = capsys.readouterr()
-        assert "Usage:" in captured.out
-
-    def test_import_success_message(self, cash_magics, tmp_path, capsys):
-        cash_magics.cash("", "x = 42")
-        export_path = str(tmp_path / "test.cache")
-        cash_magics.cash_export(export_path)
-
-        # Clear and reimport
-        cash_magics._cash_instance.backend.clear()
-        cash_magics.cash_import(export_path)
-        captured = capsys.readouterr()
-        assert "Imported" in captured.out
-
-    def test_import_merge_mode(self, cash_magics, tmp_path, capsys):
-        cash_magics.cash("", "x = 42")
-        export_path = str(tmp_path / "test.cache")
-        cash_magics.cash_export(export_path)
-
-        # Import with merge (should skip existing)
-        cash_magics.cash_import(f"{export_path} --merge")
-        captured = capsys.readouterr()
-        # Should complete without error
-        assert "Imported" in captured.out or "skipped" in captured.out
 
 
 def test_stats_say_they_cover_this_kernel_only(cash_magics, capsys):

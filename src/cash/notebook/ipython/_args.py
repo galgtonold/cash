@@ -29,7 +29,7 @@ def strip_inline_comment(line: str | None) -> str:
     """Return *line* with any trailing ``#`` comment removed, stripped.
 
     Quote-aware: a ``#`` inside a quoted string is data, not a comment, so
-    ``%cash_export "my#file.json"`` keeps its path intact. Mirrors Python's own
+    ``%cash_debug file "run#1.log"`` keeps its path intact. Mirrors Python's own
     rule — the first unquoted ``#`` starts the comment.
     """
     if not line:

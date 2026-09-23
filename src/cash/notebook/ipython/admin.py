@@ -1,16 +1,13 @@
-"""Administrative magic commands extracted from CashMagics.
+"""The session-inspection magics, ``%cash_stats`` and ``%cash_provenance``.
 
-This module provides a mixin class with utility / diagnostic / benchmark
-magic commands.  The mixin is inherited by :class:`~cash.notebook.ipython.magics.CashMagics`
-so that IPython recognises these commands automatically.
+They live in a mixin inherited by :class:`~cash.notebook.ipython.magics.CashMagics`,
+so IPython registers them with the rest.
 """
 
 from __future__ import annotations
 
 import json
-import logging
-import pickle
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from IPython.core.magic import line_magic
 
@@ -21,8 +18,6 @@ from ._args import parse_mode, strip_inline_comment
 
 if TYPE_CHECKING:
     from .magics import CashMagics
-
-logger = logging.getLogger(__name__)
 
 __all__ = ["CashAdminMagicsMixin"]
 
@@ -55,34 +50,8 @@ def _fmt_signed_time(seconds: float) -> str:
     return _fmt_time(seconds)
 
 
-# ---------------------------------------------------------------------------
-# Module-level I/O helpers (used by cash_diff)
-# ---------------------------------------------------------------------------
-
-
-def _load_cache_file_data(filepath: str) -> dict | None:
-    """Try to load a cache file as JSON first, then pickle. Returns None on format failure.
-
-    Raises FileNotFoundError if the file does not exist.
-    """
-
-    try:
-        with open(filepath) as f:
-            return json.load(f)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        pass
-    except OSError:
-        raise
-    try:
-        with open(filepath, "rb") as f:
-            return pickle.load(f)
-    except (pickle.UnpicklingError, TypeError, ValueError):
-        pass
-    return None
-
-
 class CashAdminMagicsMixin:
-    """Mixin providing administrative / diagnostic / benchmark magic commands.
+    """Mixin providing the session-inspection magics.
 
     All methods expect ``self`` to be a fully-initialised
     :class:`~cash.notebook.ipython.magics.CashMagics` instance (i.e. attributes such
@@ -301,193 +270,6 @@ class CashAdminMagicsMixin:
         print("  saves beside the space it takes (`cash clear` empties it).")
 
     # ------------------------------------------------------------------
-    # Export / import / diff
-    # ------------------------------------------------------------------
-
-    @line_magic
-    def cash_export(self: CashMagics, line: str) -> None:
-        """Export cache entries to a portable file.
-
-        Usage::
-
-            %cash_export results.cache              # Export all cache (pickle)
-            %cash_export results.cache --vars x,y,z # Export specific variables
-            %cash_export results.json --json         # Export lineage as JSON
-        """
-        parts = strip_inline_comment(line).split()
-        if not parts:
-            print("Usage: %cash_export <filename> [--vars x,y,z] [--json]")
-            return
-
-        filepath = parts[0]
-        use_json = "--json" in parts
-
-        export_vars = None
-        if "--vars" in parts:
-            idx = parts.index("--vars")
-            if idx + 1 < len(parts):
-                export_vars = set(parts[idx + 1].split(","))
-
-        try:
-            if use_json:
-                self._export_json(filepath, export_vars)
-            else:
-                self._export_pickle(filepath, export_vars)
-        except (OSError, TypeError, pickle.PicklingError, ValueError) as e:
-            print(f"[Error] Export failed: {e}")
-
-    def _export_json(self: CashMagics, filepath: str, export_vars: set | None) -> None:
-        """Export lineage metadata as JSON."""
-
-        export_data: dict[str, Any] = {"version": 1, "lineage": {}, "cell_codes": {}}
-
-        if export_vars:
-            for var in export_vars:
-                if var in self.tracking_state.variable_lineage:
-                    export_data["lineage"][var] = self.tracking_state.variable_lineage[var]
-                if var in self.tracking_state.executed_cell_codes:
-                    export_data["cell_codes"][var] = self.tracking_state.executed_cell_codes[var]
-        else:
-            export_data["lineage"] = dict(self.tracking_state.variable_lineage)
-            export_data["cell_codes"] = dict(self.tracking_state.executed_cell_codes)
-
-        with open(filepath, "w") as f:
-            json.dump(export_data, f, indent=2)
-
-        print(f"[OK] Exported lineage for {len(export_data['lineage'])} variables to '{filepath}' (JSON)")
-
-    def _export_pickle(self: CashMagics, filepath: str, export_vars: set | None) -> None:
-        """Export full cache entries as pickle."""
-
-        backend = self._cash_instance.backend
-        entries = backend.list_entries()
-        export_data: dict[str, Any] = {
-            "version": 1,
-            "entries": [],
-            "lineage": {},
-            "cell_codes": {},
-        }
-
-        exported_count = 0
-        for entry in entries:
-            key = entry.get("key", "")
-            if export_vars:
-                outputs = entry.get("outputs", [])
-                if not any(v in export_vars for v in outputs) and not any(v in key for v in export_vars):
-                    continue
-            meta, value = backend.get(key)
-            if value is not None:
-                export_data["entries"].append({"key": key, "metadata": meta, "value": value})
-                exported_count += 1
-
-        if export_vars:
-            for var in export_vars:
-                if var in self.tracking_state.variable_lineage:
-                    export_data["lineage"][var] = self.tracking_state.variable_lineage[var]
-                if var in self.tracking_state.executed_cell_codes:
-                    export_data["cell_codes"][var] = self.tracking_state.executed_cell_codes[var]
-        else:
-            export_data["lineage"] = dict(self.tracking_state.variable_lineage)
-            export_data["cell_codes"] = dict(self.tracking_state.executed_cell_codes)
-
-        with open(filepath, "wb") as f:
-            pickle.dump(export_data, f)
-
-        print(f"[OK] Exported {exported_count} cache entries to '{filepath}'")
-
-    @line_magic
-    def cash_import(self: CashMagics, line: str) -> None:
-        """Import cache entries from a portable file.
-
-        Usage::
-
-            %cash_import results.cache           # Import all entries
-            %cash_import results.cache --merge    # Merge with existing cache
-        """
-
-        parts = strip_inline_comment(line).split()
-        if not parts:
-            print("Usage: %cash_import <filename> [--merge]")
-            return
-
-        filepath = parts[0]
-        merge_mode = "--merge" in parts
-        backend = self._cash_instance.backend
-
-        try:
-            with open(filepath, "rb") as f:
-                import_data = pickle.load(f)
-
-            if import_data.get("version", 0) != 1:
-                print(f"[Warning] Unknown export format version: {import_data.get('version', 0)}")
-
-            imported_count, skipped_count = _import_entries(backend, import_data.get("entries", []), merge_mode)
-            self._import_metadata(import_data, merge_mode)
-
-            msg = f"[OK] Imported {imported_count} cache entries from '{filepath}'"
-            if skipped_count:
-                msg += f" (skipped {skipped_count} existing)"
-            print(msg)
-
-        except FileNotFoundError:
-            print(f"[Error] File not found: '{filepath}'")
-        except (OSError, TypeError, ValueError, pickle.UnpicklingError, KeyError) as e:
-            print(f"[Error] Import failed: {e}")
-
-    def _import_metadata(self: CashMagics, import_data: dict, merge_mode: bool) -> None:
-        """Import lineage and cell-code metadata from an export dict."""
-        for var, lin_hash in import_data.get("lineage", {}).items():
-            if not merge_mode or var not in self.tracking_state.variable_lineage:
-                self.tracking_state.variable_lineage[var] = lin_hash
-        for var, code in import_data.get("cell_codes", {}).items():
-            if not merge_mode or var not in self.tracking_state.executed_cell_codes:
-                self.tracking_state.executed_cell_codes[var] = code
-
-    @line_magic
-    def cash_diff(self: CashMagics, line: str) -> None:
-        """Compare current cache state with another exported cache file.
-
-        Usage::
-
-            %cash_diff other_session.cache       - Compare with exported cache
-            %cash_diff other_session.cache --vars - Show variable-level diff
-        """
-        args = strip_inline_comment(line).split()
-        if not args:
-            print("Usage: %cash_diff <cache_file> [--vars]")
-            return
-
-        filepath = args[0]
-        show_vars = "--vars" in args
-
-        try:
-            other_data = _load_cache_file_data(filepath)
-            if other_data is None:
-                print(f"[Error] Invalid cache file format: '{filepath}'")
-                return
-
-            other_lineage = other_data.get("lineage", {})
-            current_lineage = dict(self.tracking_state.variable_lineage)
-            only_current, only_other, changed, identical = _compute_lineage_diff(current_lineage, other_lineage)
-
-            print(f"Cache Diff: current session vs '{filepath}'")
-            print(f"{'=' * 50}")
-            print(f"  Only in current session: {len(only_current)}")
-            print(f"  Only in '{filepath}':    {len(only_other)}")
-            print(f"  Changed (diff lineage):  {len(changed)}")
-            print(f"  Identical:               {len(identical)}")
-
-            if show_vars:
-                _print_diff_details(only_current, only_other, changed, identical)
-
-            print(f"{'=' * 50}")
-
-        except FileNotFoundError:
-            print(f"[Error] File not found: '{filepath}'")
-        except (OSError, TypeError, ValueError, KeyError) as e:
-            print(f"[Error] Diff failed: {e}")
-
-    # ------------------------------------------------------------------
     # Provenance
     # ------------------------------------------------------------------
 
@@ -543,61 +325,3 @@ class CashAdminMagicsMixin:
                     )
                 )
             )
-
-
-# ---------------------------------------------------------------------------
-# Module-level helpers (used by magic methods above, but stateless)
-# ---------------------------------------------------------------------------
-
-
-def _import_entries(backend: Any, entries: list, merge_mode: bool) -> tuple[int, int]:
-    """Store entries into backend, respecting merge_mode. Returns (imported, skipped)."""
-    imported = 0
-    skipped = 0
-    for entry in entries:
-        key = entry["key"]
-        meta = entry["metadata"]
-        value = entry["value"]
-        if not merge_mode:
-            backend.set(key, value, meta)
-            imported += 1
-        else:
-            _, existing_val = backend.get(key)
-            if existing_val is None:
-                backend.set(key, value, meta)
-                imported += 1
-            else:
-                skipped += 1
-    return imported, skipped
-
-
-def _compute_lineage_diff(
-    current: dict[str, str],
-    other: dict[str, str],
-) -> tuple[set[str], set[str], set[str], set[str]]:
-    """Return (only_current, only_other, changed, identical) sets."""
-    current_vars = set(current)
-    other_vars = set(other)
-    only_current = current_vars - other_vars
-    only_other = other_vars - current_vars
-    common = current_vars & other_vars
-    changed = {v for v in common if current.get(v) != other.get(v)}
-    identical = common - changed
-    return only_current, only_other, changed, identical
-
-
-def _print_diff_details(
-    only_current: set[str],
-    only_other: set[str],
-    changed: set[str],
-    identical: set[str],
-) -> None:
-    """Print variable-level diff details."""
-    if only_current:
-        print(f"\n  [+] Only in current: {', '.join(sorted(only_current))}")
-    if only_other:
-        print(f"  [-] Only in other:   {', '.join(sorted(only_other))}")
-    if changed:
-        print(f"  [~] Changed:         {', '.join(sorted(changed))}")
-    if identical:
-        print(f"  [=] Identical:       {', '.join(sorted(identical))}")
