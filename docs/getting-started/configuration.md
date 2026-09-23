@@ -249,6 +249,18 @@ region = "us-east-1"
 Each tier's per-backend fields are documented at
 [Backends](../api/backends.md).
 
+<!-- claim: cash/config.py:_TIER_FIELDS @3f70dfeb, cash/config.py:TierConfig.__post_init__ @afa4a855 -->
+A tier is built from these fields; a field set on a tier of another type
+does nothing, and cash says so with [`CONFIG-INVALID`](../warnings.md#config-invalid):
+
+| `type` | Fields |
+|---|---|
+| `memory` | `max_entries`, `max_size_bytes` |
+| `file` | `cache_dir`, `max_size_bytes`, `default_ttl`, `compress`, `flush_interval` |
+| `sqlite` | `cache_dir`, `db_path`, `max_size_bytes`, `default_ttl`, `wal_mode` |
+| `redis` | `host`, `port`, `db`, `password`, `prefix` |
+| `s3` | `bucket`, `region`, `prefix` |
+
 Per-field env-var overrides for tier entries: `CASH_TIER_<N>_<FIELD>`
 where `<N>` is the zero-based index. For example, to override only the
 Redis tier's host without rewriting the TOML:
@@ -262,15 +274,16 @@ export CASH_TIER_1_HOST=prod-redis.example.com
 Each backend declares a `max_size_bytes` cap that `TieredBackend` uses as
 a *promotion hint*. A value larger than the cap quietly skips that tier but
 still writes to the unconstrained ones. Most caps are static class-level
-values; the file tier's is *dynamic* — its whole (machine-scaled) cap.
+values; the file tier's is *dynamic* — its whole (machine-scaled) cap —
+and a SQLite tier given `max_size_bytes` uses that when it is smaller.
 
-<!-- claim: cash/backends/store_notices.py:StoreNotices.too_big @0b79929c, cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/sqlite_backend.py:SQLiteBackend.max_size_bytes == 104857600 -->
+<!-- claim: cash/backends/store_notices.py:StoreNotices.too_big @0b79929c, cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/sqlite_backend.py:SQLiteBackend.max_size_bytes == 104857600, cash/backends/sqlite_backend.py:SQLiteBackend.promotion_size_cap @36b1d2f8 -->
 | Backend | `max_size_bytes` cap | Rationale |
 |---|---|---|
 | `InMemoryBackend` | unbounded | RAM eviction handles pressure separately. |
 | `FileBackend` | **its whole cap** | Refuses only a single object that cannot fit in the disk cap at all; anything that fits is stored and eviction does the rest. It was half the cap, which meant a 500 MB cap cached nothing for a 263 MB working set. Warns once ([`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big)); a real write-and-evict treadmill is caught by [`CACHE-THRASH`](../warnings.md#cache-thrash) instead. See `max_cache_size`. |
 | `RedisBackend` | **10 MiB** | Redis is in-memory server-side; protocol disfavours multi-MB values. |
-| `SQLiteBackend` | **100 MiB** | SQLite blobs degrade past this. |
+| `SQLiteBackend` | **100 MiB**, or its own `max_size_bytes` if smaller | SQLite blobs degrade past this. |
 | `S3Backend` | unbounded | S3 is fine arbitrarily large. |
 
 Caps apply only to the **tiered pipeline**. A bare `RedisBackend()`

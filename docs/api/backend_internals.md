@@ -1,6 +1,6 @@
 # Backend internals
 
-<!-- claim: cash/backends/_base.py:CacheBackend @84de6e31 broad="the page documents the ABC as a whole contract" -->
+<!-- claim: cash/backends/_base.py:CacheBackend @67f61718 broad="the page documents the ABC as a whole contract" -->
 This page is for users **writing their own backend** or contributing
 fixes to the bundled ones. End-users picking a backend should go to
 [Backends](backends.md) instead.

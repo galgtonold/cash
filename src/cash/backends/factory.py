@@ -121,6 +121,7 @@ def _settings(tier: TierConfig, config: CashConfig) -> dict[str, Any]:
             out["flush_interval"] = _pick(tier.flush_interval, config.flush_interval)
         else:
             out["db_path"] = tier.db_path
+            out["wal_mode"] = _pick(tier.wal_mode, True)
         return out
     if t == "redis":
         return {
@@ -166,6 +167,7 @@ def _build(kind: str, s: dict[str, Any]) -> CacheBackend:
             db_path=s["db_path"] or _sqlite_db_path(s["cache_dir"]),
             max_size_bytes=cap,
             default_ttl=s["default_ttl"],
+            wal_mode=s["wal_mode"],
         )
     if kind == "redis":
         return _build_redis(**s)

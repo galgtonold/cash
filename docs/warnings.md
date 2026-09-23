@@ -581,7 +581,7 @@ effect and the file or variable it came from, so you can check the result.
 
 ## CONFIG-INVALID {#config-invalid}
 
-<!-- claim: cash/config.py:_validated_layer @84048bbe, cash/config.py:_warn_toml_malformed @ca4597b4, cash/config.py:_load_toml_layer @045509b5, cash/config.py:_build_tiers @d9b42b7d -->
+<!-- claim: cash/config.py:_validated_layer @84048bbe, cash/config.py:_warn_toml_malformed @ca4597b4, cash/config.py:_load_toml_layer @045509b5, cash/config.py:_build_tiers @d9b42b7d, cash/config.py:TierConfig.__post_init__ @afa4a855 -->
 **What happened.** Cash could not use something in its configuration. One of
 these:
 
@@ -601,6 +601,9 @@ these:
 * **A tier that cannot be built**, left out of the tier stack: one with no
   `type`, typically set only through `CASH_TIER_<N>_*` variables for a tier no
   file declares (add `CASH_TIER_<N>_TYPE`), or one that is not a table.
+* **A tier setting its type does not use**: `default_ttl` on a `memory`
+  tier, `max_size_bytes` on a `redis` tier, `wal_mode` on a `file` tier.
+  The tier is built without it.
 
 Each problem is reported once per process, however many times the
 configuration is resolved.

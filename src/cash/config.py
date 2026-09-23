@@ -59,6 +59,18 @@ _SUPPORTED_TIER_TYPES = frozenset({"memory", "file", "sqlite", "redis", "s3"})
 _NAMED_CHOICES = {"backend": _SUPPORTED_TIER_TYPES | {"tiered"}, "type": _SUPPORTED_TIER_TYPES}
 
 
+#: The `TierConfig` fields each tier type is built from
+#: (``backends.factory._settings``). Any other field set on a tier does
+#: nothing, and is reported (CONFIG-INVALID) rather than silently ignored.
+_TIER_FIELDS: dict[str, frozenset[str]] = {
+    "memory": frozenset({"max_size_bytes", "max_entries"}),
+    "file": frozenset({"max_size_bytes", "default_ttl", "cache_dir", "compress", "flush_interval"}),
+    "sqlite": frozenset({"max_size_bytes", "default_ttl", "cache_dir", "db_path", "wal_mode"}),
+    "redis": frozenset({"host", "port", "db", "password", "prefix"}),
+    "s3": frozenset({"bucket", "region", "prefix"}),
+}
+
+
 def _check_choice(name: str, value: Any) -> None:
     """``ValueError`` when *name* must be one of a fixed set and *value* is not."""
     allowed = _NAMED_CHOICES.get(name)
@@ -85,13 +97,14 @@ class TierConfig:
 
     # memory / file / sqlite shared:
     max_size_bytes: int | None = None
-    """Per-tier size cap in bytes. Also serves as the
-    *promotion hint* — values larger than this skip this tier when
-    used inside a tiered stack."""
+    """memory, file and sqlite tiers — size cap in bytes. On a file or
+    sqlite tier it is also the *promotion hint*: values larger than
+    this skip the tier when used inside a tiered stack."""
 
     default_ttl: int | None = None
-    """Default TTL in seconds for entries in this tier. Overridden
-    per-call by ``@cash.cache(ttl=...)``."""
+    """file and sqlite tiers — default TTL in seconds for entries
+    written without one. Overridden per-call by
+    ``@cash.cache(ttl=...)``."""
 
     # memory:
     max_entries: int | None = None
@@ -143,6 +156,19 @@ class TierConfig:
     def __post_init__(self) -> None:
         if self.type not in _SUPPORTED_TIER_TYPES:
             raise ValueError(f"Unknown tier type: {self.type!r}. Supported: {sorted(_SUPPORTED_TIER_TYPES)}")
+        unused = sorted(
+            f.name
+            for f in fields(self)
+            if f.name != "type" and getattr(self, f.name) is not None and f.name not in _TIER_FIELDS[self.type]
+        )
+        if unused:
+            _config_notice(
+                "CONFIG-INVALID",
+                f"a {self.type} tier sets {', '.join(unused)}, which a {self.type} tier does not use, "
+                f"so {'it does' if len(unused) == 1 else 'they do'} nothing.",
+                f"remove {'it' if len(unused) == 1 else 'them'}; a {self.type} tier is built from "
+                f"{', '.join(sorted(_TIER_FIELDS[self.type]))}.",
+            )
 
 
 @dataclass

@@ -286,3 +286,80 @@ def test_a_setting_no_tier_uses_leaves_the_described_stack_alone(tmp_path):
     assert tier_specs(base) != tier_specs(CashConfig(cache_dir=str(tmp_path / "other")))
     on_redis = CashConfig(backend="redis")
     assert tier_specs(on_redis) != tier_specs(CashConfig(backend="redis", redis_host="elsewhere"))
+
+
+# ---------------------------------------------------------------------------
+# Every tier setting is used, or said to do nothing
+# ---------------------------------------------------------------------------
+
+
+def test_a_sqlite_tier_gets_its_wal_mode(tmp_path):
+    """``wal_mode`` was documented for SQLite tiers and never passed on."""
+    cfg = CashConfig(cache_dir=str(tmp_path / "c"), tiers=[TierConfig(type="sqlite", wal_mode=False)])
+    sqlite = _build(cfg).backends[0]
+    try:
+        assert sqlite._conn.execute("PRAGMA journal_mode").fetchone()[0] != "wal"
+    finally:
+        sqlite.shutdown()
+
+
+def test_a_value_over_a_sqlite_tiers_cap_skips_it(tmp_path):
+    """``max_size_bytes`` on a SQLite tier is its promotion cap, as the field
+    promises: a 5 KB value is not offered to a 1 KB tier, written, and then
+    evicted at once. The class-wide 100 MiB hint stood in for it."""
+    cfg = CashConfig(
+        cache_dir=str(tmp_path / "c"),
+        tiers=[TierConfig(type="memory"), TierConfig(type="sqlite", max_size_bytes=1000)],
+    )
+    backend = _build(cfg)
+    sqlite = backend.backends[1]
+    try:
+        assert sqlite.promotion_size_cap() == 1000
+        backend.set("small", b"x" * 100, {"execution_time": 0.5})
+        from cash.exceptions import CashCacheIneffectiveWarning
+
+        with pytest.warns(CashCacheIneffectiveWarning, match="CACHE-VALUE-TOO-BIG"):
+            backend.set("big", b"x" * 5000, {"execution_time": 0.5})
+        sqlite._writes.wait_all()
+        assert sqlite.get("small")[1] == b"x" * 100, "the control: a value under the cap is written"
+        assert sqlite.get("big") == (None, None)
+    finally:
+        backend.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("tier", "unused"),
+    [
+        (TierConfig(type="memory", default_ttl=5), "default_ttl"),
+        (TierConfig(type="redis", max_size_bytes=10), "max_size_bytes"),
+        (TierConfig(type="s3", bucket="b", default_ttl=5), "default_ttl"),
+        (TierConfig(type="file", wal_mode=False), "wal_mode"),
+    ],
+    ids=lambda v: v if isinstance(v, str) else v.type,
+)
+def test_a_setting_a_tier_does_not_use_is_reported(tier, unused, monkeypatch):
+    """Such a setting was dropped without a word; a memory tier's
+    ``default_ttl`` looked like it gave RAM entries a lifetime."""
+    import dataclasses
+
+    from cash import config as cash_config
+    from cash.exceptions import CashCacheIneffectiveWarning
+
+    monkeypatch.setattr(cash_config, "_CONFIG_NOTICES", set())
+    with pytest.warns(CashCacheIneffectiveWarning, match=rf"CONFIG-INVALID.*{tier.type} tier sets {unused}"):
+        dataclasses.replace(tier)
+
+
+def test_a_tier_using_only_its_own_settings_is_not_reported(recwarn):
+    TierConfig(type="sqlite", default_ttl=5, wal_mode=False, max_size_bytes=10, db_path="x.db")
+    TierConfig(type="redis", host="h", port=1, db=0, password="p", prefix="x:")
+    assert not [w for w in recwarn if "CONFIG-INVALID" in str(w.message)]
+
+
+@pytest.mark.parametrize("kind", ["memory", "file", "sqlite", "redis", "s3"])
+def test_the_reported_fields_are_the_ones_the_factory_builds_from(kind):
+    """The list of what a tier type uses is the factory's own."""
+    from cash.backends.factory import _settings
+    from cash.config import _TIER_FIELDS
+
+    assert set(_settings(TierConfig(type=kind), CashConfig())) == _TIER_FIELDS[kind]

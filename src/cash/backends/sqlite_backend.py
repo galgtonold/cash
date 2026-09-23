@@ -359,6 +359,15 @@ class SQLiteBackend(CacheBackend):
             cursor = self._conn.execute("SELECT COUNT(*) FROM cache_entries")
             return cursor.fetchone()[0]
 
+    def promotion_size_cap(self) -> int | None:
+        """The smaller of the class-level hint and this tier's own size cap:
+        a value larger than the cap would be written only to be evicted."""
+        hint = type(self).max_size_bytes
+        own = self._max_size_bytes
+        if own is None or hint is None:
+            return hint if own is None else own
+        return min(hint, own)
+
     def shutdown(self) -> None:
         """Wait for pending writes, then close the database connection."""
         self._writes.shutdown(wait=True)

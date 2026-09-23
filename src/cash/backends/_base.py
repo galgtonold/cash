@@ -426,11 +426,11 @@ class CacheBackend(ABC):
         """Largest single object this backend accepts via *tiered* promotion.
 
         The default is the static class-level :attr:`max_size_bytes` hint
-        (Redis 10 MB, SQLite 100 MB, unbounded elsewhere). Backends whose
-        cap is *dynamic* — notably the file tier, whose LRU cap is scaled to
-        free disk — override this to derive a per-object refusal
-        threshold from their own instance cap, so an object too big to hold
-        without thrashing is skipped rather than written-then-evicted.
+        (Redis 10 MB, SQLite 100 MB, unbounded elsewhere). Backends with an
+        instance cap -- the file tier, whose cap is scaled to free disk, and
+        a SQLite tier given ``max_size_bytes`` -- override this to derive a
+        per-object refusal threshold from it, so an object too big to hold
+        is skipped rather than written-then-evicted.
 
         Consulted only by ``TieredBackend.set()``; a bare-backend ``set()``
         still writes whatever it is given.
