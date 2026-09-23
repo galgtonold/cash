@@ -48,6 +48,7 @@ from cash.notebook.statement.miss_guard import (
     resolve_cache_dir,
 )
 from cash.notebook.statement.restore import StatementRestorer
+from cash.notebook.statement.run import CodeRunner, NoCapture, StatementExecution, StatementRun
 from cash.object_hashing import estimate_object_size, mutation_fingerprint
 from cash.purity import is_known_pure, is_stateful
 from cash.tracking.file_dep_snapshot import snapshot_dependencies, snapshot_file_deps
@@ -504,7 +505,7 @@ def capture_output(stdout: bool = True, stderr: bool = True, display: bool = Tru
 
 
 from ...analysis.annotations import CacheAnnotation
-from ...analysis.cacheability import StatementAnalysis, analyze_statement
+from ...analysis.cacheability import analyze_statement
 from ...analysis.cacheability_decision import (
     decide_cacheability,
     identity_coupled_reason,
@@ -542,7 +543,7 @@ from ...tracking.randomness import (
 )
 from ..call_interception import HELPER_NAME, CallCache, wrap_eligible_calls
 from ..call_unit import call_site_is_cacheable
-from ..compiled_source import is_cash_filename, register_cell_source
+from ..compiled_source import is_cash_filename
 from ..lineage_formula import key_hidden_reads
 from ..write_observer import observe_writes
 
@@ -1100,30 +1101,97 @@ class StatementProcessor:
                 lineages.
             exec_source: The statement's ORIGINAL text (comments intact), when
                 the caller could recover one -- see ``_statement_source`` in
-                ``cell_executor.py``. Threaded down to ``_execute_statement``,
-                which parses/compiles/registers THIS instead of ``code`` so a
+                ``cell_executor.py``. Compiled in place of ``code`` so a
                 function defined here keeps its comments for
                 ``inspect.getsource`` (and therefore for a per-line
                 ``# @cash:assume-safe`` waiver). Never affects the cache key:
-                ``code`` (the unparsed form) is what is hashed, regardless of
-                whether this is supplied. Discarded (treated as absent)
-                whenever CAS-243 rewrote an eligible call in ``code`` --
-                see ``_code_and_tree_for_execution``.
+                ``code`` (the unparsed form) is what is hashed. Discarded
+                whenever call interception rewrote an eligible call in
+                ``code`` -- see ``_code_and_tree_for_execution``.
 
         Returns:
             ProcessResult with keys: 'status', 'execution_time', 'total_time',
             'saved_time', 'restored_vars', 'code', plus optional keys depending
             on cache status.
         """
-        effective_ttl, force_persist, skip_cache, allow_random, cache_fit = self._parse_annotation(annotation, ttl)
-        # Publish it for the calls inside this statement (CAS-268). Set on
-        # EVERY statement, so a previous statement's ttl can never leak into
-        # one that carries no annotation.
-        self._call_unit_ttl = effective_ttl
-        self._call_unit_persist = force_persist
-        unseeded_calls = self._warn_unseeded_randomness(code, allow_random)
+        run = StatementRun(
+            code,
+            ttl=ttl,
+            silent=silent,
+            annotation=annotation,
+            display_code=display_code,
+            exec_source=exec_source,
+            occurrence_index=occurrence_index,
+            stream_output=stream_output,
+            force_outputs=force_outputs,
+            is_last=is_last,
+        )
+        done = self._prepare(run)
+        if done is not None:
+            return done
+        with self._executing(run) as runner:
+            runner.run()
+        return self._finish(run, runner.execution)
+
+    async def process_statement_async(
+        self,
+        code: str,
+        ttl: int | None = None,
+        silent: bool = False,
+        annotation: CacheAnnotation | None = None,
+        display_code: str | None = None,
+        exec_source: str | None = None,
+        occurrence_index: int = 0,
+        stream_output: bool = False,
+        force_outputs: set[str] | None = None,
+        is_last: bool = True,
+    ) -> ProcessResult:
+        """:meth:`process_statement` for a statement holding a top-level ``await``.
+
+        The same pipeline, step for step; only the execution differs, which
+        awaits the compiled code on IPython's running loop. A cache hit returns
+        before any coroutine is built, so an identical second run skips the
+        await entirely.
+        """
+        run = StatementRun(
+            code,
+            ttl=ttl,
+            silent=silent,
+            annotation=annotation,
+            display_code=display_code,
+            exec_source=exec_source,
+            occurrence_index=occurrence_index,
+            stream_output=stream_output,
+            force_outputs=force_outputs,
+            is_last=is_last,
+        )
+        done = self._prepare(run)
+        if done is not None:
+            return done
+        with self._executing(run) as runner:
+            await runner.run_async()
+        return self._finish(run, runner.execution)
+
+    def _prepare(self, run: StatementRun) -> ProcessResult | None:
+        """Analyse, key and look up *run*'s statement, before it may execute.
+
+        Returns the finished result when the statement needs no execution -- a
+        redundant import, or a cache hit whose restore succeeded -- and
+        ``None`` when it must run, with *run* filled in for :meth:`_executing`
+        and :meth:`_finish`.
+        """
+        code = run.code
+        run.effective_ttl, run.force_persist, run.skip_cache, run.allow_random, cache_fit = self._parse_annotation(
+            run.annotation, run.ttl
+        )
+        # Publish it for the calls inside this statement. Set on EVERY
+        # statement, so a previous statement's ttl can never leak into one that
+        # carries no annotation.
+        self._call_unit_ttl = run.effective_ttl
+        self._call_unit_persist = run.force_persist
+        run.unseeded_calls = self._warn_unseeded_randomness(code, run.allow_random)
         self._warn_entropy_reseed(code)
-        metrics: ProcessResult = {
+        run.metrics = metrics = {
             "status": CacheStatus.UNKNOWN,
             "execution_time": 0.0,
             "total_time": 0.0,
@@ -1132,27 +1200,23 @@ class StatementProcessor:
             "restored_vars": [],
             "code": code.strip(),
             # The badge shows the user's own layout. NEVER part of the cache
-            # key: `code` above is what is hashed, always. This text MAY reach
-            # `ast.parse` / `compile()` / `register_cell_source` now (as
-            # `exec_source`, below) -- revised from the original
-            # "display-only, never compile()" rule so a function defined in a
-            # cell keeps its comments (and thus a per-line
-            # `# @cash:assume-safe` waiver) for `inspect.getsource`.
-            "display_code": display_code,
+            # key: `code` above is what is hashed, always.
+            "display_code": run.display_code,
             "uncacheable_reasons": [],
         }
-        self._stamp_random_effect(metrics, code, unseeded_calls)
+        self._stamp_random_effect(metrics, code, run.unseeded_calls)
         logger.debug("%s Processing statement: %s...", _LOG_DEBUG, code[:50])
 
-        process_start = time.time()
+        run.process_start = time.time()
 
         try:
-            _parsed_tree = ast.parse(code.strip())
+            run.tree = ast.parse(code.strip())
         except SyntaxError:
-            _parsed_tree = None
+            run.tree = None
+        tree = run.tree
 
-        effects, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(
-            code, occurrence_index=occurrence_index, tree=_parsed_tree
+        effects, run.source_hash, run.cache_key, analysis_time, hash_time = self._analyze_and_hash(
+            code, occurrence_index=run.occurrence_index, tree=tree
         )
         inputs, outputs = set(effects.inputs), set(effects.outputs)
         callee_globals = set(effects.callee_globals)
@@ -1163,9 +1227,9 @@ class StatementProcessor:
         # so it is unaffected — the key already tracks the loop source + input
         # lineages (a forced output only ever enters the key when it is a module,
         # which an accumulator never is).
-        if force_outputs:
-            outputs = outputs | force_outputs
-        # CAS-260: the callee's writes join ``outputs`` so their lineage is
+        if run.force_outputs:
+            outputs = outputs | run.force_outputs
+        # A callee's writes to globals join ``outputs`` so their lineage is
         # bumped (a downstream consumer of the accumulator must re-key), and the
         # statement is skip-cached below so the write actually happens.
         #
@@ -1187,30 +1251,18 @@ class StatementProcessor:
         # its preconditions is what broke.
         if callee_globals:
             outputs = outputs | callee_globals
-        # Expose the cache key on metrics so the badge can show a short
-        # prefix in the row-detail "Key" field. Lets users see at a glance
-        # when two runs of the same statement land in the same vs. a
-        # different cache slot.
-        metrics["cache_key"] = cache_key
+        run.inputs, run.outputs = inputs, outputs
+        # Exposed so the badge can show a short prefix in the row-detail "Key"
+        # field: two runs of the same statement in the same slot or not.
+        metrics["cache_key"] = run.cache_key
 
-        early_result, skip_cache = self._check_redundant_import(
-            code,
-            _parsed_tree,
-            skip_cache,
-            inputs,
-            outputs,
-            metrics,
-            source_hash,
-            cache_key,
-            process_start,
-        )
-        if early_result is not None:
-            return early_result
+        done = self._check_redundant_import(run)
+        if done is not None:
+            return done
 
-        # Compute the pure-AST StatementAnalysis once. Used both by the
-        # cacheability decision and (on the cache-miss path) by
-        # _post_execute for in-place-mutation tracking.
-        statement_analysis = analyze_statement(code, _parsed_tree, self.shell.user_ns)
+        # Computed once: used by the cacheability decision and (on the
+        # cache-miss path) by _post_execute for in-place-mutation tracking.
+        run.analysis = analyze_statement(code, tree, self.shell.user_ns)
 
         # A standalone bare-Expr method call (``lst.append(x)``, ``bus.on(fn)``)
         # has no Store target, so AST analysis never surfaces the receiver as an
@@ -1230,20 +1282,20 @@ class StatementProcessor:
         # never reproduces -> cross-cell desync. Skip them; the control structure
         # owns its body's mutation lineage.
         if is_control_body(code):
-            mut_pre_route, mut_observe, mut_assumed, mut_record = set(), set(), set(), False
-            est_fit: set[str] = set()
+            mut_pre_route: set[str] = set()
             # ...with ONE exception: a draw on a live Figure/Axes.
-            draw_only = self._identity_coupled_call_receivers(_parsed_tree)
-            fit_only = self._fitted_receivers(_parsed_tree)
+            draw_only = self._identity_coupled_call_receivers(tree)
+            fit_only = self._fitted_receivers(tree)
         else:
-            mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
-                _parsed_tree,
-                source_hash,
+            mut_pre_route, run.mut_observe, run.mut_assumed, run.mut_record = self._classify_method_mutations(
+                tree,
+                run.source_hash,
                 outputs,
             )
-            est_fit = self._estimator_fit_receivers(_parsed_tree, outputs) if cache_fit else set()
+            run.est_fit = self._estimator_fit_receivers(tree, outputs) if cache_fit else set()
             draw_only = set()
             fit_only = set()
+        est_fit = run.est_fit
         # OPT-IN ONLY (``# @cash:cache-fit``). A bare ``estimator.fit(X, y)``
         # mutates its receiver in place, so the classifier above routes it to
         # skip-caching: the statement re-executes and is never serialised, which is
@@ -1281,25 +1333,22 @@ class StatementProcessor:
         fam = effects.arg_mutations - outputs
         skip_pre_route = mut_pre_route - est_fit
         if mut_pre_route or est_fit or fam:
-            outputs = outputs | mut_pre_route | est_fit | fam
+            run.outputs = outputs = outputs | mut_pre_route | est_fit | fam
         if skip_pre_route:
-            skip_cache = True
+            run.skip_cache = True
             metrics["uncacheable_reasons"].append(
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
                 "(receiver lineage bumped; statement re-executes)" + self._cache_fit_hint(skip_pre_route)
             )
-        # CAS-260, and deliberately the SAME treatment the inline spelling of
-        # the identical mutation gets immediately above: the statement
-        # re-executes so the callee's write to a global really happens.
+        # Deliberately the SAME treatment the inline spelling of the identical
+        # mutation gets immediately above: the statement re-executes so the
+        # callee's write to a global really happens.
         #
-        # The expensive work is NOT lost. Sub-statement caching (CAS-243) still
-        # serves the call inside this statement, keyed on the mutated global's
-        # own pre-call state, so what re-executes is the glue around it. That
-        # split is CAS-243's whole thesis -- the statement does not need to
-        # cache, because the call does -- and it is what makes always
-        # re-executing affordable here.
+        # The expensive work is NOT lost. Call interception still serves the
+        # call inside this statement, keyed on the mutated global's own
+        # pre-call state, so what re-executes is the glue around it.
         if callee_globals:
-            skip_cache = True
+            run.skip_cache = True
             metrics["uncacheable_reasons"].append(
                 f"Callee mutates: {', '.join(sorted(callee_globals))} "
                 "(global lineage bumped; statement re-executes, call still cached)"
@@ -1309,12 +1358,12 @@ class StatementProcessor:
         # actually land on the Axes, but bumping its lineage from a per-statement
         # source is precisely what the control-body skip above exists to avoid.
         if draw_only:
-            skip_cache = True
+            run.skip_cache = True
             metrics["uncacheable_reasons"].append(
                 f"Draws on: {', '.join(sorted(draw_only))} (live Figure/Axes; statement re-executes)"
             )
         if fit_only:
-            skip_cache = True
+            run.skip_cache = True
             metrics["uncacheable_reasons"].append(
                 f"Fits: {', '.join(sorted(fit_only))} (estimator fitted in place; statement re-executes)"
             )
@@ -1322,17 +1371,17 @@ class StatementProcessor:
         # with no warning -- cash's AST detector cannot see the randomness inside
         # sklearn's compiled .fit(). Warn now (compute time); the same set drives
         # the restore-time warning on a cache hit below.
-        unseeded_fits = self._warn_unseeded_estimator_fit(code, est_fit, allow_random)
-        self._stamp_random_effect(metrics, code, unseeded_calls, unseeded_fits)
+        unseeded_fits = self._warn_unseeded_estimator_fit(code, est_fit, run.allow_random)
+        self._stamp_random_effect(metrics, code, run.unseeded_calls, unseeded_fits)
 
-        if not skip_cache:
+        if not run.skip_cache:
             cacheable, reasons = decide_cacheability(
                 code=code,
-                tree=_parsed_tree,
+                tree=tree,
                 inputs=inputs,
                 outputs=outputs,
-                annotation=annotation,
-                analysis=statement_analysis,
+                annotation=run.annotation,
+                analysis=run.analysis,
                 user_ns=self.shell.user_ns,
                 variable_lineage=self.tracking_state.variable_lineage,
                 is_stateful_call=self._check_callable_stateful,
@@ -1340,416 +1389,141 @@ class StatementProcessor:
             )
             if not cacheable:
                 metrics["uncacheable_reasons"].extend(reasons)
-                skip_cache = True
-        effective_ttl = self._ttl_floor_from_called_functions(inputs, effective_ttl)
-        metadata, cached_data, cache_check_time = self._do_cache_lookup(skip_cache, cache_key, effective_ttl, inputs)
-        self._observe_miss_guard(skip_cache, code, source_hash, cache_key, cached_data, inputs)
+                run.skip_cache = True
+        run.effective_ttl = self._ttl_floor_from_called_functions(inputs, run.effective_ttl)
+        metadata, cached_data, cache_check_time = self._do_cache_lookup(
+            run.skip_cache, run.cache_key, run.effective_ttl, inputs
+        )
+        self._observe_miss_guard(run.skip_cache, code, run.source_hash, run.cache_key, cached_data, inputs)
 
         if logger.isEnabledFor(logging.DEBUG):
-            self._print_cache_debug(code, cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
-
-        if cached_data and not self._import_needs_reexecution(_parsed_tree):
-            hit_result = self._handle_cache_hit(
-                cached_data, metadata, silent, cache_key, inputs, metrics, process_start, est_fit
+            self._print_cache_debug(
+                code, run.cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time
             )
+
+        if cached_data and not self._import_needs_reexecution(tree):
+            hit_result = self._handle_cache_hit(run, cached_data, metadata)
             if hit_result is not None:
                 # The restore SUCCEEDED, so the value handed back is a replay.
-                self._warn_stale_randomness(code, unseeded_calls, allow_random)
-                self._warn_stale_estimator_fit(code, unseeded_fits, allow_random)
-                self._flag_inline_unseeded_fit(
-                    hit_result,
-                    code,
-                    _parsed_tree,
-                    outputs,
-                    allow_random,
-                    is_hit=True,
-                )
+                self._warn_stale_randomness(code, run.unseeded_calls, run.allow_random)
+                self._warn_stale_estimator_fit(code, unseeded_fits, run.allow_random)
+                self._flag_inline_unseeded_fit(hit_result, code, tree, outputs, run.allow_random, is_hit=True)
                 return hit_result
 
-        _exec_code, _exec_tree = self._code_and_tree_for_execution(
-            code,
-            _parsed_tree,
-            annotation,
-        )
-        # CAS-243: `_code_and_tree_for_execution` may have rewritten an
-        # eligible call into `__cash_call__(fn, i)(...)` -- returning a NEW
-        # string, never `code` itself, when it fires (see that method: every
-        # opt-out / no-eligible-call / failure branch returns the ORIGINAL
-        # `code` object unchanged; only the actual rewrite calls
-        # `ast.unparse` to build a new one). Forwarding the pre-rewrite
-        # original text after that fired would execute a version of the
-        # statement that never went through the indirection, silently
-        # discarding the sub-expression caching this statement's calls just
-        # got routed through. Forward `exec_source` only when the rewrite
-        # made no change; otherwise fall back to None so `_execute_statement`
-        # executes `_exec_code` (the rewritten text) exactly as today.
-        _exec_source = exec_source if _exec_code is code else None
-        error_metrics, result, captured, execution_time, accessed_files, accessed_remote = self._execute_and_drain(
-            _exec_code,
-            stream_output,
-            skip_cache,
-            _exec_tree,
-            metrics,
-            process_start,
-            silent,
-            is_last,
-            exec_source=_exec_source,
-        )
-        if error_metrics is not None:
-            return error_metrics
+        run.exec_code, run.exec_tree = self._code_and_tree_for_execution(code, tree, run.annotation)
+        # `_code_and_tree_for_execution` returns a NEW string, never `code`
+        # itself, only when it routed an eligible call through the call cache.
+        # Compiling the pre-rewrite original text after that would run a version
+        # of the statement that never went through the indirection, so the
+        # original text is used only when the rewrite made no change.
+        if run.exec_code is not code:
+            run.exec_source = None
+        return None
 
-        self._flag_inline_unseeded_fit(
-            metrics,
-            code,
-            _parsed_tree,
-            outputs,
-            allow_random,
-            is_hit=False,
-        )
-        self._flag_observed_hidden_draw(metrics, code, outputs, skip_cache=skip_cache)
-        metrics["status"] = CacheStatus.COMPUTED
-        metrics["evaluated_vars"] = list(outputs) if outputs else []
-        # Surface input variable names so downstream consumers (provenance,
-        # audit, badge tooltips) can reconstruct the dependency graph.
-        # Filter out the no-name inputs the AST sometimes emits.
-        metrics["inputs"] = [v for v in (inputs or []) if isinstance(v, str)]
-        # Attribute the miss for the badge's row-detail drawer when we can do
-        # it cheaply. ``CacheFreshnessChecker`` sets ``last_miss_reason`` as a
-        # side effect for TTL / file invalidations (already-computed
-        # information).  We *don't* fall back to a backend-wide scan for the
-        # empty-key path — that diagnostic was O(N²) in cache size and
-        # dominated cold-run cost.
-        if not skip_cache and self._freshness.last_miss_reason:
-            metrics["miss_reason"] = self._freshness.last_miss_reason
-        elif not skip_cache:
-            self._attribute_input_change(metrics, inputs, outputs)
+    @contextmanager
+    def _executing(self, run: StatementRun) -> Generator[CodeRunner, None, None]:
+        """Run *run*'s code under output capture and cash's observers.
 
-        self._post_execute(
-            code,
-            result,
-            inputs,
-            outputs,
-            accessed_files,
-            execution_time,
-            effective_ttl,
-            cache_key,
-            source_hash,
-            captured,
-            skip_cache,
-            force_persist,
-            metrics,
-            process_start,
-            _parsed_tree,
-            statement_analysis,
-            mut_observe,
-            mut_assumed,
-            mut_record,
-            est_fit,
-            accessed_remote,
-        )
+        Yields the :class:`CodeRunner`; the caller runs it (``run()``, or
+        ``await run_async()``) inside the ``with`` block. Around it this
+        captures stdout/stderr/display, observes file reads and writes and the
+        global RNG streams, and records all of it on ``runner.execution``. An
+        exception from the user's code becomes the execution's error result
+        rather than propagating.
 
-        return metrics
-
-    async def process_statement_async(
-        self,
-        code: str,
-        ttl: int | None = None,
-        silent: bool = False,
-        annotation: CacheAnnotation | None = None,
-        display_code: str | None = None,
-        exec_source: str | None = None,
-        occurrence_index: int = 0,
-        stream_output: bool = False,
-        force_outputs: set[str] | None = None,
-        is_last: bool = True,
-    ) -> ProcessResult:
-        """Async twin of :meth:`process_statement` for top-level-await cells.
-
-        Line-for-line the same pipeline — analysis, cache lookup, cache-hit
-        restore, cacheability decision, mutation classification, post-execute
-        capture + store — as :meth:`process_statement`.  The ONLY difference is
-        that the cache-*miss* execution goes through
-        :meth:`_execute_and_drain_async` (which awaits the compiled unit) so a
-        statement containing a top-level ``await`` runs on IPython's live loop.
-
-        The cache-*hit* path (``_handle_cache_hit``) returns BEFORE any
-        coroutine is built, so an identical second run skips the await entirely.
-        Trailing-semicolon suppression and
-        live-alias edge-recording (in ``_post_execute``) apply unchanged because
-        this method routes through the same ``_analyze_and_hash`` /
-        ``_handle_cache_hit`` / ``_post_execute`` helpers.
+        A statement that may have written a file drops the freshness answers
+        kept for the cell (``_forget_file_answers_if_it_wrote``).
         """
-        effective_ttl, force_persist, skip_cache, allow_random, cache_fit = self._parse_annotation(annotation, ttl)
-        # Publish it for the calls inside this statement (CAS-268). Set on
-        # EVERY statement, so a previous statement's ttl can never leak into
-        # one that carries no annotation.
-        self._call_unit_ttl = effective_ttl
-        self._call_unit_persist = force_persist
-        unseeded_calls = self._warn_unseeded_randomness(code, allow_random)
-        self._warn_entropy_reseed(code)
-        metrics: ProcessResult = {
-            "status": CacheStatus.UNKNOWN,
-            "execution_time": 0.0,
-            "total_time": 0.0,
-            "saved_time": 0.0,
-            "error": None,
-            "restored_vars": [],
-            "code": code.strip(),
-            # The badge shows the user's own layout. NEVER part of the cache
-            # key: `code` above is what is hashed, always. This text MAY reach
-            # `ast.parse` / `compile()` / `register_cell_source` now (as
-            # `exec_source`, below) -- revised from the original
-            # "display-only, never compile()" rule so a function defined in a
-            # cell keeps its comments (and thus a per-line
-            # `# @cash:assume-safe` waiver) for `inspect.getsource`.
-            "display_code": display_code,
-            "uncacheable_reasons": [],
-        }
-        self._stamp_random_effect(metrics, code, unseeded_calls)
-        logger.debug("%s Processing statement (async): %s...", _LOG_DEBUG, code[:50])
-
-        process_start = time.time()
-
+        logger.debug("%s Executing (cache miss)", _LOG_CACHE_DEBUG)
+        code = run.exec_code
+        source = run.exec_source if run.exec_source is not None else code
+        # A tree parsed from the unparsed text has line numbers that do not
+        # match the original source, so the runner re-parses that instead.
+        tree = run.exec_tree if run.exec_source is None else None
+        runner = CodeRunner(code, source, tree, run.is_last, self.shell.user_ns)
+        execution = runner.execution
+        marks = self._cash_time_marks()
+        start_time = time.time()
+        # Snapshot the global RNG streams around execution so a before/after
+        # diff catches a draw that static analysis and object-introspection
+        # both miss -- one hidden inside a called function. Cleared up front
+        # so a statement that RAISES cannot leave the previous statement's
+        # draw attributed to it.
+        self._observed_rng_draw = set()
+        self._rng_draw_newly_seen = False
+        pre_rng = capture_rng_state()
         try:
-            _parsed_tree = ast.parse(code.strip())
-        except SyntaxError:
-            _parsed_tree = None
+            with self._make_capture_ctx(run.stream_output, run.skip_cache and run.stream_output) as captured:
+                execution.captured = captured
+                with observe_writes() as written_paths, FileAccessTracker(self.shell.user_ns) as file_tracker:
+                    yield runner
+                execution.accessed_files = file_tracker.get_accessed_files()
+                execution.written_paths = frozenset(written_paths)
+                execution.accessed_remote = file_tracker.get_accessed_remote_urls()
+                # `code` (the keyed form), not `source`: the observation is
+                # about what the statement does, which is the same either way,
+                # and this keeps it matched to the simulator's own unparse.
+                self._observe_statement_rng(pre_rng, code)
+                execution.result = ExecutionResult(success=True)
+        except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
+            execution.result = self._create_error_result(e)
+        self._forget_file_answers_if_it_wrote(code, execution)
+        execution.wall_time = time.time() - start_time
+        execution.cost = self._statement_cost(execution.wall_time, marks)
+        execution.tax = self._cash_tax_seconds(marks)
 
-        effects, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(
-            code, occurrence_index=occurrence_index, tree=_parsed_tree
-        )
-        inputs, outputs = set(effects.inputs), set(effects.outputs)
-        callee_globals = set(effects.callee_globals)
-        if force_outputs:
-            outputs = outputs | force_outputs
-        if callee_globals:
-            outputs = outputs | callee_globals
-        metrics["cache_key"] = cache_key
+    def _finish(self, run: StatementRun, execution: StatementExecution) -> ProcessResult:
+        """Record what the executed statement did, and store it."""
+        metrics = run.metrics
+        decorator_calls: list = []
+        try:
+            cash_instance = self.get_cash_instance()
+            if cash_instance is not None:
+                decorator_calls = cash_instance.drain_decorator_calls()
+        except (AttributeError, TypeError, RuntimeError):
+            logger.debug("%s Failed to drain decorator call log", _LOG_PROCESSOR)
+        decorator_calls.extend(self._drain_call_unit_events())
+        self._learn_call_wrapping(run.exec_code, execution.wall_time, decorator_calls)
 
-        early_result, skip_cache = self._check_redundant_import(
-            code,
-            _parsed_tree,
-            skip_cache,
-            inputs,
-            outputs,
-            metrics,
-            source_hash,
-            cache_key,
-            process_start,
-        )
-        if early_result is not None:
-            return early_result
+        captured = execution.captured
+        metrics["stdout"] = captured.stdout
+        metrics["stderr"] = captured.stderr
+        # IPython rich-display capture (RichOutput objects). Distinct from
+        # ``metadata['outputs']`` and ``evaluated_vars`` (which hold variable
+        # NAMES from AST analysis), so they never mix in badge fields.
+        metrics["rich_outputs"] = captured.outputs
+        if decorator_calls:
+            metrics["decorator_calls"] = decorator_calls
 
-        statement_analysis = analyze_statement(code, _parsed_tree, self.shell.user_ns)
+        self._display_execution_output(captured, execution.wall_time, run.silent, run.stream_output, metrics)
+        metrics["execution_time"] = execution.wall_time
+        metrics["compute_cost"] = execution.cost
+        metrics["cash_tax"] = execution.tax
 
-        if is_control_body(code):
-            mut_pre_route, mut_observe, mut_assumed, mut_record = set(), set(), set(), False
-            est_fit: set[str] = set()
-            # ...with ONE exception: a draw on a live Figure/Axes.
-            draw_only = self._identity_coupled_call_receivers(_parsed_tree)
-            fit_only = self._fitted_receivers(_parsed_tree)
-        else:
-            mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
-                _parsed_tree,
-                source_hash,
-                outputs,
-            )
-            est_fit = self._estimator_fit_receivers(_parsed_tree, outputs) if cache_fit else set()
-            draw_only = set()
-            fit_only = set()
-        # OPT-IN ONLY (``# @cash:cache-fit``). A bare ``estimator.fit(X, y)``
-        # mutates its receiver in place, so the classifier above routes it to
-        # skip-caching: the statement re-executes and is never serialised, which is
-        # net-NEUTRAL -- a fit that keeps missing cannot cost more than it saves.
-        #
-        # It does NOT make aliases safe. An earlier design claimed skipping the fit
-        # made ``backup = clf`` correct "by construction"; that was later disproved.
-        # ``backup = clf`` is an ORDINARY ASSIGNMENT that cash caches on its own, and
-        # restoring it rebinds ``backup`` to a pre-fit deserialised copy -- the fit
-        # statement has no bearing on it either way. Do not restore that reasoning.
-        #
-        # Caching a bare fit instead is the OPT-IN path, kept because it
-        # is a large win when it lands but demoted from the default because its
-        # correctness surface exceeds what per-statement restore can guarantee:
-        #   * a cache HIT may REBIND the receiver, leaving an alias pointing at the
-        #     pre-fit object. Not fixable per-statement -- on a warm run-all the
-        #     CONSTRUCTOR statement's own hit-restore rebinds the receiver before
-        #     the fit's in-place transfer lands, so the alias graph is already
-        #     broken upstream; and
-        #   * the duck-type gate admits the whole sklearn-compatible universe
-        #     (xgboost/lightgbm/custom), each with its own ``__getstate__``
-        #     contract, and several never restore -- re-serialising every run for
-        #     a net LOSS.
-        # For reliable ML caching, wrap training in a returning function under
-        # ``@cash.cache`` instead (verified 9-11x, no identity caveat).
-        #
-        # When opted in: add the receiver to ``outputs`` (so its source-based
-        # lineage is bumped AND the fitted value is captured/saved) but do NOT
-        # skip-cache it, so the normal lookup runs (hit -> in-place restore; miss
-        # -> execute + save). A receiver that is BOTH an estimator fit AND another
-        # genuine skip receiver still skips (the skip wins for that receiver).
-        # ``est_fit`` also threads to the cache-hit path so its restore is IN
-        # PLACE. Without the directive ``est_fit`` is empty and every
-        # site below degrades to the pre-existing skip-cache behaviour.
-        fam = effects.arg_mutations - outputs
-        skip_pre_route = mut_pre_route - est_fit
-        if mut_pre_route or est_fit or fam:
-            outputs = outputs | mut_pre_route | est_fit | fam
-        if skip_pre_route:
-            skip_cache = True
-            metrics["uncacheable_reasons"].append(
-                f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
-                "(receiver lineage bumped; statement re-executes)" + self._cache_fit_hint(skip_pre_route)
-            )
-        # CAS-260, and deliberately the SAME treatment the inline spelling of
-        # the identical mutation gets immediately above: the statement
-        # re-executes so the callee's write to a global really happens.
-        #
-        # The expensive work is NOT lost. Sub-statement caching (CAS-243) still
-        # serves the call inside this statement, keyed on the mutated global's
-        # own pre-call state, so what re-executes is the glue around it. That
-        # split is CAS-243's whole thesis -- the statement does not need to
-        # cache, because the call does -- and it is what makes always
-        # re-executing affordable here.
-        if callee_globals:
-            skip_cache = True
-            metrics["uncacheable_reasons"].append(
-                f"Callee mutates: {', '.join(sorted(callee_globals))} "
-                "(global lineage bumped; statement re-executes, call still cached)"
-            )
-        # a draw inside a loop/branch body. Skip the CACHE without
-        # touching ``outputs`` -- the statement must re-execute so the artists
-        # actually land on the Axes, but bumping its lineage from a per-statement
-        # source is precisely what the control-body skip above exists to avoid.
-        if draw_only:
-            skip_cache = True
-            metrics["uncacheable_reasons"].append(
-                f"Draws on: {', '.join(sorted(draw_only))} (live Figure/Axes; statement re-executes)"
-            )
-        if fit_only:
-            skip_cache = True
-            metrics["uncacheable_reasons"].append(
-                f"Fits: {', '.join(sorted(fit_only))} (estimator fitted in place; statement re-executes)"
-            )
-        # An UNSEEDED estimator fit routed to caching above is frozen on re-run
-        # with no warning -- cash's AST detector cannot see the randomness inside
-        # sklearn's compiled .fit(). Warn now (compute time); the same set drives
-        # the restore-time warning on a cache hit below.
-        unseeded_fits = self._warn_unseeded_estimator_fit(code, est_fit, allow_random)
-        self._stamp_random_effect(metrics, code, unseeded_calls, unseeded_fits)
+        result = execution.result
+        if not result.success:
+            metrics["status"] = CacheStatus.ERROR
+            metrics["error"] = result.error
+            metrics["total_time"] = time.time() - run.process_start
+            self._handle_execution_error(result, run.silent)
+            return metrics
 
-        if not skip_cache:
-            cacheable, reasons = decide_cacheability(
-                code=code,
-                tree=_parsed_tree,
-                inputs=inputs,
-                outputs=outputs,
-                annotation=annotation,
-                analysis=statement_analysis,
-                user_ns=self.shell.user_ns,
-                variable_lineage=self.tracking_state.variable_lineage,
-                is_stateful_call=self._check_callable_stateful,
-                scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
-            )
-            if not cacheable:
-                metrics["uncacheable_reasons"].extend(reasons)
-                skip_cache = True
-        effective_ttl = self._ttl_floor_from_called_functions(inputs, effective_ttl)
-        metadata, cached_data, cache_check_time = self._do_cache_lookup(skip_cache, cache_key, effective_ttl, inputs)
-        self._observe_miss_guard(skip_cache, code, source_hash, cache_key, cached_data, inputs)
-
-        if logger.isEnabledFor(logging.DEBUG):
-            self._print_cache_debug(code, cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
-
-        # CACHE HIT — returns before any coroutine is built, so an identical
-        # second run of a top-level-await cell skips the await entirely.
-        if cached_data and not self._import_needs_reexecution(_parsed_tree):
-            hit_result = self._handle_cache_hit(
-                cached_data, metadata, silent, cache_key, inputs, metrics, process_start, est_fit
-            )
-            if hit_result is not None:
-                # The restore SUCCEEDED, so the value handed back is a replay.
-                self._warn_stale_randomness(code, unseeded_calls, allow_random)
-                self._warn_stale_estimator_fit(code, unseeded_fits, allow_random)
-                self._flag_inline_unseeded_fit(
-                    hit_result,
-                    code,
-                    _parsed_tree,
-                    outputs,
-                    allow_random,
-                    is_hit=True,
-                )
-                return hit_result
-
-        _exec_code, _exec_tree = self._code_and_tree_for_execution(
-            code,
-            _parsed_tree,
-            annotation,
-        )
-        # CAS-243 guard -- see the identical comment in :meth:`process_statement`.
-        _exec_source = exec_source if _exec_code is code else None
-        (
-            error_metrics,
-            result,
-            captured,
-            execution_time,
-            accessed_files,
-            accessed_remote,
-        ) = await self._execute_and_drain_async(
-            _exec_code,
-            stream_output,
-            skip_cache,
-            _exec_tree,
-            metrics,
-            process_start,
-            silent,
-            is_last,
-            exec_source=_exec_source,
-        )
-        if error_metrics is not None:
-            return error_metrics
-
-        self._flag_inline_unseeded_fit(
-            metrics,
-            code,
-            _parsed_tree,
-            outputs,
-            allow_random,
-            is_hit=False,
-        )
-        self._flag_observed_hidden_draw(metrics, code, outputs, skip_cache=skip_cache)
+        self._flag_inline_unseeded_fit(metrics, run.code, run.tree, run.outputs, run.allow_random, is_hit=False)
+        self._flag_observed_hidden_draw(metrics, run.code, run.outputs, skip_cache=run.skip_cache)
         metrics["status"] = CacheStatus.COMPUTED
-        metrics["evaluated_vars"] = list(outputs) if outputs else []
-        metrics["inputs"] = [v for v in (inputs or []) if isinstance(v, str)]
-        if not skip_cache and self._freshness.last_miss_reason:
+        metrics["evaluated_vars"] = list(run.outputs) if run.outputs else []
+        # Input names, so provenance, audit and badge tooltips can rebuild the
+        # dependency graph. The no-name inputs the AST sometimes emits are dropped.
+        metrics["inputs"] = [v for v in (run.inputs or []) if isinstance(v, str)]
+        # Attribute the miss for the badge's row-detail drawer when it is cheap:
+        # ``CacheFreshnessChecker`` sets ``last_miss_reason`` for TTL / file
+        # invalidations. Never a backend-wide scan for the empty-key path.
+        if not run.skip_cache and self._freshness.last_miss_reason:
             metrics["miss_reason"] = self._freshness.last_miss_reason
-        elif not skip_cache:
-            self._attribute_input_change(metrics, inputs, outputs)
+        elif not run.skip_cache:
+            self._attribute_input_change(metrics, run.inputs, run.outputs)
 
-        self._post_execute(
-            code,
-            result,
-            inputs,
-            outputs,
-            accessed_files,
-            execution_time,
-            effective_ttl,
-            cache_key,
-            source_hash,
-            captured,
-            skip_cache,
-            force_persist,
-            metrics,
-            process_start,
-            _parsed_tree,
-            statement_analysis,
-            mut_observe,
-            mut_assumed,
-            mut_record,
-            est_fit,
-            accessed_remote,
-        )
-
+        self._post_execute(run, execution)
         return metrics
 
     def _parse_annotation(
@@ -2390,7 +2164,7 @@ class StatementProcessor:
         (:meth:`_flag_inline_unseeded_fit`) sees a fitted estimator bound as an
         output. Neither sees a draw hidden inside a called function --
         ``x = make_data()`` where ``make_data`` does ``np.random.rand()``. The
-        before/after global-RNG diff captured in :meth:`_execute_statement`
+        before/after global-RNG diff captured in :meth:`_executing`
         does: the stream advanced with no name and no syntax to give it away.
 
         Three gates keep this from mislabeling anything the other paths handle:
@@ -2583,7 +2357,7 @@ class StatementProcessor:
         a reorder re-runs the tail).
 
         **Both halves are returned, and both are load-bearing.**
-        :meth:`_execute_statement` compiles the *tree* only when the statement's
+        :class:`CodeRunner` compiles the *tree* only when the statement's
         last node is an ``ast.Expr`` (so the value can be echoed); every other
         shape compiles the *code string*. Handing back a rewritten tree alone
         therefore worked for ``out.append(compute(x))`` and was silently
@@ -2679,7 +2453,7 @@ class StatementProcessor:
                 # not a mistake worth a warning.
                 return code, tree
             new_code = ast.unparse(rewritten)
-            # ``ast.unparse`` drops a trailing ';', which _execute_statement
+            # ``ast.unparse`` drops a trailing ";", which CodeRunner
             # reads as "suppress the repr". Losing it would make a rewritten
             # statement echo a value the user silenced.
             if code.rstrip().endswith(";"):
@@ -2718,137 +2492,6 @@ class StatementProcessor:
         except (SyntaxError, ValueError, TypeError, AttributeError):
             logger.debug("%s cache-calls rewrite failed; executing unmodified", _LOG_PROCESSOR)
             return code, tree
-
-    def _execute_and_drain(
-        self,
-        code: str,
-        stream_output: bool,
-        skip_cache: bool,
-        tree: ast.Module | None,
-        metrics: ProcessResult,
-        process_start: float,
-        silent: bool,
-        is_last: bool = True,
-        exec_source: str | None = None,
-    ) -> tuple[ProcessResult | None, Any, Any, float, set[str]]:
-        """Execute the statement, drain decorator calls, populate stdout/stderr in metrics.
-
-        Returns ``(error_metrics, result, captured, execution_time, accessed_files,
-        accessed_remote)``.
-        *error_metrics* is non-None only when execution fails; callers should return it.
-        """
-        logger.debug("%s Executing (cache miss)", _LOG_CACHE_DEBUG)
-
-        marks = self._cash_time_marks()
-        result, captured, execution_time, accessed_files, accessed_remote = self._execute_statement(
-            code,
-            stream_output=stream_output,
-            tree=tree,
-            skip_capture=(skip_cache and stream_output),
-            is_last=is_last,
-            exec_source=exec_source,
-        )
-        wall_time = execution_time
-        execution_time = self._statement_cost(execution_time, marks)
-
-        decorator_calls: list = []
-        try:
-            cash_instance = self.get_cash_instance()
-            if cash_instance is not None:
-                decorator_calls = cash_instance.drain_decorator_calls()
-        except (AttributeError, TypeError, RuntimeError):
-            logger.debug("%s Failed to drain decorator call log", _LOG_PROCESSOR)
-        decorator_calls.extend(self._drain_call_unit_events())
-        self._learn_call_wrapping(code, wall_time, decorator_calls)
-
-        metrics["stdout"] = captured.stdout
-        metrics["stderr"] = captured.stderr
-        # IPython rich-display capture (RichOutput objects). Distinct from
-        # ``metadata['outputs']`` and ``evaluated_vars`` (which hold variable
-        # NAMES from AST analysis). Keeping them under different keys avoids
-        # the F-01-style fallback chain that printed ``<RichOutput at 0x..>``
-        # into badge fields.
-        metrics["rich_outputs"] = captured.outputs
-        if decorator_calls:
-            metrics["decorator_calls"] = decorator_calls
-
-        self._display_execution_output(captured, wall_time, silent, stream_output, metrics)
-        metrics["execution_time"] = wall_time
-        metrics["compute_cost"] = execution_time
-        metrics["cash_tax"] = self._cash_tax_seconds(marks)
-
-        if not result.success:
-            metrics["status"] = CacheStatus.ERROR
-            metrics["error"] = result.error
-            metrics["total_time"] = time.time() - process_start
-            self._handle_execution_error(result, silent)
-            return metrics, result, captured, execution_time, accessed_files, accessed_remote
-
-        return None, result, captured, execution_time, accessed_files, accessed_remote
-
-    async def _execute_and_drain_async(
-        self,
-        code: str,
-        stream_output: bool,
-        skip_cache: bool,
-        tree: ast.Module | None,
-        metrics: ProcessResult,
-        process_start: float,
-        silent: bool,
-        is_last: bool = True,
-        exec_source: str | None = None,
-    ) -> tuple[ProcessResult | None, Any, Any, float, set[str]]:
-        """Async twin of :meth:`_execute_and_drain`.
-
-        Identical to the sync version except it awaits
-        :meth:`_execute_statement_async` so a top-level-await statement runs on
-        IPython's live loop.  All post-execution bookkeeping (decorator drain,
-        stdout/stderr/rich capture, output display, error handling) is byte-for-
-        byte the same.
-        """
-        logger.debug("%s Executing (cache miss)", _LOG_CACHE_DEBUG)
-
-        marks = self._cash_time_marks()
-        result, captured, execution_time, accessed_files, accessed_remote = await self._execute_statement_async(
-            code,
-            stream_output=stream_output,
-            tree=tree,
-            skip_capture=(skip_cache and stream_output),
-            is_last=is_last,
-            exec_source=exec_source,
-        )
-        wall_time = execution_time
-        execution_time = self._statement_cost(execution_time, marks)
-
-        decorator_calls: list = []
-        try:
-            cash_instance = self.get_cash_instance()
-            if cash_instance is not None:
-                decorator_calls = cash_instance.drain_decorator_calls()
-        except (AttributeError, TypeError, RuntimeError):
-            logger.debug("%s Failed to drain decorator call log", _LOG_PROCESSOR)
-        decorator_calls.extend(self._drain_call_unit_events())
-        self._learn_call_wrapping(code, wall_time, decorator_calls)
-
-        metrics["stdout"] = captured.stdout
-        metrics["stderr"] = captured.stderr
-        metrics["rich_outputs"] = captured.outputs
-        if decorator_calls:
-            metrics["decorator_calls"] = decorator_calls
-
-        self._display_execution_output(captured, wall_time, silent, stream_output, metrics)
-        metrics["execution_time"] = wall_time
-        metrics["compute_cost"] = execution_time
-        metrics["cash_tax"] = self._cash_tax_seconds(marks)
-
-        if not result.success:
-            metrics["status"] = CacheStatus.ERROR
-            metrics["error"] = result.error
-            metrics["total_time"] = time.time() - process_start
-            self._handle_execution_error(result, silent)
-            return metrics, result, captured, execution_time, accessed_files, accessed_remote
-
-        return None, result, captured, execution_time, accessed_files, accessed_remote
 
     def _cash_time_marks(self) -> tuple[float, Any, float, float]:
         """Cash's own clocks, read around a statement (see :meth:`_statement_cost`)."""
@@ -2904,39 +2547,24 @@ class StatementProcessor:
         except Exception:  # noqa: BLE001 - never let accounting break a statement
             return 0.0
 
-    def _post_execute(
-        self,
-        code: str,
-        result: Any,
-        inputs: set[str],
-        outputs: set[str],
-        accessed_files: set[str],
-        execution_time: float,
-        effective_ttl: int | None,
-        cache_key: str,
-        source_hash: str,
-        captured: Any,
-        skip_cache: bool,
-        force_persist: bool,
-        metrics: ProcessResult,
-        process_start: float,
-        tree: ast.Module | None,
-        statement_analysis: StatementAnalysis,
-        mut_observe: set[str] = frozenset(),
-        mut_assumed: set[str] = frozenset(),
-        mut_record: bool = False,
-        est_fit: set[str] = frozenset(),
-        accessed_remote: set[str] = frozenset(),
-    ) -> None:
-        """Auto-track imports, capture vars, detect mutations, save to cache, record analytics."""
+    def _post_execute(self, run: StatementRun, execution: StatementExecution) -> None:
+        """Auto-track imports, capture vars, detect mutations, save to cache, record analytics.
+
+        Updates ``run.outputs`` and ``run.skip_cache`` with what execution
+        revealed (an observed mutation, an uncacheable value).
+        """
+        code, tree, inputs, outputs = run.code, run.tree, run.inputs, run.outputs
+        source_hash, cache_key, metrics = run.source_hash, run.cache_key, run.metrics
+        skip_cache, est_fit = run.skip_cache, run.est_fit
+        accessed_files, accessed_remote = execution.accessed_files, execution.accessed_remote
         # Broad-precise mutation observation: for a standalone method call whose
         # method is not statically known, compare each candidate receiver's
         # content after execution against its pre-statement hash. Must run BEFORE
         # capture_and_track so a newly-detected mutation is in ``outputs`` (its
         # lineage gets bumped) and skip-caches the statement. The verdict is
         # recorded for the upstream simulation, which cannot observe execution.
-        if mut_record:
-            newly_mutated = {b for b in mut_observe if self._receiver_mutated(b)}
+        if run.mut_record:
+            newly_mutated = {b for b in run.mut_observe if self._receiver_mutated(b)}
             for name, before in self._arg_snapshots.pop(source_hash, {}).items():
                 if mutation_fingerprint(self.shell.user_ns.get(name)) != before:
                     newly_mutated.add(name)
@@ -2963,7 +2591,7 @@ class StatementProcessor:
                         "(observed; receiver lineage bumped; statement re-executes)"
                         + self._cache_fit_hint(skip_observed)
                     )
-            self.tracking_state.mutation_verdicts[source_hash] = set(mut_assumed) | newly_mutated
+            self.tracking_state.mutation_verdicts[source_hash] = set(run.mut_assumed) | newly_mutated
             self._persist_mutation_verdict(source_hash, self.tracking_state.mutation_verdicts[source_hash])
 
         # Auto-track newly imported local modules so _capture_variables includes
@@ -3047,9 +2675,9 @@ class StatementProcessor:
         # to tell an edited/new writer from one that already ran.
         # A write the code does not spell (``save_chart(kind)``, whose savefig
         # is in the helper) counts too: it was observed (``write_observer``).
-        written = self.user_written_paths(getattr(self, "_last_written_paths", frozenset()))
+        written = self.user_written_paths(execution.written_paths)
         try:
-            if written or any(e.kind == "file_write" for e in statement_analysis.side_effects):
+            if written or any(e.kind == "file_write" for e in run.analysis.side_effects):
                 self.tracking_state.executed_write_stmt_codes.add(code)
                 # The upstream check's per-file answers for this cell run were
                 # taken before this write; nothing checked after it may use them.
@@ -3074,7 +2702,7 @@ class StatementProcessor:
         # Detect in-place mutations (detection-only; do not modify lineage).
         # Reuses the StatementAnalysis from process_statement to avoid a
         # second pass of AST visitors over the same tree.
-        pure_mutations = statement_analysis.all_mutated_vars - outputs
+        pure_mutations = run.analysis.all_mutated_vars - outputs
         if pure_mutations:
             self.tracking_state.vars_with_mutation_lineage.update(pure_mutations)
             logger.debug("%s Detected in-place mutations on: %s", _LOG_MUTATION, pure_mutations)
@@ -3090,9 +2718,9 @@ class StatementProcessor:
         # default, not a veto.
         miss_guarded = (
             not skip_cache
-            and not force_persist
+            and not run.force_persist
             and not self._miss_guard.should_serialise(source_hash)
-            and not self._write_is_cheap(outputs, captured_vars, execution_time)
+            and not self._write_is_cheap(outputs, captured_vars, execution.cost)
         )
 
         # A statement whose hidden draw we only just discovered has a key built
@@ -3114,25 +2742,10 @@ class StatementProcessor:
                 source_hash[:12],
             )
 
+        run.outputs, run.skip_cache = outputs, skip_cache
         saved_metadata = None
         if not skip_cache:
-            saved_metadata = self._save_to_cache(
-                cache_key,
-                code,
-                result,
-                inputs,
-                outputs,
-                accessed_files,
-                execution_time,
-                effective_ttl,
-                captured,
-                process_start,
-                source_hash,
-                captured_vars,
-                force_persist=force_persist,
-                miss_guarded=miss_guarded,
-                accessed_remote=accessed_remote,
-            )
+            saved_metadata = self._save_to_cache(run, execution, captured_vars, miss_guarded=miss_guarded)
         else:
             logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
 
@@ -3151,9 +2764,9 @@ class StatementProcessor:
                 if value is not None:
                     metrics[k] = value
         storage = (saved_metadata.storage if saved_metadata else None) or ()
-        self._note_rebuild_cost(cache_key, inputs, outputs, execution_time, on_disk=any(s != "RAM" for s in storage))
+        self._note_rebuild_cost(cache_key, inputs, outputs, execution.cost, on_disk=any(s != "RAM" for s in storage))
 
-        metrics["total_time"] = time.time() - process_start
+        metrics["total_time"] = time.time() - run.process_start
         self.analytics_manager.record_event(
             status="MISS",
             execution_time=metrics["total_time"],
@@ -3587,26 +3200,22 @@ class StatementProcessor:
 
     def _handle_cache_hit(
         self,
+        run: StatementRun,
         cached_data: Any,
         metadata: StatementCacheMetadata | None,
-        silent: bool,
-        cache_key: str,
-        inputs: set[str],
-        metrics: ProcessResult,
-        process_start: float,
-        inplace_restore: set[str] = frozenset(),
     ) -> ProcessResult | None:
         """Restore from cache and populate *metrics* for a cache-hit path.
 
         Returns the completed *metrics* dict on success, or ``None`` if
         restoration fails (caller should fall through to execution).
 
-        *inplace_restore* names the estimator-fit receivers whose fitted state
+        ``run.est_fit`` names the estimator-fit receivers whose fitted state
         must be transferred onto the EXISTING object rather than rebound, so
         every alias observes the fit. It is recomputed each call from
         the live namespace (never read from ``mutation_verdicts``, which is empty
         right after a kernel restart).
         """
+        cache_key, inputs, metrics, process_start = run.cache_key, run.inputs, run.metrics, run.process_start
         try:
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("%s Cache hit for key: %s...", _LOG_CACHE_HIT, cache_key[:20])
@@ -3626,7 +3235,7 @@ class StatementProcessor:
                         [(k, v[:16] + "...") for k, v in (metadata.output_lineages or {}).items()],
                     )
             self._stmt_restorer.restore_from_cache(
-                self.tracking_state, cached_data, metadata, silent, process_start, inplace_restore
+                self.tracking_state, cached_data, metadata, run.silent, process_start, run.est_fit
             )
 
             metrics["status"] = CacheStatus.RESTORED
@@ -3702,31 +3311,20 @@ class StatementProcessor:
                 names.add(node.module.split(".")[0])
         return names
 
-    def _check_redundant_import(
-        self,
-        code: str,
-        tree: ast.Module | None,
-        skip_cache: bool,
-        inputs: set[str],
-        outputs: set[str],
-        metrics: ProcessResult,
-        source_hash: str,
-        cache_key: str,
-        process_start: float,
-    ) -> tuple[ProcessResult | None, bool]:
+    def _check_redundant_import(self, run: StatementRun) -> ProcessResult | None:
         """Detect redundant (already-imported) import statements.
 
-        Returns ``(early_result, skip_cache)``.  If the import is genuinely
-        redundant *early_result* is the completed metrics dict.  If the module
-        was recently reloaded, ``skip_cache`` is set to ``True`` so the caller
-        forces re-execution.  Returns ``(None, skip_cache)`` when normal
-        processing should continue.
+        Returns the completed metrics when the import is genuinely redundant,
+        else ``None``. An import that must run (a module recently reloaded, or
+        a name that does not yet hold what the import binds) sets
+        ``run.skip_cache``: an import runs, it is never stored.
         """
+        code, tree = run.code, run.tree
         try:
             tree_check = tree if tree is not None else ast.parse(code.strip())
             import_names = self._get_redundant_import_names(tree_check)
             if not import_names:
-                return None, skip_cache
+                return None
 
             source_module_names = self._collect_import_source_modules(tree_check)
             has_reloaded = bool((import_names | source_module_names) & self.recently_reloaded_modules)
@@ -3744,7 +3342,8 @@ class StatementProcessor:
                     _LOG_OPTIMIZATION,
                     code.strip(),
                 )
-                return None, True  # updated skip_cache
+                run.skip_cache = True
+                return None
 
             if not all_present:
                 # An import runs, it is never stored. Re-running one whose
@@ -3754,27 +3353,28 @@ class StatementProcessor:
                 # bound THEN: `from helper import summary` restored after an
                 # edit to helper.py put the pre-edit function back (round 29
                 # prep; see `import_only` in the upstream classifier).
-                return None, True
+                run.skip_cache = True
+                return None
             if all_present:
                 logger.debug("%s SKIPPING redundant import: %s", _LOG_OPTIMIZATION, code.strip())
-                metrics["status"] = CacheStatus.SKIPPED
-                metrics["total_time"] = time.time() - process_start
+                run.metrics["status"] = CacheStatus.SKIPPED
+                run.metrics["total_time"] = time.time() - run.process_start
                 self._update_state_tracking(
                     code,
                     ExecutionResult(success=True, skipped=True),
-                    inputs,
-                    outputs,
+                    run.inputs,
+                    run.outputs,
                     set(),
-                    source_hash,
-                    cache_key,
+                    run.source_hash,
+                    run.cache_key,
                     tree=tree,
                 )
-                return metrics, skip_cache
+                return run.metrics
 
         except (ImportError, AttributeError, SyntaxError) as e:
             logger.debug("%s Error checking imports: %s", _LOG_OPTIMIZATION, e)
 
-        return None, skip_cache
+        return None
 
     def _publish_rich_outputs(self, outputs: list) -> None:
         """Replay a list of rich display outputs.
@@ -3815,23 +3415,16 @@ class StatementProcessor:
     def _make_capture_ctx(stream_output: bool, skip_capture: bool) -> Any:
         """Return the output-capture context manager for an execution.
 
-        Shared by the sync and async executors so both wrap user code in the
-        exact same stdout/stderr/display capture (only the exec primitive
-        inside differs).
+        Streaming output that will not be cached skips capture entirely, so
+        it reaches the real streams with no interception.
         """
         if stream_output and skip_capture:
-
-            class _EmptyCaptured:
-                stdout = ""
-                stderr = ""
-                outputs = []
-
-            return contextlib.nullcontext(_EmptyCaptured())
+            return contextlib.nullcontext(NoCapture())
         if stream_output:
             return tee_output()
         return capture_output(stdout=True, stderr=True, display=True)
 
-    def _forget_file_answers_if_it_wrote(self, code: str, result: Any) -> None:
+    def _forget_file_answers_if_it_wrote(self, code: str, execution: StatementExecution) -> None:
         """Drop the cell's kept file answers (``CacheFreshnessChecker.
         forget_file_answers``) when the statement that just ran may have
         changed a file: it was seen writing one, cash's static writer check
@@ -3842,7 +3435,7 @@ class StatementProcessor:
         (``ax.annotate`` per topic, reading a frame built from 10,000
         documents) re-checked all of them 52 times in one cell.
         """
-        wrote = bool(getattr(self, "_last_written_paths", None)) or not getattr(result, "success", False)
+        wrote = bool(execution.written_paths) or not getattr(execution.result, "success", False)
         if not wrote:
             try:
                 wrote = (
@@ -3852,269 +3445,6 @@ class StatementProcessor:
                 wrote = True
         if wrote:
             self._freshness.forget_file_answers(getattr(self.shell, "execution_count", None))
-
-    def _execute_statement(
-        self,
-        code: str,
-        stream_output: bool = False,
-        tree: ast.Module | None = None,
-        skip_capture: bool = False,
-        is_last: bool = True,
-        exec_source: str | None = None,
-    ) -> tuple[Any, Any, float, set[str]]:
-        """Execute statement with output capture and file tracking.
-
-        A statement that may have written a file drops the freshness answers
-        kept for the cell (``_forget_file_answers_if_it_wrote``).
-
-        Args:
-            code: Python code to execute.
-            stream_output: When True, use tee_output() so output goes to the
-                real terminal in real-time while still being recorded.
-            tree: Optional pre-parsed AST to avoid redundant parsing. Ignored
-                (re-derived from ``source`` below) when ``exec_source`` is
-                supplied -- see the comment at the top of the ``try`` block.
-            skip_capture: When True AND stream_output is True, bypass output
-                capture entirely.  Output goes directly to the real streams
-                with zero interception overhead.  Use when the result will not
-                be cached (skip_cache=True) so recorded stdout/stderr are not
-                needed.
-            exec_source: The statement's ORIGINAL text (comments intact), or
-                ``None`` to execute ``code`` (the ``ast.unparse`` form) as
-                before. Never affects the cache key -- callers hash ``code``,
-                not this.
-        """
-        start_time = time.time()
-        accessed_files = set()
-        accessed_remote: set[str] = set()
-        # Observe randomness the way we observe file access: snapshot the global
-        # RNG streams around execution so a before/after diff catches a draw that
-        # static analysis and object-introspection both miss -- one hidden inside
-        # a called function (``x = make_data()`` where make_data draws). Cleared
-        # up front so a statement that RAISES cannot leave the previous
-        # statement's draw attributed to it.
-        self._observed_rng_draw = set()
-        self._rng_draw_newly_seen = False
-        pre_rng = capture_rng_state()
-        # The files it writes (see `write_observer`); read by the post-execution
-        # step for the writer's provenance. Reset first, like the RNG draw.
-        self._last_written_paths: frozenset[str] = frozenset()
-
-        try:
-            # What we EXECUTE is the user's own text when we have it; what we
-            # KEY on is `code`, the ast.unparse output, and that does not
-            # change here.
-            #
-            # `ast.unparse` strips comments, so a function defined in a cell
-            # used to be compiled from source with no comments in it -- and
-            # `inspect.getsource` then handed the purity analyzer a body
-            # where `# @cash:assume-safe` had never existed. Compiling the
-            # original fixes that, and makes a traceback inside a
-            # cell-defined function show what the user wrote rather than
-            # cash's normalised form.
-            source = exec_source if exec_source is not None else code
-            if exec_source is not None:
-                # A tree parsed from the unparsed text has line numbers that
-                # do not match the source we are about to compile and
-                # register. Re-parse below instead of trusting the caller's.
-                tree = None
-            ctx_manager = self._make_capture_ctx(stream_output, skip_capture)
-            with ctx_manager as captured:
-                with observe_writes() as written_paths, FileAccessTracker(self.shell.user_ns) as file_tracker:
-                    if tree is None:
-                        try:
-                            tree = ast.parse(source)
-                        except SyntaxError:
-                            # Fallback to standard exec if parse fails (though it shouldn't if compiled worked, but good for safety)
-                            tree = None
-
-                    # One linecache-registered filename per statement, so a
-                    # traceback inside a function DEFINED here shows its source
-                    # instead of "<cash>" with no line.
-                    cash_file = register_cell_source(source)
-
-                    if tree and tree.body and isinstance(tree.body[-1], ast.Expr):
-                        body_nodes = tree.body[:-1]
-                        last_node = tree.body[-1]
-
-                        if body_nodes:
-                            mod = ast.Module(body=body_nodes, type_ignores=[])
-                            # Locations must be fixed for some python versions/ast nodes
-                            # but usually parse provides them.
-                            c_body = compile(mod, cash_file, "exec")
-                            exec(c_body, self.shell.user_ns, self.shell.user_ns)
-
-                        expr_val = last_node.value
-                        mod_expr = ast.Expression(body=expr_val)
-                        ast.fix_missing_locations(mod_expr)
-                        c_expr = compile(mod_expr, cash_file, "eval")
-                        result_val = eval(c_expr, self.shell.user_ns, self.shell.user_ns)
-
-                        # IPython echoes only the LAST expression of a CELL. Cash
-                        # splits the cell into statements and executes each as its
-                        # own unit, so without ``is_last`` every bare expression
-                        # got displayed and cash silently changed notebook
-                        # semantics -- `a+1 / a+2 / a+3` printed 2,3,4 where a
-                        # plain kernel prints 4. Gating the DISPLAY (not
-                        # the cache-keyed source) is deliberate: the reverted
-                        # attempt appended ';' to the keyed source in the runtime
-                        # only, desyncing it from the simulator's unparse and
-                        # blanking a chart.
-                        # A trailing ``;`` suppresses the repr in IPython. The
-                        # cell splitter re-attaches it after ``ast.unparse``
-                        # ; honour it so no repr is displayed OR captured
-                        # (an empty capture then also restores cleanly).
-                        if is_last and result_val is not None and not code.rstrip().endswith(";"):
-                            from IPython.display import display
-
-                            display(result_val)
-                    else:
-                        compiled_code = compile(source, cash_file, "exec")
-                        exec(compiled_code, self.shell.user_ns, self.shell.user_ns)
-                        result_val = None
-
-                accessed_files = file_tracker.get_accessed_files()
-                self._last_written_paths = frozenset(written_paths)
-                accessed_remote = file_tracker.get_accessed_remote_urls()
-                # Deliberately `code` (the canonical/keyed form), not `source`:
-                # the RNG observation is about what the STATEMENT does, which
-                # is identical either way -- see `_statement_source` (the
-                # dedent is a no-op for a top-level node) -- and this keeps it
-                # matched to what the simulator's own unparse would see.
-                self._observe_statement_rng(pre_rng, code)
-
-                result = ExecutionResult(success=True)
-
-        except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
-            result = self._create_error_result(e)
-            if "captured" not in dir():
-
-                class _EmptyCaptured:
-                    stdout = ""
-                    stderr = ""
-                    outputs = []
-
-                captured = _EmptyCaptured()
-
-        self._forget_file_answers_if_it_wrote(code, result)
-        execution_time = time.time() - start_time
-        return result, captured, execution_time, accessed_files, accessed_remote
-
-    async def _execute_statement_async(
-        self,
-        code: str,
-        stream_output: bool = False,
-        tree: ast.Module | None = None,
-        skip_capture: bool = False,
-        is_last: bool = True,
-        exec_source: str | None = None,
-    ) -> tuple[Any, Any, float, set[str]]:
-        """Async twin of :meth:`_execute_statement` for top-level-await cells.
-
-        Byte-for-byte the same output-capture / file-tracking / last-expr
-        display / error handling as the sync path — the ONLY difference is the
-        exec primitive: every unit is compiled under
-        ``ast.PyCF_ALLOW_TOP_LEVEL_AWAIT`` and, when the compiled code object
-        carries ``CO_COROUTINE`` (i.e. it contains a top-level ``await``), the
-        coroutine returned by ``exec``/``eval`` is awaited on IPython's live
-        loop.  A plain statement compiled under the flag does NOT get
-        ``CO_COROUTINE``, so it runs through the identical synchronous
-        ``exec``/``eval`` and behaves exactly like the sync path.
-
-        This mirrors IPython's own ``run_code`` pattern (compile under the flag,
-        ``await`` when ``CO_COROUTINE``), so a top-level-await statement executes
-        exactly once, on the same loop IPython would have used.
-
-        ``exec_source``: same contract as the sync path -- the statement's
-        original text (comments intact), used for parse/compile/linecache in
-        place of ``code`` when supplied. See the comment at the top of the
-        ``try`` block in :meth:`_execute_statement`.
-        """
-        start_time = time.time()
-        accessed_files = set()
-        accessed_remote: set[str] = set()
-        _FLAG = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
-        # Per-statement RNG observation, same as the sync path.
-        self._observed_rng_draw = set()
-        self._rng_draw_newly_seen = False
-        pre_rng = capture_rng_state()
-        # The files it writes (see `write_observer`); read by the post-execution
-        # step for the writer's provenance. Reset first, like the RNG draw.
-        self._last_written_paths: frozenset[str] = frozenset()
-
-        try:
-            # See the identical comment in `_execute_statement`: `source` is
-            # what we EXECUTE, `code` (unchanged) is what we KEY on.
-            source = exec_source if exec_source is not None else code
-            if exec_source is not None:
-                tree = None
-            ctx_manager = self._make_capture_ctx(stream_output, skip_capture)
-            with ctx_manager as captured:
-                with observe_writes() as written_paths, FileAccessTracker(self.shell.user_ns) as file_tracker:
-                    if tree is None:
-                        try:
-                            tree = ast.parse(source)
-                        except SyntaxError:
-                            tree = None
-
-                    # Same per-statement linecache registration as the sync path
-                    # so an await-bearing cell's tracebacks resolve too.
-                    cash_file = register_cell_source(source)
-
-                    if tree and tree.body and isinstance(tree.body[-1], ast.Expr):
-                        body_nodes = tree.body[:-1]
-                        last_node = tree.body[-1]
-
-                        if body_nodes:
-                            mod = ast.Module(body=body_nodes, type_ignores=[])
-                            c_body = compile(mod, cash_file, "exec", flags=_FLAG)
-                            coro = eval(c_body, self.shell.user_ns, self.shell.user_ns)
-                            if c_body.co_flags & inspect.CO_COROUTINE:
-                                await coro
-
-                        expr_val = last_node.value
-                        mod_expr = ast.Expression(body=expr_val)
-                        ast.fix_missing_locations(mod_expr)
-                        c_expr = compile(mod_expr, cash_file, "eval", flags=_FLAG)
-                        result_val = eval(c_expr, self.shell.user_ns, self.shell.user_ns)
-                        if c_expr.co_flags & inspect.CO_COROUTINE:
-                            result_val = await result_val
-
-                        # Same last-expression-only rule as the sync path.
-                        if is_last and result_val is not None and not code.rstrip().endswith(";"):
-                            from IPython.display import display
-
-                            display(result_val)
-                    else:
-                        compiled_code = compile(source, cash_file, "exec", flags=_FLAG)
-                        coro = eval(compiled_code, self.shell.user_ns, self.shell.user_ns)
-                        if compiled_code.co_flags & inspect.CO_COROUTINE:
-                            await coro
-                        result_val = None
-
-                accessed_files = file_tracker.get_accessed_files()
-                self._last_written_paths = frozenset(written_paths)
-                accessed_remote = file_tracker.get_accessed_remote_urls()
-                # `code` (the canonical/keyed form), not `source` -- see the
-                # identical comment in `_execute_statement`.
-                self._observe_statement_rng(pre_rng, code)
-
-                result = ExecutionResult(success=True)
-
-        except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
-            result = self._create_error_result(e)
-            if "captured" not in dir():
-
-                class _EmptyCaptured:
-                    stdout = ""
-                    stderr = ""
-                    outputs = []
-
-                captured = _EmptyCaptured()
-
-        self._forget_file_answers_if_it_wrote(code, result)
-        execution_time = time.time() - start_time
-        return result, captured, execution_time, accessed_files, accessed_remote
 
     def _update_state_tracking(
         self,
@@ -4141,25 +3471,15 @@ class StatementProcessor:
 
     def _save_to_cache(
         self,
-        cache_key: str,
-        code: str,
-        result: Any,
-        inputs: set[str],
-        outputs: set[str],
-        accessed_files: set[str],
-        execution_time: float,
-        ttl: int | None,
-        captured: Any,
-        process_start: float,
-        source_hash: str,
+        run: StatementRun,
+        execution: StatementExecution,
         captured_vars: dict[str, Any],
-        force_persist: bool = False,
         miss_guarded: bool = False,
-        accessed_remote: set[str] | None = None,
     ) -> StatementCacheMetadata | None:
-        if getattr(result, "skipped", False):
+        if getattr(execution.result, "skipped", False):
             return None
 
+        accessed_files = execution.accessed_files
         all_file_deps = set(accessed_files) if accessed_files else set()
         inherited_snapshots: dict[str, dict] = {}
 
@@ -4173,7 +3493,7 @@ class StatementProcessor:
         # a frame read out of 5,222 files re-read all 5,222 (round 23, r23s4).
         # A later lookup still checks the real file against it.
         direct = all_file_deps.copy()
-        for input_var in inputs:
+        for input_var in run.inputs:
             inherited = self.tracking_state.executed_file_deps.get(input_var)
             if not inherited:
                 continue
@@ -4184,22 +3504,12 @@ class StatementProcessor:
                     inherited_snapshots.setdefault(path, recorded[path])
 
         return self._store_in_cache(
-            cache_key,
+            run,
+            execution,
             captured_vars,
-            captured,
-            ttl,
-            inputs,
-            outputs,
-            execution_time,
-            process_start,
-            source_hash=source_hash,
-            code=code,
             file_dependencies=all_file_deps,
-            accessed_remote=accessed_remote or set(),
-            force_persist=force_persist,
             miss_guarded=miss_guarded,
             inherited_snapshots=inherited_snapshots,
-            direct_reads=bool(accessed_files or accessed_remote),
         )
 
     def _producer_file_snapshots(self, var_name: str) -> dict[str, dict]:
@@ -4571,28 +3881,25 @@ class StatementProcessor:
 
     def _store_in_cache(
         self,
-        cache_key: str,
+        run: StatementRun,
+        execution: StatementExecution,
         captured_vars: dict[str, Any],
-        captured_output: Any,
-        ttl: int | None,
-        inputs: set[str],
-        outputs: set[str],
-        execution_time: float,
-        process_start: float,
-        source_hash: str,
-        code: str,
+        *,
         file_dependencies: set[str],
-        accessed_remote: set[str] = frozenset(),
-        force_persist: bool = False,
         miss_guarded: bool = False,
         inherited_snapshots: dict[str, dict] | None = None,
-        direct_reads: bool | None = None,
     ) -> StatementCacheMetadata | None:
         """Store execution results and metadata in the cache. Returns
         metadata, or ``None`` when the statement was so cheap to compute
         that we don't even write a metadata-only entry (the next lookup
         will miss cleanly rather than hit a metadata-only entry and
         pay a per-file read just to decide 'recompute')."""
+        cache_key, code, source_hash = run.cache_key, run.code, run.source_hash
+        inputs, outputs, ttl = run.inputs, run.outputs, run.effective_ttl
+        force_persist = run.force_persist
+        execution_time = execution.cost
+        captured_output = execution.captured
+        accessed_remote = execution.accessed_remote
         t_store = time.time()
         # What this key recorded is about to change (``_producer_file_snapshots``).
         producer_memo = self.__dict__.get("_producer_snapshot_memo")
@@ -4610,17 +3917,15 @@ class StatementProcessor:
         # The restore-cost check below is waived only for a statement that
         # READS a file itself: reading is the expensive part then.
         # `file_dependencies` also holds every file the inputs were built from,
-        # and waiving on those exempted everything downstream of a load (round
-        # 28, r28s5: ~400 MiB frames restoring slower than they computed,
-        # served as hits). *direct_reads* None: a caller that does not say,
-        # which keeps the old rule.
+        # and waiving on those exempted everything downstream of a load:
+        # ~400 MiB frames restoring slower than they computed, served as hits.
         #
         # The too-cheap FLOOR keeps the old rule on purpose. A first version
         # narrowed it too, and a cheap reader of a file HANDLE
         # (`lines = [l for l in fh]`) stopped being stored, re-ran on the second
         # Run All against the handle its skipped producer had left at EOF, and
         # printed [] (test_file_handle_iteration_second_run_all).
-        reads_files = bool(file_dependencies or accessed_remote) if direct_reads is None else direct_reads
+        reads_files = bool(execution.accessed_files or accessed_remote)
         if not force_persist and not file_dependencies and not accessed_remote:
             config_obj = getattr(self.cash_instance, "config", None)
             min_exec_time = config_float(config_obj, "min_execution_time_to_cache_seconds", 0.01)
@@ -4831,7 +4136,7 @@ class StatementProcessor:
             logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
 
         store_time = time.time() - t_store
-        total_time = time.time() - process_start
+        total_time = time.time() - run.process_start
 
         logger.debug("[TIMING] Store: %.1fms | OVERALL: %.1fms", store_time * 1000, total_time * 1000)
         logger.debug("[CACHE DEBUG] Stored in cache: %s", cache_key)

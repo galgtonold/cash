@@ -1,7 +1,7 @@
 import os
 import tempfile
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from traitlets.config.configurable import Configurable
@@ -51,46 +51,19 @@ def test_delete_code_in_cell(statement_processor_fixture):
     """Test that removing code from a cell changes the hash and invalidates cache."""
     processor, shell, backend = statement_processor_fixture
 
-    # 1. Execute initial code
+    # 1. Execute initial code. `persist` so the instant statement is stored.
     code1 = "x = 1\ny = 2\nz = x + y"
-
-    # Mock execution side effects
-    def exec_side_effect_1(code, **kwargs):
-        shell.user_ns["x"] = 1
-        shell.user_ns["y"] = 2
-        shell.user_ns["z"] = 3
-        result = MagicMock(success=True)
-        result.skipped = False
-        # (result, captured, execution_time, accessed_files, accessed_remote)
-        return result, MagicMock(stdout="", stderr="", outputs=[]), 0.1, set(), set()
-
-    # We need to patch _execute_statement to avoid actual compilation issues or just let it run if simple
-    # But since we use StatementProcessor directly, let's patch _execute_statement for control
-    with patch.object(processor, "_execute_statement", side_effect=exec_side_effect_1):
-        metrics1 = processor.process_statement(code1)
-        assert metrics1["status"] == CacheStatus.COMPUTED
-        assert len(backend.list_entries()) == 1
+    metrics1 = processor.process_statement(code1, annotation=_PERSIST)
+    assert metrics1["status"] == CacheStatus.COMPUTED
+    assert shell.user_ns["z"] == 3
+    assert len(backend.list_entries()) == 1
 
     # 2. Execute modified code (removed y=2, z depends on x+1 directly)
     code2 = "x = 1\nz = x + 1"  # Changed logic
-
-    def exec_side_effect_2(code, **kwargs):
-        shell.user_ns["x"] = 1
-        shell.user_ns["z"] = 2
-        result = MagicMock(success=True)
-        result.skipped = False
-        # (result, captured, execution_time, accessed_files, accessed_remote)
-        return result, MagicMock(stdout="", stderr="", outputs=[]), 0.1, set(), set()
-
-    with patch.object(processor, "_execute_statement", side_effect=exec_side_effect_2):
-        metrics2 = processor.process_statement(code2)
-        assert metrics2["status"] == CacheStatus.COMPUTED  # Should miss cache because SOURCE changed
-        assert len(backend.list_entries()) == 2  # New entry
-
-    # Verify hashes are different
-    # This is implicitly verified by COMPLETED status, but let's check
-    entries = backend.list_entries()
-    assert len(entries) == 2
+    metrics2 = processor.process_statement(code2, annotation=_PERSIST)
+    assert metrics2["status"] == CacheStatus.COMPUTED  # Should miss cache because SOURCE changed
+    assert shell.user_ns["z"] == 2
+    assert len(backend.list_entries()) == 2  # New entry
 
 
 def test_complex_statement_structure(statement_processor_fixture):

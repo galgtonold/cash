@@ -1038,7 +1038,7 @@ class CallUnit:
         #: Seconds this unit spent on calls beyond their own compute (keys,
         #: lookups, stores, restores), and the compute its hits stood in for.
         #: Monotonic; a statement reads the difference across its run (see
-        #: ``StatementProcessor._execute_and_drain``).
+        #: ``StatementProcessor._finish``).
         self.overhead_s = 0.0
         # Per call SITE: what its key was built from last time, and what moved
         # since -- the badge's answer to "why did this re-run?".

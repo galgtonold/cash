@@ -70,7 +70,7 @@ class TestStatementProcessorImport:
         """
         expected_methods = [
             "process_statement",
-            "_execute_statement",
+            "process_statement_async",
             "_analyze_and_hash",
         ]
         for method_name in expected_methods:

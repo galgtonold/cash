@@ -302,15 +302,15 @@ def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
 
     Originally written for display only, and still what the badge shows --
     but its result is also reused, unchanged, as what a cache-miss statement
-    COMPILES from (``exec_source`` in ``processor.py``'s
-    ``_execute_statement``), instead of the ``ast.unparse`` form, whenever it
+    COMPILES from (``exec_source``, compiled by ``statement/run.py``'s
+    ``CodeRunner``), instead of the ``ast.unparse`` form, whenever it
     is not ``None``. ``ast.unparse`` normalizes a statement onto one logical
     line and strips comments -- both fine for the CACHE KEY, which stays the
     unparsed form always (never this), but wrong for compiling a function
     DEFINED in the cell that carries a per-line ``# @cash:assume-safe``: that
     comment would be invisible to ``inspect.getsource`` (and so to the purity
     analyzer) if compiled from text with no comments in it. See
-    ``_execute_statement`` for the cache-key/exec-source boundary in full,
+    ``StatementProcessor._executing`` for the cache-key/exec-source boundary in full,
     and ``_exec_source_for_node`` below for how a top-level ``def``/``class``
     -- excluded here -- is handled instead: ONLY when the purity analyzer
     recognises its body as carrying an ``# @cash:assume-safe`` waiver does it
@@ -623,7 +623,7 @@ def _exec_source_for_node(
     -- so ``decorator_list[0].lineno`` (the expression's own line) is not
     the ``@`` line, and the manual prefix above silently drops the ``@(``
     line while leaving a stray ``)``. Text like that does not compile, and
-    returning it anyway does not "fail" here -- ``_execute_statement``
+    returning it anyway does not "fail" here -- ``CodeRunner``
     would raise trying to parse/compile it, which is exactly as capable of
     killing the cell as this function raising directly would be (measured:
     an ``IndentationError`` on a cell that ran fine before this function
@@ -689,7 +689,7 @@ def _exec_source_for_node(
         # that will raise there.
         #
         # The flag matches what the ASYNC execution path compiles with
-        # (`processor._execute_statement_async`). Without it this check is
+        # (`CodeRunner.run_async`). Without it this check is
         # STRICTER than the path it is guarding, and a decorator expression
         # that is itself a bare top-level `await` -- `@await get_deco()`,
         # legal since PEP 614 because decorators evaluate in the enclosing
@@ -2045,7 +2045,7 @@ class CellExecutor:
             # ``ast.unparse`` drops a trailing ``;``, losing IPython's display
             # suppression (``df.head();`` shows no repr). Re-attach it so the
             # suppression rides through the cache key AND the execution path
-            # (``_execute_statement`` skips the display), so a cached re-run
+            # (``CodeRunner`` skips the display), so a cached re-run
             # doesn't emit a phantom repr.
             if self.expr_has_trailing_semicolon(raw_cell, node):
                 stmt_code = stmt_code + ";"
