@@ -1,6 +1,7 @@
 name: Benchmarks
 
-# Opt-in: runs when the benchmark code changes, or by hand from the Actions tab.
+# Not a merge gate: runs when benchmarks/ changes, weekly, or by hand from the
+# Actions tab.
 on:
   push:
     branches: [main, master]
@@ -9,6 +10,8 @@ on:
   pull_request:
     paths:
       - "benchmarks/**"
+  schedule:
+    - cron: "0 4 * * 1"
   workflow_dispatch:
 
 jobs:
@@ -31,3 +34,29 @@ jobs:
       # Run from the repo root: some tests start the benchmark scripts by relative path.
       - name: Run benchmark tooling tests
         run: python -m pytest benchmarks/tests -n auto --tb=short -q
+
+  # Tests marked `perf` assert wall-clock thresholds. They are too noisy for the
+  # unit job on shared runners, so they run here, serially, and never block.
+  perf:
+    name: Wall-clock threshold tests
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run perf tests
+        run: >-
+          python -m pytest tests/ -m perf -n 0 --tb=short -q
+          --ignore=tests/test_notebook_integration
+          --ignore=tests/test_wheel_gate
+          --ignore=tests/docs

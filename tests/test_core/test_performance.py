@@ -13,6 +13,7 @@ import time
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from cash.notebook.object_hashing import estimate_object_size
 
@@ -59,6 +60,7 @@ def test_mixed_types_sum():
     assert total > df_size + arr_size, "Total size accounts for all variables"
 
 
+@pytest.mark.perf
 def test_large_dataframe_fast():
     """Sizing a 100k-row DataFrame stays under 100ms."""
     df = pd.DataFrame(

@@ -11,7 +11,9 @@ Measures:
 - Upstream simulation overhead
 
 Run with: pytest tests/test_benchmarks.py -v
-Each test asserts that the measured operation stays within acceptable bounds.
+Each timing test asserts that the measured operation stays within acceptable
+bounds. They carry the ``perf`` marker: the unit CI job excludes them, because
+wall-clock thresholds are not reliable on shared runners under xdist.
 """
 
 import ast
@@ -48,6 +50,7 @@ def _timeit(fn, iterations=100, warmup=5):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.perf
 class TestLineageHashPerformance:
     """Target: <1ms per hash computation."""
 
@@ -97,6 +100,7 @@ class TestLineageHashPerformance:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.perf
 class TestASTParsing:
     """Target: <5ms for typical statements."""
 
@@ -182,6 +186,7 @@ result = (
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.perf
 class TestCodeAnalyzerPerformance:
     """Test the analyze_code_block function performance."""
 
@@ -254,6 +259,7 @@ df = pd.read_csv('data.csv')
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.perf
 class TestSerializationPerformance:
     """Test pickle serialization for common types."""
 
@@ -317,6 +323,7 @@ class TestSerializationPerformance:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.perf
 class TestBackendPerformance:
     """Compare InMemoryBackend vs FileBackend performance."""
 
@@ -391,6 +398,7 @@ class TestBackendPerformance:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.perf
 class TestStatementProcessorOverhead:
     """Measure the overhead of statement processing components."""
 

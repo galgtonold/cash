@@ -60,6 +60,7 @@ jobs:
             --ignore=tests/test_notebook_integration \
             --ignore=tests/test_wheel_gate \
             --ignore=tests/docs \
+            -m "not perf" \
             -n auto --tb=short -q
         # Windows runners default to pwsh, where `\` is NOT a line continuation:
         # the backslashes above parse as "Missing expression after unary
