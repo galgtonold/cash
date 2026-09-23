@@ -567,7 +567,7 @@ the file is behind and says so on the badge — a warning row naming the time th
 file was last saved. That proof condemns the whole file, so the warning stands
 until you save.
 
-<!-- claim: cash/notebook/live_cells.py:handle_message @f101a60b, cash/notebook/server_discovery.py:_try_extension_cells @750c7c4a -->
+<!-- claim: cash/notebook/live_cells.py:handle_message @f101a60b, cash/notebook/server_discovery.py:_try_extension_cells @1c9b3c41 -->
 **On JupyterLab, cash's own extension pushes your unsaved edits to the kernel.**
 `pip install cash-lib` also drops a prebuilt JupyterLab extension
 (`cash-live-cells`) into your environment, which JupyterLab discovers at startup
@@ -669,7 +669,7 @@ not running, there is nothing to diverge on and this never triggers.
 **What to do:** avoid editing the same notebook open in two tabs at once, or
 save (`Ctrl+S` / `Cmd+S`) before switching tabs to run a cell.
 
-<!-- claim: cash/notebook/vscode_backup.py:live_cells @b86cd33f, cash/notebook/server_discovery.py:_read_notebook_code_cells @6808d937 -->
+<!-- claim: cash/notebook/vscode_backup.py:live_cells @b86cd33f, cash/notebook/server_discovery.py:NotebookCellReaders.vscode_backup @0432293d -->
 **On VS Code, cash reads your unsaved edits directly.** VS Code keeps dirty
 editors in a backup file so it can restore after a crash, and cash reads its
 cells from there instead of the saved `.ipynb` — so editing one cell and running

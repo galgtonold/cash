@@ -79,4 +79,4 @@ def test_result_cached_within_ttl(monkeypatch):
 def test_no_op_when_not_in_colab(monkeypatch):
     monkeypatch.delitem(sys.modules, "google.colab", raising=False)
     assert sd.in_colab() is False
-    assert sd._try_colab_notebook_cells(False) is None
+    assert sd.NotebookCellReaders().colab() is None

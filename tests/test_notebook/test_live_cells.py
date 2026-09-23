@@ -41,7 +41,7 @@ def teardown_function():
     # Belt-and-suspenders: a test that armed the store (or the file-signature
     # caches _try_extension_cells sits in front of) must not leak it into
     # whatever test xdist schedules next on this worker. `_try_extension_cells`
-    # is the FIRST branch of `_read_notebook_code_cells` and ignores
+    # is the FIRST branch of `NotebookCellReaders.read` and ignores
     # `notebook_path` entirely, so a leaked snapshot here silently overrides
     # every other reader -- observed taking down test_colab_cell_source.py and
     # test_vscode_cell_source.py under `--dist worksteal`, which (unlike a
@@ -367,14 +367,16 @@ def test_wiring_a_frontend_that_stops_pushing_falls_back_to_the_file(tmp_path):
 
     handle_message({"seq": 1, "cells": CELLS})
     sd.invalidate_notebook_cells_cache()
-    assert sd.get_notebook_cells(str(nb_path)) == ["THRESHOLD = 0.9", "y = THRESHOLD * 2"]
-    assert sd.last_cell_source() == "extension"
+    read = sd.read_notebook_cells(str(nb_path))
+    assert read.codes == ["THRESHOLD = 0.9", "y = THRESHOLD * 2"]
+    assert read.source == "extension"
 
     expire()  # end of that execution; the frontend pushes nothing more
 
     sd.invalidate_notebook_cells_cache()
-    assert sd.get_notebook_cells(str(nb_path)) == ["from_file = True"]
-    assert sd.last_cell_source() == "file"
+    read = sd.read_notebook_cells(str(nb_path))
+    assert read.codes == ["from_file = True"]
+    assert read.source == "file"
 
 
 # --- The hook that calls `expire` -- registration, not just the function -----

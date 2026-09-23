@@ -58,11 +58,11 @@ class TestGetNotebookPath:
 
 
 class TestReadNotebookCodeCells:
-    """Test the _read_notebook_code_cells utility."""
+    """Test reading a notebook's code cells."""
 
     def test_read_code_cells(self, tmp_path):
         """Read code cells from a notebook file."""
-        from cash.notebook.server_discovery import _read_notebook_code_cells
+        from cash.notebook.server_discovery import get_notebook_cells
 
         nb = {
             "cells": [
@@ -74,14 +74,14 @@ class TestReadNotebookCodeCells:
         nb_path = tmp_path / "test.ipynb"
         nb_path.write_text(json.dumps(nb))
 
-        cells = _read_notebook_code_cells(str(nb_path))
+        cells = get_notebook_cells(str(nb_path))
         assert len(cells) == 2
         assert cells[0] == "x = 1"
         assert cells[1] == "y = x + 1"
 
     def test_read_code_cells_with_ids(self, tmp_path):
         """Read code cells with IDs."""
-        from cash.notebook.server_discovery import _read_notebook_code_cells
+        from cash.notebook.server_discovery import get_notebook_cells_with_ids
 
         nb = {
             "cells": [
@@ -92,14 +92,14 @@ class TestReadNotebookCodeCells:
         nb_path = tmp_path / "test.ipynb"
         nb_path.write_text(json.dumps(nb))
 
-        cells = _read_notebook_code_cells(str(nb_path), include_ids=True)
+        cells = get_notebook_cells_with_ids(str(nb_path))
         assert len(cells) == 2
         assert cells[0] == ("cell1", "x = 1")
         assert cells[1] == ("cell2", "y = 2")
 
     def test_read_cells_string_source(self, tmp_path):
         """Handle source as string (not list)."""
-        from cash.notebook.server_discovery import _read_notebook_code_cells
+        from cash.notebook.server_discovery import get_notebook_cells
 
         nb = {
             "cells": [
@@ -109,34 +109,34 @@ class TestReadNotebookCodeCells:
         nb_path = tmp_path / "test.ipynb"
         nb_path.write_text(json.dumps(nb))
 
-        cells = _read_notebook_code_cells(str(nb_path))
+        cells = get_notebook_cells(str(nb_path))
         assert cells[0] == "x = 42"
 
     def test_read_nonexistent_notebook(self):
         """Returns empty list for nonexistent notebook."""
-        from cash.notebook.server_discovery import _read_notebook_code_cells
+        from cash.notebook.server_discovery import get_notebook_cells
 
-        cells = _read_notebook_code_cells("/nonexistent/notebook.ipynb")
+        cells = get_notebook_cells("/nonexistent/notebook.ipynb")
         assert cells == []
 
     def test_read_invalid_json(self, tmp_path):
         """Returns empty list for invalid JSON."""
-        from cash.notebook.server_discovery import _read_notebook_code_cells
+        from cash.notebook.server_discovery import get_notebook_cells
 
         nb_path = tmp_path / "bad.ipynb"
         nb_path.write_text("not valid json{{{")
 
-        cells = _read_notebook_code_cells(str(nb_path))
+        cells = get_notebook_cells(str(nb_path))
         assert cells == []
 
     def test_no_cells_key(self, tmp_path):
         """Returns empty list if no 'cells' key."""
-        from cash.notebook.server_discovery import _read_notebook_code_cells
+        from cash.notebook.server_discovery import get_notebook_cells
 
         nb_path = tmp_path / "empty.ipynb"
         nb_path.write_text(json.dumps({"metadata": {}}))
 
-        cells = _read_notebook_code_cells(str(nb_path))
+        cells = get_notebook_cells(str(nb_path))
         assert cells == []
 
 
@@ -225,16 +225,16 @@ class TestGetNotebookPathEdgeCases:
             assert result is None or isinstance(result, str)
 
     def test_none_path_returns_empty_list(self):
-        """_read_notebook_code_cells returns [] when no path detected."""
-        from cash.notebook.server_discovery import _read_notebook_code_cells
+        """get_notebook_cells returns [] when no path detected."""
+        from cash.notebook.server_discovery import get_notebook_cells
 
         with patch("cash.notebook.server_discovery.get_notebook_path", return_value=None):
-            cells = _read_notebook_code_cells(None)
+            cells = get_notebook_cells(None)
             assert cells == []
 
     def test_no_glob_fallback(self, tmp_path, monkeypatch):
         """No glob fallback when no notebook path given (Issue 23 fix)."""
-        from cash.notebook.server_discovery import _read_notebook_code_cells
+        from cash.notebook.server_discovery import get_notebook_cells
 
         # Create a fake notebook in tmp_path
         nb = {"cells": [{"cell_type": "code", "source": ["x = 42"]}]}
@@ -244,12 +244,12 @@ class TestGetNotebookPathEdgeCases:
         monkeypatch.chdir(tmp_path)
         with patch("cash.notebook.server_discovery.get_notebook_path", return_value=None):
             # Should return empty list instead of picking up the notebook via glob
-            cells = _read_notebook_code_cells(None)
+            cells = get_notebook_cells(None)
             assert cells == []
 
     def test_cell_id_from_metadata(self, tmp_path):
         """Read cell ID from metadata when 'id' key is missing."""
-        from cash.notebook.server_discovery import _read_notebook_code_cells
+        from cash.notebook.server_discovery import get_notebook_cells_with_ids
 
         nb = {
             "cells": [
@@ -259,12 +259,12 @@ class TestGetNotebookPathEdgeCases:
         nb_path = tmp_path / "test.ipynb"
         nb_path.write_text(json.dumps(nb))
 
-        cells = _read_notebook_code_cells(str(nb_path), include_ids=True)
+        cells = get_notebook_cells_with_ids(str(nb_path))
         assert cells[0] == ("meta_id_1", "x = 1")
 
     def test_cell_no_id(self, tmp_path):
         """Cell with no id field returns None."""
-        from cash.notebook.server_discovery import _read_notebook_code_cells
+        from cash.notebook.server_discovery import get_notebook_cells_with_ids
 
         nb = {
             "cells": [
@@ -274,7 +274,7 @@ class TestGetNotebookPathEdgeCases:
         nb_path = tmp_path / "test.ipynb"
         nb_path.write_text(json.dumps(nb))
 
-        cells = _read_notebook_code_cells(str(nb_path), include_ids=True)
+        cells = get_notebook_cells_with_ids(str(nb_path))
         assert cells[0] == (None, "x = 1")
 
 

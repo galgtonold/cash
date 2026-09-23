@@ -84,7 +84,7 @@ def test_cache_invalidates_on_edit(tmp_path, _count_parses):
     assert _count_parses["n"] == 2, "edit should force a fresh parse"
 
 
-def test_include_ids_variant_cached_separately(tmp_path):
+def test_codes_and_ids_come_from_one_read(tmp_path, _count_parses):
     nb = tmp_path / "n.ipynb"
     _write_nb(nb, ["x = 1"])
     _age(nb, 100)
@@ -94,3 +94,4 @@ def test_include_ids_variant_cached_separately(tmp_path):
 
     assert plain == ["x = 1"]
     assert [code for _id, code in with_ids] == ["x = 1"]
+    assert _count_parses["n"] == 1, "the two views of one file state should share one parse"

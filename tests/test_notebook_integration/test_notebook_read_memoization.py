@@ -77,6 +77,6 @@ def test_edit_does_not_trigger_notebook_read_storm(nb_runner):
         # 5s from a two-file run.
         _exec(nb_runner, ("from cash.notebook import server_discovery as _sd\n_sd._wait_for_notebook_save = _orig\n"))
 
-    # Per file state we parse at most twice (the plain + include_ids variants).
+    # Per file state we parse once (the code-only and with-ids views share it).
     # A small bound (<= 4) leaves slack while still catching the ~30x storm.
     assert 0 < n <= 4, f"notebook read {n} times during one run_all (read storm regressed)"

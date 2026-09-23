@@ -224,7 +224,7 @@ class TestNotebookPathCacheInvalidation:
         assert checker.simulator.virtual_lineage._ast_cache == {}
 
     def test_no_glob_fallback_for_notebook_discovery(self, tmp_path):
-        """_read_notebook_code_cells should NOT use glob fallback (Issue 23).
+        """get_notebook_cells should NOT use glob fallback (Issue 23).
 
         The glob fallback can pick the wrong notebook when multiple .ipynb
         files exist in the working directory, leading to wrong upstream cells.
@@ -233,7 +233,7 @@ class TestNotebookPathCacheInvalidation:
         import os
         from unittest.mock import patch
 
-        from cash.notebook.server_discovery import _read_notebook_code_cells
+        from cash.notebook.server_discovery import get_notebook_cells
 
         # Create a notebook in tmp_path
         nb = {"cells": [{"cell_type": "code", "source": ["wrong = True"]}]}
@@ -245,7 +245,7 @@ class TestNotebookPathCacheInvalidation:
         try:
             os.chdir(tmp_path)
             with patch("cash.notebook.server_discovery.get_notebook_path", return_value=None):
-                cells = _read_notebook_code_cells(None)
+                cells = get_notebook_cells(None)
                 # Should return empty, NOT the cells from wrong_notebook.ipynb
                 assert cells == [], f"Should not pick up notebook via glob, got: {cells}"
         finally:
