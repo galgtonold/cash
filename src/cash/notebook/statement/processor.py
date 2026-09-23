@@ -23,6 +23,7 @@ from typing import Any, TypedDict
 
 import cash
 from cash import cost_model
+from cash.control_markers import has_marker, strip_markers
 from cash.exceptions import (
     CacheBackendError,
     CacheKeyComputationError,
@@ -259,7 +260,7 @@ def is_control_body(code: str) -> bool:
     decisions, and three copies of a marker string is three chances for one of
     them to silently stop matching.
     """
-    return "# __iteration_context__:" in code or "# control_context:" in code
+    return has_marker(code)
 
 
 class TeeWriter:
@@ -1846,24 +1847,6 @@ class StatementProcessor:
             floor = declared if floor is None else min(floor, declared)
         return floor
 
-    @staticmethod
-    def _strip_control_markers(code: str) -> str:
-        """Drop the per-iteration / per-branch cache-key discriminator comments.
-
-        Control-structure body statements arrive with an ``# __iteration_context__``
-        / ``# control_context`` comment prepended, which differs per iteration.
-        Stripping it keeps the detector memo AND the per-statement dedupe keyed on
-        the body's real source, so a random draw inside a 1000-iteration loop
-        warns once, not 1000 times.
-        """
-        if "# __iteration_context__:" not in code and "# control_context:" not in code:
-            return code
-        return "\n".join(
-            line
-            for line in code.split("\n")
-            if not line.startswith("# __iteration_context__:") and not line.startswith("# control_context:")
-        )
-
     def _warn_unseeded_randomness(self, code: str, allow_random: bool) -> list:
         """Warn when *code* draws from an unseeded RNG.
 
@@ -1883,7 +1866,7 @@ class StatementProcessor:
         Never allowed to break execution: this is advisory output, so a detector
         fault must not take the statement down with it.
         """
-        code = self._strip_control_markers(code)
+        code = strip_markers(code)
         try:
             unseeded_calls, _has_seed = check_and_warn_randomness(
                 code,
@@ -1911,7 +1894,7 @@ class StatementProcessor:
         Once per reseed statement, and never fatal -- advisory only.
         """
         try:
-            stripped = self._strip_control_markers(code)
+            stripped = strip_markers(code)
             if not get_entropy_reseed_modules(stripped):
                 return
             digest = hashlib.sha256(stripped.encode("utf-8")).hexdigest()
@@ -1949,7 +1932,7 @@ class StatementProcessor:
         the cached value is frozen, not freshly drawn.
         """
         try:
-            stripped = self._strip_control_markers(code)
+            stripped = strip_markers(code)
             draws = bool(get_drawing_rng_modules(stripped)) or bool(unseeded_calls) or bool(unseeded_fits)
             seeds = bool(get_seeding_rng_modules(stripped))
         except (SyntaxError, ValueError, AttributeError, RecursionError):
@@ -1998,7 +1981,7 @@ class StatementProcessor:
             return
         try:
             warn_stale_randomness(
-                self._strip_control_markers(code),
+                strip_markers(code),
                 unseeded_calls,
                 self.randomness_detector,
                 suppress_warning=allow_random,
@@ -2061,7 +2044,7 @@ class StatementProcessor:
             return []
         try:
             warn_unseeded_estimator_fit(
-                self._strip_control_markers(code),
+                strip_markers(code),
                 unseeded,
                 self.randomness_detector,
                 suppress_warning=allow_random,
@@ -2198,7 +2181,7 @@ class StatementProcessor:
         if not code or not drew:
             return
         try:
-            visible = get_drawing_rng_modules(self._strip_control_markers(code))
+            visible = get_drawing_rng_modules(strip_markers(code))
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             return
         hidden = set(drew) - set(visible)
@@ -2462,7 +2445,7 @@ class StatementProcessor:
         if not changed:
             return
         try:
-            ast_draws = get_drawing_rng_modules(self._strip_control_markers(code))
+            ast_draws = get_drawing_rng_modules(strip_markers(code))
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             return
         seeded = set(self._rng_seed_epochs)
@@ -2490,7 +2473,7 @@ class StatementProcessor:
             return
         try:
             warn_stale_estimator_fit(
-                self._strip_control_markers(code),
+                strip_markers(code),
                 unseeded_fits,
                 self.randomness_detector,
                 suppress_warning=allow_random,
@@ -2545,7 +2528,7 @@ class StatementProcessor:
         """
         if skip_cache:
             return
-        if "# __iteration_context__:" in code or "# control_context:" in code:
+        if has_marker(code):
             return
         self._miss_guard.observe(
             source_hash,
@@ -2600,15 +2583,6 @@ class StatementProcessor:
             logger.debug("%s Failed to drain call-unit log", _LOG_PROCESSOR)
             return []
 
-    @staticmethod
-    def _wrap_key(code: str) -> str:
-        """*code* without the per-iteration / branch context marker lines."""
-        if "# __iteration_context__:" not in code and "# control_context:" not in code:
-            return code
-        return "\n".join(
-            line for line in code.split("\n") if not line.startswith(("# __iteration_context__:", "# control_context:"))
-        )
-
     def _learn_call_wrapping(self, code: str, wall_time: float, calls: list) -> None:
         """Record whether *code*'s calls are worth the call cache next time."""
         try:
@@ -2617,7 +2591,7 @@ class StatementProcessor:
             if not isinstance(floor, (int, float)):
                 floor = 0.003
             hit = any(isinstance(ev, dict) and ev.get("cache_hit") for ev in calls or ())
-            key = self._wrap_key(code)
+            key = strip_markers(code)
             if wall_time < floor and not hit:
                 self._calls_not_worth_wrapping.add(key)
             else:
@@ -2674,7 +2648,7 @@ class StatementProcessor:
         # its tree, an unparse and a gate per call, on every loop iteration --
         # 1.7 of a 631-iteration loop's 9.5 s (round 28, r28s3). Learned in
         # `_learn_call_wrapping`; a hit or a slow run clears it again.
-        if self._wrap_key(code) in self._calls_not_worth_wrapping:
+        if strip_markers(code) in self._calls_not_worth_wrapping:
             return code, tree
         try:
             # The object-level half of the gate (CAS-243 Task 4/5): a call that
@@ -4696,9 +4670,9 @@ class StatementProcessor:
         counter; an ordinary ``# @cash:persist`` on a single statement has no
         marker, gets ``None`` here, and is untouched by the whole mechanism.
         """
-        if "# __iteration_context__:" not in code and "# control_context:" not in code:
+        if not has_marker(code):
             return None
-        return self._strip_control_markers(code).strip()
+        return strip_markers(code).strip()
 
     def _check_persist_amplification(
         self,

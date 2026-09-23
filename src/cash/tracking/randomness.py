@@ -8,13 +8,14 @@ import hashlib
 import inspect
 import logging
 import random
-import re
 import secrets
 import sys
 import types
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import NamedTuple
+
+from cash.control_markers import strip_markers
 
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashWarning
@@ -1682,11 +1683,6 @@ def restore_object_rng_states(
             logger.debug("[RANDOMNESS] Failed to restore RNG state for %r: %s", name, e)
 
 
-#: A loop body statement's source is prefixed per iteration with a comment
-#: naming the iteration; a comment changes nothing these scans report.
-_CONTROL_MARKER_LINE = re.compile(r"\A(?:# (?:__iteration_context__|control_context):[^\n]*\n)+")
-
-
 @functools.lru_cache(maxsize=1024)
 def _scan_rng_modules(code: str) -> tuple[frozenset, frozenset, frozenset]:
     """``(drawn, seeded, entropy-reseeded)`` modules for *code*, parsed once.
@@ -1709,7 +1705,9 @@ def _scan_rng_modules(code: str) -> tuple[frozenset, frozenset, frozenset]:
 
 
 def _rng_scan(code: str) -> tuple[frozenset, frozenset, frozenset]:
-    return _scan_rng_modules(_CONTROL_MARKER_LINE.sub("", code))
+    # A loop body statement's source is prefixed per iteration with a comment
+    # naming the iteration; a comment changes nothing these scans report.
+    return _scan_rng_modules(strip_markers(code))
 
 
 def get_drawing_rng_modules(code: str) -> set[str]:

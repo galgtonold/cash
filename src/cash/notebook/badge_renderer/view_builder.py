@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote
 
+from cash.control_markers import iteration_digest, strip_markers
 from cash.notebook.cache_status import CacheStatus
 
 from .theme import MIN_TIME_DISPLAY_MS, label_of
@@ -188,7 +189,7 @@ def _group_loop_iterations(
     for m in metrics:
         code = m.get("code", "")
         ctx = m.get("control_context")
-        has_iter = "# __iteration_context__:" in code
+        has_iter = iteration_digest(code) is not None
         if ctx:
             # Control context wins over iteration context — a loop *inside*
             # an if/else gets bucketed under the control, then recursively
@@ -203,11 +204,7 @@ def _group_loop_iterations(
             control_groups.setdefault(ctx, []).append(m)
         elif has_iter:
             _flush_controls()
-            actual = "\n".join(
-                line
-                for line in code.split("\n")
-                if not line.startswith("# __iteration_context__:") and not line.startswith("# control_context:")
-            )
+            actual = strip_markers(code)
             loop_stmt_groups.setdefault(actual, []).append(m)
         else:
             _flush_loops()
@@ -616,16 +613,6 @@ def _tup_str(seq: Any) -> tuple[str, ...]:
     return (str(seq),)
 
 
-def _strip_context_comments(code: str) -> str:
-    if "# __iteration_context__:" not in code and "# control_context:" not in code:
-        return code
-    return "\n".join(
-        line
-        for line in code.split("\n")
-        if not line.startswith("# __iteration_context__:") and not line.startswith("# control_context:")
-    )
-
-
 # ---------------------------------------------------------------------------
 # Row builders
 # ---------------------------------------------------------------------------
@@ -700,9 +687,9 @@ def _statement_row_from_metric(m: dict[str, Any]) -> StatementRow:
 
     return StatementRow(
         status=status,
-        code=_strip_context_comments(str(m.get("code", ""))),
+        code=strip_markers(str(m.get("code", ""))),
         time_s=time_s,
-        display_code=(_strip_context_comments(str(m["display_code"])) if m.get("display_code") else None),
+        display_code=(strip_markers(str(m["display_code"])) if m.get("display_code") else None),
         saved_time_s=saved_time_s,
         storage_tiers=_tup_str(m.get("storage")),
         source=m.get("source") or None,
@@ -729,7 +716,7 @@ def _iteration_row(m: dict[str, Any]) -> IterationRow:
     bindings = tuple((str(k), v) for k, v in loop_vars.items()) if isinstance(loop_vars, dict) else ()
     return IterationRow(
         status=map_status(m.get("status")),
-        code=_strip_context_comments(str(m.get("code", ""))),
+        code=strip_markers(str(m.get("code", ""))),
         time_s=float(m.get("total_time", 0.0)),
         saved_time_s=float(m.get("saved_time", 0.0) or 0.0),
         storage_tiers=_tup_str(m.get("storage")),
@@ -1028,7 +1015,7 @@ def build_bug_report_url(metrics: list[dict[str, Any]], context: dict | None = N
     for m in metrics:
         if m.get("is_upstream"):
             continue
-        code = _strip_context_comments(str(m.get("code") or "")).strip()
+        code = strip_markers(str(m.get("code") or "")).strip()
         if len(code) > 100:
             code = code[:97] + "..."
         # The words the reporter actually SAW on their badge. This dump used

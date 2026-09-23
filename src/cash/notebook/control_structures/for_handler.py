@@ -25,6 +25,8 @@ import logging
 import time as _time
 from typing import TYPE_CHECKING, Any
 
+from cash.control_markers import iteration_digest, mark_iteration
+
 from ...analysis.cacheability import accumulator_loop_body_shape, cacheable_accumulator_loop
 from ...lineage_tag import own_tag
 from ...object_hashing import compute_hash_full
@@ -693,7 +695,7 @@ class ForLoopHandler:
         """
 
         context_hash = compute_context_hash(iteration_context)
-        modified_code = f"# __iteration_context__: {context_hash}\n{code}"
+        modified_code = mark_iteration(code, context_hash)
 
         # A body statement is never the cell's last expression: Jupyter shows
         # nothing for ``ax.text(...)`` inside a loop (round 22: 151 Text reprs).
@@ -748,8 +750,8 @@ class ForLoopHandler:
         # renderer keeps them inside the loop group.
         for m in result.metrics:
             code = m.get("code", "")
-            if "# __iteration_context__:" not in code:
-                m["code"] = f"# __iteration_context__: {context_hash}\n{code}"
+            if iteration_digest(code) is None:
+                m["code"] = mark_iteration(code, context_hash)
             if loop_vars and "loop_vars" not in m:
                 m["loop_vars"] = loop_vars
             if not m.get("_output_flushed"):

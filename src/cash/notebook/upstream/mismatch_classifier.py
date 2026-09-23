@@ -11,8 +11,9 @@ from __future__ import annotations
 import ast
 import functools
 import logging
-import re
 import types
+
+from cash.control_markers import strip_markers
 
 from ...analysis.cacheability import analyze_statement
 from ...analysis.cacheability_decision import is_lineage_exempt, receiver_is_identity_coupled
@@ -396,7 +397,7 @@ class MismatchClassifier:
                 # check_loop_derived_trust_override) or the marked code never
                 # matches and the accumulator is falsely treated as overwritten
                 # downstream, defeating the loop trust.
-                normalized_exec_code = re.sub(r"# __iteration_context__:.*?\n", "", exec_code).strip()
+                normalized_exec_code = strip_markers(exec_code).strip()
                 if exec_code not in simulation_trace_codes and normalized_exec_code not in simulation_trace_codes:
                     overwritten_downstream = True
                     if self.debug:
@@ -1033,7 +1034,7 @@ class MismatchClassifier:
         inp_producing_code = self.executed_cell_codes.get(inp)
         if inp_producing_code is None:
             return False
-        normalized_inp_code = re.sub(r"# __iteration_context__:.*?\n", "", inp_producing_code).strip()
+        normalized_inp_code = strip_markers(inp_producing_code).strip()
         return normalized_inp_code not in simulation_trace_codes and self._ran_the_notebook_version(
             inp, simulation_trace_codes
         )
@@ -1159,7 +1160,7 @@ class MismatchClassifier:
         inp_prod_code = self.executed_cell_codes.get(inp)
         if inp_prod_code is None:
             return False
-        norm_code = re.sub(r"# __iteration_context__:.*?\n", "", inp_prod_code).strip()
+        norm_code = strip_markers(inp_prod_code).strip()
         if norm_code not in simulation_trace_codes and self._ran_the_notebook_version(inp, simulation_trace_codes):
             if self.debug:
                 logger.debug(

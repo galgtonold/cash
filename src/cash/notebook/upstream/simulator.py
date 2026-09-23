@@ -18,11 +18,12 @@ import builtins
 import collections
 import logging
 import os
-import re
 import sys
 import types
 from collections.abc import Callable
 from typing import Any
+
+from cash.control_markers import strip_markers
 
 from ...analysis.cacheability import (
     analyze_statement,
@@ -513,11 +514,7 @@ class NotebookSimulator:
                     # Strip cash's context markers (``# control_context: ...`` /
                     # ``# __iteration_context__: ...``) so a control-nested
                     # self-write still matches its cell's source text.
-                    norm_prod = re.sub(
-                        r"#\s*(?:__iteration_context__|iteration_context|control_context)\b[^\n]*\n",
-                        "",
-                        prod_code,
-                    ).strip()
+                    norm_prod = strip_markers(prod_code).strip()
                     cur_src = (
                         notebook_cells[current_cell_idx]
                         if notebook_cells is not None

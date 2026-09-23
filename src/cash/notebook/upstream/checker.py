@@ -9,6 +9,8 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from cash.control_markers import strip_markers
+
 from ...analysis.annotations import extract_annotations_for_statements, get_statement_annotations, parse_annotation_line
 from ...analysis.cacheability import (
     alias_mutation_sources,
@@ -1637,7 +1639,7 @@ class UpstreamChecker:
         producing_code = self.executed_cell_codes.get(var_name)
         if producing_code is None:
             return True
-        normalized_code = re.sub(r"# __iteration_context__:.*?\n", "", producing_code).strip()
+        normalized_code = strip_markers(producing_code).strip()
         if normalized_code not in cumulative_stmt_codes:
             if self.debug:
                 logger.debug(
@@ -2236,7 +2238,7 @@ class UpstreamChecker:
         def place(item):
             i, m = item
             code = m.get("upstream_statement") or m.get("code") or ""
-            code = re.sub(r"#\s*__iteration_context__:[^\n]*\n", "", code).strip()
+            code = strip_markers(code).strip()
             return (order.get(code, end), i)
 
         return [m for _, m in sorted(enumerate(metrics), key=place)]

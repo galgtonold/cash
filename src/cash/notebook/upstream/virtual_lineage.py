@@ -25,6 +25,8 @@ import types
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from cash.control_markers import iteration_digest, strip_markers
+
 from ...analysis.cacheability import (
     RECEIVER_READONLY_WRITE_METHODS,
     analyze_statement,
@@ -144,8 +146,7 @@ BUILTIN_NAMES: frozenset[str] = frozenset(
 
 def normalize_stmt(s: str) -> str:
     """Strip iteration-context comments and whitespace for code comparison."""
-    s = re.sub(r"# __iteration_context__:.*?\n", "", s)
-    return s.strip()
+    return strip_markers(s).strip()
 
 
 # Sentinel placed in user_ns by the forward-probe optimisation so that
@@ -1144,7 +1145,6 @@ class VirtualLineage:
         simulation_trace: list,
         scheduled_iteration_outputs: dict[str, list],
         vars_mutated_by_loops: set[str],
-        iteration_context_pattern: re.Pattern[str],
         fully_rerun_mutated: set[str],
     ) -> bool:
         """Return True if the statement at *idx* is an accumulator init that should be skipped.
@@ -1153,7 +1153,7 @@ class VirtualLineage:
         but the accumulator already has data in memory, to avoid wiping state.
         """
         stmt_code, outputs, _inputs, _, _, _ = simulation_trace[idx]
-        if iteration_context_pattern.search(stmt_code):
+        if iteration_digest(stmt_code) is not None:
             return False
         if len(outputs) != 1:
             return False
@@ -1194,7 +1194,6 @@ class VirtualLineage:
         stmts_to_run_indices: list[int],
         simulation_trace: list,
         vars_mutated_by_loops: set[str],
-        iteration_context_pattern: re.Pattern[str],
     ) -> set[str]:
         """Loop-mutated vars whose mutation is scheduled OUTSIDE a cached iteration-context body (=> full re-run)."""
         if not vars_mutated_by_loops:
@@ -1206,7 +1205,7 @@ class VirtualLineage:
         fully_rerun_mutated: set[str] = set()
         for idx in stmts_to_run_indices:
             stmt_code, outputs = simulation_trace[idx][0], simulation_trace[idx][1]
-            if iteration_context_pattern.search(stmt_code):
+            if iteration_digest(stmt_code) is not None:
                 continue
             for mv, pat in patterns.items():
                 # Only a statement that WRITES it: `def draw_roc` iterating
@@ -1230,12 +1229,10 @@ class VirtualLineage:
         accumulator already exists in memory with data, re-running the init would
         wipe accumulated state. Returns a filtered copy of *stmts_to_run_indices*.
         """
-        iteration_context_pattern = re.compile(r"# __iteration_context__: ([a-f0-9]+)")
         scheduled_iteration_outputs: dict[str, list] = {}
         for idx in stmts_to_run_indices:
             stmt_code, outputs, *_ = simulation_trace[idx]
-            match = iteration_context_pattern.search(stmt_code)
-            if match:
+            if iteration_digest(stmt_code) is not None:
                 for out in outputs:
                     scheduled_iteration_outputs.setdefault(out, []).append(idx)
 
@@ -1243,7 +1240,6 @@ class VirtualLineage:
             stmts_to_run_indices,
             simulation_trace,
             vars_mutated_by_loops,
-            iteration_context_pattern,
         )
 
         # A fully re-run loop replays its in-place mutations (.append / [k]=)
@@ -1266,7 +1262,6 @@ class VirtualLineage:
                 simulation_trace,
                 scheduled_iteration_outputs,
                 vars_mutated_by_loops,
-                iteration_context_pattern,
                 fully_rerun_mutated,
             ):
                 indices_to_remove.add(idx)
@@ -1328,7 +1323,7 @@ class VirtualLineage:
         for mv in vars_mutated_by_loops:
             if mv not in self.executed_cell_codes:
                 continue
-            exec_code = re.sub(r"# __iteration_context__:.*?\n", "", self.executed_cell_codes[mv]).strip()
+            exec_code = strip_markers(self.executed_cell_codes[mv]).strip()
             if self.debug:
                 logger.debug("[UPSTREAM_DEBUG] Checking loop trust for '%s': exec_code=%s", mv, repr(exec_code[:60]))
                 matching = [sc for sc in simulation_trace_codes if exec_code in sc or sc in exec_code]
@@ -1379,7 +1374,7 @@ class VirtualLineage:
         """
         simulation_trace_codes: set[str] = set()
         for stmt_code, _, _, _, _, _ in simulation_trace:
-            normalized = re.sub(r"# __iteration_context__:.*?\n", "", stmt_code).strip()
+            normalized = strip_markers(stmt_code).strip()
             simulation_trace_codes.add(normalized)
             try:
                 tree = self.get_cached_ast(normalized)
@@ -3341,7 +3336,7 @@ class VirtualLineage:
             producing_code = self.executed_cell_codes.get(vname)
             if producing_code is None:
                 continue
-            normalized_prod = re.sub(r"# __iteration_context__:.*?\n", "", producing_code).strip()
+            normalized_prod = strip_markers(producing_code).strip()
             if normalized_prod in simulation_trace_codes:
                 directly_mismatched.add(vname)
             elif vname in virtual_lineage:

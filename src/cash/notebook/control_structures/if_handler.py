@@ -21,6 +21,8 @@ import hashlib
 import logging
 from typing import TYPE_CHECKING
 
+from cash.control_markers import mark_control
+
 from ..cache_status import CacheStatus
 from . import helpers as _helpers
 from .processor import ControlStructureResult, is_control_structure
@@ -182,7 +184,7 @@ class IfHandler:
                 raise err
             return result.computed_iterations > 0
         stmt_code = ast.unparse(body_node)
-        modified_code = f"# control_context: {branch_hash}\n{stmt_code}"
+        modified_code = mark_control(stmt_code, branch_hash)
         annotation = _helpers.resolve_statement_annotation(
             raw_cell,
             body_node,

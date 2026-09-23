@@ -11,6 +11,8 @@ import textwrap
 import types
 from typing import TYPE_CHECKING
 
+from cash.control_markers import iteration_digest
+
 from ...analysis.cacheability import (
     REPEATABILITY_ACCUMULATING,
     REPEATABILITY_REPLACING,
@@ -2079,18 +2081,17 @@ class ReexecutionPlanner:
         outputs: set[str],
         simulation_trace: list,
         scheduled_contexts: set[str],
-        iteration_context_pattern: re.Pattern,
     ) -> bool:
         """Return True if *stmt* is a loop-var assignment for a scheduled iteration context."""
         for j in range(i + 1, min(i + 4, len(simulation_trace))):
             next_stmt = simulation_trace[j][0]
-            match = iteration_context_pattern.search(next_stmt)
-            if match and match.group(1) in scheduled_contexts:
+            digest = iteration_digest(next_stmt)
+            if digest is not None and digest in scheduled_contexts:
                 if len(outputs) == 1:
                     var_name = list(outputs)[0]
                     if f"{var_name} = " in stmt_code or f"{var_name}=" in stmt_code:
                         return True
-            elif match:
+            elif digest is not None:
                 break
         return False
 
@@ -2104,22 +2105,20 @@ class ReexecutionPlanner:
         This prevents stale restorations from overwriting loop variable
         assignments when iteration bodies are re-executed.
         """
-        iteration_context_pattern = re.compile(r"# __iteration_context__: ([a-f0-9]+)")
         stmts_set = set(stmts_to_run_indices)
 
         scheduled_contexts: set[str] = set()
         for idx in stmts_to_run_indices:
-            stmt_code = simulation_trace[idx][0]
-            match = iteration_context_pattern.search(stmt_code)
-            if match:
-                scheduled_contexts.add(match.group(1))
+            digest = iteration_digest(simulation_trace[idx][0])
+            if digest is not None:
+                scheduled_contexts.add(digest)
 
         if not scheduled_contexts:
             return stmts_to_run_indices
 
         additional_indices: list[int] = []
         for i, (stmt_code, outputs, _inputs, _, _, _) in enumerate(simulation_trace):
-            if i in stmts_set or iteration_context_pattern.search(stmt_code):
+            if i in stmts_set or iteration_digest(stmt_code) is not None:
                 continue
             if self._is_loop_var_assignment_for_context(
                 i,
@@ -2127,7 +2126,6 @@ class ReexecutionPlanner:
                 outputs,
                 simulation_trace,
                 scheduled_contexts,
-                iteration_context_pattern,
             ):
                 if self.debug:
                     logger.debug("[UPSTREAM] Adding loop var assignment for scheduled context: %s", stmt_code[:40])
