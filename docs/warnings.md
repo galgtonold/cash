@@ -829,7 +829,7 @@ ways to mute it.
 
 ## IMPURE-SIDE-EFFECTS {#impure-side-effects}
 
-<!-- claim: cash/core.py:Cash._surface_purity @7e6b3c9c -->
+<!-- claim: cash/core.py:Cash._surface_purity @970a41cf -->
 **What happened.** Before the first call, Cash reads the source of your function
 and of the helpers it calls, looking for shapes that make a cached result
 questionable. It found some. The message lists each one with its line number and
@@ -862,8 +862,9 @@ much to care:
   and `sys.stderr.write(...)` are what a hit is supposed to skip, since the
   work they report on did not happen. A `print` to stdout is still reported:
   stdout may be the program's output. A literal `execute("SELECT ...")` is a
-  read, not a write. A network read (`requests.get(url)`) is not listed here
-  either: it has its own warning, [KEY-NETWORK-READ](#key-network-read).
+  read, not a write, and neither it nor a network read (`requests.get(url)`)
+  is listed here: they have their own warning,
+  [KEY-NETWORK-READ](#key-network-read).
 - `scope_mutation` — a `global` or `nonlocal` statement, or an assignment to
   someone else's attribute or subscript: `obj.attr = ...`, `d[k] = ...`.
 - `discarded_call` — a call whose return value is thrown away, which usually
@@ -1262,26 +1263,35 @@ cache looks healthy and is silently doing nothing.
 
 ## KEY-NETWORK-READ {#key-network-read}
 
-<!-- claim: cash/core.py:Cash._surface_purity @7e6b3c9c, cash/purity_analyzer.py:DECORATOR_POLICY @64c9bb30, cash/effects.py:MODULE_CALLS @c6f9471b -->
+<!-- claim: cash/core.py:Cash._surface_purity @970a41cf, cash/purity_analyzer.py:DECORATOR_POLICY @648d6d15, cash/effects.py:MODULE_CALLS @c6f9471b -->
 **What happened.** Reading the source of the function you decorated found a
 call that fetches from a server: `requests.get(...)`, `requests.head(...)`,
 `requests.request("GET", ...)`, the same calls on `httpx`, or
-`urllib.request.urlopen(url)` without a request body. The named line ran, and
-the result was cached as normal.
+`urllib.request.urlopen(url)` without a request body. Or one that queries a
+database: `cur.execute("SELECT ...")` with the SQL written out as a literal,
+`pd.read_sql(...)`, `pd.read_sql_query(...)`, `pd.read_gbq(...)`. The named
+line ran, and the result was cached as normal.
 
 A call that sends something — `requests.post`, `requests.request("POST",
-...)`, `urlopen(url, data)`, `session.post(...)` — is not this: a cache hit
+...)`, `urlopen(url, data)`, `session.post(...)`, an `INSERT` or any SQL built
+at run time, `conn.commit()`, `df.to_sql(...)` — is not this: a cache hit
 skips it, and it is reported as [IMPURE-SIDE-EFFECTS](#impure-side-effects).
 
-**Why it matters.** What the server returns is an *input* to your result, and
-it is not one Cash can see: it is not an argument, so it is not in the cache
-key. The first answer is stored and every later call gets it back — in this
-process and in every process afterwards, because the cache is on disk. An
-exchange rate fetched on Monday is still Monday's rate on Friday.
+<!-- claim: cash/purity_analyzer.py:_opens_tracked_database @35da8b91 -->
+A query over a SQLite file the function opens itself — `sqlite3.connect(path)`
+in the body — is not reported: Cash records that file as something the
+function read, so a change to the database already reaches the key.
+
+**Why it matters.** What the server or database returns is an *input* to
+your result, and it is not one Cash can see: it is not an argument, so it is
+not in the cache key. The first answer is stored and every later call gets it
+back — in this process and in every process afterwards, because the cache is
+on disk. An exchange rate fetched on Monday is still Monday's rate on Friday;
+a count of today's orders stays the count at the first call.
 
 Nothing a hit skips is lost, which is why this is not
-[IMPURE-SIDE-EFFECTS](#impure-side-effects): a GET changes nothing on the
-server. The question is only how old a served answer may be.
+[IMPURE-SIDE-EFFECTS](#impure-side-effects): a GET or a SELECT changes
+nothing. The question is only how old a served answer may be.
 
 **What to do.** Say how old it may be:
 
@@ -1302,7 +1312,8 @@ since Cash cannot tell which argument does that job, so add
 `# @cash:assume-safe` on the line as well.
 
 **When it is safe to ignore.** When the answer never changes for the
-arguments you pass — a fetch by content hash or by a pinned version. Put
+arguments you pass — a fetch by content hash or by a pinned version, a query
+over a table nobody writes to. Put
 `# @cash:assume-safe` on the line to say so; `assume_safe=True` on the
 decorator silences every finding in the function instead. Under
 `strict=True` the call raises unless a `ttl=` is set.

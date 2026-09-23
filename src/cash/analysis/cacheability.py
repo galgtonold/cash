@@ -462,6 +462,7 @@ NOTEBOOK_POLICY: dict[EffectKind, Action] = {
     EffectKind.NETWORK_READ: Action.CACHE,
     EffectKind.NETWORK_WRITE: Action.REFUSE,
     EffectKind.NETWORK: Action.REFUSE,
+    # A query's answer is kept the same way; `# @cash:ttl=N` bounds its age.
     EffectKind.DB_READ: Action.CACHE,
     EffectKind.DB_WRITE: Action.REFUSE,
     EffectKind.SUBPROCESS: Action.REFUSE,

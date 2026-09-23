@@ -366,7 +366,7 @@ what to cache based on purity). The same machinery now runs on
 cleanly to "I want a warning", "I want it silent", and "I want it to
 fail CI".
 
-<!-- claim: cash/core.py:Cash._surface_purity @7e6b3c9c, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @970a41cf, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 ### Default: warn at first call
 
 <!-- test:expect-warning reason="this section exists to demonstrate the first-call impurity warning" -->
@@ -655,7 +655,7 @@ won't flag on it, and any function whose body calls
 
 ### What the analyzer looks at
 
-<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @fa555f87 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @a557e11f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
+<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @d5c12ecf broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @a557e11f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
 The decorator-side analyzer walks the function body AND
 **module-bounded helpers** (functions defined in the same top-level
 package, or any non-installed-library code) and any **closure-bound
@@ -702,8 +702,9 @@ it flags:
   `# @cash:assume-safe` on that line. A read that only feeds a `print`, a
   `logging` call or `warnings.warn` — a timer for an elapsed-time line — is
   not flagged: it cannot reach the result.
-- **Network reads** — `requests.get`, `requests.head`, `urlopen(url)` without
-  data. Also an input rather than a side effect, with its own warning
+- **Network and database reads** — `requests.get`, `requests.head`,
+  `urlopen(url)` without data, a literal `SELECT` through `execute`,
+  `pd.read_sql`. Also an input rather than a side effect, with its own warning
   ([`KEY-NETWORK-READ`](../../warnings.md#key-network-read)); a `ttl=` on the
   decorator bounds how old the served answer may get and silences it.
 - **Discarded calls** — `f(x)` as a statement (return thrown away)

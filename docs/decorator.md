@@ -974,19 +974,21 @@ adding or tightening a predicate, drop what was stored under the old rule with
 
 ### `strict=` and `assume_safe=` — purity gates
 
-<!-- claim: cash/core.py:Cash._surface_purity @7e6b3c9c, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @970a41cf, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 By default, `@cash.cache` runs a static analyzer on the function body
 (and module-bounded helpers) on first call. What it does depends on what it finds:
 
 - **Impure calls, scope mutations, discarded-return calls** (`requests.post`,
   `df.to_csv(...)`, `model.fit(...)`, …) → a `CashImpurityWarning` fires and the
   function is **still cached**.
-- **Network reads** (`requests.get`, `requests.head`, `urlopen(url)` without
-  data) → a `CashImpurityWarning` coded
+- **Network and database reads** (`requests.get`, `requests.head`,
+  `urlopen(url)` without data, `cur.execute("SELECT ...")`, `pd.read_sql`) → a
+  `CashImpurityWarning` coded
   [`KEY-NETWORK-READ`](warnings.md#key-network-read), and the function is
-  **still cached**. A GET writes nothing; what the server returns is an input
+  **still cached**. A read writes nothing; what the server returns is an input
   the key cannot see, so the first answer is served until the key changes.
   Setting `ttl=` bounds how old that answer may get and silences the warning.
+  A SQLite file the body opens itself is tracked as a file read instead.
 - **Ambient reads** — the clock, the environment, the working directory, a
   fresh UUID (`datetime.now()`, `date.today()`, `os.environ["..."]`,
   `os.getenv`, `os.getcwd()`, `uuid.uuid4()`) → a `CashImpurityWarning` coded
@@ -1557,7 +1559,7 @@ A network **read** is not in this group; see the next section.
 
 ### A cached GET goes stale
 
-<!-- claim: cash/core.py:Cash._surface_purity @7e6b3c9c, cash/purity_analyzer.py:DECORATOR_POLICY @64c9bb30 -->
+<!-- claim: cash/core.py:Cash._surface_purity @970a41cf, cash/purity_analyzer.py:DECORATOR_POLICY @648d6d15 -->
 `requests.get(url)` writes nothing, so it is not reported with the side
 effects. What the server returns is an **input**, and it is not in the key:
 the first answer is stored and served on every later call, in every later

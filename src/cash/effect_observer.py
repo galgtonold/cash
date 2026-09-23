@@ -83,9 +83,10 @@ _LABELS: dict[EffectKind, str] = {
 
 def observed_label(kind: EffectKind | None) -> str | None:
     """The name the observer reports an effect of *kind* under, or None when
-    the observer cannot see that kind. A network read or write is seen as the
-    connection it opens."""
-    if kind in (EffectKind.NETWORK_READ, EffectKind.NETWORK_WRITE):
+    the observer cannot see that kind. A network or database read or write is
+    seen as the connection it opens. (A database in a local file is seen as a
+    file write, which this does not cover: it errs toward reporting.)"""
+    if kind in (EffectKind.NETWORK_READ, EffectKind.NETWORK_WRITE, EffectKind.DB_READ, EffectKind.DB_WRITE):
         kind = EffectKind.NETWORK
     return _LABELS.get(kind)  # type: ignore[arg-type]
 

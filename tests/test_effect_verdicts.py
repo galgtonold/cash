@@ -80,7 +80,10 @@ ROWS = [
     ("cur.executemany(sql, [])", "refuse", "impure_call"),
     ("conn.commit()", "refuse", "impure_call"),
     ("df.to_sql('t', conn)", "refuse", "impure_call"),
-    ("cur.execute('SELECT 1')", "cache", "silent"),
+    # A query is a read from a server, judged like a GET: cached in a
+    # notebook, the TTL advisory in a decorated function.
+    ("cur.execute('SELECT 1')", "cache", "network_read"),
+    ("conn.read_sql('select 1')", "cache", "network_read"),
     # The clock: each path kept its own list. The notebook missed
     # `time.strftime("%Y")` and `datetime.today()` and refused
     # `time.localtime(ts)`, which only converts `ts`; the decorator missed

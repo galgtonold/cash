@@ -1,4 +1,5 @@
-"""A decorated function that fetches from a server gets a TTL advisory.
+"""A decorated function that fetches from a server or queries a database gets
+a TTL advisory.
 
 ``requests.get(url)`` in a ``@cash.cache`` body used to be reported as a side
 effect (IMPURE-SIDE-EFFECTS, "known I/O"), with advice to audit the line for
@@ -8,12 +9,14 @@ until something changes the key. That is the question ``ttl=`` answers, so the
 advisory (KEY-NETWORK-READ) names it, and setting a ``ttl=`` silences it.
 
 A write to the network (a POST) is still a side effect and still reported as
-one.
+one. A database is judged the same way: a literal SELECT is a read, anything
+else sent to ``execute`` is a write.
 """
 
 from __future__ import annotations
 
 import http.server
+import sqlite3
 import threading
 import urllib.request
 import warnings
@@ -140,3 +143,60 @@ def test_a_post_is_still_a_side_effect(c, url):
 def test_ttl_does_not_silence_a_post(c, url):
     rec = _call(c.cache(post, ttl=3600), url)
     assert "IMPURE-SIDE-EFFECTS" in _codes(rec), _codes(rec)
+
+
+def _connect():
+    """A connection made elsewhere: a pool, a client library, a server."""
+    return sqlite3.connect(":memory:")
+
+
+def query_elsewhere():
+    return _connect().execute("SELECT 1").fetchone()[0]
+
+
+def count_rows(path):
+    with sqlite3.connect(path) as con:
+        return con.execute("SELECT count(*) FROM t").fetchone()[0]
+
+
+def add_row(path):
+    with sqlite3.connect(path) as con:
+        con.execute("INSERT INTO t VALUES (1)")
+    return 1
+
+
+@pytest.fixture
+def db(tmp_path):
+    path = str(tmp_path / "rows.db")
+    with sqlite3.connect(path) as con:
+        con.execute("CREATE TABLE t (x)")
+    return path
+
+
+def test_a_query_gets_the_ttl_advisory(c):
+    rec = _call(c.cache(query_elsewhere))
+    assert _codes(rec) == ["KEY-NETWORK-READ"], _codes(rec)
+    message = _message(rec, "KEY-NETWORK-READ")
+    assert "execute() - what the database returns is not in the cache key" in message
+
+
+def test_ttl_silences_a_query(c):
+    rec = _call(c.cache(query_elsewhere, ttl=60))
+    assert _codes(rec) == [], _codes(rec)
+
+
+def test_a_sqlite_file_the_body_opens_is_already_in_the_key(c, db):
+    """`sqlite3.connect(path)` is tracked as a read of that file, so the
+    answer is keyed and there is nothing to advise."""
+    cached = c.cache(count_rows)
+    rec = _call(cached, db)
+    assert _codes(rec) == [], _codes(rec)
+    with sqlite3.connect(db) as con:
+        con.execute("INSERT INTO t VALUES (1)")
+    assert cached(db) == 1
+
+
+def test_a_database_write_is_still_a_side_effect(c, db):
+    rec = _call(c.cache(add_row, ttl=60), db)
+    assert "IMPURE-SIDE-EFFECTS" in _codes(rec), _codes(rec)
+    assert "KEY-NETWORK-READ" not in _codes(rec)

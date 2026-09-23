@@ -10809,10 +10809,11 @@ class Cash:
                 "`# @cash:assume-safe` on that line.",
                 once_per_version=True,
             )
-        # A network read gets its own advisory too, for the same reason as an
-        # ambient read: nothing is skipped, an input the key cannot see is
-        # frozen. Unlike the clock it has a knob made for it, `ttl=`, which
-        # silences it (above). strict=True keeps it in the one exception.
+        # A network or database read gets its own advisory too, for the same
+        # reason as an ambient read: nothing is skipped, an input the key
+        # cannot see is frozen. Unlike the clock it has a knob made for it,
+        # `ttl=`, which silences it (above). Under strict=True it raises with
+        # the other issues unless a ttl= is set.
         remote = [i for i in issues if getattr(i, "kind", None) == ISSUE_NETWORK_READ]
         if remote and mode != "strict":
             issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_NETWORK_READ]
@@ -10821,8 +10822,8 @@ class Cash:
                 func_name,
                 "network_read",
                 f"@cash.cache on {func_name}: the result depends on what a "
-                f"server returned, and that answer is not part of the cache "
-                f"key. The first call's answer is what every later call gets "
+                f"server or a database returned, and that answer is not part "
+                f"of the cache key. The first call's answer is what every later call gets "
                 f"back -- in this process and in every process after it -- "
                 f"until something changes the key.\n{_format_issues_summary(func_name, remote)}",
                 code="KEY-NETWORK-READ",

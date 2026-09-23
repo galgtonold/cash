@@ -43,6 +43,7 @@ import importlib.util
 import inspect
 import logging
 import re
+import sqlite3
 import sys
 import textwrap
 import threading
@@ -69,6 +70,7 @@ from .effects import (
     Action,
     EffectKind,
     classify_call,
+    dotted_name,
 )
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
 from .purity import (
@@ -129,12 +131,35 @@ ISSUE_MUTABLE_GLOBAL = "mutable_global"
 # sometimes exactly what the user wants -- but it is never what they want by
 # accident, and it is invisible without this.
 ISSUE_AMBIENT_READ = "ambient_read"
-# Fetching from a server: `requests.get(url)`. Also not a side effect -- the
+# Fetching from a server or querying a database: `requests.get(url)`,
+# `cur.execute("SELECT ...")`, `pd.read_sql(...)`. Also not a side effect -- the
 # hazard is that the server's answer is an input the key cannot see, so the
 # first answer is served until something changes the key. Unlike the clock,
 # there is a knob made for exactly this: `ttl=` bounds how old a served answer
 # may be, and setting one silences the advisory.
 ISSUE_NETWORK_READ = "network_read"
+#: What a `network_read` finding names as the source of the answer.
+_SOURCE: dict[EffectKind, str] = {EffectKind.NETWORK_READ: "server", EffectKind.DB_READ: "database"}
+
+
+def _opens_tracked_database(func: ast.expr, namespace: dict[str, Any] | None) -> bool:
+    """Is *func* ``sqlite3.connect``, however it is spelled?
+
+    The file tracker records the path a SQLite connection opens as a file read
+    (``FileTracker``), so a query over a connection the body opens itself is
+    already keyed by the database file.
+    """
+    name = dotted_name(func)
+    if name in ("sqlite3.connect", "sqlite3.dbapi2.connect"):
+        return True
+    if not namespace:
+        return False
+    if isinstance(func, ast.Name):
+        return namespace.get(func.id) is sqlite3.connect
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        return getattr(namespace.get(func.value.id), func.attr, None) is sqlite3.connect
+    return False
+
 
 #: Builtins whose whole job is to run code chosen at runtime. Reaching one of
 #: these through `getattr(x, "<name>")` is the same hazard as calling it
@@ -152,11 +177,11 @@ DECORATOR_POLICY: dict[EffectKind, Action] = {
     EffectKind.FILE_WRITE: Action.WARN,
     EffectKind.FILE_READ: Action.CACHE_AS_INPUT,
     # What the server returns is an input the key cannot see: advise `ttl=`,
-    # which silences it (KEY-NETWORK-READ).
+    # which silences it (KEY-NETWORK-READ). A database is a server too.
     EffectKind.NETWORK_READ: Action.SUGGEST_TTL,
     EffectKind.NETWORK_WRITE: Action.WARN,
     EffectKind.NETWORK: Action.WARN,
-    EffectKind.DB_READ: Action.CACHE,
+    EffectKind.DB_READ: Action.SUGGEST_TTL,
     EffectKind.DB_WRITE: Action.WARN,
     EffectKind.SUBPROCESS: Action.WARN,
     # These two are reported as ambient reads (KEY-AMBIENT-READ), not as
@@ -528,6 +553,10 @@ class _PurityVisitor(ast.NodeVisitor):
         #: Calls reported as known I/O (``requests.get``, ``open``). Not walked,
         #: but their bindings are noted, so a mock put in their place is seen.
         self.impure_call_nodes: list[ast.AST] = []
+        #: The body opens a SQLite file itself (`sqlite3.connect(path)`), which
+        #: the file tracker records as a read of that file: what a query on it
+        #: returns IS in the key, so its reads are not advised on.
+        self.opens_tracked_database = False
         # Bare names read (Load context) in this body - used to detect reads of
         # mutable module globals.
         self.read_names: set[str] = set()
@@ -882,12 +911,14 @@ class _PurityVisitor(ast.NodeVisitor):
             if is_log_line(node):
                 return  # a diagnostic line: a hit skipping it is what caching means
 
+            if _opens_tracked_database(func_node, self._namespace):
+                self.opens_tracked_database = True
             effect = classify_call(node, self._namespace)
             if effect is not None and DECORATOR_POLICY[effect.kind] is Action.SUGGEST_TTL:
                 self.issues.append(
                     PurityIssue(
                         kind=ISSUE_NETWORK_READ,
-                        description=f"{dotted}() - what the server returns is not in the cache key",
+                        description=f"{dotted}() - what the {_SOURCE[effect.kind]} returns is not in the cache key",
                         where=self._qualname,
                         line=line,
                         effect_kind=effect.kind,
@@ -2056,6 +2087,8 @@ class PurityAnalyzer:
             )
             visitor.visit(func_def)
             visitor.finalize_taint()
+            if visitor.opens_tracked_database:
+                visitor.issues = [i for i in visitor.issues if i.effect_kind is not EffectKind.DB_READ]
             if depth > 0 and _clock_helper_read(func) is not None:
                 # Judged where it is called (`_clock_helper_read`).
                 visitor.issues = [i for i in visitor.issues if i.kind != ISSUE_AMBIENT_READ]
