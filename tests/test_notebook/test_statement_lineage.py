@@ -6,43 +6,21 @@ import json
 import os
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-from traitlets.config.configurable import Configurable
+import pytest
 
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.user_ns = {}
-        self.user_ns["_ih"] = []
-        self.run_cell = MagicMock()
-        self.input_transformers_cleanup = []
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-        self.ast_transformers = []
-        self.events = MagicMock()
-        self.events.register = MagicMock(return_value=None)
-        self.user_global_ns = self.user_ns
+from tests._cell_driver import run_cash_cell
 
 
 class TestStatementLineage(unittest.TestCase):
     """Test statement-level dependency tracking."""
 
-    def setUp(self):
-        self.backend = InMemoryBackend()
-        self.backend.clear()
-        self.cash = Cash(backend=self.backend, register_magic=False)
-        self.shell = MockShell()
-        self.magics = CashMagics(self.shell, self.cash)
-        self.magics._debug = True
-        self.magics._auto_cache_enabled = True
+    @pytest.fixture(autouse=True)
+    def _notebook(self, cash_magics, mock_shell, clean_backend):
+        self.magics, self.shell, self.backend = cash_magics, mock_shell, clean_backend
 
+    def setUp(self):
         # Create a temporary notebook file
         self.temp_dir = tempfile.mkdtemp()
         self.notebook_path = os.path.join(self.temp_dir, "test_stmts.ipynb")
@@ -116,13 +94,13 @@ class TestStatementLineage(unittest.TestCase):
 
             # Execute Cell 1
             print("Running Cell 1 (v1)...")
-            self.magics._execute_cell(cell1_v1)
+            run_cash_cell(self.magics, cell1_v1)
             self.assertEqual(self.shell.user_ns.get("a"), 1)
             self.assertEqual(self.shell.user_ns.get("b"), 2)
 
             # Execute Cell 2
             print("Running Cell 2...")
-            self.magics._execute_cell(cell2)
+            run_cash_cell(self.magics, cell2)
             self.assertEqual(self.shell.user_ns.get("c"), 3)
 
             # Step 2: Modify Cell 1
@@ -148,7 +126,7 @@ class TestStatementLineage(unittest.TestCase):
             # We clear c to ensure it's recomputed?
             # Or reliance on user running it?
             # The test simulates user running Cell 2.
-            self.magics._execute_cell(cell2)
+            run_cash_cell(self.magics, cell2)
 
             # Verify results
             self.assertEqual(self.shell.user_ns.get("a"), 1)
@@ -204,7 +182,7 @@ class TestStatementLineage(unittest.TestCase):
 
             # 1. Initial Run
             print("Running Cell 1...")
-            self.magics._execute_cell(cell1)
+            run_cash_cell(self.magics, cell1)
             d_val = self.shell.user_ns.get("d")
             self.assertEqual(d_val, {"val": 0, "a": 1, "b": 2})
 
@@ -216,7 +194,7 @@ class TestStatementLineage(unittest.TestCase):
             print("Running Cell 2 (Check for redundant re-execution)...")
 
             with patch("cash.notebook.upstream.UpstreamChecker._reexecute_statements") as mock_reexec:
-                self.magics._execute_cell(cell2)
+                run_cash_cell(self.magics, cell2)
 
                 if mock_reexec.call_count > 0:
                     args = mock_reexec.call_args[0]
@@ -273,16 +251,16 @@ class TestStatementLineage(unittest.TestCase):
             mock_get_ids.side_effect = get_cells_with_ids
 
             # Run Cell 1 first so math is in user_ns
-            self.magics._execute_cell(cell1)
+            run_cash_cell(self.magics, cell1)
             self.assertIn("math", self.shell.user_ns)
 
             # Run Cell 2 — should succeed (math is available)
-            self.magics._execute_cell(cell2)
+            run_cash_cell(self.magics, cell2)
 
             # Verify that the upstream checker does NOT redundantly
             # re-execute the import (modules are skipped by design)
             with patch("cash.notebook.upstream.UpstreamChecker._reexecute_statements") as mock_reexec:
-                self.magics._execute_cell(cell2)
+                run_cash_cell(self.magics, cell2)
                 self.assertEqual(mock_reexec.call_count, 0, "Should not re-execute import statements")
 
             print("[OK] Test passed: Modules are not tracked as broken vars.")

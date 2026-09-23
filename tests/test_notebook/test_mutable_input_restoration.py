@@ -4,54 +4,20 @@ Ensures that when statements modify mutable inputs in-place,
 the pre-modification state is restored correctly on cache hits.
 """
 
-import os
-import sys
 import unittest
-from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 
-# Add src to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src")))
-
-from traitlets.config.configurable import Configurable
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.user_ns = {}
-        self.user_ns["_ih"] = []
-        self.run_cell = MagicMock()
-        self.input_transformers_cleanup = []
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-        self.ast_transformers = []
-        self.events = MagicMock()
-        self.events.register = MagicMock(return_value=None)
+from tests._cell_driver import run_cash_cell
 
 
 class TestMutableInputRestoration(unittest.TestCase):
     """Test restoration of mutable input states."""
 
-    def setUp(self):
-        self.backend = InMemoryBackend()
-        self.cash = Cash(backend=self.backend, register_magic=False)
-        self.shell = MockShell()
-        self.magics = CashMagics(self.shell, self.cash)
-        self.magics._debug = True
-        self.magics._auto_cache_enabled = True
-
-    def tearDown(self):
-        if hasattr(self, "backend"):
-            self.backend.clear()
-        if hasattr(self, "shell") and hasattr(self.shell, "user_ns"):
-            self.shell.user_ns.clear()
+    @pytest.fixture(autouse=True)
+    def _notebook(self, cash_magics, mock_shell, clean_backend):
+        self.magics, self.shell, self.backend = cash_magics, mock_shell, clean_backend
 
     def test_dataframe_mutation_restoration(self):
         """
@@ -64,7 +30,7 @@ class TestMutableInputRestoration(unittest.TestCase):
 
         # 2. Run mutation statement (First Run)
         code = "df['B'] = df['A'] * 2"
-        self.magics._execute_cell(code)
+        run_cash_cell(self.magics, code)
 
         self.assertIn("B", self.shell.user_ns["df"].columns)
 
@@ -83,7 +49,7 @@ class TestMutableInputRestoration(unittest.TestCase):
 
         # 4. Run cached statement (Second Run - Cache Hit)
         print("Running cached statement...")
-        self.magics._execute_cell(code)
+        run_cash_cell(self.magics, code)
 
         self.assertIn("B", self.shell.user_ns["df"].columns)
         self.assertEqual(self.shell.user_ns["df"]["B"].tolist(), [2, 4, 6])
@@ -148,18 +114,18 @@ class TestMutableInputRestoration(unittest.TestCase):
         self.shell.user_ns["pd"] = pd
 
         # Create df2
-        self.magics._execute_cell("df2 = pd.DataFrame({'A': [1]})")
+        run_cash_cell(self.magics, "df2 = pd.DataFrame({'A': [1]})")
 
         # Mutate df2
-        self.magics._execute_cell("df2['B'] = 2")
+        run_cash_cell(self.magics, "df2['B'] = 2")
         self.assertIn("B", self.shell.user_ns["df2"].columns)
 
         # Verify restoration works
         # Reset df2
-        self.magics._execute_cell("df2 = pd.DataFrame({'A': [1]})")
+        run_cash_cell(self.magics, "df2 = pd.DataFrame({'A': [1]})")
 
         # Restore mutation
-        self.magics._execute_cell("df2['B'] = 2")
+        run_cash_cell(self.magics, "df2['B'] = 2")
         self.assertIn("B", self.shell.user_ns["df2"].columns)
 
         print("✓ Dirty state restoration test passed")

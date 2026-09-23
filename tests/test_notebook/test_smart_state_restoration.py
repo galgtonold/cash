@@ -3,52 +3,23 @@ Test smart state restoration with %cash_on mode
 Tests the exact scenario user reported with commented DataFrame columns
 """
 
-import os
-import sys
 import unittest
-from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
+import pytest
 
-# Add src to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
-
-from traitlets.config.configurable import Configurable
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.user_ns = {}
-        self.user_ns["_ih"] = []
-        self.run_cell = MagicMock()
-        self.input_transformers_cleanup = []
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-        self.ast_transformers = []
-        self.events = MagicMock()
-        self.events.register = MagicMock(return_value=None)
+from tests._cell_driver import run_cash_cell
 
 
 class TestSmartStateRestoration(unittest.TestCase):
     """Test smart dependency-based state restoration."""
 
+    @pytest.fixture(autouse=True)
+    def _notebook(self, cash_magics, mock_shell, clean_backend):
+        self.magics, self.shell, self.backend = cash_magics, mock_shell, clean_backend
+
     def setUp(self):
-        self.backend = InMemoryBackend()
-        self.cash = Cash(backend=self.backend, register_magic=False)
-
-        self.shell = MockShell()
-
-        self.magics = CashMagics(self.shell, self.cash)
-        self.magics._debug = True
-        self.magics._auto_cache_enabled = True
-
         # Create realistic DataFrame
         np.random.seed(42)
         self.shell.user_ns["df_clean"] = pd.DataFrame(
@@ -59,13 +30,6 @@ class TestSmartStateRestoration(unittest.TestCase):
                 "product": np.random.choice(["A", "B", "C"], 100),
             }
         )
-
-    def tearDown(self):
-        """Clean up after each test."""
-        if hasattr(self, "backend"):
-            self.backend.clear()
-        if hasattr(self, "shell") and hasattr(self.shell, "user_ns"):
-            self.shell.user_ns.clear()
 
     def test_commented_line_with_auto_caching(self):
         """
@@ -91,7 +55,7 @@ class TestSmartStateRestoration(unittest.TestCase):
                 self.silent = False
 
         # Simulate execution
-        self.magics._execute_cell(cell1)
+        run_cash_cell(self.magics, cell1)
 
         # Verify both columns exist
         self.assertIn("revenue", self.shell.user_ns["df_clean"].columns)
@@ -115,7 +79,7 @@ class TestSmartStateRestoration(unittest.TestCase):
             }
         )
 
-        self.magics._execute_cell(cell2)
+        run_cash_cell(self.magics, cell2)
 
         print(f"Columns after step 2: {list(self.shell.user_ns['df_clean'].columns)}")
 
@@ -137,7 +101,7 @@ class TestSmartStateRestoration(unittest.TestCase):
 
         # Step 1: Create a variable
         cell1 = "summary = 'test_value'"
-        self.magics._execute_cell(cell1)
+        run_cash_cell(self.magics, cell1)
 
         self.assertEqual(self.shell.user_ns["summary"], "test_value")
 
@@ -148,7 +112,7 @@ class TestSmartStateRestoration(unittest.TestCase):
         # The smart restoration should check summary's hash and skip restoration
         # since it's already correct
 
-        self.magics._execute_cell(cell2)
+        run_cash_cell(self.magics, cell2)
 
         #  result should exist
         self.assertIn("result", self.shell.user_ns)

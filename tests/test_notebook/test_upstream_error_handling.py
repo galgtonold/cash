@@ -5,51 +5,24 @@ Test error handling when upstream cells fail during auto-reexecution
 import io
 import json
 import os
-import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-# Add src to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
+import pytest
 
-from traitlets.config.configurable import Configurable
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.user_ns = {}
-        self.user_ns["_ih"] = []
-        self.run_cell = MagicMock()
-        self.input_transformers_cleanup = []
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-        self.ast_transformers = []
-        self.events = MagicMock()
-        self.events.register = MagicMock(return_value=None)
+from tests._cell_driver import run_cash_cell
 
 
 class TestUpstreamErrorHandling(unittest.TestCase):
     """Test error handling when upstream cells fail."""
 
+    @pytest.fixture(autouse=True)
+    def _notebook(self, cash_magics, mock_shell, clean_backend):
+        self.magics, self.shell, self.backend = cash_magics, mock_shell, clean_backend
+
     def setUp(self):
-        self.backend = InMemoryBackend()
-        self.backend.clear()  # Ensure clean state
-        self.cash = Cash(backend=self.backend, register_magic=False)
-
-        self.shell = MockShell()
-
-        self.magics = CashMagics(self.shell, self.cash)
-        self.magics._debug = True  # Enable debug to see what's happening
-        self.magics._auto_cache_enabled = True
-
         # Create a temporary notebook file
         self.temp_dir = tempfile.mkdtemp()
         self.notebook_path = os.path.join(self.temp_dir, "test.ipynb")
@@ -109,10 +82,10 @@ class TestUpstreamErrorHandling(unittest.TestCase):
             mock_get_cells.side_effect = get_cells
 
             # Execute both cells
-            self.magics._execute_cell(cell1_v1)
+            run_cash_cell(self.magics, cell1_v1)
             self.assertEqual(self.shell.user_ns.get("x"), 10)
 
-            self.magics._execute_cell(cell2)
+            run_cash_cell(self.magics, cell2)
             self.assertEqual(self.shell.user_ns.get("result"), 20)
 
             # Step 2: Introduce syntax error in Cell 1
@@ -127,7 +100,7 @@ class TestUpstreamErrorHandling(unittest.TestCase):
             error_raised = None
             try:
                 print(f"DEBUG: About to call hook with cell: {cell2}")
-                self.magics._execute_cell(cell2)
+                run_cash_cell(self.magics, cell2)
                 print("DEBUG: Hook completed without error")
             except Exception as e:
                 error_raised = e
@@ -171,9 +144,9 @@ class TestUpstreamErrorHandling(unittest.TestCase):
             mock_get_cells.side_effect = get_cells
 
             # Execute both cells
-            self.magics._execute_cell(cell1_v1)
+            run_cash_cell(self.magics, cell1_v1)
 
-            self.magics._execute_cell(cell2)
+            run_cash_cell(self.magics, cell2)
             self.assertEqual(self.shell.user_ns.get("result"), 20)
 
             # Step 2: Introduce runtime error in Cell 1
@@ -189,7 +162,7 @@ class TestUpstreamErrorHandling(unittest.TestCase):
             error_raised = None
             try:
                 with redirect_stdout(output):
-                    self.magics._execute_cell(cell2)
+                    run_cash_cell(self.magics, cell2)
             except Exception as e:
                 error_raised = e
                 print(f"Exception type: {type(e).__name__}")

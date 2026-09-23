@@ -2,9 +2,8 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-from traitlets.config import Configurable
+import pytest
 
-from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
@@ -16,45 +15,10 @@ from tests._cell_driver import run_cash_cell
 _REAL_REGISTER_MAGIC = Cash.register_magic
 
 
-class MockShell(Configurable):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.user_ns = {}
-        self.user_ns["_ih"] = []  # Execution history
-        self.run_cell = MagicMock()
-        self.input_transformers_cleanup = []  # List of transformers
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-        self.ast_transformers = []  # AST transformers
-        self.events = MagicMock()  # Event system
-        self.events.register = MagicMock(return_value=None)
-
-
 class TestCashMagics(unittest.TestCase):
-    def setUp(self):
-        self.backend = InMemoryBackend()
-        self.cash = Cash(backend=self.backend)
-
-        # Mock IPython shell
-        self.shell = MockShell()
-
-        # Mock run_cell to actually execute code in user_ns
-        def run_cell(cell):
-            try:
-                exec(cell, {}, self.shell.user_ns)
-                return MagicMock(success=True)
-            except Exception as e:
-                return MagicMock(success=False, error_in_exec=e)
-
-        self.shell.run_cell.side_effect = run_cell
-
-        self.magics = CashMagics(self.shell, self.cash)
-
-    def tearDown(self):
-        """Clean up after each test."""
-        if hasattr(self, "backend"):
-            self.backend.clear()
-        if hasattr(self, "shell") and hasattr(self.shell, "user_ns"):
-            self.shell.user_ns.clear()
+    @pytest.fixture(autouse=True)
+    def _notebook(self, cash_magics, mock_shell, clean_backend):
+        self.magics, self.shell, self.backend = cash_magics, mock_shell, clean_backend
 
     def test_basic_caching(self):
         # 1. First run: Calculate a = 1 + 1
@@ -109,11 +73,11 @@ y = x + 10
     def test_global_caching(self):
         # Test enabling auto-caching
         self.magics.cash_on("")
-        self.assertTrue(self.magics._auto_cache_enabled)
+        self.assertTrue(self.magics.cash_status("dict")["auto_cache_enabled"])
 
         # Test disabling
         self.magics.cash_off("")
-        self.assertFalse(self.magics._auto_cache_enabled)
+        self.assertFalse(self.magics.cash_status("dict")["auto_cache_enabled"])
 
     def test_input_dependency(self):
         # 1. Setup input
@@ -384,7 +348,7 @@ def test_cash_help_unknown_topic_says_so_and_prints_the_card(cash_magics):
     assert "  %cash_on " in out
 
 
-def test_register_magic_registers_cash_on():
+def test_register_magic_registers_cash_on(mock_shell, cash_instance):
     """``Cash.register_magic()`` imports ``CashMagics`` from the post-ADR-013
     path and registers it on the active shell.
 
@@ -402,17 +366,14 @@ def test_register_magic_registers_cash_on():
     the full-suite single-process run. End-to-end registration against a real
     kernel is covered by the notebook-integration suite.
     """
-    shell = MockShell()
-    shell.register_magics = MagicMock()
+    mock_shell.register_magics = MagicMock()
 
-    cash = Cash(backend=InMemoryBackend(), register_magic=False)
-
-    with patch("IPython.get_ipython", return_value=shell):
+    with patch("IPython.get_ipython", return_value=mock_shell):
         # Call the real implementation, not conftest's no-op stub.
-        _REAL_REGISTER_MAGIC(cash)
+        _REAL_REGISTER_MAGIC(cash_instance)
 
-    shell.register_magics.assert_called_once()
-    (registered_magics,), _ = shell.register_magics.call_args
+    mock_shell.register_magics.assert_called_once()
+    (registered_magics,), _ = mock_shell.register_magics.call_args
     assert isinstance(registered_magics, CashMagics)
 
 

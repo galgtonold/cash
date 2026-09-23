@@ -4,48 +4,23 @@ Test handling of Jupyter magics in upstream cells
 
 import json
 import os
-import sys
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-# Add src to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
+import pytest
 
-from traitlets.config.configurable import Configurable
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.user_ns = {}
-        self.user_ns["_ih"] = []
-        self.run_cell = MagicMock()
-        self.input_transformers_cleanup = []
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-        self.ast_transformers = []
-        self.events = MagicMock()
-        self.events.register = MagicMock(return_value=None)
+from tests._cell_driver import run_cash_cell
 
 
 class TestMagicHandling(unittest.TestCase):
     """Test that Jupyter magics are correctly ignored in upstream cells."""
 
-    def setUp(self):
-        self.backend = InMemoryBackend()
-        self.backend.clear()
-        self.cash = Cash(backend=self.backend, register_magic=False)
-        self.shell = MockShell()
-        self.magics = CashMagics(self.shell, self.cash)
-        self.magics._debug = True
-        self.magics._auto_cache_enabled = True
+    @pytest.fixture(autouse=True)
+    def _notebook(self, cash_magics, mock_shell, clean_backend):
+        self.magics, self.shell, self.backend = cash_magics, mock_shell, clean_backend
 
+    def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.notebook_path = os.path.join(self.temp_dir, "test.ipynb")
 
@@ -109,7 +84,7 @@ class TestMagicHandling(unittest.TestCase):
 
             print("--- Step 3: Run Cell 2 ---")
             # This should trigger re-execution of Cell 1
-            self.magics._execute_cell(cell2)
+            run_cash_cell(self.magics, cell2)
 
             print(f"x in memory: {self.shell.user_ns.get('x')}")
             # If re-execution works despite magic, x should be 20

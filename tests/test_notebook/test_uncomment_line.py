@@ -2,52 +2,23 @@
 Test for uncommenting lines scenario - variables should reflect current session state
 """
 
-import os
-import sys
 import unittest
-from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
+import pytest
 
-# Add src to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
-
-from traitlets.config.configurable import Configurable
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.user_ns = {}
-        self.user_ns["_ih"] = []
-        self.run_cell = MagicMock()
-        self.input_transformers_cleanup = []
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-        self.ast_transformers = []
-        self.events = MagicMock()
-        self.events.register = MagicMock(return_value=None)
+from tests._cell_driver import run_cash_cell
 
 
 class TestUncommentLine(unittest.TestCase):
     """Test uncommenting a line and using the modified variable in next cell."""
 
+    @pytest.fixture(autouse=True)
+    def _notebook(self, cash_magics, mock_shell, clean_backend):
+        self.magics, self.shell, self.backend = cash_magics, mock_shell, clean_backend
+
     def setUp(self):
-        self.backend = InMemoryBackend()
-        self.cash = Cash(backend=self.backend, register_magic=False)
-
-        self.shell = MockShell()
-
-        self.magics = CashMagics(self.shell, self.cash)
-        self.magics._debug = True
-        self.magics._auto_cache_enabled = True
-
         # Create initial DataFrame
         np.random.seed(42)
         self.shell.user_ns["df_clean"] = pd.DataFrame(
@@ -61,13 +32,6 @@ class TestUncommentLine(unittest.TestCase):
         )
 
         self.shell.user_ns["selected_region"] = "South"
-
-    def tearDown(self):
-        """Clean up after each test."""
-        if hasattr(self, "backend"):
-            self.backend.clear()
-        if hasattr(self, "shell") and hasattr(self.shell, "user_ns"):
-            self.shell.user_ns.clear()
 
     def test_uncomment_line_and_use_result(self):
         """
@@ -83,7 +47,7 @@ class TestUncommentLine(unittest.TestCase):
         print("\n--- Step 1: Execute revenue calculation ---")
         cell1 = "df_clean['revenue'] = df_clean['sales'] * df_clean['units']"
 
-        self.magics._execute_cell(cell1)
+        run_cash_cell(self.magics, cell1)
 
         # Verify revenue column exists
         self.assertIn("revenue", self.shell.user_ns["df_clean"].columns)
@@ -93,7 +57,7 @@ class TestUncommentLine(unittest.TestCase):
         print("\n--- Step 2: Use revenue column ---")
         cell2 = "summary = df_clean[df_clean['region'] == selected_region].groupby('product')['revenue'].sum()"
 
-        self.magics._execute_cell(cell2)
+        run_cash_cell(self.magics, cell2)
 
         # Verify summary was created successfully
         self.assertIn("summary", self.shell.user_ns)
@@ -110,7 +74,7 @@ class TestUncommentLine(unittest.TestCase):
         # Step 1: Run with revenue line
         print("\n--- Step 1: Execute with revenue ---")
         cell1 = "df_clean['revenue'] = df_clean['sales'] * df_clean['units']"
-        self.magics._execute_cell(cell1)
+        run_cash_cell(self.magics, cell1)
         self.assertIn("revenue", self.shell.user_ns["df_clean"].columns)
 
         # Step 2: Comment out revenue line (reset df)
@@ -131,13 +95,13 @@ class TestUncommentLine(unittest.TestCase):
         # Step 3: Uncomment revenue line again
         print("\n--- Step 3: Uncomment revenue line ---")
         cell3 = "df_clean['revenue'] = df_clean['sales'] * df_clean['units']"
-        self.magics._execute_cell(cell3)
+        run_cash_cell(self.magics, cell3)
         self.assertIn("revenue", self.shell.user_ns["df_clean"].columns)
 
         # Step 4: Use revenue in next cell
         print("\n--- Step 4: Use revenue column ---")
         cell4 = "summary = df_clean['revenue'].sum()"
-        self.magics._execute_cell(cell4)
+        run_cash_cell(self.magics, cell4)
 
         self.assertIn("summary", self.shell.user_ns)
         self.assertIsInstance(self.shell.user_ns["summary"], (int, float, np.number))

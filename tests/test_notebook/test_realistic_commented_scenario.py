@@ -11,52 +11,23 @@ against the fresh ``df_clean`` and therefore recomputes rather than restoring
 the stale cached frame that still carried ``revenue``.
 """
 
-import os
-import sys
 import unittest
-from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
+import pytest
 
-# Add src to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
-
-from traitlets.config.configurable import Configurable
-
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.user_ns = {}
-        self.user_ns["_ih"] = []
-        self.run_cell = MagicMock()
-        self.input_transformers_cleanup = []
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
-        self.ast_transformers = []
-        self.events = MagicMock()
-        self.events.register = MagicMock(return_value=None)
 
 
 class TestRealisticCommentedCodeScenario(unittest.TestCase):
     """Test the EXACT scenario the user reported."""
 
+    @pytest.fixture(autouse=True)
+    def _notebook(self, cash_magics, mock_shell, clean_backend):
+        self.magics, self.shell, self.backend = cash_magics, mock_shell, clean_backend
+
     def setUp(self):
-        self.backend = InMemoryBackend()
-        self.cash = Cash(backend=self.backend, register_magic=False)
-
-        self.shell = MockShell()
-
-        self.magics = CashMagics(self.shell, self.cash)
-        self.magics._debug = True
-
         # Create a realistic DataFrame
         np.random.seed(42)
         self.shell.user_ns["df_clean"] = pd.DataFrame(
@@ -67,13 +38,6 @@ class TestRealisticCommentedCodeScenario(unittest.TestCase):
                 "product": np.random.choice(["A", "B", "C"], 100),
             }
         )
-
-    def tearDown(self):
-        """Clean up after each test."""
-        if hasattr(self, "backend"):
-            self.backend.clear()
-        if hasattr(self, "shell") and hasattr(self.shell, "user_ns"):
-            self.shell.user_ns.clear()
 
     def _fresh_df_clean(self):
         """Replace df_clean with a fresh frame (no revenue/month columns)."""
