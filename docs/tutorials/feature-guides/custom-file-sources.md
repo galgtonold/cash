@@ -58,7 +58,7 @@ A reader may be given its path positionally or by keyword — `pd.read_csv(filep
 <!-- claim: cash/tracking/file_tracker.py:_is_read_mode @238e2cb8, cash/tracking/file_tracker.py:_on_open @0ac87d87 -->
 For `open()`, cash records the path as a *dependency* only when the call can read what was there before: a mode containing `'r'`, or `'+'` without `'w'` or `'x'` (`'r+'`, `'a+'`) — see `_is_read_mode`. An `open(path, 'w')` for output does **not** become a dependency, which is what you want: folding a file the function writes into its own cache key would invalidate the entry on its own output. Nor does `'w+'` / `'x+'`, which start from an empty file — Pillow saves every image with `'w+b'`, so a `savefig` used to depend on the PNG it had just written.
 
-A write is not ignored, though — it is an *effect*, and it is reported as one. The same `open` event handler hands a write-mode open to the [effect observer](purity-decorators.md#observed-effects-what-the-first-call-actually-did), which warns once if the first call wrote a file the static analyzer never saw. That matters because every cache hit from then on skips the write.
+A write is not ignored, though — it is an *effect*, and it is reported as one. The same `open` event handler hands a write-mode open to the [effect observer](../../decorator.md#side-effects), which warns once if the first call wrote a file the static analyzer never saw. That matters because every cache hit from then on skips the write.
 
 ### A file that was not there is a dependency too
 
