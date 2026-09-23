@@ -6,7 +6,7 @@ on-disk layer, with a promotion policy that decides what's worth writing down.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend @57ebf17c, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend broad="tier ordering and read-repair are properties of the class as a whole" -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend @293e7320, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend broad="tier ordering and read-repair are properties of the class as a whole" -->
 The default `TieredBackend` stacks two layers, fastest first:
 
 | Tier | Backend | Speed | Survives restart? |
@@ -115,7 +115,7 @@ file read that only discovers the entry is a skip marker.
 `persist_all=True` — bypasses the compute floor entirely. It does not escape the
 per-tier size caps below.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.__init__ @d6dc57bf, cash/backends/persistence_policy.py:PersistencePolicy.decide @ab919a91 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.__init__ @48547719, cash/backends/persistence_policy.py:PersistencePolicy.decide @ab919a91 -->
 All three gates are one object, `PersistencePolicy`, and every `TieredBackend`
 has one: the stack cash builds from config and a `TieredBackend([...])` you
 build by hand apply the same 0.1 s floor. An entry that carries no recorded

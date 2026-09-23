@@ -3,19 +3,14 @@
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
-from ..diagnostics import warn_diagnostic
-from ..exceptions import CashCacheIneffectiveWarning
 from ._base import CacheBackend, MetadataDict
-from .adaptive_caps import human_bytes
+from .clear_watch import ClearWatcher
 from .persistence_policy import PersistencePolicy
 from .serialization import PickleSerializer, Serializer
-from .value_policy import WORTH_CEILING_BYTES_PER_SECOND
-
-_UNSEEN = object()
+from .store_notices import StoreNotices
 
 logger = logging.getLogger(__name__)
 
@@ -30,15 +25,6 @@ class _TierWrites(NamedTuple):
     refused_size: int  #: the size those caps were compared with
     refusing_caps: list[int]  #: the caps that refused it
     errors: list[str]  #: the tiers whose write raised, and what it raised
-
-
-def _cap_list(caps: list[int] | None) -> str:
-    """ " (its cap is 512.0 MiB)" / " (their caps are ...)" / "" when unknown."""
-    if not caps:
-        return ""
-
-    rendered = ", ".join(human_bytes(c) for c in caps)
-    return f" (cap: {rendered})" if len(caps) == 1 else f" (caps: {rendered})"
 
 
 class TieredBackend(CacheBackend):
@@ -65,19 +51,10 @@ class TieredBackend(CacheBackend):
             policy: The persistence rule; `PersistencePolicy` defaults if omitted.
         """
         self.backends = backends
-        # See `_drop_ram_if_cleared`.
-        self._generation: Any = _UNSEEN
-        self._generation_checked_at = 0.0
-        self._stamp_writes_seen = 0
         self.promotion_policy = promotion_policy
         self.policy = policy if policy is not None else PersistencePolicy()
-        # Once-per-session dedup for the oversize-refusal warning.
-        self._warned_oversize = False
-        #: Same, for the bytes-per-compute-second ceiling (`value_policy`).
-        # Statements already told CACHE-NOT-WORTH-BYTES this session.
-        self._warned_not_worth: set[str] = set()
-        #: Refusals held for one warning per cell (`begin_cell_warnings`).
-        self._not_worth_batch: list[tuple[str, int, float]] | None = None
+        self.notices = StoreNotices()
+        self._clear_watch = ClearWatcher()
 
     def get_metadata(self, key: str) -> dict | None:
         """Get only metadata for a cache key from the first backend that has it.
@@ -217,63 +194,6 @@ class TieredBackend(CacheBackend):
             logger.debug("Could not measure the serialized size", exc_info=True)
             return None
 
-    def _warn_oversize_not_persisted(
-        self,
-        key: str,
-        size_bytes: int,
-        caps: list[int] | None = None,
-    ) -> None:
-        """Warn once/session that a worth-persisting value fit no disk tier.
-
-        The object is larger than every persistent tier's whole cap, so there
-        is nowhere durable to put it. Cash offers it to the RAM tier rather
-        than write-and-evict forever, and tells the user how to actually cache
-        it. Deduped to once per session.
-
-        *caps* is what the size was compared against, so the message can name
-        the number the user set instead of alluding to it. A tester capped a
-        cache at 500 MB, watched a 263 MB working set never get stored, and had
-        no way to work out why from either the warning or ``cash inspect`` --
-        the gate was comparing the value's in-memory footprint against a disk
-        cap, while the SIZE column showed serialized bytes. Both numbers now
-        appear here, and the one compared is the serialized one.
-
-        "Offers", not "keeps": the RAM tier applies its own byte cap, which is
-        machine-scaled and independent of ``max_cache_size``. That cap is
-        normally SMALLER than the disk threshold that refused this value (4.0
-        GiB against 18.7 GiB on one measured machine), so the usual outcome is
-        eviction inside the same ``set()`` and no caching at all -- not
-        RAM-only caching. Measured on a 4 MiB value that warns in both arms:
-        RAM cap 100 MiB -> 2 calls, 1 execution; RAM cap 1 MiB -> 2 calls, 2
-        executions."""
-        if self._warned_oversize:
-            return
-        self._warned_oversize = True
-
-        warn_diagnostic(
-            CashCacheIneffectiveWarning,
-            "CACHE-VALUE-TOO-BIG",
-            # "offered to the RAM tier", not "kept in RAM": the RAM tier applies
-            # its own byte cap (InMemoryBackend._evict_to_byte_cap), which is
-            # machine-scaled and independent of max_cache_size, and is normally
-            # SMALLER than the disk threshold that refused this value -- so the
-            # usual outcome is eviction inside the same set(), i.e. no caching
-            # at all rather than RAM-only caching. Measured on a 4 MiB value:
-            # RAM cap 100 MiB -> 2 calls, 1 execution; RAM cap 1 MiB -> 2 calls,
-            # 2 executions. Keep this and docs/warnings.md#cache-value-too-big
-            # saying the same thing.
-            f"cached value {key!r} is {human_bytes(size_bytes)} serialized, "
-            f"which is more than every persistent cache tier's whole cap"
-            f"{_cap_list(caps)}, so only the RAM tier was offered it -- it will "
-            f"not survive a kernel restart, and if it is over the RAM tier's "
-            f"own cap too it is evicted at once and nothing is cached.",
-            f"raise max_cache_size above {human_bytes(size_bytes)} (a "
-            f"comfortable multiple of it, so the cache can hold more than this "
-            f"one entry), or cache something smaller -- the aggregate, the "
-            f"sample, or the columns you actually use. The size named here is "
-            f"the serialized one, the same number `cash inspect` reports.",
-        )
-
     def _drop_persisted_call_refs(self, refs) -> None:
         """Take the persisted call results that a refused statement held.
 
@@ -300,97 +220,11 @@ class TieredBackend(CacheBackend):
                 except Exception:  # noqa: BLE001 - reclaiming disk never fails a write
                     logger.debug("Could not drop call ref %r", ref, exc_info=True)
 
-    def _warn_not_worth_its_bytes(
-        self,
-        key: str,
-        size_bytes: int,
-        compute_seconds: float,
-        code: str | None = None,
-    ) -> None:
-        """Warn once/session that a value cost more disk than it saves compute.
+    def hold_notices(self) -> None:
+        self.notices.hold()
 
-        Round 26's loudest unanimous finding was not that the cache was large
-        but that nothing said so while they worked: "I checked free disk out of
-        habit", "my project folder felt large", "nothing surfaces it while you
-        work. Not the badge, not a warning, not `%cash_stats`". Two of five
-        would have set `max_cache_size` on day one had anything told them.
-
-        So the refusal says what it refused and what it would have cost, in the
-        units the decision was made in. Deduped to once per session, like the
-        oversize warning -- a sweep hits this on every iteration, and 72 copies
-        of one message is the same silence by a different route.
-        """
-        # Once per STATEMENT, not per session: round 28's testers each saw one
-        # of these per kernel and every later refusal was silent -- including
-        # the ones on the steps they restarted into. Named by its code, which
-        # is what a reader can find in their notebook; a key is not.
-        ident = (code or "").strip() or str(key)
-        if ident in self._warned_not_worth:
-            return
-        self._warned_not_worth.add(ident)
-        lines = [ln for ln in ident.splitlines() if ln.strip()]
-        # A loop body's stored code starts with its context marker comment.
-        first = next((ln for ln in lines if not ln.lstrip().startswith("#")), lines[0] if lines else str(key))
-        named = f"`{first[:80]}`" if code else repr(key)
-        if self._not_worth_batch is not None:
-            self._not_worth_batch.append((named, size_bytes, compute_seconds))
-            return
-        self._say_not_worth([(named, size_bytes, compute_seconds)])
-
-    def begin_cell_warnings(self) -> None:
-        """Hold CACHE-NOT-WORTH-BYTES refusals until `end_cell_warnings`, to
-        say them once for the cell: a sweep cell said it 12 times, five lines
-        each (round 29, r29s5)."""
-        self._not_worth_batch = []
-
-    def end_cell_warnings(self) -> None:
-        batch, self._not_worth_batch = self._not_worth_batch, None
-        if batch:
-            self._say_not_worth(batch)
-
-    #: Statements a combined refusal names; the rest are counted.
-    _NOT_WORTH_NAMED = 5
-
-    def _say_not_worth(self, refused: list[tuple[str, int, float]]) -> None:
-        ceiling = human_bytes(WORTH_CEILING_BYTES_PER_SECOND)
-        if len(refused) == 1:
-            named, size_bytes, compute_seconds = refused[0]
-            rate = size_bytes / max(compute_seconds, 1e-9) / (1024**2)
-            what = (
-                f"the value of {named} is {human_bytes(size_bytes)} serialized but "
-                f"only takes {compute_seconds:.2f}s to recompute -- "
-                f"{rate:,.0f} MiB of cache per second saved, against the "
-                f"{ceiling} per second cash is willing to spend. It was not "
-                f"persisted, so it is recomputed rather than restored."
-            )
-        else:
-            shown = ", ".join(
-                f"{named} ({human_bytes(size)} for {secs:.2f}s)"
-                for named, size, secs in refused[: self._NOT_WORTH_NAMED]
-            )
-            more = len(refused) - self._NOT_WORTH_NAMED
-            what = (
-                f"{len(refused)} values in this cell take more cache per second "
-                f"saved than the {ceiling} cash is willing to spend: {shown}"
-                + (f" and {more} more" if more > 0 else "")
-                + ". They were not persisted, so they are recomputed rather "
-                "than restored."
-            )
-        warn_diagnostic(
-            CashCacheIneffectiveWarning,
-            "CACHE-NOT-WORTH-BYTES",
-            what,
-            "nothing, if the recompute is cheap enough that you had not "
-            "noticed it -- that is the trade being made. To cache it anyway, "
-            "say so explicitly: `@cash:persist` on the statement, or "
-            "`@cash.cache` on the function, both of which cash honours without "
-            "re-taking the decision. Caching something smaller -- the "
-            "aggregate, the sample, the columns you use -- is usually the "
-            "better answer for a value this large. `cash inspect` in a "
-            "terminal lists what the cache does hold, each entry's size "
-            "next to the time it saves.",
-            location=("<cash>", 1),
-        )
+    def release_notices(self) -> None:
+        self.notices.release()
 
     def peek_metadata(self, key: str) -> MetadataDict | None:
         """The fastest tier's metadata for *key*, without counting an access
@@ -403,55 +237,17 @@ class TieredBackend(CacheBackend):
                 return metadata
         return None
 
-    #: How often a process checks whether its disk cache was cleared under it.
-    _GENERATION_CHECK_EVERY = 1.0
-
     def _drop_ram_if_cleared(self) -> None:
-        """Forget RAM-held results when the disk cache was cleared under us.
-
-        `cash clear` on a live service cleared the disk and nothing else: a
-        worker kept serving the pre-clear answer from its RAM tier (round 18,
-        5 stale answers in a row). The disk tier's generation token moves on a
-        clear; this compares it at most once a second -- one stat, not one per
-        hit -- and empties the faster tiers when it moved.
-        """
-        now = time.monotonic()
-        if now - self._generation_checked_at < self._GENERATION_CHECK_EVERY:
-            return
-        self._generation_checked_at = now
+        """Empty the tiers in front of the disk tier when it was cleared from
+        outside this process (`ClearWatcher`)."""
         disk = self._disk_tier()
-        if disk is None:
+        if disk is None or not self._clear_watch.cleared(disk):
             return
-        try:
-            token = disk.generation_token()
-        except Exception:  # noqa: BLE001 - a check must never break a read
-            return
-        # From no stamp to one is a directory being created, not cleared --
-        # unless THIS process wrote that stamp since the last look. A process
-        # that started cold saw no stamp, created one on its first write, and
-        # took the clear that followed -- the stamp gone again with `--all`, or
-        # rewritten by `--function` -- for "still new": 5 of 5 kept serving
-        # the pre-clear answer from RAM (round 19).
-        known = self._generation
-        writes = disk.stamp_writes
-        # This process writing the stamp AGAIN is itself the evidence: it
-        # stamps a directory only when it finds none, so a second stamp means
-        # the first was taken away in between -- by `cash clear --all`, while a
-        # long call ran that began inside the one-second window after the
-        # first write and so was never checked (round 20: 7 of 10).
-        restamped = writes > self._stamp_writes_seen and (
-            self._stamp_writes_seen >= 1 or writes - self._stamp_writes_seen >= 2
-        )
-        if known in (_UNSEEN, None) and writes != self._stamp_writes_seen:
-            known = disk.written_stamp
-        self._stamp_writes_seen = writes
-        if restamped or (known not in (_UNSEEN, None) and token != known):
-            for faster in self.backends[: self.backends.index(disk)]:
-                try:
-                    faster.clear()
-                except Exception:  # noqa: BLE001
-                    logger.debug("could not drop %s after a clear", type(faster).__name__)
-        self._generation = token
+        for faster in self.backends[: self.backends.index(disk)]:
+            try:
+                faster.clear()
+            except Exception:  # noqa: BLE001 - a read must not fail over a stale RAM tier
+                logger.debug("could not drop %s after a clear", type(faster).__name__, exc_info=True)
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         self._drop_ram_if_cleared()
@@ -576,7 +372,7 @@ class TieredBackend(CacheBackend):
             stored_metadata, rebuild_seconds, backend_kind=self._promotion_backend_kind()
         )
         if decision.skipped == "bytes":
-            self._warn_not_worth_its_bytes(key, decision.weight, rebuild_seconds, code=stored_metadata.get("code"))
+            self.notices.not_worth_bytes(key, decision.weight, rebuild_seconds, code=stored_metadata.get("code"))
             self._drop_persisted_call_refs(stored_metadata.get("call_refs"))
             stored_metadata["persist_skipped"] = "bytes"
         if not decision.persist:
@@ -591,7 +387,7 @@ class TieredBackend(CacheBackend):
         writes = self._write_persistent_tiers(key, value, metadata, None, stored_metadata.get("size") or size)
         if not writes.stored:
             if writes.size_refused:
-                self._warn_oversize_not_persisted(key, writes.refused_size, writes.refusing_caps)
+                self.notices.too_big(key, writes.refused_size, writes.refusing_caps)
             return False
         stored_metadata["storage"] = ["RAM", *writes.stored]
         stored_metadata.pop("persist_skipped", None)
@@ -651,7 +447,7 @@ class TieredBackend(CacheBackend):
             if decision.skipped == "bytes":
                 exec_time = metadata.get("execution_time", 0) or 0
                 if decision.report:
-                    self._warn_not_worth_its_bytes(key, decision.weight, exec_time, code=metadata.get("code"))
+                    self.notices.not_worth_bytes(key, decision.weight, exec_time, code=metadata.get("code"))
                 self._drop_persisted_call_refs(metadata.get("call_refs"))
             writes = (
                 self._write_persistent_tiers(key, value, metadata, serializer, cap_size)
@@ -664,7 +460,7 @@ class TieredBackend(CacheBackend):
             # Worth persisting, but too big for every persistent tier's cap: it
             # lives in RAM only, and the user should know why and what to do.
             if size_refused and not any(d != "RAM" for d in stored_destinations):
-                self._warn_oversize_not_persisted(key, writes.refused_size, writes.refusing_caps)
+                self.notices.too_big(key, writes.refused_size, writes.refusing_caps)
 
         # Update metadata with storage info so UI can see it immediately
         if metadata is not None:

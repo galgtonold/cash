@@ -21,6 +21,7 @@ import time
 import pytest
 
 from cash import Cash, FileBackend
+from cash.backends.clear_watch import ClearWatcher
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
@@ -67,7 +68,7 @@ def test_python_dash_m_and_an_import_share_one_entry(tmp_path):
 def test_a_clear_under_a_running_process_empties_its_ram_tier(tmp_path, monkeypatch, how):
     cache_dir = tmp_path / ".cash"
     c = Cash(cache_dir=str(cache_dir), register_magic=False)
-    monkeypatch.setattr(type(c.backend), "_GENERATION_CHECK_EVERY", 0.0)
+    monkeypatch.setattr(ClearWatcher, "CHECK_EVERY", 0.0)
     calls = []
 
     @c.cache
@@ -103,7 +104,7 @@ def test_a_clear_reaches_a_process_that_started_with_no_cache(tmp_path, monkeypa
     cache_dir = tmp_path / ".cash"
     assert not cache_dir.exists()
     c = Cash(cache_dir=str(cache_dir), register_magic=False)
-    monkeypatch.setattr(type(c.backend), "_GENERATION_CHECK_EVERY", 3600.0)
+    monkeypatch.setattr(ClearWatcher, "CHECK_EVERY", 3600.0)
     calls = []
 
     @c.cache
@@ -124,7 +125,7 @@ def test_a_clear_reaches_a_process_that_started_with_no_cache(tmp_path, monkeypa
         from cash.__main__ import cmd_clear
 
         cmd_clear(SimpleNamespace(path=str(cache_dir), all=False, function="f"))
-    monkeypatch.setattr(type(c.backend), "_GENERATION_CHECK_EVERY", 0.0)  # the second has passed
+    monkeypatch.setattr(ClearWatcher, "CHECK_EVERY", 0.0)  # the second has passed
     f(1)
     assert calls == [1, 1], "the RAM tier served a result cleared from disk"
 
@@ -143,7 +144,7 @@ def test_a_clear_during_a_call_begun_inside_the_check_window_is_seen(tmp_path, m
     for trial in range(8):
         cache_dir = tmp_path / f"trial{trial}" / ".cash"
         c = Cash(cache_dir=str(cache_dir), register_magic=False)
-        monkeypatch.setattr(type(c.backend), "_GENERATION_CHECK_EVERY", 3600.0)
+        monkeypatch.setattr(ClearWatcher, "CHECK_EVERY", 3600.0)
         disk = c.backend.backends[-1]
         calls = []
 
@@ -163,7 +164,7 @@ def test_a_clear_during_a_call_begun_inside_the_check_window_is_seen(tmp_path, m
         rate(1)
         long_report(1)  # its store re-creates the directory
         disk._writes.wait_all()
-        monkeypatch.setattr(type(c.backend), "_GENERATION_CHECK_EVERY", 0.0)
+        monkeypatch.setattr(ClearWatcher, "CHECK_EVERY", 0.0)
         rate(1)
         assert calls == [1, 1], f"trial {trial}: the RAM tier served a result cleared from disk"
         c.shutdown()

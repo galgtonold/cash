@@ -430,7 +430,7 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 - The no-op "nothing to clear" message paths (no resolved cache, no sibling
   cache) exit 0; they're treated as success, not failure.
 <!-- claim: cash/backends/cache_dir.py:CacheDirStamp.check @c89cf812, cash/backends/cache_dir.py:CacheDirStamp._entries_are_current @853438c9 -->
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._drop_ram_if_cleared @2d8a0222, cash/__main__.py:_bump_generation @9e2ac2be -->
+<!-- claim: cash/backends/clear_watch.py:ClearWatcher.cleared @04551b75, cash/__main__.py:_bump_generation @9e2ac2be -->
 - **Clearing the cache of a process that is still running** reaches its memory
   too. A running process checks, at most once a second, whether its cache
   directory was cleared (`--all`, `--function`, `--entry`), and if so drops

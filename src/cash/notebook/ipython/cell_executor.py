@@ -965,14 +965,14 @@ class CellExecutor:
         # One CACHE-NOT-WORTH-BYTES per cell, not per statement (round 29).
         backend = self._cell_warning_backend()
         if backend is not None:
-            backend.begin_cell_warnings()
+            backend.hold_notices()
         try:
             with _builtin_trap(self.shell):
                 return self._execute_cell_pipeline(raw_cell, args, kwargs, original_run_cell)
         finally:
             end_file_state_epoch()
             if backend is not None:
-                backend.end_cell_warnings()
+                backend.release_notices()
 
     def _cell_warning_backend(self):
         """The backend that batches this cell's warnings, if it does."""
@@ -1144,14 +1144,14 @@ class CellExecutor:
         begin_file_state_epoch()
         backend = self._cell_warning_backend()  # as execute_cell
         if backend is not None:
-            backend.begin_cell_warnings()
+            backend.hold_notices()
         try:
             with _builtin_trap(self.shell):
                 return await self._execute_cell_pipeline_async(raw_cell, args, kwargs, original_run_cell)
         finally:
             end_file_state_epoch()
             if backend is not None:
-                backend.end_cell_warnings()
+                backend.release_notices()
 
     async def _execute_cell_pipeline_async(
         self,

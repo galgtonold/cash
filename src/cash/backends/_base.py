@@ -197,7 +197,7 @@ class CacheBackend(ABC):
 
     #: How many times this process wrote the generation stamp, and the token
     #: its last write left. Kept by a backend whose :meth:`generation_token`
-    #: can move (the file tier); see ``TieredBackend._drop_ram_if_cleared``.
+    #: can move (the file tier); see ``clear_watch.ClearWatcher``.
     stamp_writes: int = 0
     written_stamp: tuple | None = None
 
@@ -245,12 +245,12 @@ class CacheBackend(ABC):
         Only a tiered backend has tiers to move a value between."""
         return False
 
-    def begin_cell_warnings(self) -> None:  # noqa: B027 - intentional no-op default
-        """Hold warnings about refused stores until `end_cell_warnings`, to say
-        them once for a notebook cell. The default holds nothing."""
+    def hold_notices(self) -> None:  # noqa: B027 - intentional no-op default
+        """Hold notices about values not persisted until `release_notices`,
+        to say them once for a batch of stores. The default holds nothing."""
 
-    def end_cell_warnings(self) -> None:  # noqa: B027 - intentional no-op default
-        """Say the warnings held since `begin_cell_warnings`."""
+    def release_notices(self) -> None:  # noqa: B027 - intentional no-op default
+        """Say the notices held since `hold_notices`."""
 
     @abstractmethod
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:

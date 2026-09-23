@@ -464,7 +464,7 @@ writes through a shared object, so a read-only caller loses nothing — pass
 
 ## CACHE-NOT-WORTH-BYTES {#cache-not-worth-bytes}
 
-<!-- claim: cash/backends/value_policy.py:worth_its_bytes, cash/backends/tiered_backend.py:TieredBackend._warn_not_worth_its_bytes -->
+<!-- claim: cash/backends/value_policy.py:worth_its_bytes, cash/backends/store_notices.py:StoreNotices.not_worth_bytes @bac7fc82 -->
 **What happened.** A value was large enough to matter and cheap enough to
 rebuild that caching it costs more disk than it saves time, so it was not
 persisted. The message names both numbers and the rate between them: cash
@@ -508,7 +508,7 @@ rather than leaving it to chance.
 
 ## CACHE-VALUE-TOO-BIG {#cache-value-too-big}
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @a641a652, cash/backends/file_backend.py:FileBackend.promotion_size_cap @ef38a34e -->
+<!-- claim: cash/backends/store_notices.py:StoreNotices.too_big @0b79929c, cash/backends/file_backend.py:FileBackend.promotion_size_cap @ef38a34e -->
 **What happened.** A single value is larger than every persistent tier's whole
 cap, so there is nowhere durable to put it and Cash offered it to the RAM tier
 instead. The message names the value's size and the cap it was measured

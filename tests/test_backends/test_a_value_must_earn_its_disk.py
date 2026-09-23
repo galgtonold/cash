@@ -133,10 +133,10 @@ class TestThroughABackend:
         b = self._tiered(tmp_path)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            b.begin_cell_warnings()
+            b.hold_notices()
             for i in range(3):
                 self._set(b, f"stmt:c{i}", 200 * MIB, 1.2, code=f"row{i} = expand(orders, {i})")
-            b.end_cell_warnings()
+            b.release_notices()
         b.shutdown()
         ours = [str(w.message) for w in caught if "CACHE-NOT-WORTH-BYTES" in str(w.message)]
         assert len(ours) == 1, ours

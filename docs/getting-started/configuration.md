@@ -259,7 +259,7 @@ a *promotion hint*. A value larger than the cap quietly skips that tier but
 still writes to the unconstrained ones. Most caps are static class-level
 values; the file tier's is *dynamic* — its whole (machine-scaled) cap.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @a641a652, cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/sqlite_backend.py:SQLiteBackend.max_size_bytes == 104857600 -->
+<!-- claim: cash/backends/store_notices.py:StoreNotices.too_big @0b79929c, cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/sqlite_backend.py:SQLiteBackend.max_size_bytes == 104857600 -->
 | Backend | `max_size_bytes` cap | Rationale |
 |---|---|---|
 | `InMemoryBackend` | unbounded | RAM eviction handles pressure separately. |

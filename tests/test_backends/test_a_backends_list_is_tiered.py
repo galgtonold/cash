@@ -10,6 +10,7 @@ from __future__ import annotations
 import shutil
 
 from cash.backends import FileBackend, InMemoryBackend, TieredBackend
+from cash.backends.clear_watch import ClearWatcher
 from cash.core import Cash
 
 
@@ -20,7 +21,7 @@ def test_a_backends_list_builds_the_tiered_stack(tmp_path, monkeypatch):
     c = Cash(backends=[ram, disk], register_magic=False)
     assert isinstance(c.backend, TieredBackend)
     assert c.backend.backends == [ram, disk]
-    monkeypatch.setattr(TieredBackend, "_GENERATION_CHECK_EVERY", 0.0)
+    monkeypatch.setattr(ClearWatcher, "CHECK_EVERY", 0.0)
 
     calls = []
 

@@ -74,7 +74,7 @@ The rate ceiling exists because the first two gates, on their own, filled five u
 > single-tier persistent backend (`Cash(backend=FileBackend(...))` or
 > `SQLiteBackend`), which writes every entry regardless of compute time.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.end_cell_persistence @72ff88af, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @7caa4f6a -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.end_cell_persistence @72ff88af, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @6876d20a -->
 In a notebook, "cheaper to re-run" is judged once more at the end of each cell.
 A statement is often fast only because its inputs are there: `latest =
 sales['week'].max()` takes milliseconds, but after a restart `sales` is gone too,
@@ -142,7 +142,7 @@ notebook's own promotion gate reads the config live as well.
 
 ## Inspecting where a value actually landed
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @7bc0d379, cash/backends/tiered_backend.py:TieredBackend.get @1c90dca6 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @8f018587, cash/backends/tiered_backend.py:TieredBackend.get @1c90dca6 -->
 The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']`. This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (set in `TieredBackend.get`).
 
 When it went no further than RAM, `metadata['persist_skipped']` says why: `"size"` (a tier's size cap), `"bytes"` (the bytes-per-second-saved ceiling), `"compute"` (the notebook's compute floor or its cost model), or `"replaced_in_cell"` (a later statement of the same cell writes that name again, so the version the cell leaves is the one written). Only the first can happen to a `@cash.cache` result: decorating a function is the decision to cache it, so neither the floor nor the cost model is consulted on that path.
@@ -225,7 +225,7 @@ See [Choosing a Backend](choosing-a-backend.md) for how to wire `TieredBackend` 
 
 ## Replacing the cost model
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.__init__ @d6dc57bf -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.__init__ @48547719 -->
 `TieredBackend(tiers, promotion_policy=fn)` takes a `(execution_time, size_bytes) -> bool` callable that decides instead of the cost model for an entry that carries no `cost_model_family` (a decorated call's result does not). `@cash.cache`, `# @cash:persist` and the bytes-per-second ceiling still apply. `TieredBackend(tiers, policy=PersistencePolicy(min_savings_pct=0.1))` changes the savings fraction for a stack you build yourself.
 
 ## Caveats
