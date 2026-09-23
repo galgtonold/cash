@@ -2476,8 +2476,11 @@ class VirtualLineage:
             # (fold into the key + the output-lineage inputs, so a re-seed both
             # re-keys the draw and propagates to everything cached downstream); a
             # seed PRODUCES it. Kept out of the plain ``inputs`` set that feeds the
-            # trace/cacheability. Mirrors the runtime seam byte-for-byte.
-            hidden_reads = hidden_lineage_reads(stmt_code) | self._observed_rng_reads(stmt_code)
+            # trace/cacheability. A draw only OBSERVED at runtime joins the key
+            # but not the output lineage, exactly as at runtime
+            # (``StatementLineageBuilder.capture_and_track_variables``).
+            lineage_hidden_reads = hidden_lineage_reads(stmt_code)
+            hidden_reads = lineage_hidden_reads | self._observed_rng_reads(stmt_code)
             hidden_writes = hidden_lineage_writes(stmt_code)
 
             # A bare ``seed()`` carries no output, so it would return below before
@@ -2515,9 +2518,8 @@ class VirtualLineage:
 
             key_lineage_inputs = inputs | hidden_reads
 
-            # Resolve input lineages (includes ALL inputs for output lineage computation)
             input_lineages_all = self._resolve_virtual_input_lineages(
-                stmt_code, key_lineage_inputs, virtual_lineage, virtual_modules
+                stmt_code, inputs | lineage_hidden_reads, virtual_lineage, virtual_modules
             )
 
             # Compute cache key using the unified function
