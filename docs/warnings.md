@@ -1126,10 +1126,11 @@ control.
 
 ## KEY-DEPENDS-ON-OPAQUE {#key-depends-on-opaque}
 
-<!-- claim: cash/decorator/registry.py:RegistryMixin._register_declared_callable_dep @65dda02c -->
-**What happened.** You named a callable in `depends_on=`, and Cash could not
-read its source to fingerprint it — it is a builtin, or it lives in a compiled
-extension. The declaration was accepted and does nothing.
+<!-- claim: cash/decorator/registry.py:RegistryMixin._register_declared_callable_dep @33eccac7 -->
+**What happened.** You named a callable in `depends_on=`, and Cash has nothing
+to fingerprint it by — no source and no Python bytecode: it is a builtin, a
+NumPy ufunc, or it lives in a compiled extension. All Cash can key on is its
+name (`numpy.add`), so the declaration was accepted and does next to nothing.
 
 **Why it matters.** `depends_on=` is a promise that changing the named thing
 invalidates the entry. For this entry the promise is not being kept, and
@@ -1144,7 +1145,7 @@ function and depending on the wrapper does not work: the wrapper's source is
 what gets hashed, and it does not change when the extension does.
 
 **When it is safe to ignore.** Usually, and this is the common case. If you
-wrote `depends_on=[json.loads]`, or named any other stdlib or pinned
+wrote `depends_on=[math.sqrt]`, or named any other stdlib or pinned
 third-party builtin, that target is not going to change under you between runs,
 so an invalidation you were never going to need costs nothing. Take it
 seriously only when the opaque target is code you compile yourself.

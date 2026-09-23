@@ -13,6 +13,7 @@ from ..analysis.code_analyzer import CodeAnalyzer
 from ..data_source import DataSource, state_token_of
 from ..exceptions import CashCacheIneffectiveWarning
 from ..purity_analyzer import PurityReport, bindings_changed, get_analyzer, resolve_binding
+from ..source_norm import bytecode_identity, compiled_identity
 from .cached_function import PurityMode
 from .call_state import KeyBuildFailed
 
@@ -89,14 +90,13 @@ class RegistryMixin:
 
         Stores a source-hash snapshot and a ``(module, attr_chain)`` path for
         live re-resolution (so an on-disk edit + ``importlib.reload`` is seen).
-        If the dep's source cannot be hashed (builtin / C-extension), warn once
-        that the declared dependency is inert rather than silently ignore it.
+        If the dep has neither source nor bytecode (builtin / C-extension), its
+        identity is only its ``module.qualname``, which a rebuilt extension
+        does not change: warn once that the declared dependency is inert
+        rather than silently ignore it.
         """
-        try:
-            snapshot = self._hash_callable_source(dep)
-        except (OSError, TypeError, ValueError):
-            snapshot = None
-        if snapshot is None:
+        snapshot = self._hash_callable_source(dep)
+        if bytecode_identity(dep) is None and snapshot == compiled_identity(dep):
             self._warn_once(
                 CashCacheIneffectiveWarning,
                 func_name,
