@@ -5,6 +5,7 @@ This module provides comprehensive fixtures for testing Cash functionality
 with proper isolation between tests.
 """
 
+import itertools
 import os
 import shutil
 import sys
@@ -391,6 +392,91 @@ def disable_auto_magic_registration(monkeypatch):
     monkeypatch.setattr(Cash, "register_magic", lambda self: None)
 
 
+# ---------------------------------------------------------------------------
+# Unit tests never write into the checkout.
+#
+# Under pytest, cash anchors its default ``.cash`` to the project pytest was
+# started in, which is this checkout. Every test that built ``Cash()`` or used
+# the module-level ``@cash.cache`` without a ``cache_dir`` wrote there, so a
+# unit run left a ``.cash/`` in the working tree and tests could serve each
+# other's entries. ``CASH_CACHE_DIR`` is the documented way to move the default,
+# so the unit suite sets it: to a per-test folder while a test runs, and to a
+# per-process folder while a test module is imported (a module-level
+# ``@cash.cache`` or ``Cash()`` builds its instance then, and keeps it).
+#
+# Integration and wheel-gate tests are left alone. Their kernels and venvs are
+# other processes that choose their own directories, and would inherit the
+# variable: the per-worker kernel would keep the first test's folder.
+# ---------------------------------------------------------------------------
+_OWN_CACHE_DIRS = ("test_notebook_integration", "test_wheel_gate")
+_DEFAULT_CACHE_DIRS = itertools.count()
+_IMPORT_TIME_CACHE_DIR: str | None = None
+_ENV_BEFORE_IMPORT: list[str | None] = []
+
+
+def _runs_in_process(path: Path) -> bool:
+    return not any(part in _OWN_CACHE_DIRS for part in path.parts)
+
+
+def _import_time_cache_dir() -> str:
+    global _IMPORT_TIME_CACHE_DIR
+    if _IMPORT_TIME_CACHE_DIR is None:
+        import tempfile
+
+        _IMPORT_TIME_CACHE_DIR = tempfile.mkdtemp(prefix="cash-tests-import-")
+    return _IMPORT_TIME_CACHE_DIR
+
+
+def pytest_collectstart(collector):
+    if isinstance(collector, pytest.Module) and _runs_in_process(collector.path):
+        _ENV_BEFORE_IMPORT.append(os.environ.get("CASH_CACHE_DIR"))
+        os.environ["CASH_CACHE_DIR"] = _import_time_cache_dir()
+
+
+def _restore_env_after_import(report) -> None:
+    if not _ENV_BEFORE_IMPORT or not report.nodeid.endswith(".py"):
+        return
+    if not _runs_in_process(Path(report.fspath)):
+        return
+    previous = _ENV_BEFORE_IMPORT.pop()
+    if previous is None:
+        os.environ.pop("CASH_CACHE_DIR", None)
+    else:
+        os.environ["CASH_CACHE_DIR"] = previous
+
+
+def pytest_unconfigure(config):
+    if _IMPORT_TIME_CACHE_DIR is not None:
+        shutil.rmtree(_IMPORT_TIME_CACHE_DIR, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def _default_cache_dir_outside_the_checkout(request, monkeypatch, tmp_path_factory):
+    """Point ``CASH_CACHE_DIR`` at a folder of this test's own, and fail the
+    test if a ``.cash/`` still appears in the repository root.
+
+    A test that needs the real default still gets it with
+    ``monkeypatch.delenv("CASH_CACHE_DIR")``.
+    """
+    if not _runs_in_process(request.node.path):
+        yield
+        return
+    checkout_cache = request.config.rootpath / ".cash"
+    existed = checkout_cache.exists()
+    # Not created here: cash makes it on first write, and most tests never write.
+    per_test = tmp_path_factory.getbasetemp() / "default_cache" / str(next(_DEFAULT_CACHE_DIRS))
+    monkeypatch.setenv("CASH_CACHE_DIR", str(per_test))
+    yield
+    if not existed and checkout_cache.exists():
+        pytest.fail(
+            f"{checkout_cache} appeared while this test ran. A unit test must not "
+            f"write into the checkout: pass cache_dir=tmp_path, or keep the "
+            f"CASH_CACHE_DIR this conftest sets. (Under xdist, a test running at "
+            f"the same time in another worker may be the one that wrote it.)",
+            pytrace=False,
+        )
+
+
 @pytest.fixture
 def isolated_test(monkeypatch, tmp_path):
     """
@@ -505,6 +591,7 @@ def pytest_collectreport(report):
     exactly like a stall.
     """
     _STALL_WATCHDOG.poke(f"collecting {report.nodeid}")
+    _restore_env_after_import(report)
 
 
 def pytest_collection_finish(session):

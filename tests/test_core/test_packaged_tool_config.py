@@ -56,6 +56,7 @@ def test_settings_outside_a_cash_table_are_named_not_read(tmp_path, monkeypatch)
 
 @needs_toml
 def test_a_home_relative_cache_dir_in_a_config_file_is_expanded(tmp_path, monkeypatch):
+    monkeypatch.delenv("CASH_CACHE_DIR", raising=False)  # it would win over the file
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))

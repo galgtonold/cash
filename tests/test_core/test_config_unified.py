@@ -14,7 +14,22 @@ are settable individually via CASH_TIER_<N>_<FIELD> env vars.
 
 from __future__ import annotations
 
+import os
+
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_cash_env(monkeypatch):
+    """Resolve from the layers each test sets up, not the caller's shell.
+
+    The suite's conftest sets ``CASH_CACHE_DIR`` for every test, and a
+    developer may have any ``CASH_*`` variable exported; either would win over
+    the files these tests write and hide the precedence they check.
+    """
+    for name in [n for n in os.environ if n.startswith("CASH_")]:
+        monkeypatch.delenv(name)
+
 
 # Import names that don't exist yet are imported lazily inside tests so
 # pytest collection doesn't blow up before the implementation lands.

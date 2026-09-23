@@ -44,7 +44,8 @@ def _run(project, *args):
         capture_output=True,
         text=True,
         timeout=180,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        # Without the caller's CASH_* settings: the project's pyproject.toml decides.
+        env={**{k: v for k, v in os.environ.items() if not k.startswith("CASH_")}, "PYTHONDONTWRITEBYTECODE": "1"},
     )
     return done
 
