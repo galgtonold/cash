@@ -6,7 +6,6 @@ import ast
 import contextlib
 import hashlib
 import importlib
-import inspect
 import logging
 import os
 import shutil
@@ -14,12 +13,10 @@ import site
 import sys
 import sysconfig
 import tempfile
-import textwrap
 import types
 from typing import Any
 
-from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from ..source_norm import read_code_file, read_code_text, source_identity_digest
+from ..source_norm import callable_identity, module_identity, read_code_text
 from .module_symbols import analysis_for
 
 __all__ = ["FunctionTracker", "is_local_module"]
@@ -122,41 +119,6 @@ def _evict_source_cache(cache: dict, max_size: int) -> None:
             del cache[k]
 
 
-def _update_code_object_hash(h: Any, code_obj: Any) -> None:
-    """Feed *code_obj* into hash *h*, recursing into nested code objects.
-
-    ``str(co_consts)`` is NOT usable for consts holding nested code objects
-    (a factory's inner ``def``): their repr embeds the compile-time memory
-    address, so two compiles of IDENTICAL source hashed differently and the
-    cache key of every consumer drifted run-to-run (fallout). Recurse
-    into nested code objects structurally instead.
-    """
-    h.update(code_obj.co_code)
-    h.update(str(code_obj.co_names).encode("utf-8"))
-    h.update(str(code_obj.co_varnames).encode("utf-8"))
-    for const in code_obj.co_consts:
-        if isinstance(const, types.CodeType):
-            _update_code_object_hash(h, const)
-        else:
-            h.update(repr(const).encode("utf-8"))
-
-
-def _compute_bytecode_hash(func: Any) -> str | None:
-    """Compute a hash from a function's bytecode when source is unavailable."""
-    code_obj = getattr(func, "__code__", None)
-    if code_obj is None and hasattr(func, "__wrapped__"):
-        code_obj = getattr(func.__wrapped__, "__code__", None)
-    if code_obj is None:
-        return None
-    try:
-        h = hashlib.sha256()
-        _update_code_object_hash(h, code_obj)
-        return h.hexdigest()
-    except (AttributeError, TypeError, ValueError) as exc:
-        logger.debug("[FUNC_TRACKER] Failed to compute bytecode hash for function: %s", exc)
-        return None
-
-
 def _reload_from_source(module) -> None:
     """``importlib.reload(module)``, compiled from the source file whatever
     bytecode sits next to it.
@@ -192,8 +154,8 @@ class FunctionTracker:
     MAX_CACHE_SIZE = 500
 
     def __init__(self):
-        # Maps (func_id, func_qualname) -> (source_hash, source_code)
-        self._source_cache: dict[tuple[int, str], tuple[str, str]] = {}
+        # Maps (func_id, func_qualname) -> source_hash
+        self._source_cache: dict[tuple[int, str], str] = {}
         # Maps function_name -> source_hash (for tracking changes)
         self._function_hashes: dict[str, str] = {}
         # Module file tracking: module_name -> last known mtime
@@ -229,10 +191,8 @@ class FunctionTracker:
     def get_function_source_hash(self, func: Any) -> str | None:
         """Get the source hash for a callable.
 
-        Returns None if:
-        - The object is not a callable
-        - The callable is a built-in or C extension
-        - The source cannot be retrieved
+        Returns None for a non-callable, a built-in or C-extension function,
+        or a lambda. Anything else gets its `callable_identity`.
 
         For functions from tracked modules, bypasses the id-based cache to
         always read fresh source from disk — this ensures that module file
@@ -242,7 +202,7 @@ class FunctionTracker:
             func: The callable to hash
 
         Returns:
-            SHA256 hash of the function's source code, or None
+            The callable's identity digest, or None
         """
         if not callable(func):
             return None
@@ -265,32 +225,17 @@ class FunctionTracker:
         # Check cache using id + qualname (id alone isn't enough since objects can be recycled)
         cache_key = (id(func), getattr(func, "__qualname__", ""))
         if use_cache and cache_key in self._source_cache:
-            return self._source_cache[cache_key][0]
+            return self._source_cache[cache_key]
 
-        # Try to get source
-        try:
-            source = inspect.getsource(func)
-            # Dedent to normalize indentation
-            source = textwrap.dedent(source)
-            # Hash the NORMALIZED form: this hash lands in the notebook
-            # statement cache key (see cache_key.py), so hashing raw text
-            # meant a comment added to any referenced function recomputed
-            # the statement. The raw source is still cached alongside for
-            # callers that want to read it.
-            source_hash = source_identity_digest(source)
-
-            _evict_source_cache(self._source_cache, self.MAX_CACHE_SIZE)
-            self._source_cache[cache_key] = (source_hash, source)
-            return source_hash
-
-        except SOURCE_RETRIEVAL_ERRORS:
-            # Can't get source - try bytecode fallback (works for IPython-defined
-            # functions when %cash_on intercepts execution)
-            source_hash = _compute_bytecode_hash(func)
-            if source_hash is not None:
-                _evict_source_cache(self._source_cache, self.MAX_CACHE_SIZE)
-                self._source_cache[cache_key] = (source_hash, "<bytecode>")
-                return source_hash
+        # Hashed in its NORMALIZED form (`callable_identity`): this hash lands
+        # in the notebook statement cache key (see cache_key.py), so hashing
+        # raw text meant a comment added to any referenced function
+        # recomputed the statement. A function whose source cannot be read
+        # (defined in a cell cash intercepted) is keyed by its bytecode.
+        source_hash = callable_identity(func)
+        _evict_source_cache(self._source_cache, self.MAX_CACHE_SIZE)
+        self._source_cache[cache_key] = source_hash
+        return source_hash
 
     def get_callable_source_hashes(self, input_names: set[str], user_ns: dict[str, Any]) -> dict[str, str]:
         """Get source hashes for all callable inputs.
@@ -854,13 +799,7 @@ class FunctionTracker:
             module = sys.modules.get(module_name)
             if module is None:
                 return hashlib.sha256(b"unknown").hexdigest()
-            file_path = getattr(module, "__file__", None)
-            if not file_path or not os.path.isfile(file_path):
-                return hashlib.sha256(b"unknown").hexdigest()
-            try:
-                return hashlib.sha256(read_code_file(file_path)).hexdigest()
-            except OSError:
-                return hashlib.sha256(b"unknown").hexdigest()
+            return module_identity(module) or hashlib.sha256(b"unknown").hexdigest()
 
         # Compute hash from only the accessed symbols (sorted for determinism)
         hasher = hashlib.sha256()

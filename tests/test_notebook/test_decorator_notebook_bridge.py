@@ -523,27 +523,27 @@ class TestSourceAwareCacheInvalidation:
         assert compute(5) == 15  # Should not return stale 10
 
     def test_bytecode_fallback_when_source_unavailable(self):
-        """CodeAnalyzer.get_source_hash should use bytecode when inspect.getsource fails."""
-        from cash.analysis.code_analyzer import CodeAnalyzer
+        """callable_identity should use bytecode when inspect.getsource fails."""
+        from cash.source_norm import callable_identity
 
         def my_func(x):
             return x + 1
 
         # Normal source hash works
-        h1 = CodeAnalyzer.get_source_hash(my_func)
+        h1 = callable_identity(my_func)
         assert h1 != ""
 
         # Simulate getsource failure (e.g., IPython context with %cash_on)
-        with patch("cash.analysis.code_analyzer.inspect.getsource", side_effect=OSError):
-            h2 = CodeAnalyzer.get_source_hash(my_func)
+        with patch("cash.source_norm.inspect.getsource", side_effect=OSError):
+            h2 = callable_identity(my_func)
             assert h2 != "", "Should fall back to bytecode hash"
 
         # Different function body should produce different bytecode hash
         def my_func2(x):
             return x + 2
 
-        with patch("cash.analysis.code_analyzer.inspect.getsource", side_effect=OSError):
-            h3 = CodeAnalyzer.get_source_hash(my_func2)
+        with patch("cash.source_norm.inspect.getsource", side_effect=OSError):
+            h3 = callable_identity(my_func2)
             assert h3 != ""
             assert h3 != h2, "Different bytecodes should produce different hashes"
 
@@ -562,26 +562,34 @@ class TestSourceAwareCacheInvalidation:
 
         # Clear cache and simulate getsource failure
         ft._source_cache.clear()
-        with patch("cash.tracking.function_tracker.inspect.getsource", side_effect=OSError):
+        with patch("cash.source_norm.inspect.getsource", side_effect=OSError):
             h2 = ft.get_function_source_hash(my_func)
             assert h2 is not None, "Should fall back to bytecode hash"
 
     def test_bytecode_fallback_for_wrapped_function(self):
-        """Bytecode fallback should follow __wrapped__ for functools.wraps wrappers."""
+        """A functools.wraps wrapper whose source cannot be read is keyed by its
+        own compiled body AND by what it wraps: every function one decorator
+        wraps shares the wrapper's code."""
         import functools
 
-        from cash.analysis.code_analyzer import CodeAnalyzer
+        from cash.source_norm import callable_identity
 
-        def original(x):
+        def deco(fn):
+            @functools.wraps(fn)
+            def wrapper(*args, **kwargs):
+                return fn(*args, **kwargs)
+
+            return wrapper
+
+        def double(x):
             return x * 2
 
-        @functools.wraps(original)
-        def wrapper(*args, **kwargs):
-            return original(*args, **kwargs)
+        def triple(x):
+            return x * 3
 
-        with patch("cash.analysis.code_analyzer.inspect.getsource", side_effect=OSError):
-            h = CodeAnalyzer.get_source_hash(wrapper)
-            assert h != "", "Should use __wrapped__.__code__ as fallback"
+        with patch("cash.source_norm.inspect.getsource", side_effect=OSError):
+            assert callable_identity(deco(double)) != callable_identity(deco(triple))
+            assert callable_identity(deco(double)) == callable_identity(deco(double))
 
 
 # ============================================================================

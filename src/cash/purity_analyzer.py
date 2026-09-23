@@ -83,9 +83,10 @@ from .purity_flow import (
     receiver_is_fresh,
 )
 from .source_norm import (
-    bytecode_identity,
+    callable_identity,
+    compiled_identity,
     normalize_source_for_hash,
-    source_identity_digest,
+    own_source,
 )
 from .tracking.function_tracker import is_local_module
 from .utils import MAIN_MODULE_NAMES, resolve_main_module
@@ -1415,21 +1416,6 @@ def resolve_local_import(module_name: str, prefix: tuple[str, ...], root_module:
     return obj
 
 
-def own_source(func: Any) -> str:
-    """``inspect.getsource``, without following ``__wrapped__`` for a function.
-
-    ``getsource`` unwraps, so for a ``functools.wraps`` wrapper it returned
-    the WRAPPED function's text: the wrapper's own body was never read, and
-    the wrapped body was analysed in the wrapper's namespace -- the decorator
-    module's globals -- where none of its helpers resolve. Reading the code
-    object gives each half its own text; the walk reaches the other half
-    through the wrapper's closure or ``__wrapped__``.
-    """
-    if isinstance(func, types.FunctionType) and hasattr(func, "__wrapped__"):
-        return inspect.getsource(func.__code__)
-    return inspect.getsource(func)
-
-
 def _callee_chain(node: ast.AST) -> tuple[str, ...] | None:
     """The name chain a call site uses: ``_sieve`` -> ``("_sieve",)``,
     ``mod.sub.f`` -> ``("mod", "sub", "f")``; None for anything else."""
@@ -1980,10 +1966,8 @@ class PurityAnalyzer:
                 src = own_source(func)
             except SOURCE_RETRIEVAL_ERRORS:
                 opaque.append(qualname)
-                digest = bytecode_identity(func)
-                if digest is not None:
-                    helper_hashes[qualname] = digest
-                    _record_resolution_path(func, qualname)
+                helper_hashes[qualname] = compiled_identity(func)
+                _record_resolution_path(func, qualname)
                 continue
             src = textwrap.dedent(src)
 
@@ -1995,7 +1979,9 @@ class PurityAnalyzer:
             # helper no longer invalidates its callers, which was the more
             # surprising half of the old behaviour: users expect editing a
             # function to recompute it, not editing something it calls.
-            helper_hashes[qualname] = source_identity_digest(src)
+            # `callable_identity`, the digest the live check recomputes: for a
+            # wrapper it folds in what it wraps, which the text alone does not.
+            helper_hashes[qualname] = callable_identity(func)
 
             _record_resolution_path(func, qualname)
 

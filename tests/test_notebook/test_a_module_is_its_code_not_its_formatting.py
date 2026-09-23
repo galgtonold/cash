@@ -23,14 +23,15 @@ import os
 
 import pytest
 
-from cash.notebook.statement import file_deps
-from cash.notebook.statement.file_deps import _module_identity, read_module_source_hash
+from cash import source_norm
+from cash.notebook.statement.file_deps import read_module_source_hash
+from cash.source_norm import _module_text_identity
 
 BASE = "def load(n):\n    return list(range(n))\n\ndef report(rows):\n    return len(rows)\n"
 
 
 def _id(text):
-    return _module_identity(text.encode("utf-8"))
+    return _module_text_identity(text.encode("utf-8"))
 
 
 class TestWhatStopsMattering:
@@ -97,11 +98,11 @@ class TestItNeverBreaks:
 
     def test_something_that_is_not_python_falls_back_to_its_bytes(self):
         raw = b"\xff\xfe this is not a python file"
-        assert _module_identity(raw) == raw
+        assert _module_text_identity(raw) == raw
 
     def test_a_syntax_error_falls_back_to_its_bytes(self):
         raw = b"def broken(:\n"
-        assert _module_identity(raw) == raw
+        assert _module_text_identity(raw) == raw
 
     def test_a_missing_file_still_returns_none(self, tmp_path):
         assert read_module_source_hash(str(tmp_path / "nope.py")) is None
@@ -180,7 +181,7 @@ class TestTheMemo:
         os.utime(path, ns=(old, old))
 
         read_module_source_hash(str(path))
-        assert str(path) in file_deps._IDENTITY_CACHE
+        assert str(path) in source_norm._MODULE_IDENTITY_CACHE
 
 
 @pytest.mark.parametrize(

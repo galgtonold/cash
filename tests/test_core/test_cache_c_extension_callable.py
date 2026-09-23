@@ -7,7 +7,7 @@ call:
   reachable via ``__wrapped__`` but which has no ``__globals__`` — raised
   ``AttributeError`` in ``find_called_functions``.
 * ``c.cache(len)`` / ``c.cache(np.add)`` — a builtin / ufunc with no source and
-  no ``__code__`` — raised ``ValueError`` from ``get_source_hash``.
+  no ``__code__`` — raised ``ValueError`` while hashing its source.
 * ``c.cache(functools.partial(...))`` — no ``__name__``/``__qualname__`` — raised
   ``AttributeError`` from ``get_func_key``.
 

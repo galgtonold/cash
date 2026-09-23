@@ -11,7 +11,6 @@ import ast
 import builtins
 import datetime
 import functools
-import hashlib
 import inspect
 import logging
 import textwrap
@@ -22,7 +21,6 @@ from collections.abc import Callable
 from typing import Any
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from ..source_norm import bytecode_identity, source_identity_digest
 from .cacheability import callee_mutated_globals_for_tree
 
 __all__ = ["CodeAnalyzer"]
@@ -450,68 +448,6 @@ class _ForbiddenVisitor(ast.NodeVisitor):
 
 class CodeAnalyzer:
     """Analyzes function code to determine dependencies and compute hashes."""
-
-    @staticmethod
-    def opaque_identity(func: Callable) -> str:
-        """Return a stable identity string for an OPAQUE callable.
-
-        Builtins, C-extension functions, ufuncs, ``functools.partial`` objects,
-        and other callables without retrievable source/``__code__`` cannot be
-        source-hashed or AST-analyzed. We key them on a best-effort stable
-        identity — ``module.qualname`` — so caching still works and does not
-        crash. Falls back to ``__name__`` then ``repr()`` when qualname is
-        absent.
-        """
-        # A partial reprs as ``functools.partial(<function slow at 0x...>, 1)``:
-        # an ADDRESS, so its identity differed in every process and a cached
-        # partial never hit across processes (found attacking the decorator
-        # before round 26). What it wraps is stable; what it binds reaches the
-        # key through the arguments and the function's own namespace name.
-        depth = 0
-        while isinstance(func, functools.partial) and depth < 8:
-            func = func.func
-            depth += 1
-        module = getattr(func, "__module__", None) or "?"
-        qualname = getattr(func, "__qualname__", None) or getattr(func, "__name__", None) or repr(func)
-        return f"{module}.{qualname}"
-
-    @staticmethod
-    def get_source_hash(func: Callable) -> str:
-        """Compute SHA256 hash of the function's source code.
-
-        Falls back to hashing the function's bytecode (``__code__``) when
-        ``inspect.getsource()`` fails — for example, functions defined inside
-        IPython cells intercepted by ``%cash_on``.
-
-        Last resort: for OPAQUE callables (builtins, C extensions, ufuncs,
-        ``functools.partial``) that have neither retrievable source nor a usable
-        ``__code__``, hash a stable identity string instead of raising, so they
-        can be cached without crashing.
-        """
-        try:
-            source = inspect.getsource(func)
-            return source_identity_digest(source)
-        except SOURCE_RETRIEVAL_ERRORS:
-            pass  # Expected: source unavailable for builtins/C extensions, or a
-            # co_filename that doesn't tokenize as Python; fall through to
-            # the bytecode hash.
-
-        # ``bytecode_identity`` rather than ``str(co_consts)``: a nested code
-        # object's repr embeds a memory ADDRESS, so the old spelling handed
-        # back a different digest in every process for any function
-        # containing a nested def or lambda -- a permanent miss, not a stale
-        # hit, but just as much a broken cache.
-        target = func
-        if getattr(func, "__code__", None) is None and hasattr(func, "__wrapped__"):
-            target = func.__wrapped__
-        digest = bytecode_identity(target)
-        if digest is not None:
-            return digest
-
-        # Opaque callable (builtin / C-extension / ufunc / partial): key on a
-        # stable identity rather than crashing.
-        identity = CodeAnalyzer.opaque_identity(func)
-        return hashlib.sha256(f"__cash_opaque__:{identity}".encode("utf-8")).hexdigest()
 
     @staticmethod
     def find_called_functions(

@@ -1,7 +1,7 @@
 import pytest
 
 from cash import Cash
-from cash.analysis.code_analyzer import CodeAnalyzer
+from cash.source_norm import callable_identity
 
 from ..dummy_lib import lib_func
 
@@ -43,9 +43,9 @@ def reset_module_state():
     main_runs = 0
 
     # Ensure source hashes are correct (use module-qualified keys)
-    app.source_hashes[Cash.get_func_key(dep2)] = CodeAnalyzer.get_source_hash(dep2)
-    app.source_hashes[Cash.get_func_key(main_func2)] = CodeAnalyzer.get_source_hash(main_func2)
-    app.source_hashes[Cash.get_func_key(lib_func)] = CodeAnalyzer.get_source_hash(lib_func)
+    app.source_hashes[Cash.get_func_key(dep2)] = callable_identity(dep2)
+    app.source_hashes[Cash.get_func_key(main_func2)] = callable_identity(main_func2)
+    app.source_hashes[Cash.get_func_key(lib_func)] = callable_identity(lib_func)
 
     yield
 

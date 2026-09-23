@@ -22,15 +22,13 @@ in ``file_tracker.py``, a different layer (the import-hook that wraps
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import logging
 import os
 from typing import TYPE_CHECKING, Any
 
-from ...analysis.annotations import ANNOTATION_PATTERN
 from ...remote_source import RemoteFileDataSource
-from ...source_norm import drop_docstrings, read_code_file, stat_has_settled
+from ...source_norm import module_identity
 from ...tracking.file_dep_snapshot import realpath_of_read_this_run
 from ...utils import normalize_path
 from ...value_types import IMMUTABLE_PRIMS
@@ -125,103 +123,13 @@ def compute_file_hash_component(
     return ""
 
 
-#: ``{path: (mtime_ns, size, identity_digest)}``. One entry per file, replaced
-#: when it moves. The identity below parses the file, which is far too much to
-#: repeat per statement -- and even the plain read it replaces was one file
-#: read per statement per module.
-_IDENTITY_CACHE: dict[str, tuple[int, int, str]] = {}
-
-
-def _module_identity(raw: bytes) -> bytes:
-    """What a module file says, with what it merely looks like removed.
-
-    The digest of this lands in the lineage of every name bound from the
-    module and in the key of every statement that reads one, so anything it
-    covers re-runs work when it moves. Hashing the FILE meant a comment, a
-    blank line or a reformat re-ran everything built on the module: measured
-    2026-09-21, adding one comment to a module re-executed a 1.2 s call that
-    used a function the edit did not touch. Round 27 r27s2 reported the same
-    thing at scale -- editing one helper re-read all 10,000 of their ticket
-    files, 48.7 s against a 17.3 s control, later 9.1x.
-
-    So: the module re-rendered from its AST, which drops comments and
-    normalises formatting, and carries no line or column numbers -- without
-    that last part, inserting a comment at the top would still move every
-    node below it and nothing would be gained.
-
-    ``ast.unparse`` rather than ``ast.dump``: both drop what we want dropped,
-    but ``dump`` prints the AST's own field names, so a Python release that
-    adds a field moves every module's digest. Generated source moves less.
-    Neither is a promise across versions, and cache keys are already not
-    portable across machines (see docs/how-it-works/cache-keys-and-lineage.md),
-    but there is no reason to add a reason.
-
-    Docstrings go too, the module's own included (``strip_docstrings``): they
-    are prose, the same as comments.
-
-    And ``@cash:`` directives stay, because they are instructions TO cash --
-    ``# @cash:assume-safe`` on a line waives a purity check, and cash's own
-    diagnostic says "@cash: directives are part of its source identity".
-
-    Each is kept as its WHOLE line, in source order, which anchors it to the
-    code it annotates: moving ``# @cash:assume-safe`` from one function to
-    another moves the digest, where keeping only the directive text would
-    have made that invisible -- the unsafe direction. The cost is that
-    reformatting a line that carries a directive still re-runs work. That is
-    a narrow class and it errs toward invalidating.
-
-    Matched with ``annotations.ANNOTATION_PATTERN`` itself, so the set of
-    directives that counts here cannot drift from the set cash parses.
-
-    Falls back to the raw bytes for anything that will not decode or parse --
-    a data file among the dependencies, a module written for a different
-    Python. That is exactly the previous behaviour, so nothing that works
-    today can be made worse by this.
-    """
-    try:
-        text = raw.decode("utf-8")
-        tree = ast.parse(text)
-        drop_docstrings(tree, module=True)
-        rendered = ast.unparse(tree)
-    except (UnicodeDecodeError, SyntaxError, ValueError, AttributeError, RecursionError):
-        return raw
-
-    parts = [rendered]
-    parts.extend(line.strip() for line in text.splitlines() if ANNOTATION_PATTERN.search(line))
-    return "\n".join(parts).encode("utf-8")
-
-
-def _identity_digest(path: str) -> str | None:
-    """:func:`_module_identity` of *path*, memoised on its stat."""
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
-    cached = _IDENTITY_CACHE.get(path)
-    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-        return cached[2]
-    settled = stat_has_settled(st)
-    try:
-        raw = read_code_file(path)
-    except OSError:
-        return None
-    # Keyed on the same signal `FunctionTracker.check_tracked_modules` uses to
-    # notice a module changed at all, so a change this memo would miss is one
-    # cash would not have reloaded for either -- once the file has settled,
-    # since a same-size save inside one mtime tick keeps that stat too.
-    digest = hashlib.sha256(_module_identity(raw)).hexdigest()
-    if settled:
-        _IDENTITY_CACHE[path] = (st.st_mtime_ns, st.st_size, digest)
-    return digest
-
-
 def read_module_source_hash(mod_file: str, dep_files: set[str] | None = None) -> str | None:
     """Combined identity hash of a module file and its dependency files.
 
-    See :func:`_module_identity` for what "identity" covers and why it is not
-    the file's bytes.
+    See `cash.source_norm.module_identity` for what "identity" covers and why
+    it is not the file's bytes.
     """
-    own = _identity_digest(mod_file)
+    own = module_identity(mod_file)
     if own is None:
         logger.debug("[MODULE_HASH] Could not read module file: %s", mod_file)
         return None
@@ -230,7 +138,7 @@ def read_module_source_hash(mod_file: str, dep_files: set[str] | None = None) ->
     hasher = hashlib.sha256()
     hasher.update(own.encode("utf-8"))
     for dep_path in sorted(dep_files):
-        dep = _identity_digest(dep_path)
+        dep = module_identity(dep_path)
         if dep is None:
             logger.debug("[MODULE_HASH] Could not read dependency file: %s", dep_path)
             continue

@@ -27,6 +27,7 @@ import pytest
 import cash
 from cash.analysis.code_analyzer import CodeAnalyzer
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
+from cash.source_norm import callable_identity
 
 # Prose that fails to tokenize on EVERY supported Python.
 #
@@ -75,10 +76,10 @@ class TestSourceRetrievalDegrades:
         assert not isinstance(exc_info.value, (OSError, SyntaxError))
         assert isinstance(exc_info.value, SOURCE_RETRIEVAL_ERRORS)
 
-    def test_get_source_hash_falls_back_instead_of_raising(self, tmp_path):
+    def test_callable_identity_falls_back_instead_of_raising(self, tmp_path):
         demo = _func_from_non_python_file(tmp_path)
 
-        digest = CodeAnalyzer.get_source_hash(demo)
+        digest = callable_identity(demo)
 
         assert isinstance(digest, str) and len(digest) == 64
 
@@ -86,7 +87,7 @@ class TestSourceRetrievalDegrades:
         """The bytecode fallback must be deterministic or every call is a miss."""
         demo = _func_from_non_python_file(tmp_path)
 
-        assert CodeAnalyzer.get_source_hash(demo) == CodeAnalyzer.get_source_hash(demo)
+        assert callable_identity(demo) == callable_identity(demo)
 
     def test_hash_still_distinguishes_different_bodies(self, tmp_path):
         """Degrading must not collapse distinct functions onto one key."""
@@ -98,7 +99,7 @@ class TestSourceRetrievalDegrades:
         exec(compile("def demo(x):\n    return x * 2\n", str(doc), "exec"), ns_a)
         exec(compile("def demo(x):\n    return x * 3\n", str(doc), "exec"), ns_b)
 
-        assert CodeAnalyzer.get_source_hash(ns_a["demo"]) != CodeAnalyzer.get_source_hash(ns_b["demo"])
+        assert callable_identity(ns_a["demo"]) != callable_identity(ns_b["demo"])
 
     def test_find_called_functions_degrades_to_empty(self, tmp_path):
         demo = _func_from_non_python_file(tmp_path)

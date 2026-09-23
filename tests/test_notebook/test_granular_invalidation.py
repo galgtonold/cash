@@ -443,7 +443,9 @@ class TestComputeModuleSymbolHash:
         assert h1 == h2
 
     def test_no_attrs_falls_back_to_full_hash(self, temp_module):
-        """Empty/None attrs falls back to full file hash."""
+        """Empty/None attrs falls back to the whole module's identity."""
+        from cash.source_norm import module_identity
+
         module_name, module_file, _ = temp_module
         ft = FunctionTracker()
         importlib.import_module(module_name)
@@ -452,9 +454,9 @@ class TestComputeModuleSymbolHash:
         h_none = ft.compute_module_symbol_hash(module_name, None)
         h_empty = ft.compute_module_symbol_hash(module_name, set())
 
-        # Both should be the full file hash
-        with open(module_file, "rb") as f:
-            expected_full = hashlib.sha256(f.read()).hexdigest()
+        # Both should be the whole module's identity, as its lineage uses
+        expected_full = module_identity(str(module_file))
+        assert expected_full is not None
         assert h_none == expected_full
         assert h_empty == expected_full
 

@@ -1341,7 +1341,7 @@ answering it after the restart. The same happened to the cached function
 itself, in a worker that imported the old code and made its first call after
 the deploy landed.
 
-<!-- claim: cash/core.py:Cash._pin_own_source @06d168df -->
+<!-- claim: cash/core.py:Cash._pin_own_source @e1c113f1 -->
 So cash keys that code by what is **actually running** instead: a cached
 function by the source it was imported with (its identity is taken when the
 decorator runs, not at its first call — and by its loaded bytecode when even
@@ -1750,7 +1750,7 @@ Whichever you pick, pick it per statement or per function. Switching caching off
 across the board to "fix" this trades a known frozen value for a slow notebook
 and gains nothing.
 
-<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @76def961 -->
+<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @3d9482ce -->
 The decorator form is checked when the decorator is applied rather than when the
 function runs, so it appears at import time, before the function has been called
 once, and once per decorated function. It reads that function's source alone: a
@@ -1914,7 +1914,7 @@ failing until you fix its cause.
 
 ## STORE-CODE-CHANGED {#store-code-changed}
 
-<!-- claim: cash/core.py:Cash._code_moved_since_keyed @8553faec, cash/core.py:Cash._code_functions @bbc5e6f3 -->
+<!-- claim: cash/core.py:Cash._code_moved_since_keyed @004a5141, cash/core.py:Cash._code_functions @bbc5e6f3 -->
 **What happened.** The file holding your cached function, a helper it calls, or
 another cached function it depends on changed on disk after this process read
 the code it keys that function by — and the change touched the code this call

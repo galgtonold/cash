@@ -91,18 +91,21 @@ from .purity_analyzer import (
     is_mock,
     local_import_map,
     own_code_is_user,
-    own_source,
     resolve_binding,
     resolve_local_import,
 )
 from .remote_source import measured_validation, validation_is_expensive, warn_validation_cost_once
 from .source_norm import (
     bytecode_identity,
+    callable_identity,
     class_functions,
     code_consts_without_docstring,
+    compiled_identity,
     loaded_class_identity,
     loaded_code_matches_disk,
-    source_identity_digest,
+    own_source,
+    own_source_digest,
+    source_digest,
 )
 from .tracking.file_dep_snapshot import (
     ACTIVE_CONFIG,
@@ -1403,14 +1406,6 @@ def _is_cow_pandas(value: Any) -> bool:
     return _COW_PANDAS
 
 
-def _disk_text_digest(fn: Any) -> str:
-    """The digest `Cash._hash_callable_source` keys *fn* by, read from its file
-    now. Raises what ``inspect.getsource`` raises."""
-    if isinstance(fn, types.FunctionType) and hasattr(fn, "__wrapped__"):
-        return source_identity_digest(inspect.getsource(fn.__code__))
-    return source_identity_digest(inspect.getsource(fn))
-
-
 def _stat_code_file(fn: Any) -> tuple[Any, str, int, int] | None:
     """``(code, path, size, mtime_ns)`` for *fn*'s source file, or None."""
     code = getattr(fn, "__code__", None)
@@ -2497,9 +2492,13 @@ class Cash:
         HELPER -- so what this returns decides whether editing a helper
         recomputes its callers.
 
+        This is `cash.source_norm.callable_identity`, plus a memo per code
+        object and a check that the file still holds the code that runs.
+
         Resolution order:
 
-        1. ``inspect.getsource(fn)`` - primary, reduced via
+        1. ``own_source(fn)`` - primary (for a ``functools.wraps`` wrapper its
+           own code, with the identity of what it wraps folded in), reduced via
            ``source_identity_digest`` so that a comment, a reformat, or a
            change to cash's own ``@....cache`` decorator arguments in a
            helper does not invalidate the functions that call it. Works
@@ -2513,12 +2512,17 @@ class Cash:
            see ``return "alpha"`` become ``return "omega"``. Bytecode is
            stable within a Python version; an upgrade conservatively
            invalidates the cache.
-        3. ``type(fn).__qualname__`` - last resort. Doesn't differentiate
-           instances of the same class; the user gets stability within
-           a process but coarse cross-process behavior.
+        3. ``opaque_identity(fn)`` (``module.qualname``) - last resort, for a
+           builtin, a ufunc or a partial. Doesn't differentiate instances of
+           the same class; stable across processes, but coarse.
         """
         memo_owner: Any = getattr(fn, "__code__", None)
-        if memo_owner is None and isinstance(fn, type):
+        if (memo_owner is None and isinstance(fn, type)) or (
+            isinstance(fn, types.FunctionType) and hasattr(fn, "__wrapped__")
+        ):
+            # A class has no code object; a `functools.wraps` wrapper shares
+            # its code with every function its decorator wraps, and its
+            # identity includes the one it wraps -- so it is memoized as itself.
             memo_owner = fn
         memo_key = id(memo_owner) if memo_owner is not None else None
         if memo_key is not None:
@@ -2535,37 +2539,26 @@ class Cash:
         # restarted process (CAS-110). Key such a helper by what actually runs.
         # One os.stat in the normal case; see `loaded_code_matches_disk`.
         if not loaded_code_matches_disk(fn):
-            digest = loaded_class_identity(fn) if isinstance(fn, type) else bytecode_identity(fn)
+            digest = loaded_class_identity(fn) if isinstance(fn, type) else compiled_identity(fn)
             if digest is not None:
                 _warn_source_changed_since_load(fn)
                 if memo_key is not None and len(_SOURCE_HASH_MEMO) < _SOURCE_HASH_MEMO_MAX:
                     _SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
                 return digest
 
+        # `callable_identity`, in its two halves: only a digest read from the
+        # file is recorded against the file's stat.
         keyed_stat = _stat_code_file(fn)
-        try:
-            # A `functools.wraps` wrapper is keyed by its OWN code. Plain
-            # `getsource` unwraps, so it returned the WRAPPED function's text --
-            # memoized under the wrapper's code object, which every function
-            # that decorator wraps shares: the second helper wrapped by it was
-            # silently keyed by the first one's source (round 18). The wrapped
-            # function is followed as a helper of its own.
-            if isinstance(fn, types.FunctionType) and hasattr(fn, "__wrapped__"):
-                src = inspect.getsource(fn.__code__)
-            else:
-                src = inspect.getsource(fn)
-            digest = source_identity_digest(src)
-            if memo_key is not None and len(_SOURCE_HASH_MEMO) < _SOURCE_HASH_MEMO_MAX:
-                _SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
-            if keyed_stat is not None and len(_CODE_KEYED_STATS) < _SOURCE_HASH_MEMO_MAX:
-                _CODE_KEYED_STATS[id(keyed_stat[0])] = (*keyed_stat, digest)
-            return digest
-        except SOURCE_RETRIEVAL_ERRORS:
-            pass
-        digest = bytecode_identity(fn)
-        if digest is not None:
-            return digest
-        return hashlib.sha256(type(fn).__qualname__.encode("utf-8")).hexdigest()
+        digest = source_digest(fn)
+        if digest is None:
+            return compiled_identity(fn)
+        if memo_key is not None and len(_SOURCE_HASH_MEMO) < _SOURCE_HASH_MEMO_MAX:
+            _SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
+        if keyed_stat is not None and len(_CODE_KEYED_STATS) < _SOURCE_HASH_MEMO_MAX:
+            own = digest if memo_owner is not fn else own_source_digest(fn)
+            if own is not None:
+                _CODE_KEYED_STATS[id(keyed_stat[0])] = (*keyed_stat, own)
+        return digest
 
     @overload
     def cache(self, func: Callable[P, T]) -> Callable[P, T]: ...
@@ -2804,7 +2797,7 @@ class Cash:
         """Register a function in the cache graph and return its key."""
         func_name = self.get_func_key(func)
         self.functions[func_name] = func
-        new_hash = CodeAnalyzer.get_source_hash(func)
+        new_hash = callable_identity(func)
         old_hash = self.source_hashes.get(func_name)
         if old_hash and old_hash != new_hash:
             self._analyzed.discard(func_name)
@@ -2905,9 +2898,9 @@ class Cash:
         keyed_stat = _stat_code_file(func)
         if source_hash is None:
             if loaded_code_matches_disk(func):
-                source_hash = CodeAnalyzer.get_source_hash(func)
+                source_hash = callable_identity(func)
             else:
-                source_hash = bytecode_identity(func) or CodeAnalyzer.get_source_hash(func)
+                source_hash = bytecode_identity(func) or callable_identity(func)
                 _warn_source_changed_since_load(func)
                 keyed_stat = None  # keyed by what runs, not by the file
         if (
@@ -2915,10 +2908,9 @@ class Cash:
             and id(keyed_stat[0]) not in _CODE_KEYED_STATS
             and len(_CODE_KEYED_STATS) < _SOURCE_HASH_MEMO_MAX
         ):
-            try:
-                _CODE_KEYED_STATS[id(keyed_stat[0])] = (*keyed_stat, _disk_text_digest(func))
-            except SOURCE_RETRIEVAL_ERRORS:
-                pass
+            disk_digest = own_source_digest(func)
+            if disk_digest is not None:
+                _CODE_KEYED_STATS[id(keyed_stat[0])] = (*keyed_stat, disk_digest)
         pin = source_hash
         if getattr(func, "__name__", "") == "<lambda>":
             code = getattr(func, "__code__", None)
@@ -6789,14 +6781,11 @@ class Cash:
         cached = self._user_class_src_cache.get(cls)
         if cached is not None:
             return cached
-        try:
-            h = source_identity_digest(inspect.getsource(cls))
-        except SOURCE_RETRIEVAL_ERRORS:
-            # No source to hash (or it doesn't parse). _hash_callable_source
-            # has no class branch of its own: a class has no __code__, so ITS
-            # fallback chain falls through to type(fn).__qualname__ --
-            # literally "type" for EVERY class, colliding all source-less
-            # classes onto one hash. Try the class-aware surface first.
+        h = source_digest(cls)
+        if h is None:
+            # No source to hash (or it doesn't parse). A class has no
+            # __code__, so the callable fallback would key it on its name
+            # alone; the class-aware surface sees its members.
             h = self._code_surface_hash(cls) or self._hash_callable_source(cls)
         if len(self._user_class_src_cache) < 4096:
             self._user_class_src_cache[cls] = h
@@ -8961,10 +8950,8 @@ class Cash:
             now = stats[path]
             if now is None or now == (rec[2], rec[3]) or path in moved:
                 continue
-            try:
-                same_text = _disk_text_digest(fn) == rec[4]
-            except SOURCE_RETRIEVAL_ERRORS:
-                same_text = False  # the function is gone from the file
+            # None -- the function is gone from the file -- is not the same text.
+            same_text = own_source_digest(fn) == rec[4]
             if same_text:
                 _CODE_KEYED_STATS[id(code)] = (code, path, *now, rec[4])
             else:
@@ -9045,7 +9032,7 @@ class Cash:
         Runs at DECORATION time, once per function. The analysis is a pure
         function of the source, so there is no reason to pay for it per call,
         and ``cache()`` already reads the source anyway (``_register_func`` ->
-        ``get_source_hash``), which warms ``linecache`` for us.
+        ``callable_identity``), which warms ``linecache`` for us.
 
         A fresh detector is used per function rather than one shared across the
         instance. The detector's seed-tracking is *session*-scoped, which is

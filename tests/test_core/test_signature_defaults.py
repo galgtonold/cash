@@ -44,7 +44,7 @@ _RUNS: list[str] = []
 def _define_in_cell(src: str) -> Callable:
     """Define a function the way an IPython cell does: no source on disk.
 
-    `inspect.getsource` fails for these, so `get_source_hash` falls back to a
+    `inspect.getsource` fails for these, so `callable_identity` falls back to a
     bytecode hash -- the exact path the reporter hit, and the one where defaults
     are invisible. Compiling under a fake `<ipython-input-N>` filename reproduces
     it without a kernel.
