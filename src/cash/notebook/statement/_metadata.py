@@ -2,7 +2,7 @@
 
 Sibling to :class:`cash.backends.CacheMetadata` (the decorator-side view).
 Both are dataclass *views* over the same opaque dict channel the backends
-round-trip — see ADR-013 and the ``MetadataDict`` note in
+round-trip — see ADR-014 and the ``MetadataDict`` note in
 ``cash/backends/_base.py``.
 
 Lives in its own leaf module (imports nothing from the ``statement``

@@ -323,7 +323,7 @@ notebook/file_dep_snapshot.py    # NEW — snapshot_file_deps + split_file_dep_v
                                   # Pure file-dep snapshot utilities used cross-subsystem.
 
 notebook/statement/__init__.py
-notebook/statement/processor.py   # was statement/processor.py
+notebook/statement/processor.py   # was statement_processor.py
 notebook/statement/lineage.py     # was statement_lineage.py
 notebook/statement/restore.py     # was statement_restore.py
 notebook/statement/file_deps.py   # was statement_file_deps.py
@@ -337,7 +337,7 @@ notebook/statement/freshness.py   # CacheFreshnessChecker class only; was cache_
 - **Consistency with ADR-010.** Same pattern: collapse a documented composition unit into a package, expose a small public surface, rename files for context.
 
 ### Consequences
-- The public production import path becomes `from cash.notebook.statement import StatementProcessor` (instead of `cash.notebook.statement_processor`). All seven sibling notebook modules (`magics`, `cell_executor`, `restore`, `module_invalidator`, `control_for_handler`, `control_if_handler`, `control_try_handler`, `control_structures`) update their imports.
+- The public production import path becomes `from cash.notebook.statement import StatementProcessor` (instead of `cash.notebook.statement_processor`). The sibling notebook modules (`magics`, `cell_executor`, `restore`, `module_invalidator`, `control_for_handler`, `control_if_handler`, `control_try_handler`, `control_structures`) update their imports.
 - `src/cash/core.py` updates its two `cache_freshness.snapshot_file_deps` imports to `file_dep_snapshot.snapshot_file_deps`. The decorator path no longer reaches into a notebook subpackage for this utility.
 - `upstream/virtual_lineage.py` updates `from ..cache_freshness import split_file_dep_value` to `from ..file_dep_snapshot import split_file_dep_value`. (`upstream/` was extracted in ADR-010.)
 - Three sites in `tests/test_notebook/test_metadata_only_persistence.py` that imported `StatementRestorer` directly migrate to the full internal path (`cash.notebook.statement.restore.StatementRestorer`). The class is internal but the static method `persist_metadata_only` has no clean wrapper on `StatementProcessor` today.
@@ -417,7 +417,7 @@ Public surface: `CashMagics` only. Everything else (`CashAdminMagicsMixin`, `Cel
 - Patch-target migrations: `@patch('cash.notebook.magics.display')`, `@patch('cash.notebook.magics.publish_display_data')`, `@patch('cash.notebook.magics.get_notebook_cells')` → repointed at `cash.notebook.ipython.magics.X`. `@patch('cash.notebook.cell_executor.CodeAnalyzer.analyze_code_block')` → `cash.notebook.ipython.cell_executor.CodeAnalyzer.analyze_code_block`.
 - One test (`test_vscode_cell_id_path.py`) that imports `CellExecutor` directly migrates to the full internal path `cash.notebook.ipython.cell_executor.CellExecutor`.
 - `src/cash/notebook/__init__.py`'s lazy `__getattr__` for `CashMagics` repoints at `from .ipython.magics import CashMagics`.
-- `magic_admin.py`'s rename to `admin.py` matches the same convention as ADR-011 (`statement/processor.py` → `statement/processor.py`).
+- `magic_admin.py`'s rename to `admin.py` matches the same convention as ADR-011 (`statement_lineage.py` → `statement/lineage.py`).
 - No backward-compatibility shims at the old paths.
 - The three metrics TypedDicts (`TimingBreakdown`, `StatementSummary`, `CellMetrics`) are extracted to `ipython/_types.py` (mirroring `upstream/_types.py`) so `magics.py` is just the orchestrator file. `CashSession` stays in `magics.py` for now — it carries instance state (`provenance`, `audit`) rather than being pure data, so it doesn't belong in `_types.py`.
 
@@ -529,11 +529,9 @@ Keep an explicit **derivation edge store** on `TrackingState` (`derivation_edges
 
 ## ADR-017: Track Global-RNG Dependencies by Runtime Observation, Not Static Analysis
 
-**Status:** Accepted — implemented (`5c5fdf2`)
+**Status:** Accepted — implemented (`5c5fdf2`); see *Outcome* for how the shipped fix differs from the design below
 **Date:** 2026-07-21
 **Context:** How should cash know which cells depend on a global random seed, so that editing a `np.random.seed(...)` / `random.seed(...)` cell invalidates and correctly refreshes the draws that depend on it?
-
-This ADR is the chosen direction for CAS-225. It is a design, not yet implemented.
 
 ### The problem
 
@@ -589,10 +587,6 @@ Adopt a **runtime-observer** model for global-RNG dependency tracking, mirroring
 - **Global RNG only.** Named `np.random.default_rng(SEED)` generators already work through ordinary variable lineage (verified round 11) and are out of scope. So is a generator's **stream position across multiple drawing cells**, which remains the documented Generator limitation — this ADR fixes seed *changes*, not stream bookkeeping.
 - **Patching risk** is the same class cash already accepts for files: thread-safety of the global singleton, correct un-patching on `%cash_off`, and not disturbing user code that introspects `np.random.seed`.
 
-### Interim behaviour until implemented
-
-Docs corrected (`81eb312`) to describe the gap accurately. Three workarounds hold: re-run the seed cell after editing it (correct via CAS-223), seed in the same cell as the draw, or use a named `default_rng(SEED)`. A cheaper partial step, if the full replay proves too risky, is to use half 1's precise dependency to at least **warn** ("a draw depends on a seed cell you edited but did not re-run") instead of silently serving a wrong value — strictly better than today even without half 2.
-
 ### Alternatives Considered
 
 - **Keep static analysis, extend the AST walker**: rejected — cannot see draws inside called functions, which is the dominant real case (sklearn, helpers). No amount of static work closes it.
@@ -601,103 +595,46 @@ Docs corrected (`81eb312`) to describe the gap accurately. Three workarounds hol
 - **Patch every draw function** instead of state-diffing: rejected — numpy exposes dozens of draw entry points; state-diff observes the same fact (the stream advanced) with a two-line snapshot and no per-function wrapping.
 - **Warn-only, never reconstruct**: rejected as the *final* design (it leaves the value wrong), but accepted as a legitimate **interim** step because a precise runtime dependency makes the warning reliable, and a loud wrong-value beats a silent one.
 
-### Implementation progress
+### Outcome
 
-- **Detection core landed** (`aeeabdc`): `randomness.seed_cells_not_yet_run(drawing_modules, notebook_cells, executed_cell_hashes)` — pure, cell-granular, 11 unit tests, zero integration surface. This is the testable heart of half 1.
-- **Feasibility settled two things by experiment.** (1) Correctness genuinely needs half 2: an expensive cached draw *with a real variable edge* to the seed cell still returned a third wrong value (`0.848…`) on edit-without-rerun — reconstruction replays the draw, not the seed. (2) The wiring must cross a **granularity seam**: the processor hashes per *statement*, the notebook/checker sees whole *cells*. `executed_cell_hashes` must therefore be a set of whole-cell source hashes recorded by the cell executor — cash does not track that yet (only per-statement and per-variable hashes exist). Adding it is the first wiring step.
-- **Implemented (`5c5fdf2`).** The correctness fix landed directly (not the warn-only interim). The cell executor records `sha256(raw_cell)` into `TrackingState.executed_cell_source_hashes`; the checker's `_prepend_stale_seed_cells` runs after `simulate_upstream`, and when the current cell draws and an **upstream** seed cell's source is absent from that set, it prepends the seed cell to `statements_to_reexecute` so the seed's side effect is re-established before the draw.
-- **Correction to the assumption above:** nb_runner is **not** blind to this bug class. It writes a real `.ipynb` and `set_cell_source` persists an edit without running the cell, so the reconstruction path is reachable — only the *discovery* bugs (CAS-218) are invisible to nb_runner (it injects the path). So verification is plain pytest with an in-process oracle (the same cell sources run without cash), not the real driver. That correction is what made the fix landable with confidence.
-- **Not done:** the general runtime *observer* (patching `seed()`, state-diff draw detection) for draws **inside called functions** is still future work — the current fix uses the existing static draw/seed detection, which covers the reported cases. And CAS-226 (position-unaware epoch) is a related follow-up.
-- **Extended by ADR-018's correctness increments** for the general position-awareness problem. ADR-017's seed-replay (`5c5fdf2`) stays as a working point fix; CAS-226 and CAS-227 were then fixed by the position-aware restore + chain-rebuild + observer increments. ADR-018 also *proposed* replacing the side-channels with a single virtual variable, but that refactor was abandoned (the caching floor falsifies it — see ADR-018's "Status: NOT PURSUED").
+The fix shipped in `5c5fdf2`, and it is narrower than the decision above:
+
+- **Half 2 as designed.** The cell executor records `sha256(raw_cell)` for every executed cell in `TrackingState.executed_cell_source_hashes`. After `simulate_upstream`, the checker's `_prepend_stale_seed_cells` asks `randomness.seed_cells_not_yet_run` whether the current cell draws while an upstream seed cell's current source was never executed (edited, not re-run). If so, the seed cell is prepended to `statements_to_reexecute`, so the seed's side effect is in place before the draw.
+- **Half 1 by static detection, not a patched `seed()`.** Seed and draw cells are found with the existing AST detection. No new metadata dependency kind was added.
+- **Draws inside called functions** are covered by the runtime state-diff observer (`observed_rng_cells`) that shipped with ADR-018.
+- The warn-only interim step was not needed.
+
+nb_runner can reproduce this bug class: it writes a real `.ipynb`, and `set_cell_source` persists an edit without running the cell. The fix is tested that way, against the same cells run without cash.
 
 ---
 
-## ADR-018: Model the Global RNG as a Position-Aware Virtual Variable
+## ADR-018: Keep the Global RNG on Four Targeted Mechanisms, Not a Virtual Variable
 
-**Status:** Partially accepted — the correctness increments (`66e32dc` / `c27d44f` / observer) shipped and stand. The literal virtual-variable refactor was spiked and then **abandoned**; the size-aware caching floor falsifies its premise (see "Status: NOT PURSUED" below). The four side-channel mechanisms are retained by decision.
+**Status:** Accepted
 **Date:** 2026-07-21
-**Context:** CAS-226 (a draw above a later seed keys on that later seed) and CAS-227 (re-executing an edited draw uses the current stream position, not the position it holds top-to-bottom) are both symptoms of one thing: the global RNG state — *seed epoch and stream position* — is tracked by **runtime side-channels** instead of cash's position-aware reconstruction.
-
-* `_rng_seed_epochs` (CAS-223) records the *last-executed* seed — time-ordered, not position-ordered.
-* `capture_rng_state`/`restore_rng_state` (CAS-90) store each statement's POST state and replay it on a cache *hit*. On a full in-order Run All that keeps the stream coherent; on a partial/out-of-order re-execution the live state is whatever was last left.
-
-Ordinary variables never have this problem, because they flow through the lineage graph: the simulator, before re-executing a statement, reconstructs each input to the value it holds *at that position*. The RNG was bolted on beside that machinery instead of into it.
+**Context:** Two more RNG bugs followed ADR-017: a draw above a later seed keyed on that later seed, and re-executing an edited draw used the current stream position instead of the position it holds in a top-to-bottom run. Both come from tracking seed epoch and stream position through runtime side channels instead of the position-aware reconstruction that ordinary variables get. The proposed cure was to model each module's global RNG state as a virtual variable (`__cash_rng_<module>__`) that seeds define and draws read and advance, so lineage and reconstruction would handle it like any other variable.
 
 ### Decision
 
-Model the global RNG state, per module, as a **virtual variable** that rides the existing variable machinery.
+Do not build the virtual variable. The global RNG is handled by four mechanisms, each covering a case the others do not:
 
-* A **seed** statement *defines* it (output only): `__cash_rng_<module>__ = <fresh state>`.
-* A **draw** statement *reads and modifies* it (input **and** output): consumes the state, advances it.
-* Its **value is the RNG state**; its accessor is `capture_rng_state` and its mutator is `restore_rng_state` — **not** a `user_ns` slot. This is the one place the virtual variable differs from a real one, and the one real wiring gap (below).
-* **Detection:** static for direct calls (`RandomnessVisitor` already sees `np.random.rand()` / `.seed()` in the cell); **runtime state-diff** for draws inside called functions (`model.fit()`), observed once and recorded like a file dependency. This is why the dependency "is only known after it executes at least once" for the indirect case — exactly the file-tracker pattern.
+- **Key:** `_rng_seed_epochs` and `seed_epoch_component` key a draw on the seed that governs it.
+- **Value:** `rng_post_states` and `checker._restore_position_rng_state` restore the nearest upstream random cell's post-state before a drawing cell re-executes (`66e32dc`).
+- **Chain rebuild:** when an upstream seed is stale, `_prepend_stale_seed_cells` re-runs the seed and the intervening draws in order (`c27d44f`).
+- **Observer:** each cell's RNG state is snapshotted before and after, and `observed_rng_cells` records which modules it advanced, so a draw inside a called function is treated like a direct draw on re-run.
 
-Then the position-aware machinery does the rest for free:
-
-* The virtual variable's **lineage chains in notebook order**, so a draw keys on the RNG state governing *its* position — **CAS-226 dissolves**.
-* Reconstruction **restores the virtual variable to its at-position value before re-executing a consumer**, so an edited draw re-runs from the correct stream position — **CAS-227 dissolves**.
-* CAS-225's seed-replay becomes the ordinary "reconstruct the producer of the virtual variable."
-
-### The one confirmed gap
-
-The upstream reconstruction path (`virtual_lineage._restore_vars_from_cache`) restores `user_ns` variables; it does **not** apply `rng_state` when restoring a *producer* as an upstream dependency (RNG state is restored only on a statement's own hit today). So the make-or-break work is teaching the restore path that the virtual RNG variable's "restore" means `restore_rng_state(value)`, not a namespace write. Once that exists, the variable rides lineage + reconstruct-inputs-before-executing unchanged, and CAS-223's global epoch + CAS-90's on-hit-only replay both fold into this one model.
-
-### Consequences
-
-* Subsumes CAS-223 and CAS-90 into a single model; the epoch dict and the on-hit replay become special cases of "restore the virtual variable at its position."
-* A long draw chain (draw3←draw2←draw1←seed) is a linear dependency, but each restore is O(1) (the preceding state is cached, never recomputed) — no performance cliff.
-* The virtual variable must never surface in user-visible state (`%who`, saved vars).
-* Unseeded draws still track the variable but remain non-reproducible across kernels (matches today's warning).
+Together these fix all known cases: editing a seed without re-running it, the stream position of an edited draw, a draw above a later seed, editing a seed with draws in between, and indirect draws.
 
 ### Rationale
 
-Reuses the position-aware reconstruction cash already trusts for variables, instead of a parallel RNG code path. Fixes CAS-226 and CAS-227 uniformly rather than as separate patches, and the indirect-draw coverage hole (ADR-017 half 1) is closed by the same runtime state-diff.
+The virtual variable was spiked to a working state (`77ee74c`) and reverted, because the unification it promised cannot happen:
 
-### Alternatives considered
+1. **Cheap draws are never cached.** A bare `np.random.rand()` finishes well under the 10 ms size-aware floor, so it gets no cache entry and has no key to hit. Its correctness comes entirely from the value side: re-running it at the reconstructed stream state.
+2. **So the value half cannot fold into the variable.** A draw's RNG state can only come from a stored post-state or from replaying upstream draws. A cheap draw has no entry to store it in, so `rng_post_states` (or the chain rebuild) stays necessary.
 
-* **Keep the side-channels, patch each symptom** — rejected: whack-a-mole, and the stream-position case (CAS-227) needs a position-aware restore regardless, which is 90% of this work.
-* **Store each draw's PRE state and restore it on re-execution** — rejected as the model: a cache *miss* doesn't load the old entry, so the pre-state isn't available; and a stale pre-state (upstream changed) would be wrong. Reconstructing from the producer is the correct source of the pre-state. (Usable only as a spike shortcut, see below.)
+The variable could replace only the key half, while the value half kept its own state. That is two structures where there was one, the opposite of the simplification that motivated it.
 
-### Spike (before committing to the refactor)
+### Consequences
 
-Prove the core claim: restoring the position-correct RNG state before a *recomputing* draw makes CAS-227 green **without** disturbing the CAS-223 or CAS-225 suites. Cheapest proof — record each random cell's POST state in memory (keyed by cell source) and, before a drawing cell re-executes, restore the POST state of the immediately-preceding upstream random cell. If that holds, build the real virtual-variable wiring; if it breaks the CAS-223 suite, the model needs rework before any refactor.
-
-### First increment implemented (`66e32dc`)
-
-The spike held and shipped as the first increment: `TrackingState.rng_post_states` (cell executor snapshots the RNG after each random cell), and `checker._restore_position_rng_state` restores the nearest upstream random cell's post-state before a drawing cell re-executes. **Fixes CAS-226 and CAS-227.** Verified with nb_runner + the same-content-no-cash oracle; notebook+core 2509 passed; full deterministic integration clean (only the pre-existing zzprobe records).
-
-The spike also **found its own limitation**, exactly as the "store the PRE state" alternative predicted: the post-state table cannot reconstruct across a *seed change*. So the combined case — edit a seed **and** have intervening draws before the re-run draw — can't be fully corrected by a snapshot (the intervening draws' post-states are stale under the old seed). A guard makes `_restore_position_rng_state` **defer to the CAS-225 reseed path when an upstream seed is stale**, so that case falls back to the new seed's stream and is never made *worse*, but it is not yet fully correct (it lands on the new seed's position 0, not the position the intervening draws would have advanced it to).
-
-**Correctness completed across three further increments** — achieved via the position-aware *restore* plus checker-driven chain reconstruction and a runtime observer, rather than a literal variable in the lineage graph:
-
-* **`66e32dc`** — position-aware restore (CAS-226, CAS-227).
-* **`c27d44f`** — chain rebuild: when an upstream seed is stale, re-run the whole RNG chain (seed + intervening draws) in order, so the re-seed's epoch update makes each intervening draw miss and recompute under the new seed. Closes the combined case.
-* **`<observer>`** — runtime state-diff: snapshot the RNG before/after each cell and record which modules it changed, so a draw INSIDE a called function (`model.fit()`, a helper) is observed once and treated like a direct draw on re-run. Closes the indirect-draw coverage hole.
-
-Every reported/known-broken scenario — bare seed edit-without-rerun, edited-draw stream position, draw-above-a-later-seed, edit-seed-with-intervening-draws, and indirect draws — is now correct, verified by nb_runner + no-cash oracle, with the CAS-223/225 suites and the full deterministic integration green.
-
-**Remaining (proposed at the time): the literal virtual variable.** The three mechanisms above (post-state table, chain-rebuild, observer) plus the CAS-223 epoch are four special rules whose *seams* produced the bugs found along the way (the combined case, the args-derived edge, the stale-seed guard). The proposal was to model the RNG as a real variable in the lineage graph so position-awareness, invalidation, and chain reconstruction fall out of the trusted variable machinery. **This was attempted and abandoned — see "Status: NOT PURSUED" below.** The maintainability win does not materialize: the caching floor means the value half cannot be folded into the variable, so the variable can only *add* to the existing rules, not replace them.
-
-**Measured feasibility (throwaway injection, then reverted).** Injecting a synthetic `__cash_rng_<module>__` into a random statement's inputs/outputs does NOT crash the pipeline — most consumers skip a var absent from ``user_ns``. The blast radius is bounded and specific: it broke **6 unit tests, all in `test_allow_random_annotation.py`**, because the synthetic var changes how a random statement is judged for cacheability and restore. So the work is real but scoped.
-
-**Concrete plan (each step verified nb_runner + no-cash oracle + suites, done together since unification requires them to land as one):**
-1. **Inject** `__cash_rng_<module>__` as output of seeds and input+output of draws — statically for direct draws, from `observed_rng_cells` for indirect ones.
-2. **Lineage:** special-case it in `capture_and_track_variables` — its value is `capture_rng_state(module)` (not a ``user_ns`` slot), its output lineage chains position-aware (source + prior rng-var lineage). This is the honest boundary special-case.
-3. **Cache key:** its input lineage flows into a draw's key via the normal path, *replacing* `rng_epoch_fingerprint`. Position-aware key → CAS-226 hits; stream position is captured because each draw advances the var's lineage.
-4. **Restore:** special-case its restore to `restore_rng_state(value)` in both the own-hit and upstream-reconstruction paths — this is what closes the args-derived edge and removes the post-state table.
-5. **Filter** it out of the consumers that must not process it (mutation classification, cacheability's receiver logic, file-deps) — the fix for the 6 broken tests.
-6. **Remove** the now-redundant special rules: `_rng_seed_epochs` + `rng_epoch_fingerprint` (CAS-223), `rng_post_states` + `_restore_position_rng_state`, and the chain-rebuild in `_prepend_stale_seed_cells`. Keep `observed_rng_cells` (runtime detection is still needed to know which statements touch the RNG).
-
-Because steps 1–6 must land together to actually unify (a half-injected variable coexisting with the epoch would be a *fifth* rule), this is best executed as a single focused effort, not incrementally.
-
-### Status: NOT PURSUED — the premise is falsified by the size-aware caching floor
-
-The refactor was spiked to a working state (runtime key on the variable in `77ee74c`; a full simulator reconstruction — `advance_rng_seed_var` on the walk, an RNG-aware `_try_virtual_restore`, RNG vars carried into `input_hashes`) and then **reverted**. The spike proved the plumbing works, but empirical tracing showed the unification goal itself is unreachable. Two measured facts:
-
-1. **Cheap draws are never cached.** A bare `np.random.rand()` computes in well under the size-aware floor (10 ms), so cash writes **no cache entry** for it (`[SIZE_AWARE] … below 10ms floor — not writing cache entry`). This is the common case. For an uncached draw there is no key to hit and nothing to restore from a cache entry, so its position-correctness comes **entirely** from the value-side (`_restore_position_rng_state` re-running it at the reconstructed stream state).
-
-2. **The RNG state (value) is therefore irreducible to the key variable.** The virtual variable can carry a draw's *key* dependency, but a draw's *state* — the thing CAS-227 needs restored — can only be recovered from a stored post-state or by replaying the upstream draws. A cheap draw has no cache entry to store its post-state in, so the separate `rng_post_states` table (or the chain-rebuild) is load-bearing and cannot be folded into the variable. Step 4/6's "remove the post-state table" is impossible while cheap draws exist, which is always.
-
-**Consequence.** The variable can only ever replace the *key* half (CAS-223), not the *value* half (CAS-227/225). But keeping the variable for the key while `restore.py` still needs `_rng_seed_epochs` for its replay guard means **two** structures where there was one — a *net increase* in state, the opposite of the "simpler to maintain" goal that motivated the ADR. And even the key half only turns a spurious miss into a *hit* for the narrow case of an **expensive, cached** draw that is *upstream* of a re-run cell; the direct CAS-226 case (re-running the expensive draw itself out of order) additionally needs the reconstructed variable synced back into the live `variable_lineage` before the current cell is keyed — the simulator reconstructs upstream but `simulate_upstream` does not expose its `virtual_lineage`, so that is yet another fragile-core integration for the same narrow payoff.
-
-**Decision.** Keep the four existing mechanisms — `_rng_seed_epochs` + `rng_epoch_fingerprint` (key), `rng_post_states` + `_restore_position_rng_state` (value), the chain-rebuild in `_prepend_stale_seed_cells`, and the `observed_rng_cells` runtime detector. They are all shipped, verified, and each covers a case the variable cannot subsume. ADR-018's virtual-variable model is **superseded by this finding** and should not be re-attempted without a change to the size-aware caching policy that would make cheap draws cacheable (which would carry its own, larger cost). The correctness these mechanisms deliver (CAS-223/225/226/227, indirect draws) is complete and stands.
+- Do not re-attempt the virtual variable unless the caching policy changes so cheap draws are cached, which carries its own, larger cost.
+- A throwaway injection of the synthetic variable showed the blast radius: it broke six tests in `test_allow_random_annotation.py`, because it changes how a random statement is judged cacheable. Any future attempt starts there.
