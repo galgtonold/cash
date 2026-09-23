@@ -142,16 +142,14 @@ class ControlStructureProcessor:
         self,
         shell,
         statement_processor,  # The StatementProcessor instance
-        debug: bool = False,
     ):
         self.shell = shell
         self.statement_processor = statement_processor
-        self.debug = debug
         # Per-strategy handlers — constructed once.  Each owns the
         # strategy-specific logic; the orchestrator stays thin.
-        self._for_handler = ForLoopHandler(shell, statement_processor, debug, dispatcher=self)
-        self._if_handler = IfHandler(shell, statement_processor, debug, dispatcher=self)
-        self._try_handler = TryHandler(shell, statement_processor, debug, dispatcher=self)
+        self._for_handler = ForLoopHandler(shell, statement_processor, dispatcher=self)
+        self._if_handler = IfHandler(shell, statement_processor, dispatcher=self)
+        self._try_handler = TryHandler(shell, statement_processor, dispatcher=self)
 
     def process(
         self,
@@ -385,8 +383,7 @@ class ControlStructureProcessor:
         if isinstance(node, ast.For):
             # For loops with break/continue must be executed as single units
             if contains_break_or_continue(node.body):
-                if self.debug:
-                    logger.debug("[CONTROL] Loop contains break/continue, executing as single unit")
+                logger.debug("[CONTROL] Loop contains break/continue, executing as single unit")
                 return self.execute_as_single_unit(
                     node,
                     ttl,
@@ -461,9 +458,7 @@ class ControlStructureProcessor:
         try:
             code = ast.unparse(node)
 
-            if self.debug:
-                cs_type = get_control_structure_type(node)
-                logger.debug("[CONTROL] Processing %s as single unit: %s...", cs_type, code[:80])
+            logger.debug("[CONTROL] Processing %s as single unit: %s...", get_control_structure_type(node), code[:80])
 
             annotation = _helpers.resolve_unit_annotation(
                 raw_cell,
@@ -511,9 +506,9 @@ class ControlStructureProcessor:
         """
         try:
             code = ast.unparse(node)
-            if self.debug:
-                cs_type = get_control_structure_type(node)
-                logger.debug("[CONTROL] Processing %s as awaited single unit: %s...", cs_type, code[:80])
+            logger.debug(
+                "[CONTROL] Processing %s as awaited single unit: %s...", get_control_structure_type(node), code[:80]
+            )
 
             annotation = _helpers.resolve_unit_annotation(
                 raw_cell,
@@ -554,7 +549,6 @@ class ControlStructureProcessor:
                 self.statement_processor,
                 node,
                 code,
-                debug=self.debug,
             )
 
         # Annotate metrics with control structure body statements

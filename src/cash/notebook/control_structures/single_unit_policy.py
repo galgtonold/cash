@@ -123,7 +123,7 @@ _FILE_IO_CALLS = frozenset(
 )
 
 
-def should_run_as_single_unit(node: ast.For, iterable: Any, user_ns: dict[str, Any], *, debug: bool = False) -> bool:
+def should_run_as_single_unit(node: ast.For, iterable: Any, user_ns: dict[str, Any]) -> bool:
     """
     Decide whether a for loop should be executed as a single cacheable
     unit instead of being decomposed per-iteration.
@@ -188,14 +188,13 @@ def should_run_as_single_unit(node: ast.For, iterable: Any, user_ns: dict[str, A
     if has_file_io_calls(node.body):
         return False
 
-    if debug:
-        logger.debug(
-            "[FAST_LOOP] Estimated overhead: %.1fs (%s iters × %s stmts × %.0fms/stmt)",
-            estimated_overhead,
-            n_iterations,
-            n_body_stmts,
-            PER_STMT_OVERHEAD_SEC * 1000,
-        )
+    logger.debug(
+        "[FAST_LOOP] Estimated overhead: %.1fs (%s iters × %s stmts × %.0fms/stmt)",
+        estimated_overhead,
+        n_iterations,
+        n_body_stmts,
+        PER_STMT_OVERHEAD_SEC * 1000,
+    )
     return True
 
 

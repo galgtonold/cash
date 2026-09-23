@@ -269,7 +269,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._control_structure_processor = ControlStructureProcessor(
             shell,
             self._statement_processor,
-            debug=self._debug,
         )
 
         self._module_invalidator = ModuleInvalidator(shell)

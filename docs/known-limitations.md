@@ -358,7 +358,7 @@ puts you on the content-hashed eager path, or name the file:
 
 Unlike the mutation cases above, this one is **not** isolated-re-run only — it can give a wrong answer on a fresh `Run All`, the first time the loop ever executes.
 
-<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @ada78930 -->
+<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @6ad17c5e -->
 Cash decomposes a `for` loop per iteration and uses the loop variable's value — captured at the moment it is *bound*, before any body statement runs — as the per-iteration cache discriminator. That applies both to an ordinary cached statement in the body and to an intercepted (on by default) sub-call whose own arguments give the key nothing else to vary on. If the body **mutates the loop variable before it is used**, the discriminator was already captured before that mutation and cannot see it:
 
 <!-- test:skip reason="illustrative: pull() stands in for a slow call whose only per-iteration signal is the loop variable; call-level caching is on by default and needs no directive to make pull(handle) itself the cached, keyed unit" -->
@@ -448,7 +448,7 @@ Cash normally caches a loop **per iteration**, so a warm re-run restores every o
 
 That is a narrower claim than it used to be. By default, cash also caches the expensive **call inside** the statement (`fetch(e)` below, not the `append` around it) — see [Call-level caching](annotations.md#call-level-caching-default-and-cashno-cache-calls) — so a single-unit append loop still isn't a total loss: the call itself keeps hitting even though the loop's own bookkeeping does not, and fixing one element's data re-runs only that element's call. Inside a single-unit loop a call is cached only when it can be keyed on the values it receives: its arguments and the callee's state are plain data (numbers, strings, containers, arrays, frames), and the callee does not read, as a global, a name the loop sets. Otherwise it runs uncached. `# @cash:no-cache-calls` turns call caching off and gets you back to "no caching at all" if you need to reproduce it, or the call site simply isn't eligible (it reads the loop's own accumulator, say).
 
-<!-- claim: cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @99cdf759, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0 -->
+<!-- claim: cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @b16eecf3, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0 -->
 Three conditions must hold together before the switch happens, which is why many append loops never hit it:
 
 - **more than ~50 iterations** — cash has to be able to tell how many there will be without running the loop, which it can for a sized iterable and for one reached through plain attribute and key access (`run.var['symbol'].items()`). An iterable whose length it cannot work out reads as unknown, and an unknown count never switches — so the loop pays per-statement bookkeeping however long it is, and

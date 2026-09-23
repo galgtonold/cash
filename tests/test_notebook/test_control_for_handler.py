@@ -59,7 +59,6 @@ def handler(mock_shell, mock_statement_processor, mock_dispatcher):
     return ForLoopHandler(
         mock_shell,
         mock_statement_processor,
-        debug=False,
         dispatcher=mock_dispatcher,
     )
 

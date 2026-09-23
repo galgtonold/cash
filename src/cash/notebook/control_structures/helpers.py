@@ -257,7 +257,6 @@ def update_lineage_after_execution(
     statement_processor,
     node: ast.AST,
     code: str,
-    debug: bool = False,
     body_files: set[str] | None = None,
 ) -> None:
     """
@@ -293,7 +292,6 @@ def update_lineage_after_execution(
             mutated_vars,
             iterable_lineage,
             code,
-            debug=debug,
             input_lineages=collect_body_input_lineages(
                 statement_processor,
                 body_nodes,
@@ -494,7 +492,6 @@ def update_mutated_variable_lineages(
     mutated_vars: set[str],
     iterable_lineage: str | None,
     loop_code: str,
-    debug: bool = False,
     input_lineages: dict[str, str] | None = None,
 ) -> None:
     """
@@ -591,12 +588,10 @@ def update_mutated_variable_lineages(
             if hasattr(statement_processor, "vars_with_mutation_lineage"):
                 statement_processor.vars_with_mutation_lineage.add(var_name)
 
-            if debug:
-                logger.debug("[CONTROL] Updated lineage for mutated var '%s': %s...", var_name, new_lineage[:20])
+            logger.debug("[CONTROL] Updated lineage for mutated var '%s': %s...", var_name, new_lineage[:20])
 
         except (TypeError, ValueError, AttributeError) as e:
-            if debug:
-                logger.warning("[CONTROL] Failed to update lineage for '%s': %s", var_name, e)
+            logger.debug("[CONTROL] Failed to update lineage for '%s': %s", var_name, e)
 
 
 # ---------------------------------------------------------------------------

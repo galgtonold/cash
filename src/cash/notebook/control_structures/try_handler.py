@@ -42,10 +42,9 @@ class TryHandler:
     handler with mock dependencies and exercise it directly.
     """
 
-    def __init__(self, shell, statement_processor, debug: bool, dispatcher):
+    def __init__(self, shell, statement_processor, dispatcher):
         self.shell = shell
         self.statement_processor = statement_processor
-        self.debug = debug
         self.dispatcher = dispatcher
 
     # ------------------------------------------------------------------
@@ -162,9 +161,7 @@ class TryHandler:
             if caught_exception is not None:
                 raise caught_exception
 
-            _helpers.update_lineage_after_execution(
-                self.shell, self.statement_processor, node, ast.unparse(node), debug=self.debug
-            )
+            _helpers.update_lineage_after_execution(self.shell, self.statement_processor, node, ast.unparse(node))
             body_stmts = self._build_try_executed_body_stmts(node, try_body_succeeded, matched_handler)
 
             for m in all_metrics:

@@ -457,7 +457,6 @@ def test_for_loop_runs_even_when_statement_processor_lacks_loop_vars_scope():
     handler = ForLoopHandler(
         shell,
         _StatementProcessorWithoutLoopVarsScope(),
-        debug=False,
         dispatcher=MagicMock(),
     )
     node = ast.parse("for x in [1, 2]:\n    y = x\n").body[0]

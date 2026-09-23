@@ -48,7 +48,7 @@ def mock_dispatcher():
 
 @pytest.fixture
 def handler(mock_shell, mock_statement_processor, mock_dispatcher):
-    return IfHandler(mock_shell, mock_statement_processor, debug=False, dispatcher=mock_dispatcher)
+    return IfHandler(mock_shell, mock_statement_processor, dispatcher=mock_dispatcher)
 
 
 def _parse_if(code: str) -> ast.If:

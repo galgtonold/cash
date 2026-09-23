@@ -93,7 +93,7 @@ class TestControlStructureProcessor:
     def control_processor(self, mock_shell, mock_statement_processor):
         from cash.notebook.control_structures import ControlStructureProcessor
 
-        return ControlStructureProcessor(mock_shell, mock_statement_processor, debug=True)
+        return ControlStructureProcessor(mock_shell, mock_statement_processor)
 
     # ---- For loops: per-iteration ----
 
@@ -464,7 +464,7 @@ class TestOutputFlushing:
     def control_processor(self, mock_shell, mock_statement_processor):
         from cash.notebook.control_structures import ControlStructureProcessor
 
-        return ControlStructureProcessor(mock_shell, mock_statement_processor, debug=False)
+        return ControlStructureProcessor(mock_shell, mock_statement_processor)
 
     def test_for_loop_flushes_stdout_per_iteration(
         self, control_processor, mock_shell, mock_statement_processor, capsys
@@ -748,7 +748,7 @@ class TestSingleUnitStreamOutput:
     def control_processor(self, mock_shell, mock_statement_processor):
         from cash.notebook.control_structures import ControlStructureProcessor
 
-        return ControlStructureProcessor(mock_shell, mock_statement_processor, debug=False)
+        return ControlStructureProcessor(mock_shell, mock_statement_processor)
 
     def test_single_unit_passes_stream_output(self, control_processor, mock_shell, mock_statement_processor):
         """execute_as_single_unit should pass stream_output=True to process()."""

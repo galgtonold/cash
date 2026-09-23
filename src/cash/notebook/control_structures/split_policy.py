@@ -54,9 +54,8 @@ class LoopSplitPolicy:
     backend picks the verdict store, its config the thresholds.
     """
 
-    def __init__(self, statement_processor: Any, debug: bool = False):
+    def __init__(self, statement_processor: Any):
         self.statement_processor = statement_processor
-        self.debug = debug
         self._store: LoopSplitStore | None | object = _UNSET
 
     def store(self) -> LoopSplitStore | None:
@@ -148,14 +147,13 @@ class LoopSplitPolicy:
         if per_iter >= max_iter:
             return False
         split = (n - done) * per_iter >= min_remaining
-        if self.debug:
-            logger.debug(
-                "[LOOP_SPLIT] per_iter=%.2fms remaining=%.0fms n=%d -> %s",
-                per_iter * 1000,
-                (n - done) * per_iter * 1000,
-                n,
-                split,
-            )
+        logger.debug(
+            "[LOOP_SPLIT] per_iter=%.2fms remaining=%.0fms n=%d -> %s",
+            per_iter * 1000,
+            (n - done) * per_iter * 1000,
+            n,
+            split,
+        )
         return split
 
     def record_verdict(self, node: ast.For, elapsed: float, n: int) -> None:
@@ -170,8 +168,7 @@ class LoopSplitPolicy:
             return
         try:
             store.record(loop_source_hash(node), PROBE_ITERS)
-            if self.debug:
-                logger.debug("[LOOP_SPLIT] recorded k=%d; splits from next run", PROBE_ITERS)
+            logger.debug("[LOOP_SPLIT] recorded k=%d; splits from next run", PROBE_ITERS)
         except Exception:  # noqa: BLE001 - learning must never break execution
             logger.debug("[LOOP_SPLIT] could not record a verdict", exc_info=True)
 

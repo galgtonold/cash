@@ -97,12 +97,11 @@ class ForLoopHandler:
     touching the orchestrator.
     """
 
-    def __init__(self, shell, statement_processor, debug: bool, dispatcher):
+    def __init__(self, shell, statement_processor, dispatcher):
         self.shell = shell
         self.statement_processor = statement_processor
-        self.debug = debug
         self.dispatcher = dispatcher
-        self._split_policy = LoopSplitPolicy(statement_processor, debug)
+        self._split_policy = LoopSplitPolicy(statement_processor)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -164,8 +163,7 @@ class ForLoopHandler:
             inherited_annotation,
         )
 
-        if self.debug:
-            logger.debug("[CONTROL] Processing FOR loop with targets: %s", target_names)
+        logger.debug("[CONTROL] Processing FOR loop with targets: %s", target_names)
 
         try:
             # Evaluate the iterator, watching what it READS.
@@ -231,10 +229,9 @@ class ForLoopHandler:
             # per-iteration path below, which consumes the single, already
             # evaluated ``iterable``.
             if single_unit_policy.should_run_as_single_unit(
-                node, iterable, user_ns, debug=self.debug
+                node, iterable, user_ns
             ) and single_unit_policy.header_safe_to_reevaluate(node.iter, iterable, user_ns):
-                if self.debug:
-                    logger.debug("[CONTROL] Fast-loop: executing as single unit (overhead > benefit)")
+                logger.debug("[CONTROL] Fast-loop: executing as single unit (overhead > benefit)")
                 # Single-unit mode makes the loop ONE cache entry, so the unit
                 # annotation (whole range) is the right scope — a body directive
                 # has no finer entry to attach to here.
@@ -254,11 +251,10 @@ class ForLoopHandler:
                 if acc_loop is not None:
                     acc, loop_vars, _iter_node, _expr_call = acc_loop
                     force_outputs = {acc, *loop_vars}
-                    if self.debug:
-                        logger.debug(
-                            "[CONTROL] Single-unit accumulator loop -> force_outputs=%s",
-                            force_outputs,
-                        )
+                    logger.debug(
+                        "[CONTROL] Single-unit accumulator loop -> force_outputs=%s",
+                        force_outputs,
+                    )
                 return self.dispatcher.execute_as_single_unit(
                     node,
                     ttl,
@@ -270,8 +266,7 @@ class ForLoopHandler:
 
             # all iterations.
             iterable_lineage = _helpers.get_iterable_lineage(self.shell, self.statement_processor, node.iter)
-            if self.debug:
-                logger.debug("[CONTROL] Iterable lineage: %s...", iterable_lineage[:20] if iterable_lineage else "None")
+            logger.debug("[CONTROL] Iterable lineage: %s...", iterable_lineage[:20] if iterable_lineage else "None")
 
             # Measure the first few iterations so this loop can be judged for
             # splitting on a LATER run. Nothing is split here.
@@ -332,7 +327,6 @@ class ForLoopHandler:
                 self.statement_processor,
                 node,
                 ast.unparse(node),
-                debug=self.debug,
                 body_files=_body_files,
             )
 
@@ -456,8 +450,7 @@ class ForLoopHandler:
                 self.statement_processor.variable_lineage[name] = h
                 loop_var_digests[name] = full
             except (TypeError, ValueError, AttributeError) as exc:
-                if self.debug:
-                    logger.warning("[CONTROL] Failed to hash loop variable %s: %s", name, exc)
+                logger.debug("[CONTROL] Failed to hash loop variable %s: %s", name, exc)
 
         # `loop_var_digests` is fully populated by the loop above, over these
         # same bindings. Handing it over stops `build_iteration_context`
@@ -646,8 +639,7 @@ class ForLoopHandler:
         if shape is not None:
             acc, loop_vars = shape
             force_outputs = {acc, *loop_vars}
-        if self.debug:
-            logger.debug("[LOOP_SPLIT] executing split at k=%d (force_outputs=%s)", k, force_outputs)
+        logger.debug("[LOOP_SPLIT] executing split at k=%d (force_outputs=%s)", k, force_outputs)
 
         head_res = self.process(head, ttl, silent, parent_context, raw_cell, inherited_annotation)
         tail_res = self.dispatcher.execute_as_single_unit(

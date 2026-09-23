@@ -101,7 +101,7 @@ flowchart TD
     I3 --> K3
 ```
 
-<!-- claim: cash/notebook/control_structures/common.py:compute_context_hash @10c994da, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @85b92f00 -->
+<!-- claim: cash/notebook/control_structures/common.py:compute_context_hash @10c994da, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @db744afb -->
 The mechanism is deliberately plain: the context hash is prepended to the body
 statement as a *comment*, so it flows into the ordinary statement cache key
 through the source hash — no special key format is needed.
@@ -170,7 +170,7 @@ one of them can change on its own and the rest still hit, at the statement
 level as well as the call level. See
 [Reordering a loop's items](../known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
 
-<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @5c70cd59, cash/notebook/control_structures/try_handler.py:TryHandler.process @3469b816 -->
+<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @33f81117, cash/notebook/control_structures/try_handler.py:TryHandler.process @d4f1f320 -->
 Conditionals work the same way with a different marker: `if`/`elif`/`else` and
 `try`/`except` bodies are decomposed per statement and tagged with a
 `# control_context:` branch hash, so only the branch that actually ran is

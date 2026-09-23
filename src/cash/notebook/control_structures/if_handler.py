@@ -39,10 +39,9 @@ class IfHandler:
     handler with mock dependencies and exercise it directly.
     """
 
-    def __init__(self, shell, statement_processor, debug: bool, dispatcher):
+    def __init__(self, shell, statement_processor, dispatcher):
         self.shell = shell
         self.statement_processor = statement_processor
-        self.debug = debug
         self.dispatcher = dispatcher
 
     # ------------------------------------------------------------------
@@ -77,10 +76,9 @@ class IfHandler:
             # Walk if/elif/else chain to find the taken branch
             branch_body, branch_label = self._find_taken_branch(node)
 
-            if self.debug:
-                logger.debug(
-                    "[CONTROL] If per-statement: taking branch '%s', %s statements", branch_label, len(branch_body)
-                )
+            logger.debug(
+                "[CONTROL] If per-statement: taking branch '%s', %s statements", branch_label, len(branch_body)
+            )
 
             # Build a context hash for cache key uniqueness (which branch)
             branch_hash = hashlib.sha256(branch_label.encode()).hexdigest()[:16]
@@ -115,9 +113,7 @@ class IfHandler:
                     cached_count += 1
 
             # After execution, update lineage for mutated variables
-            _helpers.update_lineage_after_execution(
-                self.shell, self.statement_processor, node, ast.unparse(node), debug=self.debug
-            )
+            _helpers.update_lineage_after_execution(self.shell, self.statement_processor, node, ast.unparse(node))
 
             # Tag all metrics with body statements for the whole if block
             # (so the badge can show the header and which branch we took)
