@@ -14,7 +14,7 @@ import hashlib
 import logging
 import types
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from cash.notebook.lineage_store import resolve_lineage
@@ -419,21 +419,22 @@ def _attribute_only_names(code_obj: Any) -> set[str]:
     return set(code_obj.co_names) - _global_names(code_obj)
 
 
-def _process_input_var(
-    var_name: str,
-    virtual_modules: set[str],
-    user_ns: Mapping[str, Any],
-    variable_lineage: dict[str, str],
-    virtual_lineage: dict[str, str],
-    compute_hash_fn: Callable[[object], str] | None,
-    function_tracker: FunctionTrackerProtocol | None,
-    input_hashes: list[str],
-    func_source_hashes: list[str],
-    module_source_hashes: list[str],
-    virtual_callables: Mapping[str, VirtualCallable] | None = None,
-    code: str | None = None,
-) -> None:
-    """Process one input variable, appending to input_hashes / func_source_hashes / module_source_hashes."""
+@dataclass
+class _KeyParts:
+    """The per-input components a key is built from, filled one input at a time."""
+
+    input_hashes: list[str] = field(default_factory=list)
+    func_source_hashes: list[str] = field(default_factory=list)
+    module_source_hashes: list[str] = field(default_factory=list)
+
+
+def _process_input_var(var_name: str, ctx: CacheKeyContext, parts: _KeyParts, code: str | None = None) -> None:
+    """Add *var_name*'s contribution to *parts*: its lineage, and the source
+    hash of the function or module it names."""
+    user_ns = ctx.user_ns
+    variable_lineage = ctx.variable_lineage
+    function_tracker = ctx.function_tracker
+    virtual_callables = ctx.virtual_callables
     val = user_ns.get(var_name)
 
     if is_cash_instrumentation(val):
@@ -441,16 +442,16 @@ def _process_input_var(
         # name would if cash were not installed.
         return
 
-    if is_module_like(var_name, val, virtual_modules):
+    if is_module_like(var_name, val, ctx.virtual_modules or set()):
         # Narrowed to the names the statement reads when that is safe; see
         # `lineage_formula.module_read_lineage`, which the output lineage on
         # both engines calls too, so all three agree.
         narrowed = module_read_lineage(function_tracker, var_name, val, code)
         if narrowed is not None:
-            module_source_hashes.append(f"{var_name}:{narrowed}")
+            parts.module_source_hashes.append(f"{var_name}:{narrowed}")
             return
         if var_name in variable_lineage:
-            module_source_hashes.append(f"{var_name}:{variable_lineage[var_name]}")
+            parts.module_source_hashes.append(f"{var_name}:{variable_lineage[var_name]}")
             logger.debug("[CACHE_KEY] Module component for %r: %.12s...", var_name, variable_lineage[var_name])
         return
 
@@ -458,24 +459,24 @@ def _process_input_var(
         var_name,
         variable_lineage,
         value=val,
-        virtual=virtual_lineage,
-        compute_hash_fn=compute_hash_fn,
+        virtual=ctx.virtual_lineage or {},
+        compute_hash_fn=ctx.compute_hash_fn,
     )
     if lineage:
-        input_hashes.append(lineage)
+        parts.input_hashes.append(lineage)
         logger.debug("[CACHE_KEY] Input %r resolved to: %.16s...", var_name, lineage)
 
     if val is None and lineage and virtual_callables and var_name not in user_ns:
         virtual = virtual_callables.get(virtual_callable_key(lineage, var_name))
         if virtual is not None:
-            func_source_hashes.append(f"{var_name}:{virtual.source_hash}")
+            parts.func_source_hashes.append(f"{var_name}:{virtual.source_hash}")
         return
 
     if val is not None and callable(val) and not isinstance(val, type) and function_tracker is not None:
         try:
             func_hash = function_tracker.get_function_source_hash(val)
             if func_hash is not None:
-                func_source_hashes.append(f"{var_name}:{func_hash}")
+                parts.func_source_hashes.append(f"{var_name}:{func_hash}")
                 logger.debug("[CACHE_KEY] Func component for %r: %.12s...", var_name, func_hash)
         except (AttributeError, TypeError, ValueError, OSError) as exc:
             logger.debug("[CACHE_KEY] Failed to get function source hash for '%s': %s", var_name, exc)
@@ -597,39 +598,22 @@ def compute_cache_key(
         - func_source_hashes: List of ``"var:hash"`` strings for function sources.
         - module_source_hashes: List of ``"var:hash"`` strings for tracked modules.
     """
-    # Extract from context
     variable_lineage = ctx.variable_lineage
     user_ns = ctx.user_ns
-    function_tracker = ctx.function_tracker
     virtual_lineage = ctx.virtual_lineage or {}
     virtual_modules = ctx.virtual_modules or set()
-    compute_hash_fn = ctx.compute_hash_fn
 
     source_hash = statement_source_hash(code)
 
-    input_hashes: list[str] = []
-    func_source_hashes: list[str] = []
-    module_source_hashes: list[str] = []
-
+    parts = _KeyParts()
     sorted_inputs = sorted(inputs)
-
     for var_name in sorted_inputs:
         if var_name in ("get_ipython", "__builtins__"):
             continue
-        _process_input_var(
-            var_name,
-            virtual_modules,
-            user_ns,
-            variable_lineage,
-            virtual_lineage,
-            compute_hash_fn,
-            function_tracker,
-            input_hashes,
-            func_source_hashes,
-            module_source_hashes,
-            ctx.virtual_callables,
-            code=code,
-        )
+        _process_input_var(var_name, ctx, parts, code=code)
+    input_hashes = parts.input_hashes
+    func_source_hashes = parts.func_source_hashes
+    module_source_hashes = parts.module_source_hashes
 
     # Build the final combined hash string
     func_component = ""
