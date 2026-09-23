@@ -89,6 +89,18 @@ CASES = {
     "a for-else nested in a loop": [
         "log = []\nfor i in range(3):\n    for j in range(i):\n        log.append(j)\n    else:\n        log.append('e')\n",
     ],
+    "a split loop that raises in its head skips the tail": [
+        "boom = False\nseen = []",
+        "for i in range(20):\n    seen.append(i)\n    if boom and i == 2:\n        raise ValueError('boom')\n",
+        "boom = True\nseen = []",
+        "for i in range(20):\n    seen.append(i)\n    if boom and i == 2:\n        raise ValueError('boom')\n",
+    ],
+    "a split loop that raises in its tail": [
+        "boom = False\nseen = []",
+        "for i in range(20):\n    seen.append(i)\n    if boom and i == 12:\n        raise ValueError('boom')\n",
+        "boom = True\nseen = []",
+        "for i in range(20):\n    seen.append(i)\n    if boom and i == 12:\n        raise ValueError('boom')\n",
+    ],
 }
 
 
