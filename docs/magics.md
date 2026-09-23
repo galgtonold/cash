@@ -103,13 +103,15 @@ Disable automatic caching. Subsequent cells run uncached until you call
 ```
 
 ### `%cash_persist`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_persist @6b423b4b -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_persist @729a986b -->
 
 Cache *every* statement regardless of how cheap it was to compute — equivalent
 to putting `# @cash:persist` on every statement. It bypasses the cost-aware
 floors (the 10 ms "too cheap to cache" floor and the size-aware skip). Useful
 for reproducibility, benchmarks, and debugging cache behaviour; wasteful for
-trivial statements in normal use.
+trivial statements in normal use. It sets the `persist_all` setting, the same
+switch as `cash.configure(persist_all=True)`, and takes effect from the next
+statement.
 
 **Signature:** `%cash_persist [on|off]`
 

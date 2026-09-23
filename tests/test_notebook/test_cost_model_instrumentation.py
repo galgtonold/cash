@@ -87,8 +87,8 @@ class TestCostModelFieldsAbsentOnFloorExit:
         # short-circuit is what is actually under test.
         #
         # Mutating the real config rather than swapping in a MagicMock (as the
-        # siblings above do) is deliberate: `persist_all` is snapshotted into
-        # the statement_processor during __init__, so a truthy MagicMock attribute would
+        # siblings above do) is deliberate: the statement_processor reads
+        # `persist_all` from this config, so a truthy MagicMock attribute would
         # set force_persist and bypass this guard entirely.
         statement_processor.cash_instance.config.min_execution_time_to_cache_seconds = 3600.0
 

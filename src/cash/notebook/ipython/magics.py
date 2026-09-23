@@ -219,13 +219,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # `cash_on`); also run if this instance goes away still holding it.
         self._io_release: weakref.finalize | None = None
         self.global_ttl = None
-        # 'Persist everything' mode (config / %cash_persist). Seeded from config;
-        # the statement processor reads the same flag from config in its own
-        # __init__, so the two start consistent.
-        try:
-            self._persist_all = bool(getattr(cash_instance.config, "persist_all", False))
-        except (AttributeError, TypeError):
-            self._persist_all = False
 
         # The cell's badge; ``%cash_badge`` sets its mode.
         self.badges = BadgePresenter(shell, cash_instance)
@@ -687,17 +680,19 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # comment`` used to turn persistence OFF if it was already on.
         mode = strip_inline_comment(line).lower()
         if mode in ("on", "true", "1", "enable"):
-            self._persist_all = True
+            persist_all = True
         elif mode in ("off", "false", "0", "disable"):
-            self._persist_all = False
+            persist_all = False
         elif mode:
             print(f"[Error] %cash_persist: unrecognised argument: {mode!r}")
             print("   Valid forms: %cash_persist on | off | (no argument to toggle)")
             return
         else:
-            self._persist_all = not self._persist_all
-        self._statement_processor.persist_all = self._persist_all
-        print(f"Cash persist-everything mode: {'enabled' if self._persist_all else 'disabled'}.")
+            persist_all = not self._statement_processor.persist_all
+        # Config is the one place the flag lives; the statement pipeline reads
+        # it at each statement, as it does after cash.configure(persist_all=...).
+        self._cash_instance.reconfigure(persist_all=persist_all)
+        print(f"Cash persist-everything mode: {'enabled' if persist_all else 'disabled'}.")
 
     @line_magic
     def cash_help(self, line: str) -> None:

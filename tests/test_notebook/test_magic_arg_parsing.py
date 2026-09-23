@@ -83,21 +83,21 @@ def test_stats_reset_with_trailing_comment_actually_resets(
 
 def test_persist_on_with_trailing_comment_does_not_toggle_off(cash_magics, capsys):
     """`%cash_persist on # c` fell through to the TOGGLE - inverting the request."""
-    cash_magics._persist_all = True
+    cash_magics._cash_instance.reconfigure(persist_all=True)
 
     cash_magics.cash_persist("on  # keep everything")
 
-    assert cash_magics._persist_all is True, "an explicit 'on' turned persistence OFF"
+    assert cash_magics._cash_instance.config.persist_all is True, "an explicit 'on' turned persistence OFF"
 
 
 def test_persist_unknown_argument_refuses_and_leaves_mode_alone(cash_magics, capsys):
-    cash_magics._persist_all = False
+    cash_magics._cash_instance.reconfigure(persist_all=False)
 
     cash_magics.cash_persist("onn")  # typo
     out = capsys.readouterr().out
 
     assert "unrecognised" in out.lower()
-    assert cash_magics._persist_all is False, "a typo toggled persistence on"
+    assert cash_magics._cash_instance.config.persist_all is False, "a typo toggled persistence on"
 
 
 def test_badge_mode_with_trailing_comment_is_applied(cash_magics, capsys):

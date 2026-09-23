@@ -579,11 +579,11 @@ class _WarmKernel:
             "except Exception:\n"
             "    pass\n" + _REUSE_RESET_WARNING_REGISTRIES + _REUSE_CLOSE_FIGURES + _REUSE_PURGE_TEST_MODULES
         )
-        # Same shape, different flag: `%cash_persist on` sets `_persist_all` on
-        # the CashMagics INSTANCE (and mirrors it onto the statement
-        # processor), and `reset_session()` does NOT rebuild that instance --
-        # IPython keeps the object already in its magics registry, so
-        # register_magic() rebinds the functions but the flag rides along.
+        # Same shape, different flag: `%cash_persist on` sets `persist_all` on
+        # the Cash instance's config, and `reset_session()` does NOT rebuild
+        # the CashMagics holding that instance -- IPython keeps the object
+        # already in its magics registry, so register_magic() rebinds the
+        # functions but the flag rides along.
         #
         # Measured, peeking right after prepare_for_test::
         #
