@@ -10,7 +10,7 @@ Every cell Cash touches gets a badge above its output — a one-line summary plu
     `print("RUN load", file=sys.stderr)`, a counter, a timestamp — appears
     on a hit exactly as it did on the run that produced it.
 
-    Three of five testers in one round nearly reported "it never caches"
+    Three of five people in one round of user testing nearly reported "it never caches"
     because of this, and one built an entire alternative instrument to get
     around it. The badge is the instrument: its status tells you what ran,
     and your own prints cannot.

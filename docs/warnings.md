@@ -474,8 +474,8 @@ time; a result cached by a call inside a statement is named by that
 statement, never by an internal `call:` key.
 
 A cache trades bytes for seconds, and every other gate asks only whether
-restoring beats recomputing -- never what the answer costs. Round 26's five
-testers held 58 GiB of cache between them for input data of 61-360 MB. One
+restoring beats recomputing -- never what the answer costs. Five user-testing
+sessions held 58 GiB of cache between them for input data of 61-360 MB. One
 kept seven 1.3 GB copies of a feature frame that rebuilds in 5.0 seconds:
 263 MiB of disk per second saved. Another kept 72 loop-iteration entries of
 48 MiB whose recorded compute time was 0.00 s.
@@ -1335,9 +1335,9 @@ imported, or cash compares the compiled file with the running code.
 **Why it matters.** cash identifies code by its source. Read after the edit,
 that source describes code the process is not running — and a result computed
 by the old code would have been stored under the new code's identity, then
-served to the restarted process as a hit. Measured in round 17 on a helper: a
+served to the restarted process as a hit. Measured on a helper: a
 service answered 0.500504 where the new code computes 0.530876, and kept
-answering it after the restart. Round 18 found the same for the cached function
+answering it after the restart. The same happened to the cached function
 itself, in a worker that imported the old code and made its first call after
 the deploy landed.
 
@@ -1926,7 +1926,7 @@ that a process pool, `multiprocessing` or joblib starts *now* imports the file
 as it is now. So one call can run the old code here and the new code in its
 workers, and the result belongs to neither identity for sure. Stored under the
 old code's key, it was served to the next run of the old code — measured in
-round 19: a helper edited while a pooled call ran, then reverted, and the
+A helper edited while a pooled call ran, then reverted, and the
 original code got the edited code's numbers from then on.
 
 **What to do.** Restart the process: it then runs, keys and caches the new code.

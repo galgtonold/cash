@@ -225,7 +225,7 @@ out = summarize(s)                                # cell 2 — re-running this�
 s.iloc[0] = 1e9                                   # cell 3 — …does not see this
 ```
 
-Cells *below* the mutation do see it, and editing the mutation correctly re-runs them. This caught an independent tester out, who read it as a stale result.
+Cells *below* the mutation do see it, and editing the mutation correctly re-runs them. It is easy to read this as a stale result.
 
 **What to do:** move the mutation above the cell that must see it, or rebind (`s = s.copy(); s.iloc[0] = 1e9`) so the change is a new value rather than an edit to an earlier one.
 

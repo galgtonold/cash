@@ -128,7 +128,7 @@ make it serve a wrong answer. A round must come back clean before that kind of
 release ships.
 
 This has been the most productive single source of real bugs — roughly one
-correctness defect per five testers, in rounds where the automated suite was
+correctness defect per five participants, in rounds where the automated suite was
 entirely green. The findings are adjudicated rather than accepted: each is
 reproduced independently before it is believed, because roughly a third of
 reported issues turn out to be stale, environmental, or a misreading of correct

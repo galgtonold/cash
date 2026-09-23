@@ -1430,7 +1430,7 @@ def top_customers(orders_path, n=10):
 The file read inside `_orders` is a dependency of every function that uses the
 rows, including those that found them already parsed (see
 [file reads](#file-reads-are-tracked-automatically)), so an edit to the file
-recomputes them all. Measured on a 214 MB log in round-20 testing: with the rows
+recomputes them all. Measured on a 214 MB log: with the rows
 passed into cached consumers, a warm run was 1.3–3.6× *slower* than no cache;
 keyed by path, it was 18× faster.
 

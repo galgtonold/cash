@@ -253,8 +253,8 @@ Content beats the lineage attribute, and that ordering is the fix for a real bug
     `cash.notebook.cache_key`, and every output lineage by the functions in
     `cash.notebook.lineage_formula` — both shared by runtime execution
     (`StatementLineageBuilder.capture_and_track_variables`) and upstream
-    simulation. Sharing the code is necessary but was not enough: in round 21
-    the two still disagreed wherever they fed it different ingredients (a name
+    simulation. Sharing the code is necessary but was not enough: the two
+    still disagreed wherever they fed it different ingredients (a name
     from `from helpers import clean` counted as a module in the simulation
     only; the simulation hashed files a variable inherited rather than the
     ones its statement read), and every disagreement re-ran statements with

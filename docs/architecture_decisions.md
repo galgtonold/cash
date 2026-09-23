@@ -62,15 +62,15 @@ The two failure modes rejected above under *Timestamp-based* — "same content
 different time" and "content changes within same second" — were not hypothetical.
 They shipped, as bugs, in the **file-dependency** path: while variable lineage was
 content-addressed from the start, file freshness was decided by `(mtime, size)`
-until this wave.
+until this amendment.
 
-- **CAS-98** = "same content, different time": a touch-only change (identical
-  bytes, bumped mtime) forced a needless recompute — over-invalidation.
-- **CAS-10** = "content changes within same second": a same-size edit under an
-  mtime the coarse check couldn't distinguish was missed and served stale —
+- **Same content, different time**: a touch-only change (identical bytes,
+  bumped mtime) forced a needless recompute — over-invalidation.
+- **Content changes within the same second**: a same-size edit under an mtime
+  the coarse check couldn't distinguish was missed and served stale —
   under-invalidation.
-- **CAS-119** carried the same fix into the `@cash.cache` decorator path, so the
-  two subsystems share one helper and cannot drift.
+- The `@cash.cache` decorator path got the same fix, so the two subsystems
+  share one helper and cannot drift.
 
 **Resolution:** auto-tracked file deps now record a content hash alongside
 `(mtime, size)` and treat **content as authoritative whenever the size matches**
@@ -83,13 +83,13 @@ unsampled interior bytes of a file above that threshold, whose mtime is then
 restored at full nanosecond precision, is not detected -- and only on Windows,
 where there is no inode change time. The timestamp comparison is exact on the
 integer nanoseconds, so a tool restoring whole seconds does not reach it. The
-threshold defaults to 256 MiB (64 MiB until round 19, when a memory-mapped
+threshold defaults to 256 MiB (it was 64 MiB until a memory-mapped
 `.npy` write on Windows showed that a timestamp can stay put without any tool
 restoring it) — above the ordinary CSV, parquet or array file — because the
 digest is memoized per process for a few seconds, so a full hash is paid once
-per burst rather than on every lookup. Round 20 tried re-hashing on every call
-to close the window that memo leaves (a Windows `np.memmap` edit seen up to five
-seconds late in a running process) and reverted it: a loop over a 200 MB input
+per burst rather than on every lookup. Re-hashing on every call, to close the
+window that memo leaves (a Windows `np.memmap` edit seen up to five seconds late
+in a running process), was tried and reverted: a loop over a 200 MB input
 paid about 0.14 s per iteration. The window is documented in known-limitations.
 
 **Declared files follow the same rule:** `file_depends_on=` records its paths
@@ -460,7 +460,7 @@ Wire contract for both dataclasses:
 
 **Status:** Accepted
 **Date:** 2026-07-15
-**Context:** An isolated re-run of a cell that drains a live object read the leftovers of its *own* previous run: a drained `queue.Queue` printed `got=[]` and an exhausted generator totalled `0`, where `run_all` — which re-runs the producer first — gives `got=[0, 1, 2]` / `total=55` (CAS-118 / CAS-50). Two existing guards could not catch it. The stale-value guard only ever examines variables the cell **writes** (it returns early when the self-written set is empty), and the object in question is a read-only **input**. The content-base staleness check could not have caught it either: a consumable drains *in place*, so its identity never changes and `compute_hash`'s `sha256(str(id(obj)))` fallback for unpicklable objects returns the same hash before and after draining.
+**Context:** An isolated re-run of a cell that drains a live object read the leftovers of its *own* previous run: a drained `queue.Queue` printed `got=[]` and an exhausted generator totalled `0`, where `run_all` — which re-runs the producer first — gives `got=[0, 1, 2]` / `total=55`. Two existing guards could not catch it. The stale-value guard only ever examines variables the cell **writes** (it returns early when the self-written set is empty), and the object in question is a read-only **input**. The content-base staleness check could not have caught it either: a consumable drains *in place*, so its identity never changes and `compute_hash`'s `sha256(str(id(obj)))` fallback for unpicklable objects returns the same hash before and after draining.
 
 ### Decision
 Add a `consumables.py` module that classifies an object as **consumable-unrestorable** only when **both** signals hold — it is a self-iterator (`iter(obj) is obj`) **and** it hits the cache store's by-ref fallback — then probes *divergence* per type against a baseline recorded at the consumer cell's **entry** (`TrackingState.consumable_bases`). A diverged input schedules its producer **and** the statements that fill it (`_schedule_consumable_producer_touches` in `upstream/reexecution_planner.py`).
@@ -483,7 +483,7 @@ Add a `consumables.py` module that classifies an object as **consumable-unrestor
 - The upstream channel now examines **read-only inputs**, breaking the previously-safe reading that the guard only looks at variables a cell writes. Any future work on the stale-value guard must not "optimize" the empty-self-written-set early return back into covering this path.
 - Scoped to inputs the cell actually **consumes**: `n = q.qsize()` and `print(type(g))` are reporting reads and leave the producer alone.
 - The scheduling pass is scoped to `consumable_broken_vars` — vars this run's probe actually flagged — so no other broken variable's plan changes.
-- **Deliberate non-goal: opaque `itertools` cursors.** `cycle` / `chain` / `tee` keep their cursor entirely in C with no observable handle, so `consumable_state` returns `None` and the policy is "report NOT diverged, leave the producer alone". The only alternative would be to assume divergence and re-execute their producer on *every* isolated re-run — trading a silent wrong answer for unconditional recompute of anything that touches them. That is a real but narrower gap of the same family as CAS-50, tracked as CAS-122 rather than paid for by every cell here. (`itertools.count` is the exception: it renders its next value via `repr`, so it *is* probeable.)
+- **Deliberate non-goal: opaque `itertools` cursors.** `cycle` / `chain` / `tee` keep their cursor entirely in C with no observable handle, so `consumable_state` returns `None` and the policy is "report NOT diverged, leave the producer alone". The only alternative would be to assume divergence and re-execute their producer on *every* isolated re-run — trading a silent wrong answer for unconditional recompute of anything that touches them. That is a real but narrower gap of the same family as the exhausted generator above, left as a documented gap rather than paid for by every cell here. (`itertools.count` is the exception: it renders its next value via `repr`, so it *is* probeable.)
 - Regression corpus green at adoption: 2704 stress, 1634 unit, and the 14 generator over-invalidation probes.
 
 ### Alternatives Considered
@@ -491,7 +491,7 @@ Add a `consumables.py` module that classifies an object as **consumable-unrestor
 - **`deepcopy` as the classifier**: rejected on cost (~40000× slower on a `map` over a large list) for an identical verdict on every type in remit.
 - **Content-hashing the consumable**: rejected — it cannot work by construction. Draining is in-place, so identity and therefore the `id()`-based hash fallback are unchanged.
 - **Marking the variable broken and relying on the existing backward scan**: rejected — demonstrated insufficient (see Rationale); the fill statements are not scheduled.
-- **Assume-diverged for unprobeable cursors**: rejected for now — unconditional producer recompute on every isolated re-run is a worse default than a narrow, documented gap. See CAS-122.
+- **Assume-diverged for unprobeable cursors**: rejected for now — unconditional producer recompute on every isolated re-run is a worse default than a narrow, documented gap.
 
 ---
 
@@ -499,7 +499,7 @@ Add a `consumables.py` module that classifies an object as **consumable-unrestor
 
 **Status:** Accepted
 **Date:** 2026-07-15
-**Context:** Some objects hold a *live* reference to another object that lineage tracking never models: a numpy **view** (`v = a[100:200]`, where `v.base is a`) — mutating `v` in place mutates `a` — and a pandas **ref-holder** (`g = df.groupby('k')`, `r = df.rolling(3)`), where `g.obj is df` — mutating `df` in place changes what `g` aggregates. Lineage freezes each variable's hash at *creation*, so a later in-place mutation of one side never bumps the other and a downstream consumer serves a stale cached result (CAS-115 / CAS-89).
+**Context:** Some objects hold a *live* reference to another object that lineage tracking never models: a numpy **view** (`v = a[100:200]`, where `v.base is a`) — mutating `v` in place mutates `a` — and a pandas **ref-holder** (`g = df.groupby('k')`, `r = df.rolling(3)`), where `g.obj is df` — mutating `df` in place changes what `g` aggregates. Lineage freezes each variable's hash at *creation*, so a later in-place mutation of one side never bumps the other and a downstream consumer serves a stale cached result.
 
 ### Decision
 Keep an explicit **derivation edge store** on `TrackingState` (`derivation_edges`), shaped `bump_source_var -> {vars_to_bump_when_source_bumps}`, in `statement/derivation_edges.py`. Split the work in two: **detection** at runtime only (it must observe live `.base` / `.obj` identity) and **replay** in both the runtime and the upstream simulator (which never executes user code and only reads the recorded edges).
@@ -535,7 +535,7 @@ Keep an explicit **derivation edge store** on `TrackingState` (`derivation_edges
 
 ### The problem
 
-Two independent round-11 testers hit the same defect. Given:
+Two people testing cash independently hit the same defect. Given:
 
 <!-- test:skip reason="illustrative: two-cell notebook fragment, not runnable as one block" -->
 ```python
@@ -549,12 +549,12 @@ This is worse than running with caching off, and the "worse" is cash-specific. C
 
 ### Why the current design cannot fix it
 
-Randomness is handled by **static AST analysis** (`RandomnessVisitor` / `get_drawing_rng_modules` scan the cell source for `np.random.*` calls) plus post-hoc **state capture** (`capture_rng_state` snapshots the global RNG after a statement, for replay on a cache hit — CAS-90). CAS-223 additionally keys a draw on the *seed epoch* — the cache key of the last-executed seeding statement.
+Randomness is handled by **static AST analysis** (`RandomnessVisitor` / `get_drawing_rng_modules` scan the cell source for `np.random.*` calls) plus post-hoc **state capture** (`capture_rng_state` snapshots the global RNG after a statement, for replay on a cache hit). A draw is additionally keyed on the *seed epoch* — the cache key of the last-executed seeding statement.
 
 Static analysis has a coverage hole that no amount of more analysis closes: it only sees `np.random.rand()` written **directly in the cell**. It is blind to draws **inside called functions** — `model.fit(X, y)` (sklearn draws internally), or any helper `def simulate(): return np.random.rand(...)`. The calling cell's AST shows `fit(...)` / `simulate()` and no RNG, so cash does not even know the cell consumes randomness.
 
 Two fixes were considered and rejected by experiment:
-- **CAS-223's seed epoch** keys the draw on the *last-executed* seed statement. When the seed cell is edited but **not** re-run, the epoch is unchanged, so the draw is not invalidated.
+- **The seed epoch** keys the draw on the *last-executed* seed statement. When the seed cell is edited but **not** re-run, the epoch is unchanged, so the draw is not invalidated.
 - **Injecting a variable edge** (making a bare `seed()` behave like it binds a variable the draw reads) was prototyped with a *real, visible* variable edge — the draw literally read a variable set in the seed cell. It still failed: editing the seed and running only the draw returned seed-1's second draw (`0.7203244934421581`). cash re-executed the **downstream draw** but not the **seed cell**, so the global RNG was never re-seeded. This proves the missing piece is not the edge but the **replay of the seed's side effect**.
 
 This is inconsistent with how cash handles **files**, which are runtime-instrumented: `file_tracker` patches `open`/`read_csv`/etc., and records path + content-hash as a dependency when the cell actually reads the file. Files get an observer; randomness does not.
@@ -583,14 +583,14 @@ Adopt a **runtime-observer** model for global-RNG dependency tracking, mirroring
 
 - **Statement metadata gains a new dependency kind** (`rng_seed_dep` or similar) alongside `file_dependencies`. Freshness checking (`statement/freshness.py`) grows a branch that compares the stored seed reference against the currently-active one, exactly parallel to the file-dep branch.
 - **The reconstruction planner (`upstream/reexecution_planner.py`) gains a "replay this statement for its side effect, in order" capability.** This is the load-bearing, fragile half — the same subsystem whose reset-lineage branch is load-bearing for 500+ integration tests. It must be built baseline-first with the real-driver oracle and a full before/after integration run.
-- **Interacts with, and largely subsumes, CAS-223's seed epoch.** The runtime dependency is a superset of the static epoch; CAS-223 should be kept as the same-cell / re-run fast path and reconciled so the two do not double-invalidate.
-- **Global RNG only.** Named `np.random.default_rng(SEED)` generators already work through ordinary variable lineage (verified round 11) and are out of scope. So is a generator's **stream position across multiple drawing cells**, which remains the documented Generator limitation — this ADR fixes seed *changes*, not stream bookkeeping.
+- **Interacts with, and largely subsumes, the seed epoch.** The runtime dependency is a superset of the static epoch; the epoch should be kept as the same-cell / re-run fast path and reconciled so the two do not double-invalidate.
+- **Global RNG only.** Named `np.random.default_rng(SEED)` generators already work through ordinary variable lineage (verified when this was written) and are out of scope. So is a generator's **stream position across multiple drawing cells**, which remains the documented Generator limitation — this ADR fixes seed *changes*, not stream bookkeeping.
 - **Patching risk** is the same class cash already accepts for files: thread-safety of the global singleton, correct un-patching on `%cash_off`, and not disturbing user code that introspects `np.random.seed`.
 
 ### Alternatives Considered
 
 - **Keep static analysis, extend the AST walker**: rejected — cannot see draws inside called functions, which is the dominant real case (sklearn, helpers). No amount of static work closes it.
-- **CAS-223 seed epoch alone**: rejected — keys on the *last-executed* seed, so edit-without-re-running is invisible. Kept as a fast path, not the whole answer.
+- **The seed epoch alone**: rejected — keys on the *last-executed* seed, so edit-without-re-running is invisible. Kept as a fast path, not the whole answer.
 - **Inject a synthetic variable edge and rely on existing reconstruction**: rejected by experiment — even a real variable edge did not make reconstruction re-run the seed; the draw recomputed on stale global state.
 - **Patch every draw function** instead of state-diffing: rejected — numpy exposes dozens of draw entry points; state-diff observes the same fact (the stream advanced) with a two-line snapshot and no per-function wrapping.
 - **Warn-only, never reconstruct**: rejected as the *final* design (it leaves the value wrong), but accepted as a legitimate **interim** step because a precise runtime dependency makes the warning reliable, and a loud wrong-value beats a silent one.

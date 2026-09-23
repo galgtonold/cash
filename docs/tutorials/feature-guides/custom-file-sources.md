@@ -73,7 +73,7 @@ def load_config():
     return DEFAULTS
 ```
 
-The absence of `local_overrides.toml` is what selected the defaults branch — it is an input, and it was the one input Cash could not see, because a file that is never opened produces no read to track. The entry recorded no dependencies at all, so it looked valid everywhere: a round-16 tester got one directory's answer in another, silently. A negative probe is now recorded as `{'absent': True}`, and the entry stops being valid once the file appears.
+The absence of `local_overrides.toml` is what selected the defaults branch — it is an input, and it was the one input Cash could not see, because a file that is never opened produces no read to track. The entry recorded no dependencies at all, so it looked valid everywhere: one directory's answer was served in another, silently. A negative probe is now recorded as `{'absent': True}`, and the entry stops being valid once the file appears.
 
 A probe that finds the file records nothing here; the read that follows it tracks the file properly. Absent paths are kept **as written** rather than resolved: a relative probe asks "is there a file with this name, *here*", and freezing the directory it happened to run in would reintroduce the same bug in mirror image.
 

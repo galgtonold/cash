@@ -65,7 +65,7 @@ The first two are one closure, and it carries no *type*, so it assumes the slowe
 
 The `100 ms` floor is hardcoded in `factory.py`; the savings fraction is `min_cache_savings_pct` (default `0.20`).
 
-The rate ceiling exists because the first two gates, on their own, filled round 26's five caches with 58 GiB for 61–360 MB of input data — 1.3 GB frames that rebuild in 5 seconds, 48 MiB loop iterations with 0.00 s of recorded compute. Measured over all 3120 of those entries, the rate refuses 76% of the bytes and gives up 1% of the compute. `@cash.cache` and `@cash:persist` skip it, like the other two gates: an explicit decision is not re-judged.
+The rate ceiling exists because the first two gates, on their own, filled five user-testing caches with 58 GiB for 61–360 MB of input data — 1.3 GB frames that rebuild in 5 seconds, 48 MiB loop iterations with 0.00 s of recorded compute. Measured over all 3120 of those entries, the rate refuses 76% of the bytes and gives up 1% of the compute. `@cash.cache` and `@cash:persist` skip it, like the other two gates: an explicit decision is not re-judged.
 
 > **Restart implication.** The corollary of the 100 ms floor is that a *fast but
 > important* computation on the default `TieredBackend` stays RAM-only and does

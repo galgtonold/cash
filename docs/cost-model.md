@@ -327,8 +327,8 @@ the answer *costs*. Filter 3 does: cash spends at most **128 MiB of cache per
 second of compute saved**, and refuses any value over **8 MiB** that exceeds
 that rate. A value under 8 MiB is never refused on rate alone.
 
-It exists because the first two filters, on their own, filled round 26's five
-test caches with 58 GiB for 61–360 MB of input data — 1.3 GB frames that rebuild
+It exists because the first two filters, on their own, filled five user-testing
+caches with 58 GiB for 61–360 MB of input data — 1.3 GB frames that rebuild
 in five seconds, 48 MiB loop iterations with 0.00 s of recorded compute.
 Measured over all 3120 of those entries, the rate refuses 76% of the bytes and
 gives up about 1% of the compute.
