@@ -564,10 +564,10 @@ def call_cache_key(
 #: _store_in_cache``, default 0.01s) -- inherited, not measured. The two paths
 #: do not have the same overhead, and mirroring made this one over-conservative
 #: by ~3x: a whole band of loops cleared neither this floor nor the single-unit
-#: threshold and so cached nothing at all (CAS-261).
+#: threshold and so cached nothing at all.
 #:
 #: 3ms is derived from measurement, not from the statement path. End-to-end,
-#: n=124 (see ``zzmeas_cas261_*``): store ~0.7ms/call, hit ~1.2ms/call, so a
+#: n=124 (the scripts in ``benchmarks/call_unit_cost/``): store ~0.7ms/call, hit ~1.2ms/call, so a
 #: call pays for itself once its body clears ~1.2ms. Measured warm rerun vs
 #: cash-off at this n: 0.1ms body 8x SLOWER, 1ms 1.25x slower, 2ms 1.3x faster,
 #: 5ms 5x faster. 3ms keeps ~2.5x margin over the break-even for slower
@@ -578,7 +578,7 @@ def call_cache_key(
 #:
 #: Bodies BELOW this floor are not left uncovered -- they are the promotion
 #: case, where one whole-loop unit amortises over every iteration instead of
-#: N per-call entries (CAS-261 step 2). This constant is the boundary between
+#: N per-call entries. This constant is the boundary between
 #: the two mechanisms, which is why no band should fall between them.
 _COST_FLOOR_S = 0.003
 

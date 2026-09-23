@@ -4,8 +4,8 @@ The on-disk layout (one ``*.entry`` file per entry) can change shape
 between Cash versions. To avoid silently decoding a stale layout after an
 upgrade, FileBackend stamps the cache directory with the format version it
 wrote and, on init, **auto-invalidates** any cache whose stamp doesn't match
-the version this build expects. This automates the manually-documented
-"run ``%cash_repair --full`` after upgrading" step.
+the version this build expects, so nobody has to remember to clear the cache
+by hand after upgrading.
 """
 
 from __future__ import annotations

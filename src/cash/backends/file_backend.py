@@ -175,7 +175,7 @@ _ENTRY_GLOB = f"*{ENTRY_SUFFIX}"
 # older build undecodable or liable to be misread** by a newer one. On init,
 # FileBackend compares this against the stamp it finds in the cache dir and
 # auto-invalidates a mismatched cache rather than silently decoding a stale
-# layout — automating the "run %cash_repair --full after upgrading" step.
+# layout, so nobody has to remember to clear the cache after upgrading.
 CACHE_FORMAT_VERSION = 2
 
 # Filename of the per-directory format stamp. Has no entry extension so it
