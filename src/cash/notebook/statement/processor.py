@@ -63,6 +63,7 @@ from ...analysis.mutation_effects import (
 )
 from ...analysis.namespace_effects import statement_calls_user_writer
 from ...analytics import AnalyticsManager
+from ...tracking.file_dep_snapshot import file_state_epoch
 from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ..consumables import is_consumable_unrestorable
@@ -935,7 +936,7 @@ class StatementProcessor:
         """Run cache lookup unless *skip_cache* is set."""
         if not skip_cache:
             return self._freshness.check_cache(
-                self.tracking_state, cache_key, ttl, inputs, epoch=getattr(self.shell, "execution_count", None)
+                self.tracking_state, cache_key, ttl, inputs, epoch=file_state_epoch()
             )
         logger.debug("%s Skipping cache lookup due to missing input lineage or @cash:no-cache", _LOG_ANNOTATION)
         return None, None, 0.0
@@ -1298,7 +1299,7 @@ class StatementProcessor:
             except Exception:  # noqa: BLE001 - when unsure, check files again
                 wrote = True
         if wrote:
-            self._freshness.forget_file_answers(getattr(self.shell, "execution_count", None))
+            self._freshness.forget_file_answers(file_state_epoch())
 
     def _update_state_tracking(
         self,

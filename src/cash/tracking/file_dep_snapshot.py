@@ -196,6 +196,17 @@ def begin_file_state_epoch() -> None:
         HASH_EPOCH = _EPOCH_COUNT
 
 
+def file_state_epoch() -> int | None:
+    """The current cell run's number, or None between runs.
+
+    The cell run's own identity, for memos that must not outlive it. The
+    shell's ``execution_count`` is not one: it only moves for a cell run
+    with ``store_history=True``, so ``shell.run_cell(code)`` and a frontend's
+    history-less execute leave it where it was, cell after cell.
+    """
+    return HASH_EPOCH
+
+
 def end_file_state_epoch() -> None:
     """The cell run that `begin_file_state_epoch` started is over."""
     global HASH_EPOCH, _EPOCH_DEPTH
