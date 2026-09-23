@@ -605,7 +605,6 @@ class UpstreamChecker:
 
         state = self.tracking_state
         dict_attrs = (
-            "variable_lineage",
             "executed_input_lineages",
             "current_session_hashes",
             "variable_hashes",
@@ -620,6 +619,7 @@ class UpstreamChecker:
         )
         for var in to_evict:
             self.shell.user_ns.pop(var, None)
+            state.lineage.discard(var)
             for attr in dict_attrs:
                 getattr(state, attr, {}).pop(var, None)
             state.vars_with_mutation_lineage.discard(var)
