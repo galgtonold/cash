@@ -62,7 +62,7 @@ from .diagnostics import (
     warn_diagnostic,
     warn_diagnostic_message,
 )
-from .effect_observer import EffectObserver, line_waived
+from .effect_observer import EffectObserver, line_waived, observed_label
 from .effectiveness import EffectivenessLedger
 from .exceptions import (
     SOURCE_RETRIEVAL_ERRORS,
@@ -77,12 +77,12 @@ from .graph import DependencyGraph
 from .install_paths import is_user_path
 from .lineage_tag import own_tag
 from .object_hashing import builtin_hash, builtin_hash_family, estimate_object_size, stable_key_repr
-from .purity import WRITE_METHODS
 from .purity_analyzer import (
     ISSUE_AMBIENT_READ,
     ISSUE_IMPURE_CALL,
     ISSUE_MUTABLE_GLOBAL,
     ISSUE_UNTRACKABLE_DEP,
+    REPORTED_METHODS,
     PurityIssue,
     PurityReport,
     bindings_changed,
@@ -778,73 +778,22 @@ def _format_issues_summary(func_name: str, issues: list[Any]) -> str:
     return "\n".join(lines)
 
 
-_NETWORK_CALLS = frozenset(
-    {
-        "post",
-        "put",
-        "patch",
-        "send",
-        "sendall",
-        "sendto",
-        "publish",
-        "upload",
-        "upload_file",
-        "upload_fileobj",
-        "put_object",
-    }
-)
-_FILE_WRITE_CALLS = frozenset(
-    {
-        "open",
-        "write",
-        "write_bytes",
-        "write_text",
-        "writelines",
-        "to_csv",
-        "to_excel",
-        "to_json",
-        "to_parquet",
-        "to_pickle",
-        "save",
-        "savefig",
-        "dump",
-        "makedirs",
-        "mkdir",
-        "remove",
-        "rename",
-        "replace",
-        "rmdir",
-        "unlink",
-        "copy",
-        "copy2",
-        "move",
-        "rmtree",
-    }
-)
-
-
 def _static_effect_kinds(report: Any) -> set[str]:
     """The observed-effect kinds (``EffectObserver``) a static report names.
 
     So an effect the static warning already listed is not repeated by
     IMPURE-OBSERVED-EFFECTS, while one of another kind still is. Errs toward
-    NOT covering: an unrecognised call covers nothing.
+    NOT covering: a finding with no effect kind covers nothing.
     """
     kinds: set[str] = set()
     for issue in getattr(report, "issues", ()) or ():
-        description = getattr(issue, "description", "")
-        if "changes the argument" in description:
+        if "changes the argument" in getattr(issue, "description", ""):
             kinds.add("argument mutation")
         if getattr(issue, "kind", None) != "impure_call":
             continue
-        name = description.split(" - ", 1)[0].removesuffix("()").split("(", 1)[0]
-        last = name.rsplit(".", 1)[-1]
-        if name.startswith(("subprocess.", "os.system")):
-            kinds.add("subprocess")
-        elif name.startswith("requests.") or last in _NETWORK_CALLS:
-            kinds.add("network")
-        elif last in _FILE_WRITE_CALLS:
-            kinds.add("file write")
+        label = observed_label(getattr(issue, "effect_kind", None))
+        if label is not None:
+            kinds.add(label)
     return kinds
 
 
@@ -5292,7 +5241,7 @@ class Cash:
         unsafe: set[str] = set()
         write_methods: frozenset[str] = frozenset()
         if mutating_methods_only:
-            write_methods = WRITE_METHODS
+            write_methods = REPORTED_METHODS
         for node in ast.walk(tree):
             if waived is not None and isinstance(node, (ast.Call, ast.stmt)) and waived(node):
                 continue
@@ -7139,7 +7088,7 @@ class Cash:
                     return None
                 method = getattr(value, "__name__", "")
 
-                if method in WRITE_METHODS or method in _LOG_METHOD_NAMES:
+                if method in REPORTED_METHODS or method in _LOG_METHOD_NAMES:
                     # `record = RESULTS.append`, `log = logger.info`: what the
                     # owner holds is the call's OUTPUT, not an input.
                     return None

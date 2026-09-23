@@ -9,19 +9,20 @@ from __future__ import annotations
 
 import ast
 import builtins
-import datetime
 import functools
+import importlib
 import inspect
 import logging
+import sys
 import textwrap
-import time
 import types
-import uuid
-from collections.abc import Callable
+from collections import ChainMap
+from collections.abc import Callable, Mapping
 from typing import Any
 
+from ..effects import Action
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from .cacheability import callee_mutated_globals_for_tree
+from .cacheability import NOTEBOOK_POLICY, SCANNED_KINDS, callee_mutated_globals_for_tree, notebook_effect
 
 __all__ = ["CodeAnalyzer"]
 
@@ -347,39 +348,21 @@ class _FlowVisitor(ast.NodeVisitor):
 
 
 class _ForbiddenVisitor(ast.NodeVisitor):
-    """Detect calls to forbidden (non-deterministic) functions.
-
-    Lifted from the inline class inside ``scan_for_forbidden_functions``.
+    """Find the calls whose kind the notebook refuses and that are judged by
+    what their names are bound to (``SCANNED_KINDS``): the clock, the person
+    at the keyboard. Imports written in the statement itself are followed.
     """
 
-    def __init__(self, forbidden_objs: dict, user_ns: dict[str, Any]) -> None:
-        self.forbidden_objs = forbidden_objs
+    def __init__(self, user_ns: Mapping[str, Any]) -> None:
         self.user_ns = user_ns
-        self.local_ns: dict = {}
+        self.local_ns: dict[str, Any] = {}
+        self.namespace = ChainMap(self.local_ns, user_ns)  # type: ignore[arg-type]
         self.found_reasons: list[str] = []
 
-    def _resolve_name(self, name: str) -> Any:
-        if name in self.local_ns:
-            return self.local_ns[name]
-        if name in self.user_ns:
-            return self.user_ns[name]
-        if hasattr(builtins, name):
-            return getattr(builtins, name)
-        return None
-
-    def _resolve_node_value(self, node: ast.expr) -> Any:
-        if isinstance(node, ast.Name):
-            return self._resolve_name(node.id)
-        if isinstance(node, ast.Attribute):
-            parent = self._resolve_node_value(node.value)
-            if parent is not None and hasattr(parent, node.attr):
-                return getattr(parent, node.attr)
-        return None
-
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
-        func_obj = self._resolve_node_value(node.func)
-        if func_obj in self.forbidden_objs:
-            self.found_reasons.append(self.forbidden_objs[func_obj])
+        reason = _forbidden_call(node, self.namespace)
+        if reason is not None:
+            self.found_reasons.append(reason)
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node) -> None:  # noqa: N802
@@ -418,27 +401,60 @@ class _ForbiddenVisitor(ast.NodeVisitor):
     def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
         for alias in node.names:
             base_name = alias.name.split(".")[0]
-            if base_name in ("time", "datetime", "uuid"):
-                try:
-                    mod = __import__(base_name)
-                    store_name = alias.asname or base_name
-                    if not alias.asname and base_name != alias.name:
-                        self.local_ns[base_name] = mod
-                    else:
-                        self.local_ns[store_name] = mod
-                except ImportError:
-                    pass  # Expected: module may not be importable in analysis context
+            module = _loaded(base_name)
+            if module is not None:
+                self.local_ns[alias.asname or base_name] = (
+                    sys.modules.get(alias.name, module) if alias.asname else module
+                )
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
-        if node.module and any(node.module.startswith(m) for m in ("time", "datetime", "uuid")):
-            try:
-                mod = __import__(node.module, fromlist=[n.name for n in node.names])
-                for alias in node.names:
-                    obj = getattr(mod, alias.name, None)
-                    if obj:
-                        self.local_ns[alias.asname or alias.name] = obj
-            except ImportError:
-                pass  # Expected: module may not be importable in analysis context
+        module = _loaded(node.module or "") if not node.level else None
+        if module is None:
+            return
+        for alias in node.names:
+            obj = getattr(module, alias.name, None)
+            if obj is not None:
+                self.local_ns[alias.asname or alias.name] = obj
+
+
+#: Standard-library modules whose calls the scan knows, imported on demand when
+#: the statement imports one that nothing has loaded yet. Any other module is
+#: followed only once it is loaded: the scan never imports a library.
+_STDLIB_ROOTS: frozenset[str] = frozenset({"time", "datetime", "uuid", "os", "getpass"})
+
+
+def _loaded(name: str) -> Any:
+    module = sys.modules.get(name)
+    if module is None and name in _STDLIB_ROOTS:
+        module = importlib.import_module(name)
+    return module
+
+
+#: Clock reads the notebook refused whatever their arguments, before it shared
+#: the decorator's rule that ``time.localtime(ts)`` only converts ``ts``.
+_REFUSED_WITH_ANY_ARGS: frozenset[str] = frozenset({"time.localtime", "time.gmtime"})
+
+
+def _forbidden_call(node: ast.Call, namespace: Mapping[str, Any]) -> str | None:
+    """The reason *node* makes a statement uncacheable, or None.
+
+    Only a call whose first name is bound (in the namespace, by an import in
+    the statement, or as a builtin) counts: an unbound name is not a call to
+    anything yet.
+    """
+    root = node.func
+    while isinstance(root, ast.Attribute):
+        root = root.value
+    if not isinstance(root, ast.Name) or not (root.id in namespace or hasattr(builtins, root.id)):
+        return None
+    effect = notebook_effect(node, namespace)
+    if effect is None:
+        effect = notebook_effect(ast.Call(func=node.func, args=[], keywords=[]), namespace)
+        if effect is None or effect.name not in _REFUSED_WITH_ANY_ARGS:
+            return None
+    if effect.kind not in SCANNED_KINDS or NOTEBOOK_POLICY[effect.kind] is not Action.REFUSE:
+        return None
+    return ".".join(effect.name.split(".")[-2:])
 
 
 # ---------------------------------------------------------------------------
@@ -851,26 +867,12 @@ class CodeAnalyzer:
         Returns:
             List of detected forbidden function names (e.g. ['time.time'])
         """
-        forbidden_objs: dict = {}
-
-        for name in ["time", "monotonic", "perf_counter", "process_time", "time_ns", "localtime", "gmtime"]:
-            if hasattr(time, name):
-                forbidden_objs[getattr(time, name)] = f"time.{name}"
-
-        forbidden_objs[datetime.datetime.now] = "datetime.now"
-        forbidden_objs[datetime.datetime.utcnow] = "datetime.utcnow"
-        forbidden_objs[datetime.date.today] = "date.today"
-
-        for name in ["uuid1", "uuid4"]:
-            if hasattr(uuid, name):
-                forbidden_objs[getattr(uuid, name)] = f"uuid.{name}"
-
         if tree is None:
             try:
                 tree = ast.parse(CodeAnalyzer.strip_magics(code))
             except SyntaxError:
                 return []
 
-        visitor = _ForbiddenVisitor(forbidden_objs, user_ns)
+        visitor = _ForbiddenVisitor(user_ns)
         visitor.visit(tree)
         return list(set(visitor.found_reasons))

@@ -59,18 +59,21 @@ from .analysis.cacheability import (
     get_base_name,
     get_call_module,
     get_call_name,
-    is_open_write_mode,
+)
+from .effects import (
+    CLOCK_WHEN_ARG_CALLS,
+    ENVIRON_NAMES,
+    METHOD_VERBS,
+    MODULE_CALLS,
+    MUTATOR_METHODS,
+    Action,
+    Effect,
+    EffectKind,
+    classify_call,
 )
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
 from .purity import (
-    AMBIENT_ARG_VALUES,
-    AMBIENT_READ_CALLS,
-    AMBIENT_WHEN_ARG_CALLS,
-    AMBIENT_WHEN_ARGS_OMITTED,
-    IMPURE_FUNCTION_CALLS,
-    IMPURE_MODULE_CALLS,
     KNOWN_PURE_BUILTINS,
-    WRITE_METHODS,
     is_pure,
     is_stateful,
 )
@@ -79,7 +82,6 @@ from .purity_flow import (
     fresh_name_nodes,
     is_log_helper,
     is_log_line,
-    is_read_only_sql,
     receiver_is_fresh,
 )
 from .source_norm import (
@@ -94,6 +96,8 @@ from .utils import MAIN_MODULE_NAMES, resolve_main_module
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "DECORATOR_POLICY",
+    "REPORTED_METHODS",
     "PurityAnalyzer",
     "PurityReport",
     "PurityIssue",
@@ -132,9 +136,130 @@ ISSUE_AMBIENT_READ = "ambient_read"
 #: dispatch rule (which only fires on a NON-constant name).
 _DYNAMIC_BUILTIN_NAMES = frozenset({"eval", "exec", "compile", "__import__"})
 
-#: How the process environment is spelled at a subscript: ``os.environ[...]``,
-#: or bare ``environ[...]`` after ``from os import environ``.
-_ENVIRON_NAMES = frozenset({"os.environ", "environ"})
+#: What a ``@cash.cache`` function's first call does about each kind of effect
+#: its body has. What a kind IS lives in :mod:`cash.effects`, shared with the
+#: notebook, whose own table is ``cash.analysis.cacheability.NOTEBOOK_POLICY``.
+#: A decorated function is always cached -- refusing would cost the user the
+#: compute and prevent nothing, since the body has run -- so the choice here is
+#: only what to say. A test keeps this covering every kind.
+DECORATOR_POLICY: dict[EffectKind, Action] = {
+    EffectKind.FILE_WRITE: Action.WARN,
+    EffectKind.FILE_READ: Action.CACHE_AS_INPUT,
+    EffectKind.NETWORK_READ: Action.WARN,
+    EffectKind.NETWORK_WRITE: Action.WARN,
+    EffectKind.NETWORK: Action.WARN,
+    EffectKind.DB_READ: Action.CACHE,
+    EffectKind.DB_WRITE: Action.WARN,
+    EffectKind.SUBPROCESS: Action.WARN,
+    # These two are reported as ambient reads (KEY-AMBIENT-READ), not as
+    # side effects: a hidden input is frozen, nothing is skipped.
+    EffectKind.CLOCK: Action.WARN,
+    EffectKind.ENVIRONMENT: Action.WARN,
+    # A hit drops what the first call printed. A log line (`is_log_line`) is
+    # exempt: a hit skipping it is what caching means.
+    EffectKind.CONSOLE: Action.WARN,
+    EffectKind.DISPLAY: Action.WARN,
+    EffectKind.INTERACTIVE: Action.WARN,
+}
+
+#: Kinds reported as ambient reads rather than as side effects.
+_AMBIENT_KINDS = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT})
+
+#: Calls the decorator did not report before the two paths shared one
+#: vocabulary, although the notebook path refuses them (or both should have
+#: named them). Each group is closed on its own, with a test of the new verdict
+#: on both paths.
+_NOT_YET_REPORTED: frozenset[str] = frozenset(
+    {
+        # files and folders
+        "os.symlink",
+        "os.link",
+        "os.chmod",
+        "os.removedirs",
+        "os.renames",
+        "os.truncate",
+        "shutil.copyfile",
+        "shutil.copytree",
+        "csv.writer",
+        "to_hdf",
+        "to_feather",
+        "to_stata",
+        "to_latex",
+        "to_html",
+        "to_clipboard",
+        "to_markdown",
+        "mkdir",
+        "touch",
+        "unlink",
+        "symlink_to",
+        "hardlink_to",
+        # other programs
+        "os.popen",
+        "os.execv",
+        "os.execve",
+        "os.execl",
+        "os.execlp",
+        "os.execvp",
+        "os.spawnv",
+        "os.spawnl",
+        "os.posix_spawn",
+        "subprocess.getoutput",
+        "subprocess.getstatusoutput",
+        # network reads not named alongside `requests.get`
+        "requests.head",
+        "requests.options",
+        "httpx.get",
+        "httpx.head",
+        "httpx.options",
+        "httpx.post",
+        "httpx.put",
+        "httpx.patch",
+        "httpx.delete",
+        "httpx.request",
+        "urllib.request.urlopen",
+        "urlopen",
+        # database writes through a frame
+        "to_sql",
+        "to_gbq",
+        # the clock
+        "time.process_time",
+        # the person at the keyboard
+        "getpass.getpass",
+    }
+)
+
+#: Builtin names the decorator reported on ANY receiver before (``re.compile``,
+#: ``gzip.open``), not only as the builtin itself.
+_REPORTED_ON_ANY_RECEIVER = frozenset(
+    {"print", "input", "open", "exec", "eval", "compile", "exit", "quit", "breakpoint"}
+)
+
+#: Bare builtins whose discarded result is not worth a word: each is reported
+#: by another rule already (an effect, or explicit dynamic execution).
+_DISCARD_REPORTED_BUILTINS = frozenset(name for name in MODULE_CALLS if "." not in name) | {
+    "open",
+    "exec",
+    "eval",
+    "compile",
+}
+
+
+def decorator_effect(call: ast.Call, namespace: dict[str, Any] | None = None) -> Effect | None:
+    """The effect *call* has, as the decorator path judges it, or None."""
+    effect = classify_call(call, namespace)
+    if effect is None or effect.name in _NOT_YET_REPORTED or effect.kind is EffectKind.DISPLAY:
+        return None
+    return effect
+
+
+#: Method names the decorator reports on any receiver: a mutator, or a verb
+#: whose kind it warns about. The discarded-call rule skips these (the call is
+#: already reported), and "does this change a global?" reads them.
+REPORTED_METHODS: frozenset[str] = MUTATOR_METHODS | frozenset(
+    name
+    for name, kind in METHOD_VERBS.items()
+    if DECORATOR_POLICY[kind] is Action.WARN and name not in _NOT_YET_REPORTED
+)
 
 
 @dataclass(frozen=True)
@@ -157,6 +282,8 @@ class PurityIssue:
             module rather than the file of the call that surfaced it.
         subject: The name the finding is about, where there is one -- the
             global of a ``mutable_global``.
+        effect_kind: The :class:`~cash.effects.EffectKind` of the call an
+            ``impure_call`` is about, where it has one.
     """
 
     kind: str
@@ -165,6 +292,7 @@ class PurityIssue:
     line: int = 0
     filename: str = ""
     subject: str = ""
+    effect_kind: EffectKind | None = None
 
 
 @dataclass(frozen=True)
@@ -535,7 +663,7 @@ class _PurityVisitor(ast.NodeVisitor):
         """
         if (
             isinstance(node.ctx, ast.Load)
-            and get_base_name(node.value) in _ENVIRON_NAMES
+            and get_base_name(node.value) in ENVIRON_NAMES
             and id(node) not in self._log_only
         ):
             self.issues.append(
@@ -784,7 +912,7 @@ class _PurityVisitor(ast.NodeVisitor):
             self._subscript_call_nodes.append(node)
             return
 
-        # Known-impure module-qualified calls (requests.post, os.system, ...).
+        # Calls with an effect (requests.post, os.system, df.to_csv, ...).
         func_name = get_call_name(func_node)
         module_name = get_call_module(func_node)
         if func_name:
@@ -825,36 +953,59 @@ class _PurityVisitor(ast.NodeVisitor):
             if is_log_line(node):
                 return  # a diagnostic line: a hit skipping it is what caching means
 
-            if dotted in IMPURE_MODULE_CALLS or func_name in IMPURE_FUNCTION_CALLS:
-                # Special case: open() in read mode is not impure.
-                if func_name == "open" and not module_name and not is_open_write_mode(node):
-                    pass  # open(path) for read - track via file-deps, not as impurity
-                else:
-                    self.issues.append(
-                        PurityIssue(
-                            kind=ISSUE_IMPURE_CALL,
-                            description=f"{dotted}() - known I/O / side-effecting",
-                            where=self._qualname,
-                            line=line,
-                        )
+            effect = decorator_effect(node, self._namespace)
+            if (
+                effect is not None
+                and effect.kind not in _AMBIENT_KINDS
+                and DECORATOR_POLICY[effect.kind] is Action.WARN
+                and not effect.method
+            ):
+                self.issues.append(
+                    PurityIssue(
+                        kind=ISSUE_IMPURE_CALL,
+                        description=f"{dotted}() - known I/O / side-effecting",
+                        where=self._qualname,
+                        line=line,
+                        effect_kind=effect.kind,
                     )
-                    self.impure_call_nodes.append(node)
-                    return
+                )
+                self.impure_call_nodes.append(node)
+                return
+            if (
+                effect is None
+                and isinstance(func_node, ast.Attribute)
+                and func_name in _REPORTED_ON_ANY_RECEIVER
+                and not (func_name == "open" and module_name is None)
+            ):
+                self.issues.append(
+                    PurityIssue(
+                        kind=ISSUE_IMPURE_CALL,
+                        description=f"{dotted}() - known I/O / side-effecting",
+                        where=self._qualname,
+                        line=line,
+                        effect_kind=EffectKind.FILE_WRITE if func_name == "open" else None,
+                    )
+                )
+                self.impure_call_nodes.append(node)
+                return
 
-            # Method calls in WRITE_METHODS (to_csv, write, savefig, ...).
-            # Skipped when the receiver is a fresh local (e.g. ``lines.append``
-            # where ``lines = []``): mutating a local accumulator is pure.
+            # A method with an effect on any receiver (to_csv, write, post,
+            # execute, ...), or a container mutator. Skipped when the receiver
+            # is a fresh local (``lines.append`` where ``lines = []``):
+            # mutating a local accumulator is pure.
+            reported_method = (
+                effect is not None and effect.method and DECORATOR_POLICY[effect.kind] is Action.WARN
+            ) or func_name in MUTATOR_METHODS
             if (
                 isinstance(func_node, ast.Attribute)
-                and func_node.attr in WRITE_METHODS
+                and reported_method
                 and not self._receiver_is_local_owned(func_node.value)
                 and not self._is_module_function_named_like_a_mutator(func_node)
-                and not is_read_only_sql(node)
             ):
                 base = get_base_name(func_node.value)
                 base_str = f"{base}." if base else ""
                 what = "write method"
-                if func_node.attr in self._MUTATOR_NAMES:
+                if func_node.attr in MUTATOR_METHODS:
                     # `rows.sort()` on a parameter changes the caller's list:
                     # say so, rather than the label a local's `.sort()` gets.
                     kind = self._mutation_kind(base, "method")
@@ -866,6 +1017,7 @@ class _PurityVisitor(ast.NodeVisitor):
                         description=f"{base_str}{func_node.attr}() - {what}",
                         where=self._qualname,
                         line=line,
+                        effect_kind=effect.kind if effect is not None else None,
                     )
                 )
                 return
@@ -893,30 +1045,13 @@ class _PurityVisitor(ast.NodeVisitor):
         # Not flagged as anything - record for recursion attempt.
         self.called_callable_nodes.append(node)
 
-    #: Container mutators among the write methods. Called on an object they
-    #: change it; called on a MODULE (`np.sort`, `np.append`, `np.insert`) they
-    #: return a new array and change nothing -- round 19 reported "np.sort()
-    #: - write method". A module's real writes (`np.save`, `plt.savefig`,
-    #: `os.write`) keep being reported, as do `os.remove` and the rest of the
-    #: impure-module table, which is checked first.
-    _MUTATOR_NAMES = frozenset(
-        {
-            "append",
-            "extend",
-            "insert",
-            "pop",
-            "remove",
-            "sort",
-            "reverse",
-            "clear",
-            "update",
-            "add",
-            "discard",
-        }
-    )
+    #: Container mutators (`MUTATOR_METHODS`) called on a MODULE (`np.sort`,
+    #: `np.append`, `np.insert`) return a new array and change nothing --
+    #: round 19 reported "np.sort() - write method". A module's real writes
+    #: (`np.save`, `plt.savefig`, `os.write`) keep being reported.
 
     def _is_module_function_named_like_a_mutator(self, func_node: ast.Attribute) -> bool:
-        if func_node.attr not in self._MUTATOR_NAMES or not self._namespace:
+        if func_node.attr not in MUTATOR_METHODS or not self._namespace:
             return False
         chain = _callee_chain(func_node.value)
         if not chain or chain[0] not in self._namespace:
@@ -959,7 +1094,7 @@ class _PurityVisitor(ast.NodeVisitor):
                 name = func_node.id
                 # `print(...)` is already an impure_call; saying it twice, once
                 # as a discarded return, was the same line counted two ways.
-                if name not in KNOWN_PURE_BUILTINS and name not in IMPURE_FUNCTION_CALLS:
+                if name not in KNOWN_PURE_BUILTINS and name not in _DISCARD_REPORTED_BUILTINS:
                     self.issues.append(
                         PurityIssue(
                             kind=ISSUE_DISCARDED_CALL,
@@ -974,7 +1109,7 @@ class _PurityVisitor(ast.NodeVisitor):
                 # impure module calls), it's recorded by _record_call. The
                 # discarded-return flag here adds nothing useful - skip to
                 # avoid double-counting. Skip known-pure idioms too.
-                if method not in WRITE_METHODS and method not in PANDAS_INPLACE_METHODS:
+                if method not in REPORTED_METHODS and method not in PANDAS_INPLACE_METHODS:
                     base = get_base_name(func_node.value)
                     base_str = f"{base}." if base else ""
                     self.issues.append(
@@ -1430,98 +1565,24 @@ def _callee_chain(node: ast.AST) -> tuple[str, ...] | None:
     return tuple(reversed(parts))
 
 
-_AMBIENT_ROOTS: dict[str, Any] = {"loaded": None, "roots": {}}
-
-
-def _ambient_roots() -> dict[int, tuple[Any, str]]:
-    """``id(obj) -> (obj, canonical name)`` for every module, class and plain
-    function an ambient-read spelling passes through (``datetime``,
-    ``datetime.datetime``, ``time.time``, ``pandas.Timestamp``), among the
-    modules loaded now. Rebuilt when that set changes."""
-    table = AMBIENT_READ_CALLS | AMBIENT_WHEN_ARG_CALLS | set(AMBIENT_WHEN_ARGS_OMITTED)
-    loaded = tuple(sorted({e.split(".", 1)[0] for e in table} & set(sys.modules)))
-    if _AMBIENT_ROOTS["loaded"] == loaded:
-        return _AMBIENT_ROOTS["roots"]
-    roots: dict[int, tuple[Any, str]] = {}
-    for entry in table:
-        parts = entry.split(".")
-        obj: Any = sys.modules.get(parts[0])
-        if obj is None:
-            continue
-        roots.setdefault(id(obj), (obj, parts[0]))
-        for i in range(1, len(parts)):
-            try:
-                nxt = getattr(obj, parts[i])
-                # Only objects with a stable identity: `datetime.datetime.now`
-                # is a new bound method on every read, and a recycled id would
-                # match something else.
-                if nxt is not getattr(obj, parts[i]):
-                    break
-            except AttributeError:
-                break
-            obj = nxt
-            roots.setdefault(id(obj), (obj, ".".join(parts[: i + 1])))
-    _AMBIENT_ROOTS["loaded"], _AMBIENT_ROOTS["roots"] = loaded, roots
-    return roots
-
-
-def _reads_clock_when_omitted(canonical: str, node: ast.Call) -> bool:
-    """``time.strftime(fmt)`` reads the clock; ``time.strftime(fmt, t)`` does not."""
-    most = AMBIENT_WHEN_ARGS_OMITTED.get(canonical)
-    return (
-        most is not None
-        and len(node.args) <= most
-        and not node.keywords
-        and not any(isinstance(a, ast.Starred) for a in node.args)
-    )
-
-
 def _ambient_call(node: ast.Call, namespace: dict[str, Any] | None) -> str | None:
     """The ambient read *node* makes, spelled canonically, or None.
 
     The spelling in the source first (``datetime.now()``), then what its names
-    are bound to in *namespace*: round 19 found ``import datetime as _dt;
-    _dt.datetime.now()``, ``from datetime import datetime as DateTime``,
-    ``import time as _time``, ``import os as _os`` and ``pd.Timestamp.now()``
-    freezing a timestamp with no warning, while the canonical spellings
-    warned. Also ``pd.to_datetime("today")`` and ``pd.Timestamp("now")``.
+    are bound to in *namespace* (:func:`cash.effects.classify_call`): round 19
+    found ``import datetime as _dt; _dt.datetime.now()``, ``from datetime
+    import datetime as DateTime``, ``import time as _time``, ``import os as
+    _os`` and ``pd.Timestamp.now()`` freezing a timestamp with no warning,
+    while the canonical spellings warned. Also ``pd.to_datetime("today")`` and
+    ``pd.Timestamp("now")``.
     """
-    func_node = node.func
-    name = get_call_name(func_node)
-    module = get_call_module(func_node)
-    if name:
-        dotted = f"{module}.{name}" if module else name
-        if dotted in AMBIENT_READ_CALLS or _reads_clock_when_omitted(dotted, node):
-            return dotted
-    chain = _callee_chain(func_node)
-    if not namespace or not chain or chain[0] not in namespace:
-        return None
-    roots = _ambient_roots()
-    obj: Any = namespace[chain[0]]
-    candidates: list[str] = []
-    for i in range(len(chain)):
-        if i:
-            if not isinstance(obj, (types.ModuleType, type)):
-                break
-            try:
-                obj = getattr(obj, chain[i])
-            except Exception:  # noqa: BLE001 - a probe of user namespaces
-                break
-        hit = roots.get(id(obj))
-        if hit is not None and hit[0] is obj:
-            candidates.append(".".join((hit[1], *chain[i + 1 :])))
-    for canonical in reversed(candidates):
-        if canonical in AMBIENT_READ_CALLS or _reads_clock_when_omitted(canonical, node):
-            return canonical
-        if (
-            canonical in AMBIENT_WHEN_ARG_CALLS
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, str)
-            and node.args[0].value.strip().lower() in AMBIENT_ARG_VALUES
-        ):
-            return f"{canonical}({node.args[0].value!r})"
-    if len(chain) == 1:
+    effect = decorator_effect(node, namespace)
+    if effect is not None and effect.kind in _AMBIENT_KINDS:
+        if effect.name in CLOCK_WHEN_ARG_CALLS:
+            return f"{effect.name}({node.args[0].value!r})"  # type: ignore[attr-defined]
+        return effect.name
+    chain = _callee_chain(node.func)
+    if namespace and chain and len(chain) == 1 and chain[0] in namespace:
         inner = _clock_helper_read(namespace[chain[0]])
         if inner is not None:
             shown = inner if inner.endswith(")") else f"{inner}()"
@@ -2389,7 +2450,7 @@ def _log_only_ambient_reads(
         elif (
             isinstance(node, ast.Subscript)
             and isinstance(node.ctx, ast.Load)
-            and get_base_name(node.value) in _ENVIRON_NAMES
+            and get_base_name(node.value) in ENVIRON_NAMES
         ):
             candidates.append(node)
     if not candidates:
@@ -2603,7 +2664,7 @@ class _GlobalMutationScanner(ast.NodeVisitor):
         if (
             self._in_function
             and isinstance(f, ast.Attribute)
-            and f.attr in WRITE_METHODS
+            and f.attr in REPORTED_METHODS
             and isinstance(f.value, ast.Name)
             and self._is_global(f.value.id)
             and f.value.id not in self._module_names

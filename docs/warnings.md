@@ -849,7 +849,7 @@ much to care:
   (`df = load(p); df = df[mask]; df["x"] = ...`). The same frame changed
   *before* the copy is still flagged: it may be the helper's own object.
 
-<!-- claim: cash/purity_flow.py:_FreshFlow._check_insertion @70874c70, cash/purity_flow.py:_FreshFlow._loop_targets @bd0ebd1c, cash/purity_flow.py:is_log_line @9b6ff1b9, cash/purity_flow.py:is_read_only_sql @e845f859 -->
+<!-- claim: cash/purity_flow.py:_FreshFlow._check_insertion @70874c70, cash/purity_flow.py:_FreshFlow._loop_targets @bd0ebd1c, cash/purity_flow.py:is_log_line @9b6ff1b9, cash/effects.py:is_read_only_sql @1d849155 -->
   The same goes for the elements of a container the function built and filled
   only with objects of its own — the per-key accumulator every parser writes:
   `by_user[k].append(x)` on a local `defaultdict(list)`,
@@ -943,7 +943,7 @@ that moved — shows it again.
 
 ## KEY-AMBIENT-READ {#key-ambient-read}
 
-<!-- claim: cash/purity.py:AMBIENT_READ_CALLS @8b0e48fe, cash/purity_analyzer.py:_PurityVisitor.visit_Subscript @9378a32e -->
+<!-- claim: cash/effects.py:MODULE_CALLS @c6f9471b, cash/purity_analyzer.py:_PurityVisitor.visit_Subscript @41979fda -->
 **What happened.** Reading the source of the function you decorated found a
 call that asks the world what time it is, what the environment says, where the
 process is running, or for a fresh UUID: `datetime.now()`, `date.today()`,
@@ -952,13 +952,13 @@ process is running, or for a fresh UUID: `datetime.now()`, `date.today()`,
 `pd.to_datetime("today")`. The named line ran, and the result was cached as
 normal.
 
-<!-- claim: cash/purity.py:AMBIENT_WHEN_ARGS_OMITTED @6fec5a70, cash/purity_analyzer.py:_reads_clock_when_omitted @71a49435 -->
+<!-- claim: cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511, cash/effects.py:_reads_clock_when_omitted @b543a896 -->
 `time.strftime("%Y-%m")`, `time.asctime()`, `time.ctime()`,
 `time.localtime()` and `time.gmtime()` count when the time argument is left
 out, which is when they read the clock; `time.strftime("%Y-%m", t)` and
 `time.localtime(ts)` only format or convert the time you give them.
 
-<!-- claim: cash/purity_analyzer.py:_ambient_call @3ab99ecc -->
+<!-- claim: cash/purity_analyzer.py:_ambient_call @999d803f, cash/effects.py:_canonical_names @e0692d46 -->
 It is recognised by what the names refer to, not by how they are spelled:
 `import datetime as _dt; _dt.datetime.now()`, `from datetime import datetime as
 DateTime; DateTime.now()`, `import time as _time` and `from time import time as

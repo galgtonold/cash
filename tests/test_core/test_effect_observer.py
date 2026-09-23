@@ -9,7 +9,7 @@ function whose return value was used.
 
 These tests pin both halves of the answer:
 
-* the widened name list (``cash.purity.WRITE_METHODS``), which catches
+* the widened name list (``cash.effects.METHOD_VERBS``), which catches
   ``session.post`` / ``cur.execute`` statically, and
 * :mod:`cash.effect_observer`, which watches the first call for a file write,
   an outbound connection, or a spawned process.

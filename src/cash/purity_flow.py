@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import ast
 
-__all__ = ["fresh_name_nodes", "receiver_is_fresh", "LogOnlyFlow", "is_log_helper", "is_log_line", "is_read_only_sql"]
+__all__ = ["fresh_name_nodes", "receiver_is_fresh", "LogOnlyFlow", "is_log_helper", "is_log_line"]
 
 _FRESH_CONSTRUCTOR_NAMES = frozenset(
     {
@@ -877,44 +877,6 @@ def is_log_line(call: ast.Call) -> bool:
     if f.attr in _LOG_METHODS and "log" in recv_name.lower():
         return True
     return f.attr in ("write", "flush") and _is_stderr(recv)
-
-
-_SQL_WRITES = (
-    "INSERT",
-    "UPDATE",
-    "DELETE",
-    "REPLACE",
-    "MERGE",
-    "UPSERT",
-    "CREATE",
-    "DROP",
-    "ALTER",
-    "TRUNCATE",
-    "ATTACH",
-    "DETACH",
-    "VACUUM",
-    "PRAGMA",
-)
-
-
-def is_read_only_sql(call: ast.Call) -> bool:
-    """``con.execute("SELECT ...")``: a query that reads, written as a literal.
-
-    ``execute`` is a write-shaped method -- through it most database writes
-    happen -- but a literal SELECT (or a WITH that only selects) changes
-    nothing, and round 20 was told a sqlite lookup was a "write method". A
-    query built at run time, or any statement naming a write verb, is still
-    reported.
-    """
-    if not (isinstance(call.func, ast.Attribute) and call.func.attr == "execute" and call.args):
-        return False
-    sql = call.args[0]
-    if not (isinstance(sql, ast.Constant) and isinstance(sql.value, str)):
-        return False
-    text = " ".join(line.split("--", 1)[0] for line in sql.value.splitlines()).upper()
-    words = set(text.replace("(", " ").replace(")", " ").replace(";", " ").split())
-    head = text.lstrip()
-    return head.startswith(("SELECT", "WITH")) and not words.intersection(_SQL_WRITES)
 
 
 def is_log_helper(func_def: ast.AST) -> bool:

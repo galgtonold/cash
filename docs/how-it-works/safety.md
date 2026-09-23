@@ -190,7 +190,7 @@ Replaying them from cache would skip the action (a file never gets written, a
 request never gets sent). Cash's side-effect analysis flags these statements as
 **uncacheable** so they always run:
 
-<!-- claim: cash/analysis/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @a2946490, cash/analysis/cacheability.py:_SideEffectVisitor @2da2ebf4 broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
+<!-- claim: cash/effects.py:MODULE_CALLS @c6f9471b, cash/analysis/cacheability.py:NOTEBOOK_POLICY @86811d37, cash/analysis/cacheability.py:_SideEffectVisitor @007fedd1 broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
 | Pattern | Examples | Why it's unsafe to replay |
 |---------|----------|---------------------------|
 | File writes | `open('f', 'w')`, `df.to_csv()`, `df.to_parquet()`, `Path(p).write_text()` | The file wouldn't be written on a cache hit |
@@ -209,7 +209,7 @@ Writing to the console is output, not a file: `os.write(2, ...)`, `sys.stderr.wr
 and `sys.stdout.write(...)` count as a `print` does, so a step marker in a helper does
 not make every statement that calls it a file writer.
 
-<!-- claim: cash/analysis/cacheability.py:_WRITE_METHODS @11ba6ecb, cash/analysis/cacheability.py:_WRITE_MODES @07565e83, cash/analysis/cacheability.py:is_open_write_mode @5ed73806, cash/analysis/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @a2946490 -->
+<!-- claim: cash/effects.py:METHOD_VERBS @49934ce1, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @c6f9471b -->
 Detection is by call shape, so it works without importing anything, with two
 consequences worth knowing. A bare `open(...)` counts only when its mode
 argument is **statically** a write mode: `open(p, 'w')` is flagged, and
@@ -223,7 +223,7 @@ colliding: `rename`, `replace` and `touch` are deliberately absent, because
 that has one writes to a filesystem, and an `OUT.mkdir(exist_ok=True)` restored
 instead of run leaves an emptied output folder missing.
 
-<!-- claim: cash/analysis/cacheability.py:statement_write_repeatability @0fbfbfca, cash/analysis/cacheability.py:_REPLACING_WRITE_METHODS @b3158e08, cash/analysis/cacheability.py:_is_append_mode_call @d7aef5f5 -->
+<!-- claim: cash/analysis/cacheability.py:statement_write_repeatability @3790def9, cash/analysis/cacheability.py:_REPLACING_WRITE_METHODS @b3158e08, cash/analysis/cacheability.py:_is_append_mode_call @d7aef5f5 -->
 Being uncacheable is not the end of the story for a writer. Because a file
 write has no variable edge, nothing in the lineage graph would ever re-run one,
 so Cash separately records which statements wrote which paths and re-fires a

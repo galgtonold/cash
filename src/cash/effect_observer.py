@@ -4,7 +4,7 @@ Static analysis stops at library boundaries -- that is deliberate, since
 folding every installed package into the walk would be both slow and useless.
 The cost is that a side effect *inside* a library is reachable only by the
 method's NAME (``session.post``, ``cur.execute``; see
-``cash.purity.WRITE_METHODS``), and a name cannot reach everything:
+``cash.effects.METHOD_VERBS``), and a name cannot reach everything:
 ``session.get(...)`` collides with ``dict.get``, and an arbitrary vendor
 function like ``client.emit_metric(...)`` has no effect-shaped name at all.
 
@@ -57,6 +57,7 @@ import os
 import sys
 from typing import Any
 
+from .effects import EffectKind
 from .install_paths import is_user_path
 from .tracking import io_watch
 
@@ -68,6 +69,25 @@ logger = logging.getLogger(__name__)
 active_observer: contextvars.ContextVar["EffectObserver | None"] = contextvars.ContextVar(
     "_cash_active_observer", default=None
 )
+
+
+#: How each kind of effect the observer can see is named in its report. The
+#: static findings are matched against these names, so an effect the static
+#: warning already listed is not reported twice (see :func:`observed_label`).
+_LABELS: dict[EffectKind, str] = {
+    EffectKind.FILE_WRITE: "file write",
+    EffectKind.NETWORK: "network",
+    EffectKind.SUBPROCESS: "subprocess",
+}
+
+
+def observed_label(kind: EffectKind | None) -> str | None:
+    """The name the observer reports an effect of *kind* under, or None when
+    the observer cannot see that kind. A network read or write is seen as the
+    connection it opens."""
+    if kind in (EffectKind.NETWORK_READ, EffectKind.NETWORK_WRITE):
+        kind = EffectKind.NETWORK
+    return _LABELS.get(kind)  # type: ignore[arg-type]
 
 
 def _record(kind: str, detail: str) -> None:
@@ -95,13 +115,13 @@ def line_waived(filename: str, lineno: int) -> bool:
 def _on_connect(args: tuple) -> None:
     """The ``socket.connect`` audit event: ``(socket, address)``."""
     if active_observer.get() is not None:
-        _record("network", f"socket connect to {_describe_address(args[1])}")
+        _record(_LABELS[EffectKind.NETWORK], f"socket connect to {_describe_address(args[1])}")
 
 
 def _on_spawn(args: tuple) -> None:
     """The ``subprocess.Popen`` audit event: ``(executable, args, cwd, env)``."""
     if active_observer.get() is not None:
-        _record("subprocess", f"spawned {_describe_argv(args[1])}")
+        _record(_LABELS[EffectKind.SUBPROCESS], f"spawned {_describe_argv(args[1])}")
 
 
 # Audit events rather than wrappers on `socket.socket.connect` and
@@ -271,7 +291,7 @@ class EffectObserver:
             return
         if self._exclude and resolved.startswith(self._exclude):
             return
-        self.record_effect("file write", resolved)
+        self.record_effect(_LABELS[EffectKind.FILE_WRITE], resolved)
 
     # -- reporting ---------------------------------------------------------
     def summary(self) -> str | None:

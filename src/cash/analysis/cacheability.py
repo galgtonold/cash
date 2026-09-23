@@ -23,6 +23,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ..effects import Action, Effect, EffectKind, classify_call, is_open_write_mode, writes_to_console
 from ..install_paths import installed_roots, normcase_path
 from ..purity import is_pure
 
@@ -70,6 +71,10 @@ __all__ = [
     "module_setting_receivers",
     "MODULE_SETTING_FUNCTIONS",
     "RECEIVER_READONLY_WRITE_METHODS",
+    # The notebook's answer to each kind of effect
+    "NOTEBOOK_POLICY",
+    "SCANNED_KINDS",
+    "notebook_effect",
 ]
 
 # ---------------------------------------------------------------------------
@@ -200,7 +205,7 @@ KNOWN_PURE_METHODS = frozenset(
 # and corrupting the file.
 #
 # This governs ONLY the receiver-mutation question.  The file-WRITE side effect
-# these calls carry is tracked SEPARATELY (``_WRITE_METHODS`` /
+# these calls carry is tracked SEPARATELY (``cash.effects.METHOD_VERBS`` /
 # ``statement_writes_files`` / the re-execution planner's writer scheduling), so
 # a genuinely-edited writer still re-runs — it just no longer masquerades as a
 # mutation of the frame it read.
@@ -442,134 +447,148 @@ class _MutationVisitor(ast.NodeVisitor):
 
 
 # ---------------------------------------------------------------------------
-# Side-effect detection — moved from side_effects.py
+# Side-effect detection
 # ---------------------------------------------------------------------------
+
+#: What a notebook statement does about each kind of effect in it. What a kind
+#: IS lives in :mod:`cash.effects`, shared with the decorator, whose own table
+#: is ``cash.purity_analyzer.DECORATOR_POLICY``. The two differ where the paths
+#: differ on purpose -- a notebook replays a statement's printed output, so a
+#: print caches here, while a decorator hit drops it -- and a test keeps both
+#: covering every kind, so a new kind cannot slip past either.
+NOTEBOOK_POLICY: dict[EffectKind, Action] = {
+    EffectKind.FILE_WRITE: Action.REFUSE,
+    EffectKind.FILE_READ: Action.CACHE_AS_INPUT,
+    # A slow GET is a result worth keeping, like reading a file.
+    EffectKind.NETWORK_READ: Action.CACHE,
+    EffectKind.NETWORK_WRITE: Action.REFUSE,
+    EffectKind.NETWORK: Action.REFUSE,
+    EffectKind.DB_READ: Action.CACHE,
+    EffectKind.DB_WRITE: Action.REFUSE,
+    EffectKind.SUBPROCESS: Action.REFUSE,
+    EffectKind.CLOCK: Action.REFUSE,
+    EffectKind.ENVIRONMENT: Action.CACHE,
+    # The captured output is replayed on a hit.
+    EffectKind.CONSOLE: Action.CACHE,
+    EffectKind.DISPLAY: Action.REFUSE,
+    EffectKind.INTERACTIVE: Action.REFUSE,
+}
+
+#: Kinds judged by :meth:`CodeAnalyzer.scan_for_forbidden_functions`, which
+#: resolves a call through what its names are bound to (``from time import time
+#: as now; now()``). The side-effect visitor below reads spelling alone.
+SCANNED_KINDS: frozenset[EffectKind] = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT, EffectKind.INTERACTIVE})
+
+#: How a refused kind is named in its skip reason, ``Side effect: <call> (<label>)``.
+_NOTEBOOK_LABELS: dict[EffectKind, str] = {
+    EffectKind.FILE_WRITE: "file_write",
+    EffectKind.NETWORK_WRITE: "network",
+    EffectKind.NETWORK: "network",
+    EffectKind.SUBPROCESS: "system",
+    EffectKind.DISPLAY: "display",
+}
+
+#: Calls the notebook did not refuse before the two paths shared one
+#: vocabulary, although the decorator path reports them. Each group is closed
+#: on its own, with a test of the new verdict on both paths.
+_NOT_YET_REFUSED: frozenset[str] = frozenset(
+    {
+        # files and folders
+        "os.link",
+        "os.chmod",
+        "os.removedirs",
+        "os.renames",
+        "os.truncate",
+        "shutil.copyfile",
+        "touch",
+        "unlink",
+        "symlink_to",
+        "hardlink_to",
+        # other programs
+        "os.popen",
+        "os.execv",
+        "os.execve",
+        "os.execl",
+        "os.execlp",
+        "os.execvp",
+        "os.spawnv",
+        "os.spawnl",
+        "os.posix_spawn",
+        "subprocess.getoutput",
+        "subprocess.getstatusoutput",
+        # the network: the generic request forms, and writes through a client
+        "requests.request",
+        "httpx.post",
+        "httpx.put",
+        "httpx.patch",
+        "httpx.delete",
+        "httpx.request",
+        "urllib.request.urlopen",
+        "urlopen",
+        "post",
+        "put",
+        "patch",
+        "send",
+        "sendall",
+        "sendto",
+        "publish",
+        "upload",
+        "upload_file",
+        "upload_fileobj",
+        "put_object",
+        # a database, through a cursor or connection
+        "execute",
+        "executemany",
+        "executescript",
+        "commit",
+        "rollback",
+        # the clock: forms the decorator knew and the notebook did not
+        "datetime.today",
+        "datetime.datetime.today",
+        "pandas.Timestamp.now",
+        "pandas.Timestamp.today",
+        "pandas.Timestamp.utcnow",
+        "pandas.to_datetime",
+        "pandas.Timestamp",
+        "numpy.datetime64",
+        "time.strftime",
+        "time.asctime",
+        "time.ctime",
+        # the person at the keyboard
+        "input",
+        "breakpoint",
+        "getpass.getpass",
+        "exit",
+        "quit",
+    }
+)
+
+#: Database writes the notebook refused as file writes before.
+_REFUSED_AS_FILE_WRITES: frozenset[str] = frozenset({"to_sql", "to_gbq"})
+
+
+def notebook_effect(call: ast.Call, namespace: Mapping[str, Any] | None = None) -> Effect | None:
+    """The effect *call* has, as the notebook path judges it, or None.
+
+    *namespace* is passed on to :func:`cash.effects.classify_call`.
+    """
+    effect = classify_call(call, namespace)
+    if effect is None or effect.name in _NOT_YET_REFUSED:
+        return None
+    if effect.method and effect.name in _REFUSED_AS_FILE_WRITES:
+        return effect._replace(kind=EffectKind.FILE_WRITE)
+    return effect
 
 
 @dataclass
 class SideEffectInfo:
     """Information about a detected side effect."""
 
-    kind: str  # 'file_write', 'network', 'system', 'global_state'
+    kind: str  # the label shown in a skip reason: 'file_write', 'network', 'system', ...
     description: str
     line: int = 0
+    effect_kind: EffectKind | None = None
 
-
-# Function calls known to produce I/O side effects.
-# Format: (module_or_empty_string, function_name) -> side_effect_kind
-_IO_SIDE_EFFECT_FUNCTIONS: dict[tuple[str, str], str] = {
-    # File writing
-    ("", "open"): "file_write",  # open() with write modes detected separately
-    # os module
-    ("os", "remove"): "file_write",
-    ("os", "unlink"): "file_write",
-    ("os", "rmdir"): "file_write",
-    ("os", "mkdir"): "file_write",
-    ("os", "makedirs"): "file_write",
-    ("os", "rename"): "file_write",
-    ("os", "replace"): "file_write",
-    ("os", "symlink"): "file_write",
-    ("os", "system"): "system",
-    # shutil
-    ("shutil", "copy"): "file_write",
-    ("shutil", "copy2"): "file_write",
-    ("shutil", "copytree"): "file_write",
-    ("shutil", "rmtree"): "file_write",
-    ("shutil", "move"): "file_write",
-    # subprocess
-    ("subprocess", "run"): "system",
-    ("subprocess", "call"): "system",
-    ("subprocess", "Popen"): "system",
-    ("subprocess", "check_call"): "system",
-    ("subprocess", "check_output"): "system",
-    # pandas write operations
-    ("", "to_csv"): "file_write",
-    ("", "to_excel"): "file_write",
-    ("", "to_parquet"): "file_write",
-    ("", "to_json"): "file_write",
-    ("", "to_pickle"): "file_write",
-    ("", "to_hdf"): "file_write",
-    ("", "to_feather"): "file_write",
-    ("", "to_sql"): "file_write",
-    # json/pickle/csv module
-    ("json", "dump"): "file_write",
-    ("pickle", "dump"): "file_write",
-    ("csv", "writer"): "file_write",
-    # requests/urllib
-    ("requests", "post"): "network",
-    ("requests", "put"): "network",
-    ("requests", "delete"): "network",
-    ("requests", "patch"): "network",
-}
-
-# matplotlib.pyplot module aliases. EVERY module-level ``plt.*`` call operates on
-# pyplot's PROCESS-GLOBAL current figure — drawing (``plt.plot``, ``plt.hist``,
-# ``plt.imshow``), styling (``plt.title``, ``plt.legend``, ``plt.grid``), or
-# displaying (``plt.show``) — state cash does not track. Its only "input" is the
-# module, so with a stable key such a call would cache and then, on a later run,
-# either REPLAY a stale figure (``plt.show``) or SKIP the draw/style (losing that
-# content from a freshly re-drawn figure — visible under ``%cash_persist`` or for
-# an expensive draw above the cost floor). So any pyplot module-level call is a
-# display side-effect: always re-execute, never cache. ``plt.savefig`` is the one
-# exception — it is a file write (handled via ``_WRITE_METHODS`` below), not a
-# display.
-_PYPLOT_MODULE_ALIASES: frozenset[str] = frozenset({"plt", "pyplot", "matplotlib.pyplot"})
-
-# pyplot calls that CREATE or FETCH a Figure/Axes rather than draw on / style the
-# current one. They return identity-coupled objects already refused (and
-# explained: "Identity-coupled figure") by the live-alias / figure-identity
-# path, so leave them to it rather than relabel them a generic display effect.
-_PYPLOT_FIGURE_ACCESSORS: frozenset[str] = frozenset(
-    {
-        "figure",
-        "subplots",
-        "subplot",
-        "subplot_mosaic",
-        "subplot2grid",
-        "axes",
-        "gca",
-        "gcf",
-        "get_current_fig_manager",
-    }
-)
-
-# Method names that indicate writing (when called on any object)
-_WRITE_METHODS: frozenset[str] = frozenset(
-    {
-        "to_csv",
-        "to_excel",
-        "to_parquet",
-        "to_json",
-        "to_pickle",
-        "to_hdf",
-        "to_feather",
-        "to_sql",
-        "to_stata",
-        "to_latex",
-        "to_html",
-        "to_clipboard",
-        "to_gbq",
-        "to_markdown",
-        "savefig",  # matplotlib
-        "save",  # numpy, PIL, torch
-        "write",  # file objects
-        "writelines",
-        # pathlib.Path writes. Only the unambiguous names: generic
-        # Path mutators like `rename`/`replace`/`touch` collide with common
-        # methods on other types (str.replace!) and would over-flag.
-        "write_text",
-        "write_bytes",
-        # `OUT.mkdir(exist_ok=True)`: restored instead of run, it left an output
-        # folder the user had emptied missing, and the first savefig into it
-        # raised (round 22, with every result persisted). A write on every type
-        # that has it (Path, ZipFile, SFTP clients). Its repeatability stays
-        # unknown, like os.mkdir's: without exist_ok a second run raises.
-        "mkdir",
-    }
-)
-
-# File open modes that indicate writing
-_WRITE_MODES: frozenset[str] = frozenset({"w", "wb", "a", "ab", "w+", "wb+", "a+", "ab+", "x", "xb"})
 
 # Cheap textual pre-filter for statement_writes_files: superset of the names
 # in the write-detection tables above, checked before any AST work.
@@ -599,7 +618,7 @@ def statement_writes_files(code: str, tree: "ast.Module | None" = None) -> bool:
         analysis = analyze_statement(code, tree)
     except (SyntaxError, ValueError, TypeError):
         return False
-    return any(e.kind == "file_write" for e in analysis.side_effects)
+    return any(e.effect_kind is EffectKind.FILE_WRITE for e in analysis.side_effects)
 
 
 def statement_calls_user_writer(
@@ -770,13 +789,13 @@ _REPLACING_WRITE_METHODS: frozenset[str] = frozenset(
     }
 )
 
-# Module-level writers that land the same result when repeated. Everything else
-# in _IO_SIDE_EFFECT_FUNCTIONS (remove/rename/move/mkdir/rmtree...) is NOT
+# Module-level writers that land the same result when repeated. Every other
+# module-level file write (remove/rename/move/mkdir/rmtree...) is NOT
 # repeatable -- a second run raises or acts on a target that is already gone.
-_REPLACING_IO_FUNCTIONS: frozenset[tuple[str, str]] = frozenset(
+_REPLACING_IO_FUNCTIONS: frozenset[str] = frozenset(
     {
-        ("shutil", "copy"),
-        ("shutil", "copy2"),
+        "shutil.copy",
+        "shutil.copy2",
     }
 )
 
@@ -787,10 +806,10 @@ REPEATABILITY_UNKNOWN = "unknown"
 
 # Module writers that take an already-open FILE HANDLE rather than a path, so
 # their repeatability is decided by whatever opened it -- never by the call
-# itself. Maps (module, func) -> positional index of the handle argument.
-_HANDLE_WRITE_FUNCTIONS: dict[tuple[str, str], int] = {
-    ("json", "dump"): 1,
-    ("pickle", "dump"): 1,
+# itself. Maps the writer's name -> positional index of the handle argument.
+_HANDLE_WRITE_FUNCTIONS: dict[str, int] = {
+    "json.dump": 1,
+    "pickle.dump": 1,
 }
 
 
@@ -843,35 +862,10 @@ def _locally_opened_handles(tree: ast.AST) -> set[str]:
     return handles
 
 
-def _writes_to_console(call: ast.Call) -> bool:
-    """``os.write(1 | 2, ...)``, ``sys.stdout.write(...)``, ``sys.stderr.write(...)``.
-
-    Output, like ``print``, not a file. Counted as a write whose repeatability
-    was unknown, a step marker (``os.write(2, f"RUN {step}")``) inside a helper
-    made every statement calling it a file writer; after a restart none had a
-    record of its files, so all were re-fired, and the fits feeding them with
-    them: a cell reading only the loaded frame ran 70 statements (round 24,
-    r24s1).
-    """
-    func = call.func
-    if not (isinstance(func, ast.Attribute) and func.attr in ("write", "writelines")):
-        return False
-    base = func.value
-    if isinstance(base, ast.Name) and base.id == "os" and func.attr == "write":
-        fd = call.args[0] if call.args else None
-        return isinstance(fd, ast.Constant) and fd.value in (1, 2)
-    return (
-        isinstance(base, ast.Attribute)
-        and base.attr in ("stdout", "stderr", "__stdout__", "__stderr__")
-        and isinstance(base.value, ast.Name)
-        and base.value.id == "sys"
-    )
-
-
 def _call_repeatability(call: ast.Call, local_handles: frozenset[str] = frozenset()) -> str | None:
     """Repeatability of one call node, or ``None`` if it is not a file write."""
     func = call.func
-    if _writes_to_console(call):
+    if writes_to_console(call):
         return None
     if isinstance(func, ast.Name) and func.id == "open":
         mode = _open_mode_node(call)
@@ -888,7 +882,8 @@ def _call_repeatability(call: ast.Call, local_handles: frozenset[str] = frozense
         return REPEATABILITY_ACCUMULATING if "a" in mode.value else REPEATABILITY_REPLACING
     if isinstance(func, ast.Attribute):
         method = func.attr
-        if method not in _WRITE_METHODS:
+        effect = notebook_effect(call)
+        if effect is None or not effect.method or effect.kind is not EffectKind.FILE_WRITE:
             return None
         if _is_append_mode_call(call):
             return REPEATABILITY_ACCUMULATING
@@ -911,7 +906,7 @@ def statement_write_repeatability(code: str, tree: "ast.Module | None" = None) -
     """How safe is it to re-run *code*'s file writes?
 
     The question the write-detection helpers above do not answer:
-    :data:`_WRITE_MODES` pools ``'a'`` with ``'w'``, so every consumer learns
+    :func:`cash.effects.is_open_write_mode` pools ``'a'`` with ``'w'``, so every consumer learns
     only "this writes a file", never "repeating this write duplicates data".
 
     Returns the WORST verdict across every write in the statement:
@@ -938,14 +933,11 @@ def statement_write_repeatability(code: str, tree: "ast.Module | None" = None) -
         if verdict is not None:
             verdicts.add(verdict)
         # Module-level writers (os.remove, shutil.move, ...) are recognised
-        # through the side-effect table rather than the call shapes above.
-        name = get_call_name(node.func)
-        module = get_call_module(node.func)
-        if not name or not module:
+        # by their full name rather than the call shapes above.
+        effect = notebook_effect(node)
+        if effect is None or effect.method or effect.kind is not EffectKind.FILE_WRITE or "." not in effect.name:
             continue
-        key = (module, name)
-        if _IO_SIDE_EFFECT_FUNCTIONS.get(key) != "file_write":
-            continue
+        key = effect.name
         if key in _REPLACING_IO_FUNCTIONS:
             continue
         handle_idx = _HANDLE_WRITE_FUNCTIONS.get(key)
@@ -1454,85 +1446,32 @@ def get_base_name(node: ast.AST) -> str | None:
     return None
 
 
-def is_open_write_mode(call_node: ast.Call) -> bool:
-    """Return True if an open() call uses a write mode."""
-    # Check positional arg (2nd argument is mode)
-    if len(call_node.args) >= 2:
-        mode_arg = call_node.args[1]
-        if isinstance(mode_arg, ast.Constant) and isinstance(mode_arg.value, str):
-            return mode_arg.value in _WRITE_MODES or any(c in mode_arg.value for c in "wax")
-    # Check keyword argument mode=...
-    for kw in call_node.keywords:
-        if kw.arg == "mode" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-            return kw.value.value in _WRITE_MODES or any(c in kw.value.value for c in "wax")
-    return False
-
-
 class _SideEffectVisitor(ast.NodeVisitor):
-    """Collects side-effect call sites from an AST."""
+    """Collects the calls a notebook statement must not be restored past:
+    those whose kind :data:`NOTEBOOK_POLICY` refuses."""
 
     def __init__(self) -> None:
         self.effects: list[SideEffectInfo] = []
 
     def visit_Call(self, node: ast.Call) -> None:
         """Detect function/method calls with side effects."""
-        func_name = get_call_name(node.func)
-        module_name = get_call_module(node.func)
-
-        if func_name:
-            key = (module_name or "", func_name)
-            named = key in _IO_SIDE_EFFECT_FUNCTIONS
-            if named:
-                kind = _IO_SIDE_EFFECT_FUNCTIONS[key]
-                if func_name == "open" and not module_name:
-                    if is_open_write_mode(node):
-                        self.effects.append(
-                            SideEffectInfo(
-                                kind="file_write",
-                                description="open() with write mode",
-                                line=getattr(node, "lineno", 0),
-                            )
-                        )
-                else:
-                    self.effects.append(
-                        SideEffectInfo(
-                            kind=kind,
-                            description=f"{module_name + '.' if module_name else ''}{func_name}()",
-                            line=getattr(node, "lineno", 0),
-                        )
-                    )
-            elif (
-                module_name in _PYPLOT_MODULE_ALIASES
-                and func_name not in _WRITE_METHODS
-                and func_name not in _PYPLOT_FIGURE_ACCESSORS
-            ):
-                # A pyplot module-level call (draw/style/show) mutating the global
-                # figure — uncacheable. savefig is a file_write (below); figure
-                # creation/access is left to the identity-coupling path.
-                self.effects.append(
-                    SideEffectInfo(
-                        kind="display",
-                        description=f"{module_name}.{func_name}()",
-                        line=getattr(node, "lineno", 0),
-                    )
+        effect = notebook_effect(node)
+        if effect is not None and effect.kind not in SCANNED_KINDS and NOTEBOOK_POLICY[effect.kind] is Action.REFUSE:
+            if effect.method:
+                base = get_base_name(node.func.value)  # type: ignore[attr-defined]
+                description = f"{base + '.' if base else ''}{effect.name}()"
+            elif effect.name == "open":
+                description = "open() with write mode"
+            else:
+                description = f"{effect.name}()"
+            self.effects.append(
+                SideEffectInfo(
+                    kind=_NOTEBOOK_LABELS.get(effect.kind, effect.kind.value),
+                    description=description,
+                    line=getattr(node, "lineno", 0),
+                    effect_kind=effect.kind,
                 )
-
-            # Not when the name lookup above already recorded it:
-            # ``pd.Series(d).to_csv(...)`` has no module name, so ``('', 'to_csv')``
-            # matched there too and the badge said "Side effect: to_csv()
-            # (file_write), Side effect: to_csv() (file_write)" (round 25, r25s1).
-            if isinstance(node.func, ast.Attribute) and not named:
-                method = node.func.attr
-                if method in _WRITE_METHODS and not _writes_to_console(node):
-                    base = get_base_name(node.func.value)
-                    self.effects.append(
-                        SideEffectInfo(
-                            kind="file_write",
-                            description=f"{base + '.' if base else ''}{method}()",
-                            line=getattr(node, "lineno", 0),
-                        )
-                    )
-
+            )
         self.generic_visit(node)
 
 
