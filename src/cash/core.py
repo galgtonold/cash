@@ -2382,7 +2382,7 @@ class Cash:
         fix = (
             f"name what it runs with @cash.cache(depends_on=[...]) if the result "
             f"depends on its implementation, or pass it in a form cash can read "
-            f"(a plain function and keyword arguments). cash.mark_opaque({kind_name}) "
+            f"(a plain function and keyword arguments). cash.opaque({kind_name}) "
             f"records that the code does not matter -- for every {kind_name} in "
             f"the process, including ones added later."
         )
