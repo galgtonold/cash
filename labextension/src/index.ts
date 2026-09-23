@@ -41,7 +41,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
   // name. While this read `cash:live-cells` the documented disable command
   // wrote `{"cash-live-cells": true}`, matched nothing, and the extension kept
   // running while `jupyter labextension list` reported it disabled: a kill
-  // switch that lied in both directions (CAS-274 Task 4, Finding A).
+  // switch that lied in both directions.
   //
   // Pinned by tests/test_labextension_packaging.py::
   // test_the_plugin_id_is_namespaced_by_the_package_name, over BOTH this
