@@ -918,9 +918,8 @@ class CacheBackend(ABC):
 
         Used by the notebook badge renderer to lay out one indicator dot
         per tier. The default returns ``[source_label]`` (or the class
-        name as a fallback) — a single-tier label. Composite backends
-        (``TieredBackend``, ``CascadingBackend``) override to return
-        their children's labels in configured order.
+        name as a fallback) — a single-tier label. ``TieredBackend``
+        overrides it to return its children's labels in configured order.
         """
         return [getattr(type(self), "source_label", None) or type(self).__name__]
 

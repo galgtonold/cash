@@ -1,9 +1,9 @@
-"""Tests for backend classes - CascadingBackend, InMemoryBackend, FileBackend."""
+"""Tests for backend classes - InMemoryBackend, FileBackend."""
 
 import os
 import time
 
-from cash.backends import CascadingBackend, FileBackend, InMemoryBackend
+from cash.backends import FileBackend, InMemoryBackend
 from cash.backends.entry_format import read_entry
 from cash.backends.serialization import CloudPickleSerializer, PickleSerializer, get_serializer
 
@@ -236,111 +236,6 @@ class TestFileBackendAdvanced:
         b._metadata_cache.clear()
         meta, data = b.get("key1")
         assert data is None
-
-
-class TestCascadingBackend:
-    """Test CascadingBackend (multi-tier caching)."""
-
-    def test_basic_cascading(self):
-        """Get checks backends in order."""
-        b1 = InMemoryBackend()
-        b2 = InMemoryBackend()
-        cb = CascadingBackend([b1, b2])
-
-        # Set only in lower tier
-        b2.set("k1", "v1", {"key": "k1"})
-        meta, val = cb.get("k1")
-        assert val == "v1"
-
-    def test_read_repair(self):
-        """Found in lower tier promotes to higher tier."""
-        b1 = InMemoryBackend()
-        b2 = InMemoryBackend()
-        cb = CascadingBackend([b1, b2])
-
-        b2.set("k1", "v1", {"key": "k1"})
-        cb.get("k1")
-
-        # Should now be in b1 (read-repair)
-        _, val = b1.get("k1")
-        assert val == "v1"
-
-    def test_set_writes_to_all(self):
-        """Set writes to all backends."""
-        b1 = InMemoryBackend()
-        b2 = InMemoryBackend()
-        cb = CascadingBackend([b1, b2])
-
-        cb.set("k1", "v1", {"key": "k1"})
-        _, v1 = b1.get("k1")
-        _, v2 = b2.get("k1")
-        assert v1 == "v1"
-        assert v2 == "v1"
-
-    def test_delete_from_all(self):
-        """Delete removes from all backends."""
-        b1 = InMemoryBackend()
-        b2 = InMemoryBackend()
-        cb = CascadingBackend([b1, b2])
-
-        cb.set("k1", "v1", {"key": "k1"})
-        cb.delete("k1")
-        _, v1 = b1.get("k1")
-        _, v2 = b2.get("k1")
-        assert v1 is None
-        assert v2 is None
-
-    def test_clear_all(self):
-        """Clear removes from all backends."""
-        b1 = InMemoryBackend()
-        b2 = InMemoryBackend()
-        cb = CascadingBackend([b1, b2])
-
-        cb.set("k1", "v1", {"key": "k1"})
-        cb.clear()
-        _, v1 = b1.get("k1")
-        assert v1 is None
-
-    def test_list_entries_deduplicates(self):
-        """list_entries deduplicates across tiers."""
-        b1 = InMemoryBackend()
-        b2 = InMemoryBackend()
-        cb = CascadingBackend([b1, b2])
-
-        cb.set("k1", "v1", {"key": "k1"})
-        entries = cb.list_entries()
-        assert len(entries) == 1
-
-    def test_cleanup_expired_all_tiers(self):
-        """cleanup_expired processes all tiers, returns unique keys deleted."""
-        b1 = InMemoryBackend()
-        b2 = InMemoryBackend()
-        cb = CascadingBackend([b1, b2])
-
-        b1.set("old", "v1", {"key": "old", "timestamp": 1000})
-        b2.set("old", "v1", {"key": "old", "timestamp": 1000})
-        total = cb.cleanup_expired(lambda m: m.get("timestamp", 0) < 2000)
-        # Returns count of unique keys deleted (1 key deleted from both backends)
-        assert total == 1
-        # Verify key is gone from both backends
-        assert b1.get("old") == (None, None)
-        assert b2.get("old") == (None, None)
-
-    def test_shutdown_all(self):
-        """shutdown calls shutdown on all backends."""
-        b1 = InMemoryBackend()
-        b2 = InMemoryBackend()
-        cb = CascadingBackend([b1, b2])
-        cb.shutdown()  # Should not raise
-
-    def test_miss_all_tiers(self):
-        """Get returns None when not in any tier."""
-        b1 = InMemoryBackend()
-        b2 = InMemoryBackend()
-        cb = CascadingBackend([b1, b2])
-        meta, val = cb.get("missing")
-        assert meta is None
-        assert val is None
 
 
 class TestSerializers:

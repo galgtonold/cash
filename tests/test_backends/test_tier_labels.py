@@ -2,8 +2,7 @@
 the badge renderer uses to lay out one dot per configured tier.
 
 Each concrete backend reports its own ``source_label`` as a single-element
-tier list. Composite backends (TieredBackend, CascadingBackend) flatten
-their child labels in order.
+tier list. TieredBackend flattens its children's labels in order.
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ from unittest.mock import patch
 import pytest
 
 from cash.backends._base import CacheBackend
-from cash.backends.cascading_backend import CascadingBackend
 from cash.backends.file_backend import FileBackend
 from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
@@ -103,9 +101,3 @@ class TestTieredBackendTierLabels:
         inner = TieredBackend([InMemoryBackend(), FileBackend(str(tmp_path / "a"))])
         outer = TieredBackend([inner, FileBackend(str(tmp_path / "b"))])
         assert outer.tier_labels() == ["RAM", "DISK", "DISK"]
-
-
-class TestCascadingBackendTierLabels:
-    def test_cascading_flattens_children(self, tmp_path):
-        b = CascadingBackend([InMemoryBackend(), FileBackend(str(tmp_path))])
-        assert b.tier_labels() == ["RAM", "DISK"]

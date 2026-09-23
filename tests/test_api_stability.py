@@ -65,7 +65,7 @@ def test_core_exports_stable():
         "InMemoryBackend",
         "FileBackend",
         "SQLiteBackend",
-        "CascadingBackend",
+        "TieredBackend",
         # Data sources
         "DataSource",
         "FileDataSource",

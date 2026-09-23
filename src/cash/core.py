@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 from . import _plain_data
-from .backends import CacheBackend, CacheMetadata, CascadingBackend
+from .backends import CacheBackend, CacheMetadata, TieredBackend
 from .backends.factory import build_backend_from_config
 
 if TYPE_CHECKING:
@@ -1719,7 +1719,7 @@ class Cash:
             self._backend = backend
         elif backends:
             if len(backends) > 1:
-                self._backend = CascadingBackend(backends)
+                self._backend = TieredBackend(backends)
             else:
                 self._backend = backends[0]
 

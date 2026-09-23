@@ -8,7 +8,6 @@ from collections.abc import Callable
 from typing import Any
 
 from ._base import CacheBackend, MetadataDict
-from .cascading_backend import _MultiBackendMixin
 from .serialization import PickleSerializer, Serializer
 
 _UNSEEN = object()
@@ -28,7 +27,7 @@ def _cap_list(caps: list[int] | None) -> str:
     return f" (cap: {rendered})" if len(caps) == 1 else f" (caps: {rendered})"
 
 
-class TieredBackend(_MultiBackendMixin, CacheBackend):
+class TieredBackend(CacheBackend):
     """
     Backend that manages multiple cache tiers (e.g., Memory -> File -> S3).
     Implements smart promotion and read-repair.
@@ -80,6 +79,101 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         self._warned_not_worth: set[str] = set()
         #: Refusals held for one warning per cell (`begin_cell_warnings`).
         self._not_worth_batch: list[tuple[str, int, float]] | None = None
+
+    def get_metadata(self, key: str) -> dict | None:
+        """Get only metadata for a cache key from the first backend that has it.
+
+        Checks backends in order (fast → slow), returning the first hit.
+        Supports metadata-only entries written by `set_metadata_only`.
+        """
+        for backend in self.backends:
+            meta = backend.get_metadata(key)
+            if meta is not None:
+                return meta
+        return None
+
+    def set_metadata_only(self, key: str, metadata: dict) -> None:
+        """Persist metadata without data payload to all backends that support it."""
+        for backend in self.backends:
+            if hasattr(backend, "set_metadata_only"):
+                backend.set_metadata_only(key, metadata)
+
+    def delete(self, key: str) -> None:
+        for backend in self.backends:
+            backend.delete(key)
+
+    def clear(self) -> None:
+        for backend in self.backends:
+            backend.clear()
+
+    def list_entries(self) -> list[dict[str, Any]]:
+        seen_keys = set()
+        entries = []
+        for backend in self.backends:
+            for entry in backend.list_entries():
+                key = entry.get("key")
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    entries.append(entry)
+        return entries
+
+    def entry_count(self) -> int:
+        """The largest tier's count.
+
+        The tiers overlap, and only `list_entries` can tell by how much: it
+        reads every entry's key. The notebook writes a metadata record to the
+        persistent tier for every statement it stores, RAM-only values
+        included, so there the largest tier holds them all; a RAM-only entry
+        from a decorated function is the one thing this can miss.
+        """
+        return max((b.entry_count() for b in self.backends), default=0)
+
+    def tier_labels(self) -> list[str]:
+        """Flatten child tier labels in configured order.
+
+        Nested composite backends are expanded transitively, so a
+        ``TieredBackend([TieredBackend([RAM, DISK]), S3])`` reports
+        ``['RAM', 'DISK', 'S3']`` — one dot per leaf storage tier.
+        """
+        labels: list[str] = []
+        for b in self.backends:
+            labels.extend(b.tier_labels())
+        return labels
+
+    def shutdown(self) -> None:
+        """Propagate shutdown to every child backend.
+
+        This is what lets ``atexit`` drain pending async writes in
+        Python scripts: ``Cash.shutdown()`` → ``TieredBackend.shutdown()``
+        → each tier's own ``shutdown()`` → each tier's PendingWrites
+        executor finishes its queue before the process exits. Errors
+        from one tier do not block shutdown of the others — we still
+        owe every backend its cleanup call.
+        """
+        for backend in self.backends:
+            try:
+                backend.shutdown()
+            except Exception as e:  # noqa: BLE001 — best-effort cleanup
+                logger.warning(
+                    "Shutdown failed for backend %s: %s",
+                    type(backend).__name__,
+                    e,
+                )
+
+    def cleanup_expired(self, is_expired: Callable[[dict[str, Any]], bool]) -> int:
+        total = 0
+        seen_keys = set()
+        for backend in self.backends:
+            for entry in list(backend.list_entries()):
+                key = entry.get("key")
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                if is_expired(entry):
+                    for b in self.backends:
+                        b.delete(key)
+                    total += 1
+        return total
 
     def _promotion_backend_kind(self) -> str:
         """Cost-model backend kind of the first tier past RAM (the primary

@@ -3,7 +3,7 @@
 import time
 from unittest.mock import MagicMock, patch
 
-from cash.backends import CascadingBackend, InMemoryBackend
+from cash.backends import InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
 from cash.core import Cash
 from cash.data_source import FileDataSource
@@ -40,11 +40,11 @@ class TestCashInit:
         assert c.backend is not None
 
     def test_init_with_backends_list(self):
-        """Cash with multiple backends creates CascadingBackend."""
+        """Cash with multiple backends creates a TieredBackend."""
         b1 = InMemoryBackend()
         b2 = InMemoryBackend()
         c = Cash(backends=[b1, b2], register_magic=False)
-        assert isinstance(c.backend, CascadingBackend)
+        assert isinstance(c.backend, TieredBackend)
 
     def test_init_with_single_backend_in_list(self):
         """Cash with single backend in list uses it directly."""

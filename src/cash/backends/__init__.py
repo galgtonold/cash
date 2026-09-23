@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from ._base import CacheBackend, CacheMetadata, MetadataDict
-from .cascading_backend import CascadingBackend
 from .file_backend import FileBackend
 from .memory_backend import InMemoryBackend
 from .serialization import ParquetSerializer, PickleSerializer, Serializer, get_serializer
@@ -50,7 +49,6 @@ __all__ = [
     "InMemoryBackend",
     "FileBackend",
     "SQLiteBackend",
-    "CascadingBackend",
     "TieredBackend",
     "RedisBackend",
     "S3Backend",

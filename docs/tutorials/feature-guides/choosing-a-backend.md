@@ -1,6 +1,6 @@
 # Choosing a backend — where Cash actually stores your results
 
-Cash ships seven backend classes; six of them are selectable from configuration. The default — `TieredBackend` with in-memory L1 + filesystem L2 — works for most users. Choose differently when you need cross-process sharing, network durability, or memory-only workflows.
+Cash ships six backend classes, all selectable from configuration. The default — `TieredBackend` with in-memory L1 + filesystem L2 — works for most users. Choose differently when you need cross-process sharing, network durability, or memory-only workflows.
 
 This guide walks through each backend, when to use it, and exactly how to wire it up.
 
@@ -26,7 +26,7 @@ Walk through these questions top to bottom and stop at the first match:
 
 ## The backend table
 
-<!-- claim: cash/backends/__init__.py:__all__ @9359c304 broad="the count and the table are a claim about the exported backend set" -->
+<!-- claim: cash/backends/__init__.py:__all__ @87b54eb0 broad="the count and the table are a claim about the exported backend set" -->
 | Backend | Persistence | Speed | Sharing | Best for |
 |---------|-------------|-------|---------|----------|
 | `InMemoryBackend` | Kernel restart clears | Fastest | Single process | Quick experiments |
@@ -35,7 +35,6 @@ Walk through these questions top to bottom and stop at the first match:
 | `TieredBackend` | Two layers | L1 fast, L2 persistent | Same machine | **Default** (recommended) |
 | `RedisBackend` | Configurable | Network-fast | Multi-process, multi-host | Teams, microservices |
 | `S3Backend` | Cloud-durable | Network | Multi-region | Cloud pipelines |
-| `CascadingBackend` | Per-member | Slowest member on write | Per-member | Write-to-all mirroring (code-only; no `CASH_BACKEND` value) |
 
 ## `InMemoryBackend`
 
@@ -98,7 +97,7 @@ c.register_magic()
 
 One file per entry under `cache_dir`, named by the SHA-256 of the cache key, holding a small header, the entry's metadata, and then the value. Writes are split: serialization happens on the calling thread, the actual disk write runs on a background executor. In a notebook that buys less than it sounds — `%cash_on` flushes pending writes at the end of every cell, so a killed kernel cannot lose them, which means write cost lands on your clock once per cell rather than disappearing. A second thread flushes metadata every `flush_interval` seconds, rewriting only the metadata region rather than the whole file.
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._rebuild_evict_queue @3ee6a418, cash/backends/file_backend.py:FileBackend._check_and_evict @92057a04, cash/backends/rank_index.py:RankIndex.load @f7ab4eee, cash/backends/file_backend.py:FileBackend._record_rank @6d3f3044, cash/backends/rank_index.py:INDEX_FILENAME == '_rank.log' -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._rebuild_evict_queue @65947c55, cash/backends/file_backend.py:FileBackend._check_and_evict @92057a04, cash/backends/rank_index.py:RankIndex.load @29f8b401, cash/backends/file_backend.py:FileBackend._record_rank @4f5d888c, cash/backends/rank_index.py:INDEX_FILENAME == '_rank.log' -->
 When the cache exceeds `max_size_bytes`, entries are evicted until it fits under 90% of the cap, **least valuable per byte first** — the same ordering as the RAM tier: execution time divided by size, raised by each hit, with a clock that makes entries nobody reads age out. A 30-second result outlives newer 50 ms ones; one huge cheap value goes before many small expensive ones. Entries of about equal value go in least-recently-used order.
 
 The ranking never opens the entries. It comes from one `scandir` (sizes, and mtime as last access) plus `_rank.log`, a small file in the cache directory where each write and each access flush records the entry's priority (in batches, so a write pays nothing extra) — so a new process, after a kernel restart, still knows what the entries it did not write are worth. The file is advisory: delete it, or let two processes interleave into it, and nothing breaks; entries with no record rank as if their cost were unknown and small, and an old entry that is still being read gets a record on its next access flush. The ranking is a queue drained across many eviction passes, which matters: once a cache is full it evicts on most writes, so re-ranking per pass would put a directory walk on nearly every write.
@@ -251,8 +250,7 @@ Like `FileBackend`, writes are split: serialize on the calling thread, INSERT on
 ## `TieredBackend` (the default)
 
 ```python
-from cash import Cash, InMemoryBackend, FileBackend
-from cash.backends import TieredBackend
+from cash import Cash, InMemoryBackend, FileBackend, TieredBackend
 
 backend = TieredBackend([
     InMemoryBackend(max_entries=100),
@@ -394,18 +392,17 @@ Env vars resolve to the same `CashConfig` regardless of entry point. There is no
 
 ## API reference (compact)
 
-<!-- claim: cash/backends/__init__.py:__all__ @9359c304 broad="the import-path column is a claim about what the package exports" -->
+<!-- claim: cash/backends/__init__.py:__all__ @87b54eb0 broad="the import-path column is a claim about what the package exports" -->
 **Every** backend below imports from `cash.backends`. The four that are always
-available — no extra to install, nothing to assemble — are re-exported from the
-top-level `cash` as well, and that is the shorter spelling to reach for:
+available — no extra to install — are re-exported from the top-level `cash` as
+well, and that is the shorter spelling to reach for:
 
 | Backend | Import path | Required parameter | Key knobs |
 |---|---|---|---|
 | `InMemoryBackend` | `from cash import InMemoryBackend` | — | `max_entries`, `max_memory_percent` |
 | `FileBackend` | `from cash import FileBackend` | `cache_dir` | `compress`, `max_size_bytes`, `flush_interval`, `default_ttl` |
 | `SQLiteBackend` | `from cash import SQLiteBackend` | `db_path` | `default_ttl`, `max_size_bytes`, `wal_mode` |
-| `CascadingBackend` | `from cash import CascadingBackend` | `backends` (list) | — writes to every member, read-repairs on hit |
-| `TieredBackend` | `from cash.backends import TieredBackend` | `backends` (list) | `promotion_policy` |
+| `TieredBackend` | `from cash import TieredBackend` | `backends` (list) | `promotion_policy`; `Cash(backends=[...])` builds one |
 | `RedisBackend` | `from cash.backends import RedisBackend` | — (`host` defaults to `localhost`) | `port`, `db`, `password`, `prefix`, retry/keepalive kwargs |
 | `S3Backend` | `from cash.backends import S3Backend` | `bucket` (the only genuinely required one) | `prefix`, `max_pool_connections`, `retries`, boto3 kwargs |
 | `CashConfig.backend` | `CASH_BACKEND` env / TOML | one of `memory`/`file`/`sqlite`/`redis`/`s3`/`tiered` | resolved by `build_backend_from_config` |

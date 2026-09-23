@@ -37,11 +37,8 @@ from cash import (
     InMemoryBackend,
     FileBackend,
     SQLiteBackend,
-    CascadingBackend,
+    TieredBackend,  # the default; Cash() and Cash(backends=[...]) build one
 )
-
-# Default backend (auto-built by Cash() when you pass nothing):
-from cash.backends.tiered_backend import TieredBackend
 
 # Experimental — extras-gated:
 #   pip install 'cash-lib[redis]'
@@ -65,12 +62,7 @@ from cash.backends.s3_backend import S3Backend
       members:
         - __init__
 
-::: cash.CascadingBackend
-    options:
-      members:
-        - __init__
-
-::: cash.backends.tiered_backend.TieredBackend
+::: cash.TieredBackend
     options:
       members:
         - __init__

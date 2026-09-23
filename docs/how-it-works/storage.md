@@ -6,7 +6,7 @@ on-disk layer, with a promotion policy that decides what's worth writing down.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend @81dd03b9, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend, cash/backends/cascading_backend.py:CascadingBackend broad="tier ordering and read-repair are properties of the class as a whole" -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend @ba27a59d, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend broad="tier ordering and read-repair are properties of the class as a whole" -->
 The default `TieredBackend` stacks two layers, fastest first:
 
 | Tier | Backend | Speed | Survives restart? |
@@ -20,8 +20,8 @@ tier does its own eviction. The one value it turns away is one it could never
 keep: over 90% of its own cap, where holding it would first evict everything
 else. Writes are the opposite: they're gated, and the next
 section is about that gate. Cash also ships backends you can swap in or stack —
-`SQLiteBackend`, `RedisBackend`, `S3Backend`, and a `CascadingBackend` for
-multi-tier setups (see
+`SQLiteBackend`, `RedisBackend` and `S3Backend`; `Cash(backends=[...])` stacks
+the ones you pass in a `TieredBackend` of their own (see
 [Choosing a Backend](../tutorials/feature-guides/choosing-a-backend.md)).
 
 ## What's worth persisting

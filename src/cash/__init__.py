@@ -20,7 +20,7 @@ import contextlib
 from collections.abc import Iterator
 from typing import Any
 
-from .backends import CascadingBackend, FileBackend, InMemoryBackend
+from .backends import FileBackend, InMemoryBackend, TieredBackend
 from .backends.sqlite_backend import SQLiteBackend
 from .config import CashConfig, create_default_config, get_config
 from .core import CacheExplanation, Cash
@@ -410,7 +410,7 @@ def _change_affects_active_backend(c: Cash, changed: set[str]) -> bool:
         class_name = type(backend).__name__.lower()
         if class_name.startswith(type_name):
             return True
-        # TieredBackend / CascadingBackend: walk children.
+        # TieredBackend: walk children.
         children = getattr(backend, "backends", None)
         if children:
             return any(_has_tier_type(child, type_name) for child in children)
@@ -474,7 +474,7 @@ __all__ = [
     "InMemoryBackend",
     "FileBackend",
     "SQLiteBackend",
-    "CascadingBackend",
+    "TieredBackend",
     # Data sources (stable)
     "DataSource",
     "FileDataSource",

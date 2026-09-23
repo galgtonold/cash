@@ -56,7 +56,7 @@ def expensive(x):
     ...
 ```
 
-<!-- claim: cash/core.py:Cash.__init__ @932edca8 -->
+<!-- claim: cash/core.py:Cash.__init__ @6981e3cf -->
 The flag is a `Cash`-instance option, not a per-decorator one. All functions registered through this instance go through the lock path on misses; switch instances if you want a mix.
 
 Lock acquisition uses **the cache backend itself** — `self.backend.lock(cache_key)` returns a context manager whose semantics are defined by the backend subclass. See the next section for what each backend implements.
@@ -79,7 +79,6 @@ There are exactly **two** `lock()` definitions in the codebase:
 | `FileBackend` | Inherits | Base in-process `RLock`. |
 | `InMemoryBackend` | Inherits | Base in-process `RLock`. |
 | `S3Backend` | Inherits | Base in-process `RLock`. S3 has no native primitive for cross-process locking. |
-| `CascadingBackend` | Inherits | Base in-process `RLock`. |
 | `TieredBackend` | Inherits | Base in-process `RLock`. **This is the default `Cash()` backend.** |
 
 **Practical consequence:** with the default `Cash(use_locking=True)` and no explicit backend, two concurrent threads in the same process single-flight correctly — one computes, the other blocks and then observes the stored result on the double check. What the in-process lock cannot do is coordinate **separate processes**: two `multiprocessing` workers, two Airflow tasks, two containers each hold their own registry and will each compute once. That, and only that, is what `RedisBackend` buys you.
@@ -178,7 +177,7 @@ from another module.
 | `Cash(use_locking=False)` (default) | Skip the lock helper; compute closure runs directly. |
 | `CacheBackend.lock(key)` (base) | Per-key `threading.RLock` from a process-local registry — **in-process single-flight**. Inherited by every backend except Redis. |
 | `RedisBackend.lock(key)` | Returns `client.lock(f"{prefix}lock:{key}", timeout=60, blocking_timeout=10)` — a real **distributed** lock. The only backend that coordinates across processes. |
-| `SQLiteBackend.lock(key)`, `FileBackend.lock(key)`, `InMemoryBackend.lock(key)`, `S3Backend.lock(key)`, `CascadingBackend.lock(key)`, `TieredBackend.lock(key)` | Inherit the base in-process `RLock`. The default `Cash()` backend is `TieredBackend`. |
+| `SQLiteBackend.lock(key)`, `FileBackend.lock(key)`, `InMemoryBackend.lock(key)`, `S3Backend.lock(key)`, `TieredBackend.lock(key)` | Inherit the base in-process `RLock`. The default `Cash()` backend is `TieredBackend`. |
 | `CashCacheIneffectiveWarning` (lock failed) | Emitted once per `(func_name, "lock_failed")` when lock acquisition raises (`Cash._warn_lock_failed`). The call proceeds without the lock. |
 
 ## Related

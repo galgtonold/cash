@@ -39,7 +39,6 @@ class TestBackendsInit:
         """Core backends are importable from cash.backends."""
         from cash.backends import (
             CacheBackend,
-            CascadingBackend,
             FileBackend,
             InMemoryBackend,
             TieredBackend,
@@ -51,7 +50,6 @@ class TestBackendsInit:
                 CacheBackend,
                 InMemoryBackend,
                 FileBackend,
-                CascadingBackend,
                 TieredBackend,
             ]
         )
