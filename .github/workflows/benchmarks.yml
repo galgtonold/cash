@@ -1,0 +1,33 @@
+name: Benchmarks
+
+# Opt-in: runs when the benchmark code changes, or by hand from the Actions tab.
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "benchmarks/**"
+  pull_request:
+    paths:
+      - "benchmarks/**"
+  workflow_dispatch:
+
+jobs:
+  tooling:
+    name: Benchmark tooling tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Run from the repo root: some tests start the benchmark scripts by relative path.
+      - name: Run benchmark tooling tests
+        run: python -m pytest benchmarks/tests -n auto --tb=short -q

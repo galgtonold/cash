@@ -41,6 +41,7 @@ import json
 from pathlib import Path
 
 import pytest
+from IPython.core.interactiveshell import InteractiveShell
 
 from benchmarks.bench_notebook_edit import run_notebook_edit_benchmark
 
@@ -110,13 +111,18 @@ def edit_report(tmp_path_factory):
     tmp_path = tmp_path_factory.mktemp("edit_floor")
     nb = tmp_path / "chain.ipynb"
     _write_chain_notebook(nb)
-    return run_notebook_edit_benchmark(
-        nb,
-        tmp_path / "work",
-        max_sites=2,
-        session_mode="live",
-        log=lambda *a, **k: None,
-    )
+    try:
+        return run_notebook_edit_benchmark(
+            nb,
+            tmp_path / "work",
+            max_sites=2,
+            session_mode="live",
+            log=lambda *a, **k: None,
+        )
+    finally:
+        # The driver registers a process-global IPython shell. Clear it so a
+        # later test in this worker does not run inside a live session.
+        InteractiveShell.clear_instance()
 
 
 def test_the_measurement_is_not_vacuous(edit_report):
