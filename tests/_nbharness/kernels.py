@@ -43,6 +43,11 @@ _IPYTHON_DIR = tempfile.mkdtemp(prefix="cash-test-ipython-")
 os.environ["IPYTHONDIR"] = _IPYTHON_DIR
 atexit.register(shutil.rmtree, _IPYTHON_DIR, ignore_errors=True)
 
+# A CASH_CACHE_DIR in the developer's shell would reach every test kernel, and
+# all tests on a worker would then share one cache instead of each notebook's
+# own `.cash/`, so a test could be served another test's results.
+os.environ.pop("CASH_CACHE_DIR", None)
+
 
 def kernelspec_mismatch(argv, executable) -> str | None:
     """The kernelspec comparison, split out so it is directly testable.
