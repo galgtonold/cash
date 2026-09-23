@@ -1,7 +1,14 @@
-"""File-dependency snapshot utilities used across cache subsystems.
+"""File-dependency snapshots: capturing what a computation read, and
+checking later whether it still matches.
 
-Pure helpers for capturing and unpacking file metadata snapshots
-(``{path: {'mtime': float, 'size': int, 'hash': str}}``). Consumed by:
+A snapshot is ``{path: {'mtime': float, 'size': int, 'hash': str}}`` (plus
+remote and absent entries). These are not pure functions: they stat and hash
+files, keep short-lived memos of both (``begin_file_state_epoch``,
+:class:`FreshnessMemo`), and do their own reads outside every tracker
+(``untracked``). One setting shapes the answers, the size above which a file
+is hashed by sampling; every entry point takes it as ``full_hash_max``, and
+resolves it from the running ``Cash``'s config (:func:`full_hash_max_bytes`)
+only when a caller does not pass it. Consumed by:
 
 - ``src/cash/core.py`` — the decorator subsystem, when recording file deps for
   a cached function call.
@@ -15,8 +22,7 @@ Pure helpers for capturing and unpacking file metadata snapshots
 These helpers used to live alongside ``CacheFreshnessChecker`` in
 ``cache_freshness.py``. They were extracted before the ``statement/`` package
 was formed (ADR-011) so callers outside the statement subsystem don't end up
-reaching into ``cash.notebook.statement.freshness`` for what is really a
-pure utility.
+reaching into ``cash.notebook.statement.freshness`` for them.
 
 **Content-hash freshness.** ``(mtime, size)`` alone is an
 ambiguous freshness signal and fails two opposite ways: a touch-only change
@@ -106,7 +112,8 @@ ACTIVE_CONFIG: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_active
 
 
 def full_hash_max_bytes() -> int:
-    """Largest file hashed IN FULL rather than sampled.
+    """Largest file hashed IN FULL rather than sampled, for a caller that did
+    not pass its own ``full_hash_max``.
 
     Configurable (``file_hash_full_max_bytes``) because the sampled regime has
     a hole that cost two round-16 testers a wrong answer each: a same-size
@@ -419,6 +426,7 @@ def file_content_hash(
 def snapshot_file_deps(
     paths: set[str],
     known: dict[str, tuple[Any, str]] | None = None,
+    full_hash_max: int | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Return ``{path: {'mtime', 'size', 'hash'}}`` for paths that exist.
 
@@ -430,9 +438,13 @@ def snapshot_file_deps(
     it was hashed])``: that
     hash is used while the stat is still the same, so the entry describes the
     file as the body read it (see ``FileAccessTracker.read_digests``).
+
+    *full_hash_max* is the caller's ``file_hash_full_max_bytes``; resolved
+    from the running config when omitted (:func:`full_hash_max_bytes`).
     """
     snapshot: dict[str, dict[str, Any]] = {}
-    full_hash_max = full_hash_max_bytes()
+    if full_hash_max is None:
+        full_hash_max = full_hash_max_bytes()
     for f in paths:
         try:
             st = os.stat(f)
@@ -527,6 +539,7 @@ def snapshot_dependencies(
     urls: Iterable[str] | None = None,
     absent: Iterable[str] | None = None,
     known: dict[str, tuple[Any, str]] | None = None,
+    full_hash_max: int | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Snapshot everything a call read — local files and remote objects — as one dict.
 
@@ -537,7 +550,7 @@ def snapshot_dependencies(
     shape; keeping the *capture* side unified too means the discriminator is
     written in exactly one place.
     """
-    snapshot = snapshot_file_deps(set(paths), known) if paths else {}
+    snapshot = snapshot_file_deps(set(paths), known, full_hash_max) if paths else {}
     if urls:
         snapshot.update(snapshot_remote_deps(urls))
     if absent:
@@ -1012,7 +1025,7 @@ def dep_is_fresh(
 
 
 def snapshot_is_fresh(
-    snap: Mapping[str, Any] | None, memo: FreshnessMemo | None = None
+    snap: Mapping[str, Any] | None, memo: FreshnessMemo | None = None, full_hash_max: int | None = None
 ) -> tuple[bool, StaleDep | None]:
     """``(True, None)`` when every dependency in *snap* still matches, else
     ``(False, StaleDep)`` naming the first one that does not.
@@ -1021,11 +1034,12 @@ def snapshot_is_fresh(
     (``{path: entry}``); an empty or missing one is vacuously fresh. Each entry
     is judged by :func:`dep_is_fresh`. With a *memo*, answers and directory
     listings are shared with the caller's other checks for as long as it
-    keeps the memo.
+    keeps the memo. *full_hash_max* as for :func:`snapshot_file_deps`.
     """
     if not snap:
         return True, None
-    full_hash_max = full_hash_max_bytes()
+    if full_hash_max is None:
+        full_hash_max = full_hash_max_bytes()
     if memo is not None and len(snap) >= LISTING_MIN_FILES:
         # Many files: read their directories once rather than stat each.
         unlisted = [p for p, s in snap.items() if isinstance(s, dict) and "size" in s and p not in memo.listed]
