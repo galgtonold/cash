@@ -373,7 +373,7 @@ configures a tool — a `tests/pyproject.toml` holding `[tool.ruff]` — does no
 so running from `tests/` still finds the repository's project and its
 `[tool.cash]`.
 
-<!-- claim: cash/__init__.py:configure @6b47c643 -->
+<!-- claim: cash/__init__.py:configure @fb7ac151 -->
 ## Runtime mutation: `cash.configure()`
 
 Change the active configuration of the default singleton at runtime

@@ -137,7 +137,7 @@ cash.configure(min_cache_savings_pct=0.10)        # promote when a hit saves >10
 cash.configure(smart_persistence=False)           # fall back to the default policy
 ```
 
-<!-- claim: cash/__init__.py:configure @6b47c643, cash/backends/factory.py:apply_persistence_settings @3d11b6d6 -->
+<!-- claim: cash/__init__.py:configure @fb7ac151, cash/backends/factory.py:apply_persistence_settings @3d11b6d6 -->
 `cash.configure` hands a change to either setting straight to the running
 backend (`apply_persistence_settings`), so it applies from the next write
 without rebuilding the backend or dropping what the RAM tier holds. The

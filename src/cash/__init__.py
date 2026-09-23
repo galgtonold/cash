@@ -21,14 +21,20 @@ import contextlib
 # Aliased: importing the ``cash.logging`` submodule rebinds ``cash.logging``.
 import logging as _stdlib_logging
 from collections.abc import Iterator
-from dataclasses import fields
+from dataclasses import fields as _dataclass_fields
 from typing import Any
 
 from .backends import FileBackend, InMemoryBackend, TieredBackend
-from .backends.factory import apply_persistence_settings, build_backend_from_config
+
+# The helpers configure() uses are imported under private names, so they stay
+# out of the `cash.` namespace users tab-complete.
+from .backends.factory import apply_persistence_settings as _apply_persistence_settings
+from .backends.factory import build_backend_from_config as _build_backend_from_config
 from .backends.sqlite_backend import SQLiteBackend
-from .config import CashConfig, create_default_config, get_config, validate_value
-from .core import CacheExplanation, Cash, enable_cash_logging
+from .config import CashConfig, create_default_config, get_config
+from .config import validate_value as _validate_value
+from .core import CacheExplanation, Cash
+from .core import enable_cash_logging as _enable_cash_logging
 from .data_source import DataSource, FileDataSource
 from .exceptions import (
     AmbiguousCellError,
@@ -188,14 +194,14 @@ def configure(**overrides: Any) -> None:
     if not overrides:
         return
 
-    valid_fields = {f.name for f in fields(CashConfig) if not f.name.startswith("_")}
+    valid_fields = {f.name for f in _dataclass_fields(CashConfig) if not f.name.startswith("_")}
     unknown = set(overrides) - valid_fields
     if unknown:
         raise ValueError(f"{sorted(unknown)!r} is not a configurable field. Valid keys: {sorted(valid_fields)!r}")
 
     # Checked before anything is applied, so a bad value leaves the running
     # configuration exactly as it was -- see `config.validate_value`.
-    overrides = {key: (val if key == "tiers" else validate_value(key, val)) for key, val in overrides.items()}
+    overrides = {key: (val if key == "tiers" else _validate_value(key, val)) for key, val in overrides.items()}
 
     c = _get_global_cash()
 
@@ -238,18 +244,18 @@ def configure(**overrides: Any) -> None:
         c.debug = bool(overrides["debug"])
         if c.debug:
             # Same as the constructor: asking for debug output produces some.
-            enable_cash_logging(_stdlib_logging.DEBUG)
+            _enable_cash_logging(_stdlib_logging.DEBUG)
     if "verbose" in overrides:
         c.verbose = bool(overrides["verbose"])
         if c.verbose:
-            enable_cash_logging(_stdlib_logging.INFO)
+            _enable_cash_logging(_stdlib_logging.INFO)
 
     if (
         not needs_rebuild
         and {"smart_persistence", "min_cache_savings_pct"} & set(overrides)
         and c.backend_if_built is not None
     ):
-        apply_persistence_settings(c.backend_if_built, c.config)
+        _apply_persistence_settings(c.backend_if_built, c.config)
 
     if needs_rebuild:
         old_backend = c.backend_if_built
@@ -261,7 +267,7 @@ def configure(**overrides: Any) -> None:
                     "Old backend shutdown failed during configure(): %s",
                     e,
                 )
-        c.backend = build_backend_from_config(c.config)
+        c.backend = _build_backend_from_config(c.config)
 
 
 @contextlib.contextmanager
