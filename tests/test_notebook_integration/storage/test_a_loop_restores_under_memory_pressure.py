@@ -25,6 +25,22 @@ pressure below is what makes it one of ten. The machine's memory is reported
 at 95% by patching the backend's psutil, so what cash decides does not depend
 on what else is running.
 
+The tier still gives back its SHARE, and holds flat after that: the least
+valuable bytes go, and those are the loop's statement entries (each holds the
+growing dict) long before the tiny results of the ``work`` calls inside them.
+So an identical re-run may run a few iterations again, each served its
+``work(k)`` from the call cache in milliseconds -- "6 cached, 4 ran (0.02s),
+sub-call work(k): 4/4 hit" is the tier doing its job, not the bug. What the
+bug did was re-run the WORK, so that is what is counted, with a counter the
+cached function cannot replay.
+
+Nothing here goes past RAM (``RAM_ONLY``): an iteration that also reached disk
+restores from there whatever the RAM tier did, and whether one does depends on
+it costing more than the disk tier's 0.1 s floor -- on how busy the machine
+is. Under load every iteration did, and the test passed on the old,
+tier-emptying code too; on a quiet machine some did not. Kept in RAM, the old
+code re-runs all ten ``work`` calls on every re-run.
+
 The unit twin is ``tests/test_backends/test_ram_tier_sheds_its_share.py``.
 """
 
@@ -39,12 +55,13 @@ import pytest
 # tests left behind.
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(600), pytest.mark.fresh_kernel]
 
-# Restoring from cache, the standing caveat: the canonical explanation is in
-# `test_loop_edit_rerun_matrix.py`. Only a failure saying "re-ran" is retried.
-LOAD_SENSITIVE = pytest.mark.flaky(reruns=2, reruns_delay=5, only_rerun=["re-ran"])
+#: No entry is worth a disk write: a restore would have to save all of the
+#: compute (``PersistencePolicy.pays_to_restore``), so the RAM tier is the only
+#: place anything is kept and the test sees what IT does.
+RAM_ONLY = "cash.configure(min_cache_savings_pct=1.0)"
 
 SETUP = (
-    "import cash\n%cash_on\n%cash_badge print\nimport numpy as np\n"
+    f"import cash\n%cash_on\n%cash_badge print\n{RAM_ONLY}\nimport os\nimport numpy as np\n"
     "import psutil as _ps, types as _ty\n"
     "import cash.backends.memory_backend as _mb\n"
     "_tot = _ps.virtual_memory().total\n"
@@ -53,6 +70,19 @@ SETUP = (
 )
 
 KEYS = 'KEYS = ["k%02d" % i for i in range(10)]'
+
+
+def _loop(counter) -> str:
+    """The loop, with ``work`` appending a byte to *counter* each time it really runs."""
+    return LOOP.replace("def work(k):\n", f"def work(k):\n    _count({str(counter)!r})\n", 1)
+
+
+#: ``os.write``, not ``open``: an ``open`` write is an effect a hit replays.
+COUNT = """def _count(path):
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+    os.write(fd, b"x")
+    os.close(fd)
+"""
 
 # Each iteration a large matmul, so every one is unambiguously worth caching:
 # at a few milliseconds the cost floor, not the pressure, decides, and the
@@ -77,20 +107,25 @@ def _sum(out):
     return m.group(1) if m else None
 
 
-@LOAD_SENSITIVE
-def test_a_ten_iteration_loop_restores_all_ten_under_pressure(nb_runner):
-    nb_runner.create_notebook([SETUP, KEYS, LOOP])
+def test_a_ten_iteration_loop_redoes_none_of_its_work_under_pressure(nb_runner, tmp_path):
+    counter = tmp_path / "work_calls.log"
+    nb_runner.create_notebook([SETUP, KEYS, COUNT + "\n" + _loop(counter)])
     nb_runner.start_kernel()
     nb_runner.run_all()
     first = nb_runner.get_output(3)
+    assert counter.stat().st_size == 10, "the first run should run work() for every key"
 
     # The first re-run under pressure gives back the tier's share; what matters
     # is where it settles, which is what the user lived with.
     nb_runner.run_cell(3)
+    before = counter.stat().st_size
     nb_runner.run_cell(3)
+    ran = counter.stat().st_size - before
     raw = nb_runner.get_raw_output(3)
 
     assert _sum(nb_runner.get_output(3)) == _sum(first), raw
-    assert "10 cached" in raw, (
-        "an identical re-run under memory pressure re-ran iterations of the loop instead of restoring all ten:\n" + raw
+    assert ran == 0, (
+        f"an identical re-run under memory pressure ran work() {ran} times instead of restoring it:\n" + raw
     )
+    loop = next(line for line in raw.splitlines() if "LOOP x10" in line)
+    assert "cached" in loop, "the RAM tier emptied itself: no iteration of the loop restored:\n" + raw
