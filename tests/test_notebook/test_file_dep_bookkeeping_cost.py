@@ -21,6 +21,9 @@ import types
 
 import pytest
 
+from cash.notebook._protocols import TrackingState
+from cash.notebook.restored_var import apply_restored_var
+from cash.notebook.statement import StatementCacheMetadata
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.tracking import file_dep_snapshot
 
@@ -64,10 +67,10 @@ def test_an_in_place_change_keeps_the_files_it_had(tmp_path):
 
 def test_a_restored_variable_carries_exactly_its_entry_files(tmp_path):
     a, b = _aged(tmp_path, "a.csv"), _aged(tmp_path, "b.csv")
-    state, deps = _state(), StatementFileDeps()
+    state = TrackingState()
     for path in (a, b):
-        meta = types.SimpleNamespace(file_dependencies={path: {"mtime": 0.0, "size": 1}})
-        deps.restore_from_metadata(state, {"d": object()}, meta)
+        meta = StatementCacheMetadata(file_dependencies={path: {"mtime": 0.0, "size": 1}})
+        apply_restored_var(state, "d", object(), meta)
     assert state.executed_file_deps["d"] == {b}
 
 

@@ -36,7 +36,6 @@ from ..server_discovery import get_notebook_path
 
 if TYPE_CHECKING:
     from .._protocols import TrackingState
-    from ._metadata import StatementCacheMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -232,21 +231,3 @@ class StatementFileDeps:
                 var_name,
                 type(value).__name__,
             )
-
-    def restore_from_metadata(
-        self,
-        tracking_state: "TrackingState",
-        restored_vars: dict,
-        metadata: "StatementCacheMetadata | None",
-    ) -> None:
-        """Propagate file deps from cached metadata back into the tracking dict."""
-        if not metadata:
-            return
-        file_deps = metadata.file_dependencies or {}
-        if not file_deps:
-            return
-        executed_file_deps = tracking_state.executed_file_deps
-        # A restored value is exactly the entry's value: its files are the
-        # entry's, not those of whatever the name held before.
-        for var_name in restored_vars:
-            executed_file_deps[var_name] = set(file_deps.keys())

@@ -52,23 +52,14 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ...tracking.randomness import restore_object_rng_states, restore_rng_state
+from ..restored_var import apply_restored_var
 from .capture import replay_outputs
 
 if TYPE_CHECKING:
     from .._protocols import ShellProtocol, TrackingState
     from ._metadata import StatementCacheMetadata
-    from .file_deps import StatementFileDeps
 
 logger = logging.getLogger(__name__)
-
-
-def _get_statement_code_and_hash(
-    metadata: "StatementCacheMetadata | None",
-) -> tuple[str | None, str | None]:
-    """Return stored statement code and hash from cache metadata."""
-    if not metadata:
-        return None, None
-    return metadata.code, metadata.source_hash
 
 
 class StatementRestorer:
@@ -76,22 +67,20 @@ class StatementRestorer:
 
     Stateless apart from the shell reference and the optional content
     hasher; all :class:`TrackingState` access happens through the
-    ``tracking_state`` method parameter.  Holds the sibling
-    :class:`StatementFileDeps` for file-dep restoration.  Mutates
-    ``user_ns`` and ``tracking_state`` directly; replays captured display
-    output via IPython.
+    ``tracking_state`` method parameter, and what a restored value records
+    there is :func:`~cash.notebook.restored_var.apply_restored_var`'s.
+    Mutates ``user_ns`` and ``tracking_state`` directly; replays captured
+    display output via IPython.
     """
 
     def __init__(
         self,
         shell: "ShellProtocol",
-        file_deps: "StatementFileDeps",
         compute_hash: Callable[[Any], str] | None = None,
         debug: bool = False,
         rng_seed_epochs: dict[str, str] | None = None,
     ) -> None:
         self.shell = shell
-        self._file_deps = file_deps
         self.compute_hash = compute_hash
         self.debug = debug
         # SHARED with the processor's ledger (same dict object), so a seed
@@ -198,7 +187,6 @@ class StatementRestorer:
                     )
                 restore_object_rng_states(object_rng_states, self.shell.user_ns)
 
-            self._file_deps.restore_from_metadata(tracking_state, restored_vars, metadata)
             var_restore_time = time.time() - t_var
 
             output_replay_time = 0.0
@@ -232,42 +220,16 @@ class StatementRestorer:
         metadata: "StatementCacheMetadata | None",
         inplace_restore: "set[str] | frozenset[str]" = frozenset(),
     ) -> None:
-        """Write one restored variable into the shell namespace and update tracking state.
+        """Write one restored variable into the shell namespace and record it.
 
-                For a var in *inplace_restore* (a bare ``estimator.fit(...)`` receiver,
-        ) the fitted state is transferred ONTO the existing object rather
-                than rebinding the name, so every alias of the receiver (``backup = clf``)
-                observes the fit -- mirroring what an in-place ``.fit()`` does at runtime.
-                A rebind would leave aliases pointing at the stale, unfitted object.
+        For a var in *inplace_restore* (a bare ``estimator.fit(...)``
+        receiver) the fitted state is transferred ONTO the existing object
+        rather than rebinding the name, so every alias of the receiver
+        (``backup = clf``) observes the fit -- mirroring what an in-place
+        ``.fit()`` does at runtime.
         """
         self._write_restored_value(var_name, value, inplace_restore)
-
-        if metadata:
-            output_lineages = metadata.output_lineages or {}
-            if var_name in output_lineages:
-                tracking_state.lineage.record(var_name, output_lineages[var_name], value=value)
-
-            # What this value was built from, carried on the entry. Without it a
-            # restored value has no provenance, and the classifier's check for
-            # "built on an input that has been rebuilt since" compares an empty
-            # dict and passes -- which is how a model table restored before an
-            # upstream fix survived the repair that rebuilt its own inputs and
-            # was exported (round 26, r26s4).
-            if metadata.input_lineages:
-                tracking_state.executed_input_lineages[var_name] = dict(metadata.input_lineages)
-
-            stored_code, stored_hash = _get_statement_code_and_hash(metadata)
-            if stored_hash:
-                if var_name not in tracking_state.executed_cell_hashes:
-                    tracking_state.executed_cell_hashes[var_name] = set()
-                tracking_state.executed_cell_hashes[var_name].add(stored_hash)
-            if stored_code:
-                tracking_state.executed_cell_codes[var_name] = stored_code
-
-        self._record_restored_var_hash(tracking_state, var_name, value, metadata)
-
-        if metadata and metadata.key is not None:
-            tracking_state.variable_sources[var_name] = metadata.key
+        apply_restored_var(tracking_state, var_name, value, metadata, compute_hash=self.compute_hash)
 
     def _write_restored_value(
         self,
@@ -319,29 +281,6 @@ class StatementRestorer:
                 return
         existing.__dict__.clear()
         existing.__dict__.update(value.__dict__)
-
-    def _record_restored_var_hash(
-        self,
-        tracking_state: "TrackingState",
-        var_name: str,
-        value: Any,
-        metadata: "StatementCacheMetadata | None",
-    ) -> None:
-        """Update variable_hashes / current_session_hashes for a single restored variable."""
-        type_name = type(value).__name__
-        if type_name in ("DataFrame", "Series", "ndarray"):
-            lineage_hash = ((metadata.output_lineages or {}) if metadata else {}).get(var_name)
-            if lineage_hash:
-                tracking_state.variable_hashes.setdefault(var_name, set()).add(lineage_hash)
-                tracking_state.current_session_hashes[var_name] = lineage_hash
-        elif self.compute_hash:
-            try:
-                content_hash = self.compute_hash(value)
-                tracking_state.variable_hashes.setdefault(var_name, set()).add(content_hash)
-                tracking_state.current_session_hashes[var_name] = content_hash
-            except (TypeError, ValueError, AttributeError, RecursionError) as e:
-                if self.debug:
-                    logger.debug("[CACHE DEBUG] Could not hash restored variable '%s': %s", var_name, e)
 
     def _replay_cached_outputs(
         self,

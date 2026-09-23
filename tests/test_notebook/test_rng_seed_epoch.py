@@ -57,7 +57,6 @@ class TestRngReplayGate:
     def _restorer(self, epochs):
         return StatementRestorer(
             shell=object(),
-            file_deps=object(),
             rng_seed_epochs=epochs,
         )
 
@@ -84,8 +83,8 @@ class TestRngReplayGate:
 
 def test_default_ledger_is_isolated():
     """Two restorers built without a ledger must not share one dict."""
-    a = StatementRestorer(shell=object(), file_deps=object())
-    b = StatementRestorer(shell=object(), file_deps=object())
+    a = StatementRestorer(shell=object())
+    b = StatementRestorer(shell=object())
     a._rng_seed_epochs["numpy.random"] = "stmt:aaa"
     assert b._rng_seed_epochs == {}
 
@@ -99,7 +98,7 @@ def test_epoch_ledger_is_shared_with_the_processor(seeded_first):
     bug for every statement cached before the re-seed.
     """
     ledger: dict[str, str] = {}
-    r = StatementRestorer(shell=object(), file_deps=object(), rng_seed_epochs=ledger)
+    r = StatementRestorer(shell=object(), rng_seed_epochs=ledger)
     if seeded_first:
         ledger["numpy.random"] = "stmt:aaa"
     ledger["numpy.random"] = "stmt:bbb"

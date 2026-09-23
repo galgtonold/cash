@@ -202,7 +202,6 @@ class StatementProcessor:
         # Stateless w.r.t. tracking state — receives it per call.
         self._stmt_restorer = StatementRestorer(
             shell=shell,
-            file_deps=self._file_deps,
             compute_hash=compute_hash_fn,
             debug=debug,
             rng_seed_epochs=self._randomness.seed_epochs,
