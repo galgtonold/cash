@@ -10,7 +10,6 @@ import logging
 import sys
 import threading
 import time
-import traceback
 import weakref
 
 # Any is used at IPython API boundaries where types come from the shell's dynamic
@@ -278,7 +277,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             shell,
             backend=cash_instance.backend,
             tracking_state=self.tracking_state,
-            debug=self._debug,
         )
 
         self._cell_executor = CellExecutor(
@@ -291,7 +289,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             restorer=self._restorer,
             module_invalidator=self._module_invalidator,
             control_structure_processor=self._control_structure_processor,
-            debug=self._debug,
         )
 
     def _init_session_state(self, shell: ShellProtocol) -> None:
@@ -581,8 +578,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 print("   an unsaved edit is invisible, so the upstream check skips it")
                 print("   and you get the previous answer for the new code.")
                 print('   JupyterLab autosaves on a timer; VS Code: "files.autoSave".')
-        if self._debug:
-            print(f"TTL: {ttl if ttl is not None else 'None'}")
+        logger.debug("TTL: %s", ttl)
 
     @line_magic
     def cash_off(self, line: str) -> None:
@@ -1027,9 +1023,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             timer.daemon = True
             timer.start()
         except Exception as e:  # noqa: BLE001 - a badge must never break a cell; degrade to none
-            if self._debug:
-                print(f"[BADGE ARM ERROR] {e}")
-                traceback.print_exc()
+            logger.debug("[BADGE ARM ERROR] %s", e, exc_info=True)
             return
         self._progress_timer = timer
 
@@ -1097,8 +1091,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             if pub is not None and not self._is_capturing_display_pub(pub):
                 self._badge_display_pub = pub
         except Exception as e:  # noqa: BLE001 - a badge must never break a cell
-            if self._debug:
-                print(f"[BADGE PUBLISHER ERROR] {e}")
+            logger.debug("[BADGE PUBLISHER ERROR] %s", e)
         return getattr(self, "_badge_display_pub", None)
 
     def _execute_cell(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
@@ -1397,13 +1390,15 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         self._record_provenance(all_metrics)
 
-        if self._debug:
-            print(f"[TIMING_PROXY] PROXY TOTAL: {hook_total * 1000:.1f}ms")
-            print(f"[TIMING_PROXY] Badge init: {timing_breakdown.get('badge_init', 0) * 1000:.1f}ms")
-            print(f"[TIMING_PROXY] Upstream check: {timing_breakdown.get('upstream_check', 0) * 1000:.1f}ms")
-            print(f"[TIMING_PROXY] Badge progress renders: {badge_render_time * 1000:.1f}ms")
+        logger.debug(
+            "[TIMING_PROXY] Total %.1fms (badge init %.1fms, upstream check %.1fms, badge progress %.1fms)",
+            hook_total * 1000,
+            timing_breakdown.get("badge_init", 0) * 1000,
+            timing_breakdown.get("upstream_check", 0) * 1000,
+            badge_render_time * 1000,
+        )
 
-        # Now that all debug prints are done, show the Buffered Result (if any)
+        # Show the buffered result (if any)
         for output in buffered_result_outputs:
             if isinstance(output, dict) and "data" in output:
                 publish_display_data(data=output["data"], metadata=output.get("metadata", {}))
@@ -1722,9 +1717,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         try:
             _badge.print_text_badge(metrics_list, cell_total_time=cell_total_time)
         except Exception as e:  # noqa: BLE001 — the badge is never worth breaking a cell
-            if self._debug:
-                print(f"[BADGE RENDER ERROR] {e}")
-                traceback.print_exc()
+            logger.debug("[BADGE RENDER ERROR] %s", e, exc_info=True)
 
     def _get_bug_report_context(self) -> dict:
         """Collect runtime environment info for the pre-filled bug report URL.
@@ -1834,9 +1827,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             )
             return html or None
         except Exception as e:  # noqa: BLE001 — intentionally broad; see render_interactive_badge
-            if self._debug:
-                print(f"[BADGE RENDER ERROR] {e}")
-                traceback.print_exc()
+            logger.debug("[BADGE RENDER ERROR] %s", e, exc_info=True)
             return None
 
     def _publish_badge_html(
@@ -1895,9 +1886,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             else:
                 display(HTML(html))
         except Exception as e:  # noqa: BLE001 — intentionally broad; see render_interactive_badge
-            if self._debug:
-                print(f"[BADGE RENDER ERROR] {e}")
-                traceback.print_exc()
+            logger.debug("[BADGE RENDER ERROR] %s", e, exc_info=True)
 
     def render_interactive_badge(
         self,

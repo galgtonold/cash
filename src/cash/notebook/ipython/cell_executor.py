@@ -48,7 +48,6 @@ import sys
 import time
 import uuid
 from collections.abc import Callable
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from IPython.display import display, publish_display_data
@@ -929,7 +928,6 @@ class CellExecutor:
         restorer: "Restorer",
         module_invalidator: "ModuleInvalidator",
         control_structure_processor: "ControlStructureProcessor",
-        debug: bool = False,
     ) -> None:
         self.shell = shell
         self._cash_instance = cash_instance
@@ -940,7 +938,6 @@ class CellExecutor:
         self._restorer = restorer
         self._module_invalidator = module_invalidator
         self._control_structure_processor = control_structure_processor
-        self._debug = debug
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -999,8 +996,7 @@ class CellExecutor:
         badge_display_id = str(uuid.uuid4())
         timing_breakdown = self._init_cell_timing_and_badge(badge_display_id)
         hook_start = time.time()
-        if self._debug:
-            print(f"[TIMING_PROXY] Start cached_run_cell: {datetime.now().strftime('%H:%M:%S.%f')}")
+        logger.debug("[TIMING_PROXY] Start cached_run_cell")
 
         # 3. Module change detection (must precede upstream check)
         pre_upstream_metrics = self._detect_module_changes(raw_cell)
@@ -1035,8 +1031,7 @@ class CellExecutor:
             upstream_metrics,
         )
 
-        if self._debug:
-            print("[TIMING_PROXY] Start executing statements...")
+        logger.debug("[TIMING_PROXY] Start executing statements")
 
         # 7. Statement execution. The per-statement RNG observer does the
         # measuring; this only opens a fresh accumulation for the cell.
@@ -1170,8 +1165,7 @@ class CellExecutor:
         badge_display_id = str(uuid.uuid4())
         timing_breakdown = self._init_cell_timing_and_badge(badge_display_id)
         hook_start = time.time()
-        if self._debug:
-            print(f"[TIMING_PROXY] Start cached_run_cell (async): {datetime.now().strftime('%H:%M:%S.%f')}")
+        logger.debug("[TIMING_PROXY] Start cached_run_cell (async)")
 
         # 3. Module change detection (must precede upstream check)
         pre_upstream_metrics = self._detect_module_changes(raw_cell)
@@ -1206,8 +1200,7 @@ class CellExecutor:
             upstream_metrics,
         )
 
-        if self._debug:
-            print("[TIMING_PROXY] Start executing statements (async)...")
+        logger.debug("[TIMING_PROXY] Start executing statements (async)")
 
         # 7. Statement execution (awaited). Same single observer as the sync path.
         self._statement_processor.begin_cell_rng_observation()
@@ -1308,8 +1301,8 @@ class CellExecutor:
         # Auto-track local module imports found in this cell
         try:
             newly_tracked = ft.auto_track_local_imports(raw_cell)
-            if newly_tracked and self._debug:
-                print(f"[AUTO_TRACK] Auto-tracking local modules: {', '.join(sorted(newly_tracked))}")
+            if newly_tracked:
+                logger.debug("[AUTO_TRACK] Auto-tracking local modules: %s", ", ".join(sorted(newly_tracked)))
         except (ImportError, AttributeError, OSError, TypeError) as exc:
             logger.debug("Failed to auto-track local imports: %s", exc)
 
@@ -1338,11 +1331,10 @@ class CellExecutor:
                     "changed_modules": dict(changed_modules.items()),
                 }
                 notifications.append(notification)
-                if self._debug:
-                    for mod, path in changed_modules.items():
-                        syms = per_module_changed_symbols.get(mod)
-                        sym_info = f" (changed symbols: {syms})" if syms is not None else " (full invalidation)"
-                        print(f"[AUTO_TRACK] Reloaded changed module '{mod}' ({path}){sym_info}")
+                for mod, path in changed_modules.items():
+                    syms = per_module_changed_symbols.get(mod)
+                    sym_info = f"changed symbols: {syms}" if syms is not None else "full invalidation"
+                    logger.debug("[AUTO_TRACK] Reloaded changed module '%s' (%s) (%s)", mod, path, sym_info)
         except (ImportError, AttributeError, OSError, TypeError, ValueError) as exc:
             logger.debug("Failed to check/reload changed modules: %s", exc)
 
@@ -1422,15 +1414,8 @@ class CellExecutor:
         # closes its figures on flush anyway).
         figs_before = _pyplot_open_fignums()
         try:
-            if self._debug:
-                print(f"[ENSURE_STATE_DEBUG] Cell code: {cell_code[:50]}...")
-
             inputs, outputs = CodeAnalyzer.analyze_code_block(cell_code)
-
-            if self._debug:
-                print(f"[ENSURE_STATE_DEBUG] Analyzed inputs: {inputs}")
-                print(f"[ENSURE_STATE_DEBUG] Analyzed outputs: {outputs}")
-                print(f"[ENSURE_STATE_DEBUG] Current user_ns keys (first 10): {list(self.shell.user_ns.keys())[:10]}")
+            logger.debug("[ENSURE_STATE_DEBUG] Cell %.50r: inputs %s, outputs %s", cell_code, inputs, outputs)
 
             total_restore_time = 0.0
             upstream_metrics: list[ProcessResult] = []
@@ -1445,10 +1430,9 @@ class CellExecutor:
                             upstream_metrics.extend(metrics)
                     except NameError:
                         # Could not find a source — proceed; upstream re-execution may provide it.
-                        if self._debug:
-                            print(
-                                f"[STATE] Could not restore '{var_name}' from cache. Hoping for upstream re-execution."
-                            )
+                        logger.debug(
+                            "[STATE] Could not restore '%s' from cache. Hoping for upstream re-execution.", var_name
+                        )
 
             reexec_metrics, upstream_restore_time, total_execution_time = self._check_and_reexecute_upstream_cells(
                 cell_code,
@@ -1548,12 +1532,14 @@ class CellExecutor:
         timing_breakdown["total_execution_time"] = total_execution_time
         timing_breakdown["upstream_check"] = (time.time() - t_ensure) - total_restore_time - total_execution_time
 
-        if self._debug:
-            print(f"[TIMING_PROXY] Ensure state: {(time.time() - t_ensure) * 1000:.2f}ms")
-            print(f"[TIMING_PROXY] Total restore time: {total_restore_time * 1000:.2f}ms")
-            print(f"[TIMING_PROXY] Total execution time: {total_execution_time * 1000:.2f}ms")
-            print(
-                f"[TIMING_PROXY] Pure overhead (excl. restore+exec): {((time.time() - t_ensure) - total_restore_time - total_execution_time) * 1000:.2f}ms"
+        if logger.isEnabledFor(logging.DEBUG):
+            ensure = time.time() - t_ensure
+            logger.debug(
+                "[TIMING_PROXY] Ensure state: %.2fms (restore %.2fms, execution %.2fms, overhead %.2fms)",
+                ensure * 1000,
+                total_restore_time * 1000,
+                total_execution_time * 1000,
+                (ensure - total_restore_time - total_execution_time) * 1000,
             )
 
         return upstream_metrics, total_restore_time, total_execution_time
@@ -1668,8 +1654,7 @@ class CellExecutor:
             if not changed_funcs:
                 return []
             func_names = ", ".join(sorted(changed_funcs))
-            if self._debug:
-                print(f"[FUNCTION_CHANGE] Detected changed functions: {func_names}")
+            logger.debug("[FUNCTION_CHANGE] Detected changed functions: %s", func_names)
             return [
                 {
                     "status": "FUNCTION_CHANGED",
@@ -1696,9 +1681,8 @@ class CellExecutor:
             opaque_warnings = ft.detect_opaque_call_patterns(raw_cell, self.shell.user_ns)
             if not opaque_warnings:
                 return []
-            if self._debug:
-                for w in opaque_warnings:
-                    print(f"[OPAQUE_CALL] {w}")
+            for w in opaque_warnings:
+                logger.debug("[OPAQUE_CALL] %s", w)
             return [
                 {
                     "status": "WARNING",
@@ -2072,8 +2056,7 @@ class CellExecutor:
             try:
                 try:
                     if is_control_structure(node):
-                        if self._debug:
-                            print("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
+                        logger.debug("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
                         # ``raw_cell`` (not the annotation) is what goes down: the
                         # structure's statements each resolve their OWN directive
                         # against the original source, and ``ast.unparse`` has already
@@ -2101,11 +2084,12 @@ class CellExecutor:
                             all_metrics,
                             buffered_result_outputs,
                         )
-                        if self._debug:
-                            print(
-                                f"[CONTROL] Completed: {ctrl_result.total_iterations} iterations, "
-                                f"{ctrl_result.cached_iterations} cached, {ctrl_result.computed_iterations} computed"
-                            )
+                        logger.debug(
+                            "[CONTROL] Completed: %s iterations, %s cached, %s computed",
+                            ctrl_result.total_iterations,
+                            ctrl_result.cached_iterations,
+                            ctrl_result.computed_iterations,
+                        )
                         if not ctrl_result.success:
                             raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
                     else:
@@ -2256,8 +2240,7 @@ class CellExecutor:
                             # raises ``SyntaxError: 'await' outside function``
                             # . Run the whole structure as one awaited unit
                             # through the PyCF_ALLOW_TOP_LEVEL_AWAIT-capable path.
-                            if self._debug:
-                                print("[CONTROL] Await inside control body, running as awaited single unit")
+                            logger.debug("[CONTROL] Await inside control body, running as awaited single unit")
                             control_log = self._statement_processor.begin_control_log(stmt_code)
                             try:
                                 ctrl_result = await self._control_structure_processor.process_await_unit(
@@ -2269,8 +2252,9 @@ class CellExecutor:
                             finally:
                                 self._statement_processor.end_control_log(control_log)
                         else:
-                            if self._debug:
-                                print("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
+                            logger.debug(
+                                "[CONTROL] Detected control structure, delegating to ControlStructureProcessor"
+                            )
                             # ``raw_cell`` (not the annotation) is what goes down: the
                             # structure's statements each resolve their OWN directive
                             # against the original source, and ``ast.unparse`` has already
@@ -2296,11 +2280,12 @@ class CellExecutor:
                             all_metrics,
                             buffered_result_outputs,
                         )
-                        if self._debug:
-                            print(
-                                f"[CONTROL] Completed: {ctrl_result.total_iterations} iterations, "
-                                f"{ctrl_result.cached_iterations} cached, {ctrl_result.computed_iterations} computed"
-                            )
+                        logger.debug(
+                            "[CONTROL] Completed: %s iterations, %s cached, %s computed",
+                            ctrl_result.total_iterations,
+                            ctrl_result.cached_iterations,
+                            ctrl_result.computed_iterations,
+                        )
                         if not ctrl_result.success:
                             raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
                     else:

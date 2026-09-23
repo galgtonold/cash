@@ -242,7 +242,6 @@ class TestEarlyCellIdCapture:
                 restorer=MagicMock(),
                 module_invalidator=MagicMock(),
                 control_structure_processor=m._control_structure_processor,
-                debug=False,
             )
         return m
 

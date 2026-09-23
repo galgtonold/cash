@@ -46,12 +46,10 @@ class Restorer:
         shell: ShellProtocol,
         backend: Any,
         tracking_state: TrackingState,
-        debug: bool = False,
     ) -> None:
         self.shell = shell
         self._backend = backend
         self.tracking_state = tracking_state
-        self._debug = debug
         # Variables currently being restored, to break dependency cycles. A
         # self-referential statement (``u = u * 0.99``) or mutually-referential
         # multi-output one (``u, v = f(u, v)``) makes a variable depend on
@@ -78,8 +76,7 @@ class Restorer:
         self._restoring.add(var_name)
         try:
             if not isinstance(cached_data, dict) or "variables" not in cached_data:
-                if self._debug:
-                    print(f"[STATE] Invalid payload format for '{var_name}'")
+                logger.debug("[STATE] Invalid payload format for '%s'", var_name)
                 return []
 
             self._ensure_inputs_current(var_name, metadata, restored_metrics)
@@ -88,16 +85,13 @@ class Restorer:
             if var_name in restored_vars:
                 self.shell.user_ns[var_name] = restored_vars[var_name]
                 self._restore_tracking_state(var_name, metadata, restored_vars)
-                if self._debug:
-                    print(f"[STATE] Restored '{var_name}' from cache")
+                logger.debug("[STATE] Restored '%s' from cache", var_name)
                 restored_metrics.append(self._build_restore_metric(var_name, metadata, restored_vars))
-            elif self._debug:
-                print(f"[STATE] Variable '{var_name}' not in cached payload")
+            else:
+                logger.debug("[STATE] Variable '%s' not in cached payload", var_name)
 
         except (KeyError, TypeError, ValueError, AttributeError, OSError, pickle.UnpicklingError) as e:
             logger.debug("[STATE] Error restoring '%s': %s", var_name, e)
-            if self._debug:
-                print(f"[STATE] Error restoring '{var_name}': {e}")
         finally:
             self._restoring.discard(var_name)
 
@@ -130,8 +124,7 @@ class Restorer:
         fresh, stale = snapshot_is_fresh(metadata.get("file_dependencies"))
         if fresh:
             return
-        if self._debug:
-            print(f"[STATE] Cannot restore '{var_name}': file dependency stale ({stale})")
+        logger.debug("[STATE] Cannot restore '%s': file dependency stale (%s)", var_name, stale)
         if stale.reason in ("missing", "unreadable"):
             raise NameError(f"name '{var_name}' is not defined (file dependency missing)")
         raise NameError(f"name '{var_name}' is not defined (file dependency changed)")
@@ -222,11 +215,9 @@ class Restorer:
         """
         if var_name not in self.tracking_state.variable_sources:
             if self._is_available_in_builtins(var_name):
-                if self._debug:
-                    print(f"[STATE] '{var_name}' not in cache, but found in built-ins. Using built-in.")
+                logger.debug("[STATE] '%s' not in cache, but found in built-ins. Using built-in.", var_name)
                 return None
-            if self._debug:
-                print(f"[STATE] Cannot restore '{var_name}': no cached source found")
+            logger.debug("[STATE] Cannot restore '%s': no cached source found", var_name)
             raise NameError(f"name '{var_name}' is not defined")
 
         cache_key = self.tracking_state.variable_sources[var_name]
@@ -234,8 +225,7 @@ class Restorer:
         if cached_data:
             cached_data = resolve_call_refs(cached_data, self._backend)
         if not cached_data:
-            if self._debug:
-                print(f"[STATE] Cannot restore '{var_name}': cache miss for key {cache_key[:16]}...")
+            logger.debug("[STATE] Cannot restore '%s': cache miss for key %s...", var_name, cache_key[:16])
             return None
 
         self._validate_file_deps(var_name, metadata)
