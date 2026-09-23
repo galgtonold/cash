@@ -23,7 +23,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from cash.notebook._protocols import TrackingState
-from cash.notebook.upstream import NotebookSimulator, UpstreamChecker
+from cash.notebook.upstream import UpstreamChecker
+from cash.notebook.upstream.virtual_lineage import VirtualLineage
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -223,17 +224,17 @@ class TestStatFileDeps:
     def test_existing_files(self, tmp_path):
         f = tmp_path / "data.csv"
         f.write_text("a,b\n1,2")
-        result = NotebookSimulator._stat_file_deps({str(f): 0.0})
+        result = VirtualLineage._stat_file_deps({str(f): 0.0})
         assert str(f) in result
         assert result[str(f)] == pytest.approx(os.path.getmtime(str(f)), abs=0.1)
 
     def test_missing_files_excluded(self, tmp_path):
         missing = str(tmp_path / "nonexistent.csv")
-        result = NotebookSimulator._stat_file_deps({missing: 0.0})
+        result = VirtualLineage._stat_file_deps({missing: 0.0})
         assert missing not in result
 
     def test_empty_input(self):
-        result = NotebookSimulator._stat_file_deps({})
+        result = VirtualLineage._stat_file_deps({})
         assert result == {}
 
     def test_multiple_files(self, tmp_path):
@@ -241,7 +242,7 @@ class TestStatFileDeps:
         f2 = tmp_path / "b.csv"
         f1.write_text("data1")
         f2.write_text("data2")
-        result = NotebookSimulator._stat_file_deps({str(f1): 0.0, str(f2): 0.0})
+        result = VirtualLineage._stat_file_deps({str(f1): 0.0, str(f2): 0.0})
         assert len(result) == 2
 
 

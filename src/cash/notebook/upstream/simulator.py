@@ -25,27 +25,10 @@ from .._trace import is_tracing, trace_event
 from ..analysis import CodeAnalyzer
 from ..cacheability import analyze_statement, consumed_input_names
 from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
-from ..control_structures import (
-    is_control_structure,  # noqa: F401  re-exported for test patching (mocked via @patch in test_issue_reproduction)
-)
-from ..server_discovery import get_notebook_cells  # noqa: F401  re-exported for test patching
-from ._types import (  # noqa: F401  re-exported (private renames)
-    IncrementalStartResult as _IncrementalStartResult,
-)
-from ._types import (
-    SimulationCacheEntry as _SimulationCacheEntry,
-)
-from ._types import (
-    apply_collected_mutations,
-)
+from ._types import SimulationCacheEntry, apply_collected_mutations
 from .mismatch_classifier import MismatchClassifier
 from .reexecution_planner import ReexecutionPlanner
-from .virtual_lineage import (  # noqa: F401  re-exported (imported by upstream/checker.py via .simulator)
-    _BUILTIN_NAMES,
-    _FORWARD_PROBE_PLACEHOLDER,
-    VirtualLineage,
-    _normalize_stmt,
-)
+from .virtual_lineage import _BUILTIN_NAMES, VirtualLineage
 
 __all__ = ["NotebookSimulator"]
 
@@ -290,19 +273,6 @@ class NotebookSimulator:
         apply_collected_mutations(self._virtual_lineage._restores, self._tracking_state)
         apply_collected_mutations(self._classifier._restores, self._tracking_state)
 
-    # --- Class-level method aliases (tests access on the class) ---
-    # Static helpers usable directly; instance-method aliases are present so
-    # ``hasattr(NotebookSimulator, '...')`` checks succeed after the
-    # VirtualLineage extraction (ADR-009) and the package extraction
-    # (ADR-010). Instance-method aliases are unbound and not intended to be
-    # called through NotebookSimulator at runtime — call them via the
-    # underlying VirtualLineage instance (`self._virtual_lineage`).
-    _validate_file_freshness = VirtualLineage._validate_file_freshness
-    _stat_file_deps = VirtualLineage._stat_file_deps
-    _iter_body_nodes = VirtualLineage._iter_body_nodes
-    _update_virtual_lineage = VirtualLineage._update_virtual_lineage
-    _resolve_input_lineage = VirtualLineage._resolve_input_lineage
-
     # --- Narrow public API for UpstreamChecker (avoid private reach-ins) ---
 
     def set_current_cell_id(self, cell_id: str | None) -> None:
@@ -317,7 +287,7 @@ class NotebookSimulator:
     def record_cell_id_index(self, cell_id: str, idx: int) -> None:
         self._virtual_lineage._cell_id_to_last_index[cell_id] = idx
 
-    def simulation_cache_entry(self, idx: int) -> _SimulationCacheEntry | None:
+    def simulation_cache_entry(self, idx: int) -> SimulationCacheEntry | None:
         cache = self._virtual_lineage._simulation_cache
         if 0 <= idx < len(cache):
             return cache[idx]
@@ -328,9 +298,6 @@ class NotebookSimulator:
 
     def simulation_cache_size(self) -> int:
         return len(self._virtual_lineage._simulation_cache)
-
-    def simulate_upstream(self, *args, **kwargs):
-        return self._simulate_and_find_changes(*args, **kwargs)
 
     def _mark_stale_value_inputs_broken(
         self,
@@ -1031,7 +998,7 @@ class NotebookSimulator:
 
         return paths, fully_known
 
-    def _simulate_and_find_changes(
+    def simulate_upstream(
         self,
         current_cell_idx: int,
         notebook_cells: list[str],

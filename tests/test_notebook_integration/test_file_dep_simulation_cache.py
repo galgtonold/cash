@@ -7,7 +7,7 @@ vars_with_stale_files is never populated. This causes the downstream cell to
 use stale cached data instead of detecting the file change and re-executing
 upstream cells.
 
-Root cause: upstream.py:_simulate_and_find_changes() incremental simulation cache
+Root cause: upstream.py:simulate_upstream() incremental simulation cache
 only checks cell CODE hash for invalidation, not file dependency mtimes.
 vars_with_stale_files is not cached/restored from simulation cache entries.
 

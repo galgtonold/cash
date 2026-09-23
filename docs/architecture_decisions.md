@@ -300,7 +300,7 @@ upstream/_types.py               # was simulator_types.py — leading _ marks IR
 - The public production import path (`from cash.notebook.upstream import UpstreamChecker`) is unchanged — `upstream` resolves to a package instead of a module.
 - Three test files migrate `from cash.notebook.notebook_simulator import NotebookSimulator` → `from cash.notebook.upstream import NotebookSimulator`.
 - One test (`tests/test_notebook/test_upstream_unit.py`) that imported `VirtualLineage` directly is rewritten to drive it through `NotebookSimulator`, the documented test seam.
-- Three test files importing the private `_SimulationCacheEntry` / `_FORWARD_PROBE_PLACEHOLDER` symbols from `cash.notebook.upstream` continue to work — those symbols are re-exported (with their leading underscores intact) from `upstream/__init__.py`.
+- Three test files importing the private `_SimulationCacheEntry` / `_FORWARD_PROBE_PLACEHOLDER` symbols from `cash.notebook.upstream` continue to work — those symbols are re-exported (with their leading underscores intact) from `upstream/__init__.py`. (Later removed: the tests import `SimulationCacheEntry` from `upstream._types` and `_FORWARD_PROBE_PLACEHOLDER` from `upstream.virtual_lineage`.)
 - Internal imports between the six files become relative (`from .virtual_lineage import VirtualLineage`).
 - No backward-compatibility shims at the old paths. The subsystem has no external (non-test) callers beyond `UpstreamChecker`, so shims would be pure cost.
 - Future architecture reviews that re-suggest flattening this back out should consult this ADR.

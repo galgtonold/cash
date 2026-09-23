@@ -1,7 +1,7 @@
 """
 Unit test: Backwards scan skips earlier definitions when variable is fully redefined.
 
-Tests the specific backwards-scan optimization in UpstreamChecker._simulate_and_find_changes
+Tests the specific backwards-scan optimization in UpstreamChecker.simulate_upstream
 where outputs of scheduled-for-execution statements are removed from needed_vars,
 preventing unnecessary cascading to earlier statements.
 """
@@ -68,7 +68,7 @@ class TestSkipOverwrittenVarUnit:
         mock_cells_ids.return_value = [(f"cell_{i}", cell) for i, cell in enumerate(cells)]
 
         # x is required but missing from memory (simulating kernel restart)
-        result, restored_info, restore_time = checker.simulator._simulate_and_find_changes(
+        result, restored_info, restore_time = checker.simulator.simulate_upstream(
             current_cell_idx=2,
             notebook_cells=cells,
             required_inputs={"x"},
@@ -103,7 +103,7 @@ class TestSkipOverwrittenVarUnit:
         mock_cells.return_value = cells
         mock_cells_ids.return_value = [(f"cell_{i}", cell) for i, cell in enumerate(cells)]
 
-        result, restored_info, restore_time = checker.simulator._simulate_and_find_changes(
+        result, restored_info, restore_time = checker.simulator.simulate_upstream(
             current_cell_idx=2,
             notebook_cells=cells,
             required_inputs={"x"},
@@ -147,7 +147,7 @@ class TestSkipOverwrittenVarUnit:
         mock_cells.return_value = cells
         mock_cells_ids.return_value = [(f"cell_{i}", cell) for i, cell in enumerate(cells)]
 
-        result, restored_info, restore_time = checker.simulator._simulate_and_find_changes(
+        result, restored_info, restore_time = checker.simulator.simulate_upstream(
             current_cell_idx=3,
             notebook_cells=cells,
             required_inputs={"x"},

@@ -13,7 +13,7 @@ import time
 from unittest.mock import patch
 
 from cash.notebook.analysis import CodeAnalyzer
-from cash.notebook.upstream import _SimulationCacheEntry
+from cash.notebook.upstream._types import SimulationCacheEntry
 
 # ===========================================================================
 # Issue 24: Comprehension variable scoping
@@ -188,8 +188,8 @@ class TestNotebookPathCacheInvalidation:
         # the simulator (extracted from UpstreamChecker).
         simulator = magics._upstream_checker.simulator
         simulator._virtual_lineage._simulation_cache = [
-            _SimulationCacheEntry("fake_hash", {"x": "lineage1"}, set(), [], set(), set(), {}),
-            _SimulationCacheEntry("fake_hash2", {"y": "lineage2"}, set(), [], set(), set(), {}),
+            SimulationCacheEntry("fake_hash", {"x": "lineage1"}, set(), [], set(), set(), {}),
+            SimulationCacheEntry("fake_hash2", {"y": "lineage2"}, set(), [], set(), set(), {}),
         ]
         simulator._virtual_lineage._ast_cache = {
             "x = 1": None,
@@ -213,7 +213,7 @@ class TestNotebookPathCacheInvalidation:
 
         # Add some data to caches
         checker.simulator._virtual_lineage._simulation_cache.append(
-            _SimulationCacheEntry("hash1", {"var": "lin"}, set(), [], set(), set(), {})
+            SimulationCacheEntry("hash1", {"var": "lin"}, set(), [], set(), set(), {})
         )
         checker.simulator._virtual_lineage._ast_cache["code1"] = None
 
@@ -653,7 +653,7 @@ for item in data:
 
             # Now trigger upstream check on downstream cell to exercise simulation
 
-            # Direct test: call _simulate_and_find_changes
+            # Direct test: call simulate_upstream
             get_cells()
 
             # We need to check that loop_target_vars gets populated

@@ -39,7 +39,7 @@ class TestUpstreamRestoration(unittest.TestCase):
 
         # Actually we need to set up lineage so _check_notebook_based finds the mismatch.
         # But _check_notebook_based is integration testing logic.
-        # Let's test _simulate_and_find_changes LOGIC directly.
+        # Let's test simulate_upstream LOGIC directly.
 
         # To simulate mismatch:
         # We need actual_lineage != final_virtual.
@@ -59,7 +59,7 @@ class TestUpstreamRestoration(unittest.TestCase):
         # virtual_lineage['x'] = ...
 
         # Test: Pass required_inputs={'x'} to specify which variables matter
-        reexecute_list, restored_info, restore_time = self.checker.simulator._simulate_and_find_changes(
+        reexecute_list, restored_info, restore_time = self.checker.simulator.simulate_upstream(
             1, [code_new_base], required_inputs={"x"}
         )
 

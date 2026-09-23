@@ -6,7 +6,7 @@ from cash.notebook.cache_status import CacheStatus
 from cash.notebook.upstream import UpstreamChecker
 
 
-# Mock CodeAnalyzer to avoid parsing real code and depend on AST
+# Stands in for CodeAnalyzer inside the _update_virtual_lineage side effect.
 class MockCodeAnalyzer:
     @staticmethod
     def strip_magics(code):
@@ -28,8 +28,7 @@ class TestIssueReproduction(unittest.TestCase):
         self.checker = UpstreamChecker(self.shell, debug=True)
         self.checker.set_tracking_state(TrackingState())
 
-    @patch("cash.notebook.upstream.reexecution_planner.CodeAnalyzer", MockCodeAnalyzer)
-    @patch("cash.notebook.upstream.simulator.get_notebook_cells")
+    @patch("cash.notebook.upstream.checker.get_notebook_cells")
     def test_unused_broken_var_triggers_restore(self, mock_get_cells):
         print("\n=== TEST: Unused Broken Variable Triggering Restore ===")
 
@@ -57,14 +56,18 @@ class TestIssueReproduction(unittest.TestCase):
 
             mock_update.side_effect = side_effect
 
-            # Set ACTUAL lineage in memory
-            self.checker.variable_lineage = {
-                "stats": "hash_BROKEN_stats",  # Mismatch
-                "ticker_stats": "hash_virtual_ticker_stats",  # Match
-            }
+            # Set ACTUAL lineage in memory. Written into the shared tracking
+            # state (not rebound on the checker) so the simulator sees it too.
+            self.checker.variable_lineage.update(
+                {
+                    "stats": "hash_BROKEN_stats",  # Mismatch
+                    "ticker_stats": "hash_virtual_ticker_stats",  # Match
+                }
+            )
+            self.shell.user_ns = {"stats": 1, "ticker_stats": 1}
 
             # Set executed codes to match
-            self.checker.executed_cell_codes = {"stats": cell1_code, "ticker_stats": cell1_code}
+            self.checker.executed_cell_codes.update({"stats": cell1_code, "ticker_stats": cell1_code})
 
             # 3. Checker call
             # Current cell is cell 2.
@@ -86,7 +89,7 @@ class TestIssueReproduction(unittest.TestCase):
                     # We need parse to return nodes for cell1
                     # And check_notebook_based to execute logic for cell1
 
-                    # _check_notebook_based calls _simulate_and_find_changes
+                    # _check_notebook_based calls simulate_upstream
                     # which calls ast.parse on cell1_code.
 
                     mock_parse.return_value.body = [mock_body]
@@ -94,11 +97,20 @@ class TestIssueReproduction(unittest.TestCase):
                     # When unparsing stmt from cell1, return cell1_code
                     with (
                         patch("ast.unparse", return_value=cell1_code),
-                        patch("cash.notebook.upstream.simulator.is_control_structure", return_value=False),
+                        patch(
+                            "cash.notebook.upstream.virtual_lineage.is_control_structure", return_value=False
+                        ) as mock_is_cs,
                     ):
                         # Execute Check for cell2
                         # Note: cell_code=cell2_code. REQUIRED INPUTS match what we setup.
                         all_metrics, _, _ = self.checker._check_notebook_based(cell2_code, required_inputs, None, None)
+
+                        # The patches must reach the code under test: without the
+                        # notebook cells the check returns before simulating
+                        # anything, and the assertion below passes vacuously.
+                        mock_get_cells.assert_called()
+                        mock_update.assert_called()
+                        mock_is_cs.assert_called()
 
                         restored_codes = [r["code"] for r in all_metrics if r.get("status") == CacheStatus.RESTORED]
                         print(f"Restored Codes: {restored_codes}")

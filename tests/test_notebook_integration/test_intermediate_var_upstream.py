@@ -8,7 +8,7 @@ Reproduces the bug where:
 4. Upstream checker schedules `result = g(intermediate)` for execution
 5. But FAILS to also schedule `intermediate = f(x)` → NameError
 
-Root cause: The backward scan in _simulate_and_find_changes should add
+Root cause: The backward scan in simulate_upstream should add
 intermediate variables as needed when their consuming statement is scheduled.
 """
 

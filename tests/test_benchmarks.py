@@ -417,7 +417,7 @@ class TestStatementProcessorOverhead:
     def test_simulation_per_cell_overhead(self):
         """Simulate processing cost for one upstream cell (parse + analyze + hash).
 
-        This measures the per-cell overhead in _simulate_and_find_changes.
+        This measures the per-cell overhead in simulate_upstream.
         For a 100-cell notebook, total overhead = this * 100.
         Target: <2ms per cell → <200ms for 100 cells.
         """

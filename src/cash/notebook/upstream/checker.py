@@ -44,14 +44,8 @@ from ..randomness import (
 )
 from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from ..staleness import StalenessTracker
-from .simulator import (  # noqa: F401  re-exports for tests + downstream modules
-    _BUILTIN_NAMES,
-    _FORWARD_PROBE_PLACEHOLDER,
-    NotebookSimulator,
-    _IncrementalStartResult,
-    _normalize_stmt,
-    _SimulationCacheEntry,
-)
+from .simulator import NotebookSimulator
+from .virtual_lineage import _BUILTIN_NAMES
 
 if TYPE_CHECKING:
     from ..statement import ProcessResult

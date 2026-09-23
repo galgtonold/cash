@@ -8,7 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cash.notebook.upstream import NotebookSimulator, UpstreamChecker
+from cash.notebook.upstream import UpstreamChecker
+from cash.notebook.upstream.virtual_lineage import VirtualLineage
 
 
 class TestUpstreamCheckerImport:
@@ -20,30 +21,16 @@ class TestUpstreamCheckerImport:
     def test_has_check_and_reexecute_method(self):
         assert hasattr(UpstreamChecker, "check_and_reexecute")
 
-    def test_has_update_virtual_lineage(self):
-        # Exposed via NotebookSimulator's class-level alias; the implementation
-        # lives on the internal VirtualLineage phase.
-        assert hasattr(NotebookSimulator, "_update_virtual_lineage")
-
-    def test_has_extracted_helpers(self):
-        """Verify the extracted helper methods are reachable via NotebookSimulator."""
-        expected_helpers = [
-            "_validate_file_freshness",
-            "_resolve_input_lineage",
-        ]
-        for name in expected_helpers:
-            assert hasattr(NotebookSimulator, name), f"NotebookSimulator missing helper method {name}"
-
 
 class TestValidateFileFreshness:
-    """Test the static _validate_file_freshness helper on the simulator."""
+    """Test the static _validate_file_freshness helper of the simulation phase."""
 
     def test_empty_files_is_fresh(self):
-        assert NotebookSimulator._validate_file_freshness({}) is True
+        assert VirtualLineage._validate_file_freshness({}) is True
 
     def test_missing_file_is_stale(self, tmp_path):
         missing = str(tmp_path / "nonexistent.csv")
-        assert NotebookSimulator._validate_file_freshness({missing: {"mtime": 0.0}}) is False
+        assert VirtualLineage._validate_file_freshness({missing: {"mtime": 0.0}}) is False
 
     def test_existing_file_with_matching_mtime(self, tmp_path):
         test_file = tmp_path / "data.csv"
@@ -51,13 +38,13 @@ class TestValidateFileFreshness:
         import os
 
         mtime = os.path.getmtime(str(test_file))
-        assert NotebookSimulator._validate_file_freshness({str(test_file): {"mtime": mtime}}) is True
+        assert VirtualLineage._validate_file_freshness({str(test_file): {"mtime": mtime}}) is True
 
     def test_existing_file_with_stale_mtime(self, tmp_path):
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2")
         # Use a very old mtime
-        assert NotebookSimulator._validate_file_freshness({str(test_file): {"mtime": 0.0}}) is False
+        assert VirtualLineage._validate_file_freshness({str(test_file): {"mtime": 0.0}}) is False
 
     def test_multiple_files_all_fresh(self, tmp_path):
         """All files must be fresh for the result to be True."""
@@ -71,7 +58,7 @@ class TestValidateFileFreshness:
             str(f1): {"mtime": os.path.getmtime(str(f1))},
             str(f2): {"mtime": os.path.getmtime(str(f2))},
         }
-        assert NotebookSimulator._validate_file_freshness(files) is True
+        assert VirtualLineage._validate_file_freshness(files) is True
 
     def test_multiple_files_one_stale(self, tmp_path):
         """If any file is stale, the result should be False."""
@@ -85,7 +72,7 @@ class TestValidateFileFreshness:
             str(f1): {"mtime": os.path.getmtime(str(f1))},
             str(f2): {"mtime": 0.0},  # Stale
         }
-        assert NotebookSimulator._validate_file_freshness(files) is False
+        assert VirtualLineage._validate_file_freshness(files) is False
 
 
 class TestUpstreamCheckerSetTrackingState:
@@ -94,10 +81,6 @@ class TestUpstreamCheckerSetTrackingState:
     def test_has_set_tracking_state(self):
         assert hasattr(UpstreamChecker, "set_tracking_state")
         assert callable(UpstreamChecker.set_tracking_state)
-
-    def test_iter_body_nodes_exists(self):
-        """Static helper for iterating control structure bodies (on simulator)."""
-        assert hasattr(NotebookSimulator, "_iter_body_nodes")
 
     def test_iter_body_nodes_recurses_into_nested_control_structures(self):
         """Regression: recursion must resolve within VirtualLineage's own module.
@@ -113,7 +96,7 @@ class TestUpstreamCheckerSetTrackingState:
 
         tree = ast.parse("for i in range(3):\n    for j in range(3):\n        x = i + j\n")
         outer_for = tree.body[0]
-        nodes = list(NotebookSimulator._iter_body_nodes(outer_for))
+        nodes = list(VirtualLineage._iter_body_nodes(outer_for))
         # Inner ``for`` plus the ``x = i + j`` assignment inside it.
         assert any(isinstance(n, ast.Assign) for n in nodes)
 
@@ -311,7 +294,7 @@ class TestForwardProbePopulatesState:
 
     def _make_checker(self):
         from cash.notebook._protocols import TrackingState
-        from cash.notebook.upstream import _FORWARD_PROBE_PLACEHOLDER
+        from cash.notebook.upstream.virtual_lineage import _FORWARD_PROBE_PLACEHOLDER
 
         mock_shell = MagicMock()
         mock_shell.user_ns = {}

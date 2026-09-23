@@ -84,7 +84,7 @@ def test_clean_notebook_no_changes_returns_empty_plan(magics_fixture):
     simulator = magics._upstream_checker.simulator
     before = _snapshot_tracking_state(simulator)
 
-    stmts, restored, total_t = simulator._simulate_and_find_changes(
+    stmts, restored, total_t = simulator.simulate_upstream(
         current_cell_idx=2,
         notebook_cells=["x = 1", "y = x + 1", "z = y"],
         required_inputs={"y"},
@@ -108,7 +108,7 @@ def test_modified_upstream_cell_schedules_reexecution(magics_fixture):
 
     # Present a modified version of cell 0 to the simulator so it detects
     # a code change.
-    stmts, restored, _t = simulator._simulate_and_find_changes(
+    stmts, restored, _t = simulator.simulate_upstream(
         current_cell_idx=2,
         notebook_cells=["x = 99", "y = x + 1", "z = y"],
         required_inputs={"y"},
@@ -122,13 +122,13 @@ def test_modified_upstream_cell_schedules_reexecution(magics_fixture):
 
 
 def test_simulate_and_find_changes_return_types(magics_fixture):
-    """_simulate_and_find_changes always returns (list, list, float)."""
+    """simulate_upstream always returns (list, list, float)."""
     magics, shell, _backend = magics_fixture
     magics.cash("", "data = [1, 2, 3]")
 
     simulator = magics._upstream_checker.simulator
 
-    stmts, restored, t = simulator._simulate_and_find_changes(
+    stmts, restored, t = simulator.simulate_upstream(
         current_cell_idx=1,
         notebook_cells=["data = [1, 2, 3]", "x = data[0]"],
         required_inputs={"data"},
@@ -149,7 +149,7 @@ def test_reset_caches_clears_simulator_state(magics_fixture):
     simulator = magics._upstream_checker.simulator
 
     # Warm up the simulator so caches are populated.
-    simulator._simulate_and_find_changes(
+    simulator.simulate_upstream(
         current_cell_idx=1,
         notebook_cells=["x = 1", "y = x"],
         required_inputs={"x"},

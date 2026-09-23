@@ -75,17 +75,11 @@ from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
 from ..statement.processor import _is_control_body
 from ._types import (
-    IncrementalStartResult as _IncrementalStartResult,
-)
-from ._types import (
+    IncrementalStartResult,
     RestoreCollector,
+    SimulationCacheEntry,
+    TraceEntry,
     apply_collected_mutations,
-)
-from ._types import (
-    SimulationCacheEntry as _SimulationCacheEntry,
-)
-from ._types import (
-    TraceEntry as _TraceEntry,
 )
 
 __all__ = ["VirtualLineage"]
@@ -291,7 +285,7 @@ class VirtualLineage:
         self._split_store = None
         self._ast_cache: dict[str, ast.Module] = {}
         self._ast_cache_max_size: int = 200
-        self._simulation_cache: list[_SimulationCacheEntry] = []
+        self._simulation_cache: list[SimulationCacheEntry] = []
         self._simulation_cell_hashes: dict[int, str] = {}
         self._cell_id_to_last_index: dict[str, int] = {}
         #: Simulated ``def``s by lineage (``VirtualCallable``). Content-
@@ -752,7 +746,7 @@ class VirtualLineage:
         self,
         current_cell_idx: int,
         notebook_cells: list[str],
-    ) -> _IncrementalStartResult:
+    ) -> IncrementalStartResult:
         """Find the first upstream cell that changed since last simulation.
 
         Compares cached simulation hashes with current notebook cells and checks
@@ -771,7 +765,7 @@ class VirtualLineage:
 
         if self.debug:
             logger.debug(
-                "[UPSTREAM_DEBUG] _simulate_and_find_changes: current_cell_idx=%d, "
+                "[UPSTREAM_DEBUG] simulate_upstream: current_cell_idx=%d, "
                 "had_prior_cache=%s, cache_size=%d, cell_hashes_size=%d",
                 current_cell_idx,
                 had_prior_cache,
@@ -834,7 +828,7 @@ class VirtualLineage:
 
         new_cache_entries = list(self._simulation_cache[:first_changed_cell]) if self._simulation_cache else []
 
-        return _IncrementalStartResult(
+        return IncrementalStartResult(
             first_changed_cell=first_changed_cell,
             had_prior_cache=had_prior_cache,
             cache_had_hash_mismatch=cache_had_hash_mismatch,
@@ -1499,7 +1493,7 @@ class VirtualLineage:
         if outputs:
             produced_lineages = {out: virtual_lineage[out] for out in outputs if out in virtual_lineage}
             simulation_trace.append(
-                _TraceEntry(stmt_code, outputs, inputs, input_hashes, produced_lineages, files_stale)
+                TraceEntry(stmt_code, outputs, inputs, input_hashes, produced_lineages, files_stale)
             )
             if lookup_time > 0:
                 stmt_lookup_times[stmt_code] = lookup_time
@@ -1519,7 +1513,7 @@ class VirtualLineage:
             from ..cacheability import statement_writes_files
 
             if statement_writes_files(stmt_code) or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
-                simulation_trace.append(_TraceEntry(stmt_code, outputs, inputs, input_hashes, {}, files_stale))
+                simulation_trace.append(TraceEntry(stmt_code, outputs, inputs, input_hashes, {}, files_stale))
 
     def _simulate_one_cell(
         self,
@@ -1561,7 +1555,7 @@ class VirtualLineage:
             clean_cell_code = CodeAnalyzer.strip_magics(cell_code)
             if not clean_cell_code.strip():
                 new_cache_entries.append(
-                    _SimulationCacheEntry(
+                    SimulationCacheEntry(
                         cell_code_hash=cell_hash,
                         virtual_lineage=dict(virtual_lineage),
                         virtual_modules=set(virtual_modules),
@@ -1632,11 +1626,11 @@ class VirtualLineage:
             raise
 
         for entry in simulation_trace[trace_start:]:
-            if isinstance(entry, _TraceEntry):
+            if isinstance(entry, TraceEntry):
                 entry.cell = i
         cell_trace_segment = simulation_trace[trace_start:]
         new_cache_entries.append(
-            _SimulationCacheEntry(
+            SimulationCacheEntry(
                 cell_code_hash=cell_hash,
                 virtual_lineage=dict(virtual_lineage),
                 virtual_modules=set(virtual_modules),
@@ -1985,7 +1979,7 @@ class VirtualLineage:
         if all_outputs:
             produced_lineages = {out: virtual_lineage[out] for out in all_outputs if out in virtual_lineage}
             simulation_trace.append(
-                _TraceEntry(stmt_code, all_outputs, inputs, input_hashes, produced_lineages, files_stale)
+                TraceEntry(stmt_code, all_outputs, inputs, input_hashes, produced_lineages, files_stale)
             )
             if lookup_time > 0:
                 stmt_lookup_times[stmt_code] = lookup_time
@@ -1994,7 +1988,7 @@ class VirtualLineage:
             # no trace entry, and a replay after a restart re-ran the cell's
             # ``PACK.mkdir()`` without it (round 23, r23s2: FileExistsError).
             # The same rule simple statements follow in _simulate_one_node.
-            simulation_trace.append(_TraceEntry(stmt_code, set(), inputs, input_hashes, {}, files_stale))
+            simulation_trace.append(TraceEntry(stmt_code, set(), inputs, input_hashes, {}, files_stale))
 
     def _persisted_mutation_verdict(self, source_hash: str) -> set[str] | None:
         """The runtime's verdict on a bare method call, from an earlier kernel.

@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 from cash.notebook._protocols import TrackingState
 from cash.notebook.upstream import NotebookSimulator
+from cash.notebook.upstream.virtual_lineage import VirtualLineage
 
 
 def _make_simulator(*, debug: bool = False) -> NotebookSimulator:
@@ -73,18 +74,18 @@ class TestStaticHelpers:
     """
 
     def test_validate_file_freshness_empty(self):
-        assert NotebookSimulator._validate_file_freshness({}) is True
+        assert VirtualLineage._validate_file_freshness({}) is True
 
     def test_validate_file_freshness_missing_is_stale(self, tmp_path):
         missing = str(tmp_path / "absent.csv")
-        assert NotebookSimulator._validate_file_freshness({missing: 0.0}) is False
+        assert VirtualLineage._validate_file_freshness({missing: 0.0}) is False
 
     def test_stat_file_deps_empty(self):
-        assert NotebookSimulator._stat_file_deps({}) == {}
+        assert VirtualLineage._stat_file_deps({}) == {}
 
     def test_stat_file_deps_excludes_missing(self, tmp_path):
         missing = str(tmp_path / "absent.csv")
-        result = NotebookSimulator._stat_file_deps({missing: 0.0})
+        result = VirtualLineage._stat_file_deps({missing: 0.0})
         assert missing not in result
 
 
