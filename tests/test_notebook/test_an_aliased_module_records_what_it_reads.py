@@ -3,7 +3,7 @@
 ``_update_module_attribute_deps`` records, per variable, the attributes it
 read from each tracked module, so that an edit to one function in the module
 invalidates only the variables that read it. It checked the NAME the
-statement read against ``_tracked_modules``, which holds real module names --
+statement read against ``tracked_modules``, which holds real module names --
 the same blind spot 9785293 fixed in the module's lineage. For
 ``tl.load(...)`` nothing was recorded and the invalidator fell back to
 invalidating the variable on any edit to the module: safe, but every aliased
@@ -22,7 +22,7 @@ from cash.tracking.function_tracker import FunctionTracker
 
 def _record(code, user_ns, tracked):
     ft = FunctionTracker()
-    ft._tracked_modules = set(tracked)
+    ft.tracked_modules = set(tracked)
     state = SimpleNamespace(module_attribute_deps={})
     builder = SimpleNamespace(function_tracker=ft)
     StatementLineageBuilder._update_module_attribute_deps(builder, state, "corpus", code, user_ns)

@@ -76,7 +76,7 @@ before touching it.
 
 Keys are computed at runtime (`_analyze_and_hash` in `statement/processor.py`),
 during upstream simulation and virtual restore (`_update_virtual_lineage` and
-`_try_virtual_restore` in `upstream/virtual_lineage.py`) and for call units
+`try_virtual_restore` in `upstream/virtual_lineage.py`) and for call units
 (`call_unit.py`). If two of these disagree, a kernel restart turns into cache
 misses or stale values; that has caused critical bugs more than once. To change
 the key, change only `compute_cache_key()`, and add tests next to

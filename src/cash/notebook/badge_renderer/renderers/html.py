@@ -1911,7 +1911,7 @@ def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
     Semantically: each statement here produced data that some later upstream
     cell now restores from cache, so re-executing it would be pure waste —
     the downstream consumer already has the final value. See
-    ``virtual_lineage._collect_skipped_statement_metrics`` for the
+    ``virtual_lineage.collect_skipped_statement_metrics`` for the
     dependency-walk that flags them.
     """
     stale = "".join(

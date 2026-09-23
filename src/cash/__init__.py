@@ -28,7 +28,7 @@ from .backends import FileBackend, InMemoryBackend, TieredBackend
 from .backends.factory import apply_persistence_settings, build_backend_from_config
 from .backends.sqlite_backend import SQLiteBackend
 from .config import CashConfig, create_default_config, get_config, validate_value
-from .core import CacheExplanation, Cash, _enable_cash_logging
+from .core import CacheExplanation, Cash, enable_cash_logging
 from .data_source import DataSource, FileDataSource
 from .exceptions import (
     AmbiguousCellError,
@@ -139,7 +139,7 @@ def reset_session() -> None:
       installed on ``builtins.open``, ``pandas.read_csv``, and other
       tracked I/O entry points. Those are permanent for the process
       lifetime and tracker-agnostic — they no-op when no tracker is
-      active (see ``cash.tracking.file_tracker._active_tracker``).
+      active (see ``cash.tracking.file_tracker.active_tracker``).
     """
     global _global_cash
     _global_cash = None
@@ -238,17 +238,21 @@ def configure(**overrides: Any) -> None:
         c.debug = bool(overrides["debug"])
         if c.debug:
             # Same as the constructor: asking for debug output produces some.
-            _enable_cash_logging(_stdlib_logging.DEBUG)
+            enable_cash_logging(_stdlib_logging.DEBUG)
     if "verbose" in overrides:
         c.verbose = bool(overrides["verbose"])
         if c.verbose:
-            _enable_cash_logging(_stdlib_logging.INFO)
+            enable_cash_logging(_stdlib_logging.INFO)
 
-    if not needs_rebuild and {"smart_persistence", "min_cache_savings_pct"} & set(overrides) and c._backend is not None:
-        apply_persistence_settings(c._backend, c.config)
+    if (
+        not needs_rebuild
+        and {"smart_persistence", "min_cache_savings_pct"} & set(overrides)
+        and c.backend_if_built is not None
+    ):
+        apply_persistence_settings(c.backend_if_built, c.config)
 
     if needs_rebuild:
-        old_backend = c._backend
+        old_backend = c.backend_if_built
         if old_backend is not None:
             try:
                 old_backend.shutdown()
@@ -257,7 +261,7 @@ def configure(**overrides: Any) -> None:
                     "Old backend shutdown failed during configure(): %s",
                     e,
                 )
-        c._backend = build_backend_from_config(c.config)
+        c.backend = build_backend_from_config(c.config)
 
 
 @contextlib.contextmanager
@@ -338,9 +342,9 @@ def _change_affects_active_backend(c: Cash, changed: set[str]) -> bool:
             return any(_has_tier_type(child, type_name) for child in children)
         return False
 
-    if changed & redis_fields and _has_tier_type(c._backend, "redis"):
+    if changed & redis_fields and _has_tier_type(c.backend_if_built, "redis"):
         return True
-    if changed & s3_fields and _has_tier_type(c._backend, "s3"):
+    if changed & s3_fields and _has_tier_type(c.backend_if_built, "s3"):
         return True
     return False
 

@@ -38,11 +38,11 @@ from ..module_invalidator import ModuleInvalidator
 from ..provenance import ProvenanceTracker
 from ..restore import Restorer
 from ..server_discovery import (
-    _in_colab,
-    _labextension_installed,
     extract_notebook_path_from_vscode_cell_id,
     get_notebook_cells,
+    in_colab,
     invalidate_notebook_path_cache,
+    labextension_installed,
     set_notebook_path,
 )
 from ..statement import ProcessResult, StatementProcessor
@@ -51,15 +51,15 @@ from ..statement import ProcessResult, StatementProcessor
 # split in %cash_stats is only honest if "worth caching" means exactly what the
 # cache meant by it, so this deliberately shares the reader rather than
 # re-deriving the threshold here.
-from ..statement.processor import _config_float
+from ..statement.processor import config_float
 from ..upstream import UpstreamChecker
 from ._args import strip_inline_comment
 from ._types import CellMetrics, TimingBreakdown
 from .admin import CashAdminMagicsMixin
 from .cell_executor import (
     CellExecutor,
-    _EarlyReturn,
-    _PipelineSyntaxError,
+    EarlyReturn,
+    PipelineSyntaxError,
     discarded_writes_notification,
 )
 from .error_display import show_clean_error as _show_clean_error_impl
@@ -208,7 +208,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         # Auto-caching mode state
         self._auto_cache_enabled = False
-        self._global_ttl = None
+        self.global_ttl = None
         # 'Persist everything' mode (config / %cash_persist). Seeded from config;
         # the statement processor reads the same flag from config in its own
         # __init__, so the two start consistent.
@@ -218,10 +218,10 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             self._persist_all = False
 
         # Badge display mode: 'html' (interactive display_id badges), 'print' (text summary), 'off' (no badge)
-        self._badge_mode = "html"
+        self.badge_mode = "html"
 
         # Shared tracking state — single owner of all lineage/dependency dicts
-        self._tracking_state = TrackingState()
+        self.tracking_state = TrackingState()
 
         self._init_processing_components(shell, cash_instance)
         self._init_session_state(shell)
@@ -238,7 +238,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             cash_instance=cash_instance,
             debug=self._debug,
             compute_hash_fn=compute_hash,
-            tracking_state=self._tracking_state,
+            tracking_state=self.tracking_state,
         )
 
         self._statement_processor = StatementProcessor(
@@ -246,7 +246,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             cash_instance,
             debug=self._debug,
             compute_hash_fn=compute_hash,
-            tracking_state=self._tracking_state,
+            tracking_state=self.tracking_state,
         )
 
         # Share function_tracker so the upstream simulation computes cache keys
@@ -264,7 +264,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._restorer = Restorer(
             shell,
             backend=cash_instance.backend,
-            tracking_state=self._tracking_state,
+            tracking_state=self.tracking_state,
             debug=self._debug,
         )
 
@@ -272,7 +272,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             shell,
             cash_instance=cash_instance,
             magics=self,
-            tracking_state=self._tracking_state,
+            tracking_state=self.tracking_state,
             statement_processor=self._statement_processor,
             upstream_checker=self._upstream_checker,
             restorer=self._restorer,
@@ -284,11 +284,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
     def _init_session_state(self, shell: ShellProtocol) -> None:
         """Initialise badge throttle, cell ID tracking, session stats, and event hooks."""
         # Badge throttle state
-        self._badge_cell_start_time = 0.0
-        self._last_badge_render_time = 0.0
+        self.badge_cell_start_time = 0.0
+        self.last_badge_render_time = 0.0
         self._BADGE_MIN_RENDER_INTERVAL = 0.3
         self._progress_timer = None
-        # Guards the race between `_cancel_progress_badge` (main thread) and
+        # Guards the race between `cancel_progress_badge` (main thread) and
         # a timer's `fire()` (background thread): `_progress_generation` is
         # bumped on every cancel, and `fire()` re-checks it after acquiring
         # `_progress_lock`, so a cancel either lands before `fire()` starts
@@ -302,7 +302,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._badge_display_pub = None
 
         # Cell ID tracking (available since IPython 8.3)
-        self._current_cell_id = None
+        self.current_cell_id = None
 
         # Last cell execution metrics (for %cash_status)
         self._last_cell_metrics: CellMetrics = {
@@ -530,7 +530,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         _reset_live_cells()
 
         self._auto_cache_enabled = True
-        self._global_ttl = ttl
+        self.global_ttl = ttl
         ttl_msg = f" (TTL: {ttl}s)" if ttl is not None else ""
         # ASCII, like the text badge: this line lands in the .ipynb and is read
         # back by nbconvert / a headless agent, whose console may be cp1252.
@@ -558,12 +558,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # The extension gate is a filesystem probe, not a look at the pushed
         # store: at %cash_on time no comm has opened yet for anyone, so the
         # store cannot distinguish absent from not-yet. See
-        # ``_labextension_installed`` for the one topology it answers wrongly
+        # ``labextension_installed`` for the one topology it answers wrongly
         # (a split install) and why suppressing-by-omission is the safe error.
         if not getattr(self, "_save_hint_shown", False):
             self._save_hint_shown = True
 
-            if not _in_colab() and not _labextension_installed():
+            if not in_colab() and not labextension_installed():
                 print("[Tip] Cash reads upstream cells from the saved notebook file.")
                 print("   Save (Ctrl+S) after editing a cell you are not about to run:")
                 print("   an unsaved edit is invisible, so the upstream check skips it")
@@ -579,7 +579,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         Usage: %cash_off
         """
         self._auto_cache_enabled = False
-        self._global_ttl = None
+        self.global_ttl = None
         print("[OK] Auto-caching disabled")
 
     @line_magic
@@ -822,12 +822,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """
         mode = strip_inline_comment(line).lower()
         if mode in ("html", "print", "off"):
-            self._badge_mode = mode
+            self.badge_mode = mode
             print(f"Badge mode set to: {mode}")
         else:
             if mode:
                 print(f"[Error] %cash_badge: unrecognised argument: {mode!r} (mode unchanged)")
-            print(f"Current badge mode: {self._badge_mode}")
+            print(f"Current badge mode: {self.badge_mode}")
             print("Usage: %cash_badge html|print|off")
 
     @line_magic
@@ -856,9 +856,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # Build comprehensive status
         status = {
             "last_cell": self._last_cell_metrics.copy(),
-            "lineage": dict(self._tracking_state.variable_lineage),
+            "lineage": dict(self.tracking_state.variable_lineage),
             "executed_codes": {
-                k: v[:50] + "..." if len(v) > 50 else v for k, v in self._tracking_state.executed_cell_codes.items()
+                k: v[:50] + "..." if len(v) > 50 else v for k, v in self.tracking_state.executed_cell_codes.items()
             },
             "auto_cache_enabled": self._auto_cache_enabled,
             "debug_enabled": self._debug,
@@ -881,7 +881,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         return status
 
     @staticmethod
-    def _cell_id_from_parent_metadata(shell: Any) -> str | None:
+    def cell_id_from_parent_metadata(shell: Any) -> str | None:
         """Return cell_id from IPython parent-header metadata, or None.
 
         Checks the two locations VS Code and other frontends use.
@@ -899,7 +899,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         return None
 
     @staticmethod
-    def _maybe_seed_notebook_path(cell_id: str | None) -> None:
+    def maybe_seed_notebook_path(cell_id: str | None) -> None:
         """If cell_id is a VS Code URI, seed the notebook-path cache from it."""
         if not cell_id:
             return
@@ -950,32 +950,32 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         ``__vsc_ipynb_file__`` is not injected.
         """
         try:
-            self._current_cell_id = None
+            self.current_cell_id = None
 
             # 1. Try standard info.cell_id (JupyterLab / IPython 8.3+)
             if hasattr(info, "cell_id") and info.cell_id:
-                self._current_cell_id = info.cell_id
+                self.current_cell_id = info.cell_id
 
             # 2. Try to get it from parent header metadata (VS Code / others)
-            if not self._current_cell_id:
-                self._current_cell_id = self._cell_id_from_parent_metadata(self.shell)
+            if not self.current_cell_id:
+                self.current_cell_id = self.cell_id_from_parent_metadata(self.shell)
 
             # 3. Seed notebook-path cache from VS Code cell_id URI
-            self._maybe_seed_notebook_path(self._current_cell_id)
+            self.maybe_seed_notebook_path(self.current_cell_id)
 
             # Debug-level logging (not a raw print): when %cash_debug is on the
             # ``cash`` logger is at DEBUG with a console handler attached, so
             # these surface; otherwise they stay silent instead of printing on
             # every cell (the "No cell_id found" case fires constantly in
             # environments that don't supply a cell_id).
-            if self._current_cell_id:
-                logger.debug("[CELL_ID] Captured cell_id: %s", self._current_cell_id)
+            if self.current_cell_id:
+                logger.debug("[CELL_ID] Captured cell_id: %s", self.current_cell_id)
             else:
                 logger.debug("[CELL_ID] No cell_id found in info or metadata")
 
         except (AttributeError, TypeError, KeyError, RuntimeError) as e:
             logger.debug("[CELL_ID] Could not capture cell_id: %s", e)
-            self._current_cell_id = None
+            self.current_cell_id = None
 
     def _should_render_progress_badge(self) -> bool:
         """Check if enough time has passed to render a progress badge update.
@@ -991,13 +991,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         now = time.time()
 
         # Throttle: skip if we rendered very recently
-        if now - self._last_badge_render_time < self._BADGE_MIN_RENDER_INTERVAL:
+        if now - self.last_badge_render_time < self._BADGE_MIN_RENDER_INTERVAL:
             return False
 
-        self._last_badge_render_time = now
+        self.last_badge_render_time = now
         return True
 
-    def _maybe_progress_badge(
+    def maybe_progress_badge(
         self,
         metrics: list[ProcessResult],
         display_id: str,
@@ -1008,11 +1008,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """Render a RUNNING badge update if throttle allows.
 
         Consolidates the throttle check + render into a single call so the
-        execution loop reads as: ``execute → _maybe_progress_badge(...)`` rather
+        execution loop reads as: ``execute → maybe_progress_badge(...)`` rather
         than the repeated ``if badge_mode == 'html' and _should_render…`` pattern.
         """
-        if self._badge_mode == "html" and self._should_render_progress_badge():
-            self._render_interactive_badge(
+        if self.badge_mode == "html" and self._should_render_progress_badge():
+            self.render_interactive_badge(
                 metrics,
                 display_id=display_id,
                 status="RUNNING",
@@ -1021,7 +1021,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 current_code=code,
             )
 
-    def _arm_progress_badge(
+    def arm_progress_badge(
         self, metrics: list[ProcessResult], display_id: str, step: int, total: int, code: str | None
     ) -> None:
         """Publish a RUNNING badge only if this statement is still running.
@@ -1035,8 +1035,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         Deferring inverts that. A statement faster than the interval publishes
         nothing; a slower one publishes once, naming itself.
         """
-        self._cancel_progress_badge()
-        if self._badge_mode != "html":
+        self.cancel_progress_badge()
+        if self.badge_mode != "html":
             return
 
         # Resolve the display publisher HERE, on the main thread, while no
@@ -1055,7 +1055,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             # hit disk, poll for an in-flight notebook save, or (on a cache
             # miss) make a bounded network call to the Jupyter server.
             # Holding `_progress_lock` across that is what used to make
-            # `_cancel_progress_badge` block the main thread for as long as
+            # `cancel_progress_badge` block the main thread for as long as
             # the render took (measured: ~400ms for a 400ms render). Only the
             # generation re-check + the actual publish need the lock.
             #
@@ -1076,7 +1076,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             if not html:
                 return
 
-            # Re-check under the SAME lock `_cancel_progress_badge` takes.
+            # Re-check under the SAME lock `cancel_progress_badge` takes.
             # `Timer.cancel()` alone cannot stop a timer whose `run()` has
             # already passed its internal `is_set()` check -- at that point
             # the callback WILL execute no matter what the main thread does.
@@ -1108,7 +1108,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             return
         self._progress_timer = timer
 
-    def _cancel_progress_badge(self) -> None:
+    def cancel_progress_badge(self) -> None:
         """Stop a pending progress badge. Safe to call when none is armed.
 
         Bumps the generation counter FIRST (under the lock a concurrent
@@ -1219,9 +1219,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         except Exception as e:  # noqa: BLE001 - intentionally broad: surfaces user code exceptions to IPython
             return self._synthesize_run_cell_raise(e, args, kwargs)
 
-        if isinstance(result, _EarlyReturn):
+        if isinstance(result, EarlyReturn):
             return result.value
-        if isinstance(result, _PipelineSyntaxError):
+        if isinstance(result, PipelineSyntaxError):
             return self._original_run_cell(raw_cell, *args, **kwargs)
 
         return self._finalize_cell_execution(
@@ -1294,9 +1294,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         except Exception as e:  # noqa: BLE001 - surfaces user code exceptions to IPython
             return await self._synthesize_run_cell_raise_async(e, args, kwargs)
 
-        if isinstance(result, _EarlyReturn):
+        if isinstance(result, EarlyReturn):
             return result.value
-        if isinstance(result, _PipelineSyntaxError):
+        if isinstance(result, PipelineSyntaxError):
             # The cell's own AST failed to parse — let IPython handle it (it
             # will render the SyntaxError) exactly once on its live loop.
             return await self._original_run_cell_async(raw_cell, *args, **kwargs)
@@ -1525,13 +1525,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # hook, the async hook, and %%cash) -- cancel any still-pending
         # progress timer first so a late fire can never overwrite it with a
         # stale RUNNING badge.
-        self._cancel_progress_badge()
-        if self._badge_mode == "html":
-            self._render_interactive_badge(
+        self.cancel_progress_badge()
+        if self.badge_mode == "html":
+            self.render_interactive_badge(
                 all_metrics, display_id=badge_display_id, cell_total_time=hook_total, timing_breakdown=timing_breakdown
             )
-        elif self._badge_mode == "print":
-            self._print_text_badge(all_metrics, cell_total_time=hook_total)
+        elif self.badge_mode == "print":
+            self.print_text_badge(all_metrics, cell_total_time=hook_total)
 
     async def _finalize_cell_execution_async(
         self,
@@ -1658,7 +1658,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # Cash's own "too cheap to cache" floor, so the cacheable/trivial split
         # below matches the decision the cache actually made rather than a
         # second opinion invented here.
-        floor = _config_float(
+        floor = config_float(
             getattr(self._cash_instance, "config", None),
             "min_execution_time_to_cache_seconds",
             0.01,
@@ -1813,8 +1813,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                     inputs=inputs_list,
                     status=provenance_status,
                     duration_ms=duration_ms,
-                    lineage_hash=self._tracking_state.variable_lineage.get(out_var, ""),
-                    file_deps=list(self._tracking_state.executed_file_deps.get(out_var, [])),
+                    lineage_hash=self.tracking_state.variable_lineage.get(out_var, ""),
+                    file_deps=list(self.tracking_state.executed_file_deps.get(out_var, [])),
                 )
 
             audit_op = _OP_MAP.get(status, "cache_operation")
@@ -1826,7 +1826,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                     duration_ms=duration_ms,
                 )
 
-    def _print_text_badge(self, metrics_list: list[ProcessResult], cell_total_time: float | None = None) -> None:
+    def print_text_badge(self, metrics_list: list[ProcessResult], cell_total_time: float | None = None) -> None:
         """Print a plain-text summary of the cell execution (for 'print' badge mode).
 
         Delegates to :func:`badge_renderer.print_text_badge`.
@@ -1926,17 +1926,17 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         calls :meth:`_get_bug_report_context` -- that can hit disk, poll for
         an in-flight notebook save, or (on a cache miss) make a bounded
         network call to the Jupyter server. Callers that must not block a
-        lock for that long -- see ``_arm_progress_badge``'s ``fire()`` -- call
+        lock for that long -- see ``arm_progress_badge``'s ``fire()`` -- call
         this OUTSIDE the lock and only take one around :meth:`_publish_badge_html`.
 
         Returns ``None`` (never raises) on failure or empty markup: see
-        :meth:`_render_interactive_badge` for why a badge must never break a
+        :meth:`render_interactive_badge` for why a badge must never break a
         cell.
         """
         try:
             html = _badge.render_interactive_badge(
                 metrics_list=metrics_list,
-                badge_mode=self._badge_mode,
+                badge_mode=self.badge_mode,
                 status=status,
                 current_step=current_step,
                 total_steps=total_steps,
@@ -1947,7 +1947,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 configured_tiers=self._configured_tier_labels(),
             )
             return html or None
-        except Exception as e:  # noqa: BLE001 — intentionally broad; see _render_interactive_badge
+        except Exception as e:  # noqa: BLE001 — intentionally broad; see render_interactive_badge
             if self._debug:
                 print(f"[BADGE RENDER ERROR] {e}")
                 traceback.print_exc()
@@ -1967,7 +1967,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         nothing here touches disk or the notebook server, so it is safe to
         call while holding ``_progress_lock``.
 
-        Never raises: see :meth:`_render_interactive_badge` for why a badge
+        Never raises: see :meth:`render_interactive_badge` for why a badge
         must never break a cell.
 
         ``publisher``, when given, is the shell's real display publisher as
@@ -2008,12 +2008,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 display(HTML(html), display_id=display_id, update=update_existing)
             else:
                 display(HTML(html))
-        except Exception as e:  # noqa: BLE001 — intentionally broad; see _render_interactive_badge
+        except Exception as e:  # noqa: BLE001 — intentionally broad; see render_interactive_badge
             if self._debug:
                 print(f"[BADGE RENDER ERROR] {e}")
                 traceback.print_exc()
 
-    def _render_interactive_badge(
+    def render_interactive_badge(
         self,
         metrics_list: list[ProcessResult],
         display_id: str | None = None,
@@ -2041,7 +2041,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         Split into :meth:`_build_badge_html` (expensive) and
         :meth:`_publish_badge_html` (cheap) so a caller that must not hold a
-        lock across the build -- ``_arm_progress_badge``'s ``fire()`` -- can
+        lock across the build -- ``arm_progress_badge``'s ``fire()`` -- can
         call them separately, taking a lock around only the publish half.
         Every other caller (all of them, other than ``fire()``) goes through
         this method and sees identical behaviour to before the split: both
@@ -2097,14 +2097,14 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         handles them.
         """
         ttl = self._cash_parse_ttl(line)
-        saved_ttl = self._global_ttl
-        self._global_ttl = ttl
+        saved_ttl = self.global_ttl
+        self.global_ttl = ttl
         try:
             result = self._cell_executor.execute_cell(cell)
 
-            if isinstance(result, _EarlyReturn):
+            if isinstance(result, EarlyReturn):
                 return
-            if isinstance(result, _PipelineSyntaxError):
+            if isinstance(result, PipelineSyntaxError):
                 logger.error("Syntax Error in %%cash cell")
                 return
 
@@ -2121,9 +2121,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 delegate_to_run_cell=False,
             )
         finally:
-            self._global_ttl = saved_ttl
+            self.global_ttl = saved_ttl
 
-    def _show_clean_error(
+    def show_clean_error(
         self,
         exc: Exception,
         raw_cell: str,

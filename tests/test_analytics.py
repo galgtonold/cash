@@ -18,13 +18,13 @@ class TestAnalyticsManager:
 
     def test_init_default_path(self, tmp_path, monkeypatch):
         """The default db is in the per-user cache root, not a hard-coded ~/.cash."""
-        from cash.config import _per_user_cache_root
+        from cash.config import per_user_cache_root
 
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
         am = AnalyticsManager()
-        assert am.db_path == str(_per_user_cache_root() / "analytics.db")
+        assert am.db_path == str(per_user_cache_root() / "analytics.db")
         assert am.db_path.startswith(str(tmp_path))
         assert not (tmp_path / "home" / ".cash").exists()
 

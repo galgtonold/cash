@@ -234,12 +234,12 @@ def apply_persistence_settings(backend: CacheBackend, config: "CashConfig") -> N
         return
     if config.smart_persistence:
         backend.promotion_policy = _build_smart_persistence_policy(config)
-        backend._min_persist_compute_s = _SMART_PERSIST_COMPUTE_FLOOR_S
-        backend._min_persist_savings_pct = _config_number(config, "min_cache_savings_pct", 0.20)
+        backend.min_persist_compute_s = _SMART_PERSIST_COMPUTE_FLOOR_S
+        backend.min_persist_savings_pct = _config_number(config, "min_cache_savings_pct", 0.20)
     else:
-        backend.promotion_policy = backend._default_promotion_policy
-        backend._min_persist_compute_s = DEFAULT_MIN_PERSIST_COMPUTE_S
-        backend._min_persist_savings_pct = DEFAULT_MIN_PERSIST_SAVINGS_PCT
+        backend.promotion_policy = backend.default_promotion_policy
+        backend.min_persist_compute_s = DEFAULT_MIN_PERSIST_COMPUTE_S
+        backend.min_persist_savings_pct = DEFAULT_MIN_PERSIST_SAVINGS_PCT
 
 
 def _build_smart_persistence_policy(config: "CashConfig"):

@@ -116,7 +116,7 @@ def _a_live_reader_can_answer() -> bool:
     returned that path and this advisory was never on the table.
     """
     try:
-        return live_cells.latest_cells() is not None or _in_colab()
+        return live_cells.latest_cells() is not None or in_colab()
     except Exception as e:  # noqa: BLE001 - an advisory gate must never break a cell
         logger.debug("[UTILS] live-reader probe failed: %s", e)
         return False
@@ -550,7 +550,7 @@ def _try_extension_cells(include_ids: bool) -> list | None:
 _LABEXT_RELPATH = ("share", "jupyter", "labextensions", "cash-live-cells")
 
 
-def _labextension_installed() -> bool:
+def labextension_installed() -> bool:
     """True when cash's prebuilt JupyterLab extension is installed in this env.
 
     A FILESYSTEM check, not a runtime one, and deliberately so. The only caller
@@ -603,7 +603,7 @@ _COLAB_FAIL_TTL = 30.0  # back off after a failure (no frontend / timeout)
 _colab_cells_cache: dict[bool, tuple[float, list | None]] = {}
 
 
-def _in_colab() -> bool:
+def in_colab() -> bool:
     """True when running inside a Google Colab runtime."""
     return "google.colab" in sys.modules
 
@@ -617,7 +617,7 @@ def _try_colab_notebook_cells(include_ids: bool) -> list | None:
     filtered) in the same shape as the file reader, so the rest of the pipeline
     is unchanged.
     """
-    if not _in_colab():
+    if not in_colab():
         return None
     now = _time.monotonic()
     cached = _colab_cells_cache.get(include_ids)

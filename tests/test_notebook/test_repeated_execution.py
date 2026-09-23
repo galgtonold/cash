@@ -128,7 +128,7 @@ class TestRepeatedExecution:
 
                 # Capture the lineage after cell 1 (the upstream state for cell 2)
                 # and after all cells
-                lineage_after_all_cells = magics._tracking_state.variable_lineage.get("df")
+                lineage_after_all_cells = magics.tracking_state.variable_lineage.get("df")
                 print(f"\ndf lineage after all cells: {lineage_after_all_cells[:16]}...")
 
                 # Now execute cell 2 again (the middle "print" cell)
@@ -141,7 +141,7 @@ class TestRepeatedExecution:
 
                 magics._execute_cell(notebook_cells[2])
 
-                lineage_after_rerun = magics._tracking_state.variable_lineage.get("df")
+                lineage_after_rerun = magics.tracking_state.variable_lineage.get("df")
                 print(f"df lineage after re-running cell 2: {lineage_after_rerun[:16]}...")
 
                 # The lineage SHOULD change — the downstream modification should be
@@ -223,14 +223,14 @@ class TestRepeatedExecution:
                     print(f"--- Cell {i} ---")
                     magics._execute_cell(cell)
 
-                df_lineage_1 = magics._tracking_state.variable_lineage.get("df")
+                df_lineage_1 = magics.tracking_state.variable_lineage.get("df")
                 print(f"df lineage after first run: {df_lineage_1[:16]}...")
 
                 # Run cell 1 again
                 print("\n=== Re-executing cell 1 ===")
                 magics._execute_cell(notebook_cells[1])
 
-                df_lineage_2 = magics._tracking_state.variable_lineage.get("df")
+                df_lineage_2 = magics.tracking_state.variable_lineage.get("df")
                 print(f"df lineage after second run: {df_lineage_2[:16]}...")
 
                 assert df_lineage_1 == df_lineage_2, "Lineage should not change"

@@ -26,7 +26,7 @@ from cash.tracking.file_dep_snapshot import file_dep_is_fresh, snapshot_file_dep
 @pytest.fixture(autouse=True)
 def _no_digest_reuse(monkeypatch):
     """No in-process memo: what is under test is whether the file is read at all."""
-    monkeypatch.setattr(file_dep_snapshot, "_HASH_EPOCH", None)
+    monkeypatch.setattr(file_dep_snapshot, "HASH_EPOCH", None)
     monkeypatch.setattr(file_dep_snapshot, "_HASH_MEMO_TTL_SECONDS", 0.0)
     file_dep_snapshot._HASH_MEMO.clear()
 

@@ -215,8 +215,8 @@ class TestModuleReadLineage:
         spec = importlib.util.spec_from_file_location(name, path)
         module = importlib.util.module_from_spec(spec)
         tracker = _types.SimpleNamespace(
-            _tracked_modules={name} if tracked else set(),
-            _dep_file_to_parents={},
+            tracked_modules={name} if tracked else set(),
+            dep_file_to_parents={},
         )
         return path, module, tracker
 
@@ -253,7 +253,7 @@ class TestModuleReadLineage:
         _path, module, tracker = self._setup(tmp_path)
         dep = tmp_path / "helper_dep.py"
         dep.write_text("VALUE = 1\n", encoding="utf-8")
-        tracker._dep_file_to_parents = {str(dep): {"mrl_lib"}}
+        tracker.dep_file_to_parents = {str(dep): {"mrl_lib"}}
         before = module_read_lineage(tracker, "lib", module, "x = lib.load(3)")
         dep.write_text("VALUE = 2\n", encoding="utf-8")
         assert module_read_lineage(tracker, "lib", module, "x = lib.load(3)") != before

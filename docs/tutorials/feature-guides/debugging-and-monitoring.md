@@ -33,7 +33,7 @@ That's the decorator path. In a notebook the equivalents are `%cash_debug on`, `
 
 ## In a script: `CASH_SUMMARY` and `CASH_DEBUG`
 
-<!-- claim: cash/core.py:Cash._print_run_summary @9b43a38c, cash/core.py:Cash._log_decorator_call @7199cb42 -->
+<!-- claim: cash/core.py:Cash._print_run_summary @edd281cb, cash/core.py:Cash._log_decorator_call @7199cb42 -->
 A script shows nothing about the cache by default. Two environment variables
 change that without touching the code:
 
@@ -142,7 +142,7 @@ For health checks rather than per-call diagnostics, you want aggregates.
 %cash_stats
 ```
 
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @58a2cb0d -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @711be826 -->
 Prints a summary of this kernel session (a restart resets it): cells executed, statements computed / restored / skipped, hit rate, and a time ledger of gross saved, cash overhead, and net saved. The net line is the honest headline, and it is **not** gross minus overhead: it credits only savings a measurement backs — one this session took by recomputing the same statement (*verified*), or the least an earlier kernel on this machine ever measured (*measured*), which is what lets a Restart & Run All report a number rather than a range — minus the measured overhead. Gross is printed beside it and labelled *(estimated)*, because it values each restore at what the entry cost when first written and nothing re-measures that. The consequence is deliberate understatement — an overstatement would be the bug — and a real loss prints as one ("cash cost you Xs this session"). `%cash_stats json` returns the same numbers as a dict (including `total_overhead`, `total_verified_saved`, `total_measured_saved`, `net_time_saved`, `net_time_saved_upper_bound`, and `discarded_writes`); `%cash_stats reset` zeros the counters, and forgets the measurements kept beside the cache — it cannot claim to have forgotten a baseline and then credit a later hit against it.
 
 If a cache write ever failed, a **discarded writes** line appears with the count and the first cause. Read it before anything else on the page: that work was never stored, so it recomputes every run, and no counter above can reveal it — a discarded write is not a miss, it is a hit that never got the chance to exist. Nothing raised when it happened, so the rest of the summary can look perfectly healthy. A `reset` deliberately does not clear these; the entries are still missing from disk afterwards.

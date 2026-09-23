@@ -54,7 +54,7 @@ class Restorer:
     ) -> None:
         self.shell = shell
         self._backend = backend
-        self._tracking_state = tracking_state
+        self.tracking_state = tracking_state
         self._debug = debug
         # Variables currently being restored, to break dependency cycles. A
         # self-referential statement (``u = u * 0.99``) or mutually-referential
@@ -148,14 +148,14 @@ class Restorer:
     def _restore_tracking_state(self, var_name: str, metadata: dict, restored_vars: dict) -> None:
         """Update TrackingState after writing a restored variable into user_ns."""
         restored_hash = compute_hash(restored_vars[var_name])
-        hashes = self._tracking_state.variable_hashes
+        hashes = self.tracking_state.variable_hashes
         if var_name not in hashes:
             hashes[var_name] = set()
         hashes[var_name].add(restored_hash)
 
         output_lineages = metadata.get("output_lineages", {})
         if var_name in output_lineages:
-            self._tracking_state.lineage.record(
+            self.tracking_state.lineage.record(
                 var_name,
                 output_lineages[var_name],
                 value=self.shell.user_ns.get(var_name),
@@ -163,15 +163,15 @@ class Restorer:
 
         stored_code = metadata.get("code")
         if stored_code:
-            self._tracking_state.executed_cell_codes[var_name] = stored_code
+            self.tracking_state.executed_cell_codes[var_name] = stored_code
 
         stored_hash = metadata.get("source_hash")
         if stored_hash:
-            self._tracking_state.executed_cell_hashes.setdefault(var_name, set()).add(stored_hash)
+            self.tracking_state.executed_cell_hashes.setdefault(var_name, set()).add(stored_hash)
 
         file_deps = metadata.get("file_dependencies", {})
         if file_deps:
-            file_dep_set = self._tracking_state.executed_file_deps
+            file_dep_set = self.tracking_state.executed_file_deps
             if var_name not in file_dep_set:
                 file_dep_set[var_name] = set()
             file_dep_set[var_name].update(file_deps.keys())
@@ -216,9 +216,9 @@ class Restorer:
                 continue
             if input_var not in self.shell.user_ns:
                 restored_metrics.extend(self.restore_variable(input_var))
-            elif input_var in self._tracking_state.variable_hashes:
+            elif input_var in self.tracking_state.variable_hashes:
                 current_hash = compute_hash(self.shell.user_ns.get(input_var))
-                if current_hash not in self._tracking_state.variable_hashes[input_var]:
+                if current_hash not in self.tracking_state.variable_hashes[input_var]:
                     restored_metrics.extend(self.restore_variable(input_var))
 
     def _fetch_cached_payload(self, var_name: str) -> tuple[dict, dict] | None:
@@ -229,7 +229,7 @@ class Restorer:
 
         Raises ``NameError`` when var_name has no known source and is not a builtin.
         """
-        if var_name not in self._tracking_state.variable_sources:
+        if var_name not in self.tracking_state.variable_sources:
             if self._is_available_in_builtins(var_name):
                 if self._debug:
                     print(f"[STATE] '{var_name}' not in cache, but found in built-ins. Using built-in.")
@@ -238,7 +238,7 @@ class Restorer:
                 print(f"[STATE] Cannot restore '{var_name}': no cached source found")
             raise NameError(f"name '{var_name}' is not defined")
 
-        cache_key = self._tracking_state.variable_sources[var_name]
+        cache_key = self.tracking_state.variable_sources[var_name]
         metadata, cached_data = self._backend.get(cache_key)
         if cached_data:
             cached_data = resolve_call_refs(cached_data, self._backend)

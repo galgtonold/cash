@@ -266,7 +266,7 @@ def _analyse(source: str) -> _Analysis | None:
 _ANALYSES: dict[str, tuple[int, int, _Analysis | None]] = {}
 
 
-def _analysis_for(path: str) -> _Analysis | None:
+def analysis_for(path: str) -> _Analysis | None:
     try:
         st = os.stat(path)
     except OSError:
@@ -312,7 +312,7 @@ def closure_digest(path: str, names: Iterable[str]) -> str | None:
     if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
         return cached[2]
     settled = stat_has_settled(st)
-    analysis = _analysis_for(path)
+    analysis = analysis_for(path)
     digest = _digest(analysis, key[1]) if analysis is not None else None
     if not settled:
         return digest

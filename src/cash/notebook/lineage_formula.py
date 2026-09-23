@@ -106,7 +106,7 @@ def callable_source_component(function_tracker: Any, inputs: set[str], user_ns: 
 
 
 def _tracked(function_tracker: Any) -> set[str]:
-    return getattr(function_tracker, "_tracked_modules", None) or set()
+    return getattr(function_tracker, "tracked_modules", None) or set()
 
 
 def _closure_with_deps(
@@ -127,7 +127,7 @@ def _closure_with_deps(
     digest = closure_digest(mod_file, attrs)
     if digest is None:
         return None
-    parents = getattr(function_tracker, "_dep_file_to_parents", None) or {}
+    parents = getattr(function_tracker, "dep_file_to_parents", None) or {}
     dep_files = sorted(dep for dep, o in parents.items() if owners & set(o))
     h = hashlib.sha256(("%s:%s" % (tag, digest)).encode("utf-8"))
     for dep in dep_files:
@@ -202,7 +202,7 @@ def module_source_component(
     if isinstance(value, types.ModuleType):
         mod_file = getattr(value, "__file__", None)
         # By the module's OWN name, not the name the cell bound it to.
-        # `_tracked_modules` holds real module names, so `import tickets_lib
+        # `tracked_modules` holds real module names, so `import tickets_lib
         # as tl` failed this test and returned "" -- the module's source
         # stayed out of `tl`'s lineage, `tl` keyed identically before and
         # after an edit to tickets_lib.py, and every statement built on it
@@ -217,7 +217,7 @@ def module_source_component(
         names = {getattr(value, "__name__", var_name), var_name}
         if not (mod_file and os.path.isfile(mod_file) and names & _tracked(function_tracker)):
             return ""
-        parents = getattr(function_tracker, "_dep_file_to_parents", None) or {}
+        parents = getattr(function_tracker, "dep_file_to_parents", None) or {}
         dep_files = {dep for dep, owners in parents.items() if names & set(owners)}
         digest = read_module_source_hash(mod_file, dep_files)
         return f":mod_src:{digest}" if digest else ""

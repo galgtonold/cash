@@ -4,7 +4,7 @@ Tests for unified cache key computation and module lineage propagation.
 Verifies that:
 1. compute_cache_key produces identical keys regardless of call site
 2. Module lineages are propagated to variable_lineage during simulation
-3. _update_virtual_lineage and _try_virtual_restore use the unified function
+3. _update_virtual_lineage and try_virtual_restore use the unified function
 4. Keys match between simulation and runtime after kernel restart
 
 This was the root cause of disk-cached entries not being restored after
@@ -224,7 +224,7 @@ class TestModuleLineagePropagation(unittest.TestCase):
         virtual_lineage = {}
         virtual_modules = set()
 
-        self.checker.simulator._virtual_lineage._update_virtual_lineage(
+        self.checker.simulator.virtual_lineage._update_virtual_lineage(
             "import pandas as pd", virtual_lineage, virtual_modules
         )
 
@@ -239,7 +239,7 @@ class TestModuleLineagePropagation(unittest.TestCase):
         virtual_lineage = {}
         virtual_modules = set()
 
-        self.checker.simulator._virtual_lineage._update_virtual_lineage(
+        self.checker.simulator.virtual_lineage._update_virtual_lineage(
             "from numpy import array", virtual_lineage, virtual_modules
         )
 
@@ -253,7 +253,7 @@ class TestModuleLineagePropagation(unittest.TestCase):
         virtual_lineage = {"x": "abc123"}
         virtual_modules = set()
 
-        self.checker.simulator._virtual_lineage._update_virtual_lineage("y = x + 1", virtual_lineage, virtual_modules)
+        self.checker.simulator.virtual_lineage._update_virtual_lineage("y = x + 1", virtual_lineage, virtual_modules)
 
         # y should be in virtual_lineage but NOT in variable_lineage
         self.assertIn("y", virtual_lineage)
@@ -267,7 +267,7 @@ class TestModuleLineagePropagation(unittest.TestCase):
         virtual_lineage = {}
         virtual_modules = set()
 
-        self.checker.simulator._virtual_lineage._update_virtual_lineage(
+        self.checker.simulator.virtual_lineage._update_virtual_lineage(
             "import pandas as pd", virtual_lineage, virtual_modules
         )
 
@@ -323,7 +323,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         # Step 1: Simulate import (sets variable_lineage['np'])
         virtual_lineage = {}
         virtual_modules = set()
-        self.checker.simulator._virtual_lineage._update_virtual_lineage(
+        self.checker.simulator.virtual_lineage._update_virtual_lineage(
             "import numpy as np", virtual_lineage, virtual_modules
         )
         np_lineage_from_import = self.checker.variable_lineage["np"]
@@ -337,7 +337,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         self.cash_instance.backend.get_metadata.return_value = {"output_lineages": {}}
 
         # Step 4: Simulate downstream statement
-        self.checker.simulator._virtual_lineage._update_virtual_lineage(code, virtual_lineage, virtual_modules)
+        self.checker.simulator.virtual_lineage._update_virtual_lineage(code, virtual_lineage, virtual_modules)
         sim_key = self._get_cache_key_from_calls()
 
         # Step 5: Compute what runtime (_analyze_and_hash) would produce
@@ -357,7 +357,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         )
 
     def test_try_virtual_restore_key_matches(self):
-        """_try_virtual_restore key must match _analyze_and_hash key."""
+        """try_virtual_restore key must match _analyze_and_hash key."""
         code = "result = np.mean(df)"
         df_lineage = hashlib.sha256(b"df_data").hexdigest()
         np_lineage = hashlib.sha256(b"np_module").hexdigest()
@@ -376,7 +376,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
             {"variables": {"result": 42}},
         )
 
-        restored, _, _ = self.checker.simulator._virtual_lineage._try_virtual_restore(
+        restored, _, _ = self.checker.simulator.virtual_lineage.try_virtual_restore(
             code, outputs, inputs, input_hashes, virtual_modules
         )
 
@@ -422,7 +422,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         self.cash_instance.backend.get_metadata.reset_mock()
         self.cash_instance.backend.get_metadata.return_value = {"output_lineages": {}}
 
-        self.checker.simulator._virtual_lineage._update_virtual_lineage(code, virtual_lineage, virtual_modules)
+        self.checker.simulator.virtual_lineage._update_virtual_lineage(code, virtual_lineage, virtual_modules)
 
         sim_key = self._get_cache_key_from_calls()
 
@@ -444,7 +444,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         # Step 1: Simulate import to propagate lineage
         virtual_lineage = {}
         virtual_modules = set()
-        self.checker.simulator._virtual_lineage._update_virtual_lineage(
+        self.checker.simulator.virtual_lineage._update_virtual_lineage(
             "import numpy as np", virtual_lineage, virtual_modules
         )
         np_lineage = self.checker.variable_lineage["np"]
@@ -459,7 +459,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
 
         # Step 4: Simulate downstream statement
         code = "result = np.mean(df)"
-        self.checker.simulator._virtual_lineage._update_virtual_lineage(code, virtual_lineage, virtual_modules)
+        self.checker.simulator.virtual_lineage._update_virtual_lineage(code, virtual_lineage, virtual_modules)
         sim_key = self._get_cache_key_from_calls()
 
         # Step 5: Compute runtime key

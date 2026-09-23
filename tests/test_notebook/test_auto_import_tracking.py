@@ -154,7 +154,7 @@ class TestAutoTrackLocalImports:
         newly_tracked = tracker.auto_track_local_imports(code)
 
         assert module_name in newly_tracked
-        assert module_name in tracker._tracked_modules
+        assert module_name in tracker.tracked_modules
 
     def test_from_import_detected(self, tracker, temp_module):
         """'from module_name import func' should auto-track."""
@@ -179,13 +179,13 @@ class TestAutoTrackLocalImports:
         assert len(newly_tracked) == 0
 
     def test_already_tracked_not_re_tracked(self, tracker, temp_module):
-        """Module already in _tracked_modules should not be re-tracked."""
+        """Module already in tracked_modules should not be re-tracked."""
         module_name, _ = temp_module
         importlib.import_module(module_name)
 
         # First tracking
         tracker.auto_track_local_imports(f"import {module_name}")
-        assert module_name in tracker._tracked_modules
+        assert module_name in tracker.tracked_modules
 
         # Second tracking should return empty set
         newly_tracked = tracker.auto_track_local_imports(f"import {module_name}")
@@ -625,8 +625,8 @@ class TestAutoTrackingIntegration:
         newly_tracked = tracker.auto_track_local_imports(code)
 
         assert module_name in newly_tracked
-        assert "os" not in tracker._tracked_modules
-        assert "json" not in tracker._tracked_modules
+        assert "os" not in tracker.tracked_modules
+        assert "json" not in tracker.tracked_modules
 
 
 # ============================================================================
@@ -720,4 +720,4 @@ output = handler(df)
         for _ in range(5):
             tracker.auto_track_local_imports(code)
 
-        assert module_name in tracker._tracked_modules
+        assert module_name in tracker.tracked_modules

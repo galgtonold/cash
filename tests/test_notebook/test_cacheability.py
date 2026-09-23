@@ -572,7 +572,7 @@ class TestSideEffects:
     def test_variable_open_mode_is_not_mistaken_for_truncating(self):
         """`open(p, m)` proves nothing -- m could be 'a' at runtime.
 
-        `_is_open_write_mode` reports False for a computed mode, which the
+        `is_open_write_mode` reports False for a computed mode, which the
         write-DETECTION path reads as "not a write". But a `.write` on the
         handle still makes the statement a writer, so collapsing those two
         would silently classify a possible append as safe to repeat.

@@ -75,7 +75,7 @@ class TestHandleLineageMismatch:
             simulation_trace = []
         if notebook_cells is None:
             notebook_cells = []
-        checker.simulator._classifier._handle_lineage_mismatch(
+        checker.simulator.classifier._handle_lineage_mismatch(
             var_name=var_name,
             actual_lineage=actual,
             final_virtual_hash=virtual,
@@ -134,20 +134,20 @@ class TestResolveInputLineage:
         """Virtual lineage should be checked first."""
         checker = _make_checker()
         checker.variable_lineage["x"] = "runtime_hash"
-        result = checker.simulator._virtual_lineage._resolve_input_lineage("x", {"x": "virtual_hash"}, set())
+        result = checker.simulator.virtual_lineage._resolve_input_lineage("x", {"x": "virtual_hash"}, set())
         assert result == "virtual_hash"
 
     def test_falls_back_to_variable_lineage(self):
         """Falls back to variable_lineage when not in virtual."""
         checker = _make_checker()
         checker.variable_lineage["x"] = "runtime_hash"
-        result = checker.simulator._virtual_lineage._resolve_input_lineage("x", {}, set())
+        result = checker.simulator.virtual_lineage._resolve_input_lineage("x", {}, set())
         assert result == "runtime_hash"
 
     def test_falls_back_to_user_ns_hash(self):
         """Falls back to hashing from user_ns when no lineage exists."""
         checker = _make_checker(user_ns={"x": 42})
-        result = checker.simulator._virtual_lineage._resolve_input_lineage("x", {}, set())
+        result = checker.simulator.virtual_lineage._resolve_input_lineage("x", {}, set())
         assert result is not None
         assert len(result) == 64
 
@@ -157,19 +157,19 @@ class TestResolveInputLineage:
             user_ns={"x": 42},
             compute_hash_fn=lambda v: "custom_hash_result",
         )
-        result = checker.simulator._virtual_lineage._resolve_input_lineage("x", {}, set())
+        result = checker.simulator.virtual_lineage._resolve_input_lineage("x", {}, set())
         assert result == "custom_hash_result"
 
     def test_returns_none_for_missing_variable(self):
         """Returns None when variable is not in any source."""
         checker = _make_checker()
-        result = checker.simulator._virtual_lineage._resolve_input_lineage("x", {}, set())
+        result = checker.simulator.virtual_lineage._resolve_input_lineage("x", {}, set())
         assert result is None
 
     def test_returns_none_for_none_value(self):
         """Returns None when user_ns has None for the variable."""
         checker = _make_checker(user_ns={"x": None})
-        result = checker.simulator._virtual_lineage._resolve_input_lineage("x", {}, set())
+        result = checker.simulator.virtual_lineage._resolve_input_lineage("x", {}, set())
         assert result is None
 
 
@@ -185,7 +185,7 @@ class TestResolveVirtualInputLineages:
         checker = _make_checker()
         checker.variable_lineage["a"] = "hash_a"
         checker.variable_lineage["b"] = "hash_b"
-        result = checker.simulator._virtual_lineage._resolve_virtual_input_lineages("x = a + b", {"a", "b"}, {}, set())
+        result = checker.simulator.virtual_lineage._resolve_virtual_input_lineages("x = a + b", {"a", "b"}, {}, set())
         assert len(result) == 2
         assert "hash_a" in result
         assert "hash_b" in result
@@ -194,7 +194,7 @@ class TestResolveVirtualInputLineages:
         """Should skip get_ipython and __builtins__."""
         checker = _make_checker()
         checker.variable_lineage["a"] = "hash_a"
-        result = checker.simulator._virtual_lineage._resolve_virtual_input_lineages(
+        result = checker.simulator.virtual_lineage._resolve_virtual_input_lineages(
             "x = a", {"a", "get_ipython", "__builtins__"}, {}, set()
         )
         assert len(result) == 1
@@ -203,14 +203,14 @@ class TestResolveVirtualInputLineages:
         """Virtual lineage should be used over runtime lineage."""
         checker = _make_checker()
         checker.variable_lineage["a"] = "runtime_hash"
-        result = checker.simulator._virtual_lineage._resolve_virtual_input_lineages(
+        result = checker.simulator.virtual_lineage._resolve_virtual_input_lineages(
             "x = a", {"a"}, {"a": "virtual_hash"}, set()
         )
         assert result == ["virtual_hash"]
 
     def test_empty_inputs(self):
         checker = _make_checker()
-        result = checker.simulator._virtual_lineage._resolve_virtual_input_lineages("x = 1", set(), {}, set())
+        result = checker.simulator.virtual_lineage._resolve_virtual_input_lineages("x = 1", set(), {}, set())
         assert result == []
 
 
@@ -259,7 +259,7 @@ class TestCheckFileDepsForRestore:
         f = tmp_path / "data.csv"
         f.write_text("content")
         checker = _make_checker()
-        result = checker.simulator._virtual_lineage._check_file_deps_for_restore(
+        result = checker.simulator.virtual_lineage._check_file_deps_for_restore(
             snapshot_file_deps({str(f)}), time.time()
         )
         assert result is None  # None means all fresh
@@ -270,20 +270,20 @@ class TestCheckFileDepsForRestore:
         snapshot = snapshot_file_deps({str(f)})
         f.write_text("changed content")
         checker = _make_checker()
-        result = checker.simulator._virtual_lineage._check_file_deps_for_restore(snapshot, time.time())
+        result = checker.simulator.virtual_lineage._check_file_deps_for_restore(snapshot, time.time())
         assert result is not None  # Tuple means failure
         assert isinstance(result, tuple)
 
     def test_missing_file(self, tmp_path):
         checker = _make_checker()
-        result = checker.simulator._virtual_lineage._check_file_deps_for_restore(
+        result = checker.simulator.virtual_lineage._check_file_deps_for_restore(
             {str(tmp_path / "gone.csv"): {"mtime": 1.0}}, time.time()
         )
         assert result is not None
 
     def test_empty_deps(self):
         checker = _make_checker()
-        result = checker.simulator._virtual_lineage._check_file_deps_for_restore({}, time.time())
+        result = checker.simulator.virtual_lineage._check_file_deps_for_restore({}, time.time())
         assert result is None
 
 
@@ -298,7 +298,7 @@ class TestCheckLineageConsistency:
     def test_consistent_lineage(self):
         checker = _make_checker()
         metadata = {"output_lineages": {"x": "hash_x"}}
-        result = checker.simulator._virtual_lineage._check_lineage_consistency(
+        result = checker.simulator.virtual_lineage._check_lineage_consistency(
             metadata, {}, {"x": "hash_x"}, time.time()
         )
         assert result is None  # None means consistent
@@ -306,7 +306,7 @@ class TestCheckLineageConsistency:
     def test_inconsistent_lineage(self):
         checker = _make_checker()
         metadata = {"output_lineages": {"x": "cached_hash"}}
-        result = checker.simulator._virtual_lineage._check_lineage_consistency(
+        result = checker.simulator.virtual_lineage._check_lineage_consistency(
             metadata, {}, {"x": "expected_hash"}, time.time()
         )
         assert result is not None
@@ -315,7 +315,7 @@ class TestCheckLineageConsistency:
         """When file deps exist, lineage check is skipped."""
         checker = _make_checker()
         metadata = {"output_lineages": {"x": "cached_hash"}}
-        result = checker.simulator._virtual_lineage._check_lineage_consistency(
+        result = checker.simulator.virtual_lineage._check_lineage_consistency(
             metadata, {"file.csv": 1.0}, {"x": "expected_hash"}, time.time()
         )
         assert result is None  # Skipped — file deps present
@@ -323,13 +323,13 @@ class TestCheckLineageConsistency:
     def test_no_expected_lineages(self):
         checker = _make_checker()
         metadata = {"output_lineages": {"x": "hash"}}
-        result = checker.simulator._virtual_lineage._check_lineage_consistency(metadata, {}, None, time.time())
+        result = checker.simulator.virtual_lineage._check_lineage_consistency(metadata, {}, None, time.time())
         assert result is None  # No expected lineages → pass
 
     def test_no_output_lineages_in_metadata(self):
         checker = _make_checker()
         metadata = {}  # No output_lineages key
-        result = checker.simulator._virtual_lineage._check_lineage_consistency(metadata, {}, {"x": "hash"}, time.time())
+        result = checker.simulator.virtual_lineage._check_lineage_consistency(metadata, {}, {"x": "hash"}, time.time())
         assert result is None
 
 
@@ -343,7 +343,7 @@ class TestGetMetadataOnly:
 
     def test_no_cash_instance(self):
         checker = _make_checker()
-        result = checker.simulator._virtual_lineage._get_metadata_only("some_key")
+        result = checker.simulator.virtual_lineage._get_metadata_only("some_key")
         assert result is None
 
     def test_with_get_metadata_method(self):
@@ -352,7 +352,7 @@ class TestGetMetadataOnly:
         mock_cash = MagicMock()
         mock_cash.backend = mock_backend
         checker = _make_checker(cash_instance=mock_cash)
-        result = checker.simulator._virtual_lineage._get_metadata_only("test_key")
+        result = checker.simulator.virtual_lineage._get_metadata_only("test_key")
         assert result == {"key": "value"}
         mock_backend.get_metadata.assert_called_once_with("test_key")
 
@@ -367,13 +367,13 @@ class TestResetCaches:
 
     def test_clears_all_caches(self):
         checker = _make_checker()
-        checker.simulator._virtual_lineage._ast_cache["code"] = MagicMock()
-        checker.simulator._virtual_lineage._simulation_cache.append(MagicMock())
-        checker.simulator._virtual_lineage._simulation_cell_hashes[0] = "hash"
+        checker.simulator.virtual_lineage._ast_cache["code"] = MagicMock()
+        checker.simulator.virtual_lineage.simulation_cache.append(MagicMock())
+        checker.simulator.virtual_lineage._simulation_cell_hashes[0] = "hash"
         checker.reset_caches()
-        assert len(checker.simulator._virtual_lineage._ast_cache) == 0
-        assert len(checker.simulator._virtual_lineage._simulation_cache) == 0
-        assert len(checker.simulator._virtual_lineage._simulation_cell_hashes) == 0
+        assert len(checker.simulator.virtual_lineage._ast_cache) == 0
+        assert len(checker.simulator.virtual_lineage.simulation_cache) == 0
+        assert len(checker.simulator.virtual_lineage._simulation_cell_hashes) == 0
 
 
 # ===========================================================================
@@ -422,23 +422,23 @@ class TestResolveFallbackCacheIdx:
         """Cell at index 0 has no prior cell to fall back to."""
         checker = _make_checker()
         checker.last_cell_index = None
-        checker.simulator._virtual_lineage._cell_id_to_last_index["cell_0"] = 0
+        checker.simulator.virtual_lineage.cell_id_to_last_index["cell_0"] = 0
         result = checker._resolve_fallback_cache_idx("cell_0")
         assert result is None
 
     def test_returns_previous_cache_index(self):
         checker = _make_checker()
         checker.last_cell_index = None
-        checker.simulator._virtual_lineage._cell_id_to_last_index["cell_2"] = 2
+        checker.simulator.virtual_lineage.cell_id_to_last_index["cell_2"] = 2
         # Need at least 2 simulation cache entries
-        checker.simulator._virtual_lineage._simulation_cache = [MagicMock(), MagicMock(), MagicMock()]
+        checker.simulator.virtual_lineage.simulation_cache = [MagicMock(), MagicMock(), MagicMock()]
         result = checker._resolve_fallback_cache_idx("cell_2")
         assert result == 1  # Previous index
 
     def test_uses_last_cell_index_without_cell_id(self):
         checker = _make_checker()
         checker.last_cell_index = 3
-        checker.simulator._virtual_lineage._simulation_cache = [MagicMock()] * 4
+        checker.simulator.virtual_lineage.simulation_cache = [MagicMock()] * 4
         result = checker._resolve_fallback_cache_idx(None)
         assert result == 2
 
@@ -446,8 +446,8 @@ class TestResolveFallbackCacheIdx:
         """If simulation cache is smaller than target index, return None."""
         checker = _make_checker()
         checker.last_cell_index = None
-        checker.simulator._virtual_lineage._cell_id_to_last_index["cell_5"] = 5
-        checker.simulator._virtual_lineage._simulation_cache = [MagicMock()]  # Only 1 entry
+        checker.simulator.virtual_lineage.cell_id_to_last_index["cell_5"] = 5
+        checker.simulator.virtual_lineage.simulation_cache = [MagicMock()]  # Only 1 entry
         result = checker._resolve_fallback_cache_idx("cell_5")
         assert result is None
 
@@ -503,12 +503,12 @@ class TestHandleDownstreamAdvancementFallback:
 
     def test_no_op_without_overlap(self):
         checker = _make_checker()
-        checker.simulator._virtual_lineage._simulation_cache = [MagicMock()]
+        checker.simulator.virtual_lineage.simulation_cache = [MagicMock()]
         checker._handle_downstream_advancement_fallback(cell_id=None, required_inputs={"a"}, current_cell_outputs={"b"})
 
     def test_no_op_with_empty_inputs(self):
         checker = _make_checker()
-        checker.simulator._virtual_lineage._simulation_cache = [MagicMock()]
+        checker.simulator.virtual_lineage.simulation_cache = [MagicMock()]
         checker._handle_downstream_advancement_fallback(cell_id=None, required_inputs=set(), current_cell_outputs={"x"})
 
 
@@ -533,11 +533,11 @@ class TestModuleSourceComponent:
         assert self._component(MagicMock(), 42, "x") == ""
 
     def test_module_not_tracked(self):
-        """Module in user_ns but not in function_tracker._tracked_modules."""
+        """Module in user_ns but not in function_tracker.tracked_modules."""
         mod = types.ModuleType("fake_mod")
         mod.__file__ = "/nonexistent/fake_mod.py"
         tracker = MagicMock()
-        tracker._tracked_modules = set()
+        tracker.tracked_modules = set()
         assert self._component(tracker, mod, "fake_mod") == ""
 
     def test_module_with_source(self, tmp_path):
@@ -547,8 +547,8 @@ class TestModuleSourceComponent:
         mod = types.ModuleType("my_module")
         mod.__file__ = str(mod_file)
         tracker = MagicMock()
-        tracker._tracked_modules = {"my_module"}
-        tracker._dep_file_to_parents = {}
+        tracker.tracked_modules = {"my_module"}
+        tracker.dep_file_to_parents = {}
         assert self._component(tracker, mod, "my_module").startswith(":mod_src:")
 
     def test_value_none(self):
@@ -562,8 +562,8 @@ class TestModuleSourceComponent:
         mod = types.ModuleType("mod")
         mod.__file__ = str(mod_file)
         tracker = MagicMock()
-        tracker._tracked_modules = {"mod"}
-        tracker._dep_file_to_parents = {str(dep_file): {"mod"}}
+        tracker.tracked_modules = {"mod"}
+        tracker.dep_file_to_parents = {str(dep_file): {"mod"}}
         h1 = self._component(tracker, mod, "mod")
         dep_file.write_text("def util(): return 42")
         assert h1 != self._component(tracker, mod, "mod")
@@ -572,8 +572,8 @@ class TestModuleSourceComponent:
         mod = types.ModuleType("mod")
         mod.__file__ = str(tmp_path / "nofile.py")
         tracker = MagicMock()
-        tracker._tracked_modules = {"mod"}
-        tracker._dep_file_to_parents = {}
+        tracker.tracked_modules = {"mod"}
+        tracker.dep_file_to_parents = {}
         assert self._component(tracker, mod, "mod") == ""
 
     def test_a_name_from_a_tracked_module_carries_its_source(self, tmp_path, monkeypatch):
@@ -587,7 +587,7 @@ class TestModuleSourceComponent:
         exec(mod_file.read_text(), mod.__dict__)
         monkeypatch.setitem(sys.modules, "zz_helpers_mod", mod)
         tracker = MagicMock()
-        tracker._tracked_modules = {"zz_helpers_mod"}
+        tracker.tracked_modules = {"zz_helpers_mod"}
         code = "from zz_helpers_mod import clean, THRESHOLD"
         # Narrowed to what each name reaches inside the module (`from_sym_src`)
         # since per-symbol keying; the whole-module `from_mod_src` is what a
@@ -626,11 +626,11 @@ class TestUpstreamCheckerInit:
 
     def test_ast_cache_starts_empty(self):
         checker = _make_checker()
-        assert len(checker.simulator._virtual_lineage._ast_cache) == 0
+        assert len(checker.simulator.virtual_lineage._ast_cache) == 0
 
     def test_simulation_cache_starts_empty(self):
         checker = _make_checker()
-        assert len(checker.simulator._virtual_lineage._simulation_cache) == 0
+        assert len(checker.simulator.virtual_lineage.simulation_cache) == 0
 
     def test_compute_hash_fn_stored(self):
         fn = lambda x: "custom"

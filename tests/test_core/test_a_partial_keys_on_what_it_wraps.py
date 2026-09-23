@@ -54,7 +54,7 @@ def test_a_second_process_hits(tmp_path):
 def test_the_name_does_not_carry_an_address():
     from cash.core import Cash
 
-    name = Cash._get_func_key(functools.partial(test_the_name_does_not_carry_an_address, 1))
+    name = Cash.get_func_key(functools.partial(test_the_name_does_not_carry_an_address, 1))
     assert "0x" not in name, name
     assert "functools.functools" not in name, name
 
@@ -65,6 +65,6 @@ def test_two_partials_of_one_function_are_two_namespaces():
     def base(a, b):
         return a + b
 
-    one = Cash._get_func_key(functools.partial(base, 1))
-    two = Cash._get_func_key(functools.partial(base, 2))
+    one = Cash.get_func_key(functools.partial(base, 1))
+    two = Cash.get_func_key(functools.partial(base, 2))
     assert one != two, one

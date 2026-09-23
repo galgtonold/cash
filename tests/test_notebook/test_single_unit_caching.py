@@ -350,26 +350,26 @@ if x > 0:
 
 
 class TestShowCleanErrorIntegration:
-    """Tests that _show_clean_error uses _cash_error_lineno for correct tracebacks."""
+    """Tests that show_clean_error uses _cash_error_lineno for correct tracebacks."""
 
     def test_execute_cell_error_shows_correct_line(self, magics_fixture):
-        """_execute_cell should call _show_clean_error with correct line number."""
+        """_execute_cell should call show_clean_error with correct line number."""
         magics, shell, backend = magics_fixture
 
-        # Add execution_count attribute for _show_clean_error
+        # Add execution_count attribute for show_clean_error
         shell.execution_count = 1
 
-        # Track what _show_clean_error receives
+        # Track what show_clean_error receives
         captured_calls = []
 
         def patched_show(exc, raw_cell, node):
-            # Check _cash_error_lineno before _show_clean_error uses it
+            # Check _cash_error_lineno before show_clean_error uses it
             lineno = getattr(exc, "_cash_error_lineno", None) or getattr(node, "lineno", None)
             captured_calls.append({"lineno": lineno, "exc_type": type(exc).__name__})
             # Don't actually call the real one (it would try to use showtraceback)
             return
 
-        magics._show_clean_error = patched_show
+        magics.show_clean_error = patched_show
         magics._auto_cache_enabled = True
 
         # Cell code: for loop with error on line 4
@@ -378,7 +378,7 @@ class TestShowCleanErrorIntegration:
 
         magics._execute_cell(raw_cell, store_history=True)
 
-        assert len(captured_calls) == 1, f"Expected 1 _show_clean_error call, got {len(captured_calls)}"
+        assert len(captured_calls) == 1, f"Expected 1 show_clean_error call, got {len(captured_calls)}"
         assert captured_calls[0]["lineno"] == 4, f"Expected error line 4, got {captured_calls[0]['lineno']}"
         assert captured_calls[0]["exc_type"] == "TypeError"
 

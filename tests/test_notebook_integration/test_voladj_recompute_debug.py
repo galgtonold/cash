@@ -182,7 +182,7 @@ class TestVolAdjRecomputeDebug:
                 # Cell 8: Dump lineage state
                 (
                     "cash_magics = get_ipython().magics_manager.magics['line'].get('cash_debug').__self__\n"
-                    "vl = cash_magics._tracking_state.variable_lineage\n"
+                    "vl = cash_magics.tracking_state.variable_lineage\n"
                     "print('=== LINEAGE STATE ===')\n"
                     "for k, v in sorted(vl.items()):\n"
                     "    print(f'  {k}: {v[:16]}...')\n"

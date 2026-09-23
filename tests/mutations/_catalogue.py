@@ -42,7 +42,7 @@ def _upstream_dead(mod, record) -> None:
         record()
         return [], [], 0.0
 
-    mod.MismatchClassifier._backward_scan_pass = dead
+    mod.MismatchClassifier.backward_scan_pass = dead
 
 
 def _restore_always_fails(mod, record) -> None:
@@ -52,13 +52,13 @@ def _restore_always_fails(mod, record) -> None:
     is destroyed. A suite that catches this but not ``upstream-dead`` is
     testing performance, not invalidation.
     """
-    original = mod.VirtualLineage._try_virtual_restore
+    original = mod.VirtualLineage.try_virtual_restore
 
     def never(self, *a, **kw):
         record()
         return set(), 0.0, 0.0
 
-    mod.VirtualLineage._try_virtual_restore = never
+    mod.VirtualLineage.try_virtual_restore = never
     del original
 
 
@@ -100,7 +100,7 @@ CATALOGUE: dict[str, Mutation] = {
             name="upstream-dead",
             target="cash.notebook.upstream.mismatch_classifier",
             probe="MismatchClassifier",
-            replaces=("MismatchClassifier._backward_scan_pass",),
+            replaces=("MismatchClassifier.backward_scan_pass",),
             description="upstream re-execution decision schedules nothing",
             apply=_upstream_dead,
         ),
@@ -108,7 +108,7 @@ CATALOGUE: dict[str, Mutation] = {
             name="restore-dead",
             target="cash.notebook.upstream.virtual_lineage",
             probe="VirtualLineage",
-            replaces=("VirtualLineage._try_virtual_restore",),
+            replaces=("VirtualLineage.try_virtual_restore",),
             description="virtual restore never succeeds; everything re-executes",
             apply=_restore_always_fails,
         ),

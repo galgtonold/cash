@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING
 from ...analysis.cacheability import (
     REPEATABILITY_ACCUMULATING,
     REPEATABILITY_REPLACING,
-    _resolve_literal_path,
     consumed_input_names,
+    resolve_literal_path,
     statement_calls_user_writer,
     statement_saves_current_pyplot_figure,
     statement_write_repeatability,
@@ -33,7 +33,7 @@ from ..cache_status import CacheStatus
 from ..carrier_history import carrier_history_fingerprint
 from ..stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
 from .mismatch_classifier import import_only
-from .virtual_lineage import _key_lineages
+from .virtual_lineage import key_lineages
 
 if TYPE_CHECKING:
     from .mismatch_classifier import MismatchClassifier
@@ -127,7 +127,7 @@ def _literal_path_bindings(simulation_trace: list | None) -> dict[str, str]:
             and isinstance(node[0].targets[0], ast.Name)
         ):
             known = {k: v for k, v in bound.items() if v is not None}
-            value = _resolve_literal_path(node[0].value, known)
+            value = resolve_literal_path(node[0].value, known)
         for name in outputs:
             bound[name] = value if name not in bound or bound[name] == value else None
     return {name: path for name, path in bound.items() if path is not None}
@@ -231,9 +231,9 @@ class ReexecutionPlanner:
 
     Holds references to VirtualLineage and MismatchClassifier so the
     planner can call into helper methods that still live on those
-    phases (e.g. _check_loop_derived_trust_override, _backward_scan_pass,
-    _collect_skipped_statement_metrics, _filter_accumulator_reinits,
-    _reapply_unsaved_extensions). Pure-phase invariants land in a later
+    phases (e.g. check_loop_derived_trust_override, backward_scan_pass,
+    collect_skipped_statement_metrics, filter_accumulator_reinits,
+    reapply_unsaved_extensions). Pure-phase invariants land in a later
     refactor.
     """
 
@@ -243,8 +243,8 @@ class ReexecutionPlanner:
         classifier: "MismatchClassifier",
         debug: bool = False,
     ) -> None:
-        self._virtual_lineage = virtual_lineage
-        self._classifier = classifier
+        self.virtual_lineage = virtual_lineage
+        self.classifier = classifier
         self.debug = debug
         #: ``(trace index, paths)`` of the writers the last plan left out of date.
         self.stale_exports: list[tuple[int, list[str]]] = []
@@ -264,7 +264,7 @@ class ReexecutionPlanner:
             return restored
         return [info for info in restored if info.get("code") not in scheduled]
 
-    def _build_reexecution_plan(
+    def build_reexecution_plan(
         self,
         simulation_trace: list,
         broken_vars: set[str],
@@ -291,13 +291,13 @@ class ReexecutionPlanner:
                 logger.debug("[UPSTREAM_DEBUG]   [%s] outputs=%s: %s...", i, outputs, stmt[:60])
 
         self.stale_exports = []
-        loop_derived_trust_overridden = self._virtual_lineage._check_loop_derived_trust_override(
+        loop_derived_trust_overridden = self.virtual_lineage.check_loop_derived_trust_override(
             upstream_has_modifications,
             vars_mutated_by_loops,
             simulation_trace_codes,
         )
 
-        stmts_to_run_indices, restored_statements_info, total_restore_time = self._classifier._backward_scan_pass(
+        stmts_to_run_indices, restored_statements_info, total_restore_time = self.classifier.backward_scan_pass(
             simulation_trace,
             broken_vars,
             vars_tainted_by_upstream_mismatch,
@@ -377,7 +377,7 @@ class ReexecutionPlanner:
                 virtual_lineage,
                 virtual_modules,
             )
-            stmts_to_run_indices = self._complete_later_producers(
+            stmts_to_run_indices = self.complete_later_producers(
                 stmts_to_run_indices,
                 simulation_trace,
             )
@@ -393,7 +393,7 @@ class ReexecutionPlanner:
             stmts_to_run_indices,
             restored_statements_info,
         )
-        skipped_metrics = self._virtual_lineage._collect_skipped_statement_metrics(
+        skipped_metrics = self.virtual_lineage.collect_skipped_statement_metrics(
             simulation_trace,
             stmts_to_run_indices,
             restored_statements_info,
@@ -406,7 +406,7 @@ class ReexecutionPlanner:
         )
 
         stmts_to_run_indices = self._schedule_loop_var_contexts(stmts_to_run_indices, simulation_trace)
-        stmts_to_run_indices = self._virtual_lineage._filter_accumulator_reinits(
+        stmts_to_run_indices = self.virtual_lineage.filter_accumulator_reinits(
             stmts_to_run_indices, simulation_trace, vars_mutated_by_loops
         )
         stmts_to_run_indices = self._dedup_sorted_indices(stmts_to_run_indices)
@@ -434,7 +434,7 @@ class ReexecutionPlanner:
             except (SyntaxError, ValueError):
                 logger.debug("Failed to analyze statement for variable outputs: %.40s", stmt_code)
 
-        self._virtual_lineage._reapply_unsaved_extensions(
+        self.virtual_lineage.reapply_unsaved_extensions(
             broken_vars,
             vars_updated_by_trace,
             simulation_trace,
@@ -448,7 +448,7 @@ class ReexecutionPlanner:
         self, simulation_trace: list, stmts_to_run_indices: list[int], restored_statements_info: list[dict]
     ) -> list[dict]:
         """Mark the writers this repair left out of date (see
-        :meth:`_find_stale_file_writer_indices`) as such, in place of the
+        :meth:`find_stale_file_writer_indices`) as such, in place of the
         "already current" skipped row they would otherwise get."""
         stale = {
             i: paths for i, paths in getattr(self, "stale_exports", None) or () if i not in set(stmts_to_run_indices)
@@ -712,15 +712,15 @@ class ReexecutionPlanner:
         With *virtual_lineage*, the globals the statement's callees read count
         as inputs too (``absent_callee_globals``).
         """
-        user_ns = self._virtual_lineage.shell.user_ns
-        live_lineage = getattr(self._virtual_lineage, "variable_lineage", None) or {}
+        user_ns = self.virtual_lineage.shell.user_ns
+        live_lineage = getattr(self.virtual_lineage, "variable_lineage", None) or {}
         scheduled = set(stmts_to_run_indices)
         pending = sorted(scheduled)
         while pending:
             i = pending.pop(0)
             inputs = set(simulation_trace[i][2] or ())
             if virtual_lineage is not None:
-                inputs |= self._virtual_lineage.absent_callee_globals(inputs, virtual_lineage, virtual_modules or set())
+                inputs |= self.virtual_lineage.absent_callee_globals(inputs, virtual_lineage, virtual_modules or set())
             for v in sorted(inputs):
                 if v not in user_ns and hasattr(builtins, v):
                     continue
@@ -732,7 +732,7 @@ class ReexecutionPlanner:
                 # its reader. Accepting it rebuilt a cleaning cell without the
                 # refund write after a restart, and the summary below showed 0
                 # refunds for three stores, silently (round 25, r25s2).
-                p = self._latest_producer(simulation_trace, v, before=i)
+                p = self.latest_producer(simulation_trace, v, before=i)
                 if p is not None and p not in scheduled:
                     scheduled.add(p)
                     pending.append(p)
@@ -758,7 +758,7 @@ class ReexecutionPlanner:
         the file does not have yet) keeps the old answer, which is what a
         per-iteration loop's statements need.
         """
-        p = self._latest_producer(simulation_trace, var, before=before)
+        p = self.latest_producer(simulation_trace, var, before=before)
         live = live_lineage.get(var)
         if p is None or live is None:
             return False
@@ -767,7 +767,7 @@ class ReexecutionPlanner:
             return False
         return any((simulation_trace[q][4] or {}).get(var) == live for q in range(p) if var in simulation_trace[q][1])
 
-    def _complete_later_producers(self, stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
+    def complete_later_producers(self, stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
         """Every statement after a re-run producer of a variable that also
         writes it re-runs too.
 
@@ -830,7 +830,7 @@ class ReexecutionPlanner:
                     trace_event("import_path_setup", stmt=entry_code[:80], before=code[:80])
         return sorted(scheduled | added)
 
-    def _latest_producer(self, simulation_trace: list, var: str, before: int) -> int | None:
+    def latest_producer(self, simulation_trace: list, var: str, before: int) -> int | None:
         """Index of the LAST statement before *before* that outputs *var*."""
         for p in range(before - 1, -1, -1):
             if var in simulation_trace[p][1]:
@@ -882,7 +882,7 @@ class ReexecutionPlanner:
         re-deriving an object while re-executing only PART of what fills it —
         precisely what this pass exists to prevent.
         """
-        user_ns = getattr(getattr(self._virtual_lineage, "shell", None), "user_ns", None)
+        user_ns = getattr(getattr(self.virtual_lineage, "shell", None), "user_ns", None)
         if user_ns is None:
             return stmts_to_run_indices, restored_statements_info
 
@@ -900,7 +900,7 @@ class ReexecutionPlanner:
                         kind = stateful_carrier_kind(user_ns.get(v))
                     except (TypeError, ValueError, AttributeError, RecursionError):
                         kind = None
-                    p = self._latest_producer(simulation_trace, v, i)
+                    p = self.latest_producer(simulation_trace, v, i)
                     if kind is None and v not in user_ns and p is not None:
                         # No live object after a restart: recognise the carrier
                         # by the code that makes it.
@@ -1007,8 +1007,8 @@ class ReexecutionPlanner:
         missing variable and is fixed by running the cell, whereas a duplicated
         append is silent and permanent.
         """
-        user_ns = getattr(getattr(self._virtual_lineage, "shell", None), "user_ns", None) or {}
-        recorded = getattr(self._virtual_lineage, "variable_lineage", None) or {}
+        user_ns = getattr(getattr(self.virtual_lineage, "shell", None), "user_ns", None) or {}
+        recorded = getattr(self.virtual_lineage, "variable_lineage", None) or {}
 
         extra: set[int] = set()
         frontier = list(pending)
@@ -1023,7 +1023,7 @@ class ReexecutionPlanner:
                 # (replay acceptance corpus, round 21).
                 if name in user_ns and name in expected and recorded.get(name) == expected[name]:
                     continue
-                producer = self._latest_producer(simulation_trace, name, j)
+                producer = self.latest_producer(simulation_trace, name, j)
                 if producer is None:
                     continue
                 if producer in scheduled or producer in pending or producer in extra:
@@ -1103,7 +1103,7 @@ class ReexecutionPlanner:
         this is a no-op, so ``fig.savefig`` and the tests are
         untouched. A missed re-save is acceptable; a blank PNG on disk is not.
         """
-        user_ns = getattr(getattr(self._virtual_lineage, "shell", None), "user_ns", None)
+        user_ns = getattr(getattr(self.virtual_lineage, "shell", None), "user_ns", None)
         scheduled = set(stmts_to_run_indices)
         refused: set[int] = set()
 
@@ -1191,7 +1191,7 @@ class ReexecutionPlanner:
         carrier is live, the carrier-history pass owns the case and this is a
         no-op.
         """
-        user_ns = getattr(getattr(self._virtual_lineage, "shell", None), "user_ns", None)
+        user_ns = getattr(getattr(self.virtual_lineage, "shell", None), "user_ns", None)
         scheduled = set(stmts_to_run_indices)
         refused: set[int] = set()
 
@@ -1214,7 +1214,7 @@ class ReexecutionPlanner:
                         continue  # live carrier: the history pass has it
                 except (TypeError, ValueError, AttributeError, RecursionError):
                     pass
-            producer = self._latest_producer(simulation_trace, receiver, w)
+            producer = self.latest_producer(simulation_trace, receiver, w)
             if producer is None or producer not in scheduled:
                 continue  # the figure is not being rebuilt here
             sibling_names = set(simulation_trace[producer][1])
@@ -1276,7 +1276,7 @@ class ReexecutionPlanner:
     )
 
     def _user_ns(self):
-        return getattr(getattr(self._virtual_lineage, "shell", None), "user_ns", None)
+        return getattr(getattr(self.virtual_lineage, "shell", None), "user_ns", None)
 
     @staticmethod
     def _called_names(code: str) -> set[str]:
@@ -1411,7 +1411,7 @@ class ReexecutionPlanner:
         # consumer — e.g. an edited payload that exists just to be dumped).
         changed_inputs = scheduled_outputs | set(broken_vars or ())
 
-        tracking = getattr(self._classifier, "_tracking_state", None)
+        tracking = getattr(self.classifier, "tracking_state", None)
         runtime_lineage = getattr(tracking, "variable_lineage", None) or {}
         # Live kernel namespace, to tell "provably unchanged" apart from
         # "absent". A writer input that is gone from user_ns (kernel restart,
@@ -1421,7 +1421,7 @@ class ReexecutionPlanner:
         # the input's producer. That left ``df.to_csv(path)`` scheduled WITHOUT
         # its producer, so it ran against a missing ``df`` and raised NameError
         # post-restart, poisoning the whole notebook.
-        user_ns = getattr(getattr(self._virtual_lineage, "shell", None), "user_ns", None)
+        user_ns = getattr(getattr(self.virtual_lineage, "shell", None), "user_ns", None)
 
         def _input_changed(name: str) -> bool:
             if name in changed_inputs:
@@ -1439,7 +1439,7 @@ class ReexecutionPlanner:
             return virt is not None and run is not None and virt != run
 
         self.stale_exports = []
-        writer_indices = self._find_stale_file_writer_indices(
+        writer_indices = self.find_stale_file_writer_indices(
             simulation_trace,
             scheduled_outputs=changed_inputs,
             skip=scheduled,
@@ -1499,7 +1499,7 @@ class ReexecutionPlanner:
         # against the PRE-write file state. Re-execution happens in trace
         # order, after the writer, so its freshness is decided against the
         # freshly written file.
-        tracking = getattr(self._classifier, "_tracking_state", None)
+        tracking = getattr(self.classifier, "tracking_state", None)
         executed_file_deps = getattr(tracking, "executed_file_deps", None) or {}
         # Only what depends on a file a scheduled writer WRITES. "Any file
         # dependency" promoted nearly everything after the writer, because
@@ -1600,7 +1600,7 @@ class ReexecutionPlanner:
                 )
         return sorted(chosen | set(extra))
 
-    def _find_stale_file_writer_indices(
+    def find_stale_file_writer_indices(
         self,
         simulation_trace: list,
         scheduled_outputs: frozenset | set = frozenset(),
@@ -1635,7 +1635,7 @@ class ReexecutionPlanner:
         file on disk is now out of date, and the badge must not call it
         current (round 28, r28s3 and r28s5).
         """
-        tracking = getattr(self._classifier, "_tracking_state", None)
+        tracking = getattr(self.classifier, "tracking_state", None)
         executed_writes = getattr(tracking, "executed_write_stmt_codes", None)
         if executed_writes is None:
             return []
@@ -1820,12 +1820,12 @@ class ReexecutionPlanner:
         literal path (``OUT = Path('report')``) resolves from *simulation_trace*;
         a folder removed by ``shutil.rmtree(OUT)`` leaves no record to fall back on.
         """
-        user_ns = getattr(getattr(self._virtual_lineage, "shell", None), "user_ns", None)
+        user_ns = getattr(getattr(self.virtual_lineage, "shell", None), "user_ns", None)
         namespace = {**_literal_path_bindings(simulation_trace), **(user_ns or {})}
         written = statement_written_paths(stmt_code, namespace=namespace)
         if written:
             return written
-        cash = getattr(self._virtual_lineage, "cash_instance", None)
+        cash = getattr(self.virtual_lineage, "cash_instance", None)
         backend = getattr(cash, "backend", None) if cash is not None else None
         if backend is None or not hasattr(backend, "get_metadata"):
             return None
@@ -2000,7 +2000,7 @@ class ReexecutionPlanner:
             trace_event("writer_not_fresh", stmt=stmt_code[:80], reason=reason, **detail)
             return reason
 
-        cash = getattr(self._virtual_lineage, "cash_instance", None)
+        cash = getattr(self.virtual_lineage, "cash_instance", None)
         backend = getattr(cash, "backend", None) if cash is not None else None
         if backend is None or not hasattr(backend, "get_metadata"):
             return "no backend"
@@ -2037,7 +2037,7 @@ class ReexecutionPlanner:
             current = None
             if entry is not None:
                 # After the writer ran: what the runtime recorded.
-                current = entry[4].get(var) if var in entry[1] else _key_lineages(entry[3]).get(var)
+                current = entry[4].get(var) if var in entry[1] else key_lineages(entry[3]).get(var)
             if current is None:
                 current = (virtual_lineage or {}).get(var)
             if current is None:
@@ -2058,7 +2058,7 @@ class ReexecutionPlanner:
         while first > 0 and getattr(simulation_trace[first - 1], "cell", -1) == cell:
             first -= 1
         return carrier_history_fingerprint(
-            [(entry[0], _key_lineages(entry[3])) for entry in simulation_trace[first:index]],
+            [(entry[0], key_lineages(entry[3])) for entry in simulation_trace[first:index]],
             carrier,
         )
 

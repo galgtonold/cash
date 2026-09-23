@@ -8,7 +8,7 @@ computation. The shape that hits it is ordinary -- develop behind an
 a driver and recompute everything you already had.
 
 Two places had to agree, which is what made the first attempt only half work.
-``Cash._get_func_key`` names the entry, and the purity analyzer's
+``Cash.get_func_key`` names the entry, and the purity analyzer's
 ``_qualname_of`` names each helper in ``helper_source_hashes``, which is folded
 into the state hash as ``helper:{qual}:{digest}``. Normalising one left the
 function name matching and the state hash not, so the entry still missed --
@@ -85,7 +85,7 @@ def test_running_then_importing_reuses_the_result(tmp_path):
 def test_the_state_hash_agrees_too(tmp_path):
     """Not just the function name -- the whole key.
 
-    The first version of this fix normalised ``_get_func_key`` alone, so both
+    The first version of this fix normalised ``get_func_key`` alone, so both
     runs agreed on ``worker.work`` and still missed, because the analyzer kept
     naming the helper ``__main__.work`` inside the state hash.
     """
@@ -105,7 +105,7 @@ def test_the_state_hash_agrees_too(tmp_path):
             import worker
             fn = worker.work.__wrapped__
             c = worker.c
-        name = c._get_func_key(fn)
+        name = c.get_func_key(fn)
         c._analyze_dependencies(fn)
         state = c._state_hasher.compute(name, own_source_override=c._pin_own_source(fn))
         print(json.dumps({"name": name, "state": state}))
@@ -265,4 +265,4 @@ def test_a_notebook_style_namespace_stays_main():
     c = cash.Cash(cache_dir=None)
     namespace: dict = {"__name__": "__main__"}
     exec("def f(n): return n", namespace)  # noqa: S102 - the case under test
-    assert c._get_func_key(namespace["f"]).startswith("__main__.")
+    assert c.get_func_key(namespace["f"]).startswith("__main__.")

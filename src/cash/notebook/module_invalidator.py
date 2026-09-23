@@ -80,7 +80,7 @@ class ModuleInvalidator:
             # pre-edit cache -- see TrackingState.module_generation. Taken
             # before the from-imports are cleared below, while they are still
             # recognisable by where they came from.
-            state = processor._tracking_state
+            state = processor.tracking_state
             state.module_generation += 1
             state.reloaded_names.update(self._names_reaching(changed_modules, state))
 
@@ -165,7 +165,7 @@ class ModuleInvalidator:
         if not code or value is None or not import_only(code):
             return None
         try:
-            return processor._lineage.lineage_if_rerun(processor._tracking_state, name, value, code)
+            return processor.lineage_builder.lineage_if_rerun(processor.tracking_state, name, value, code)
         except Exception:  # noqa: BLE001 - the reload's own hash is always a valid fallback
             logger.debug("[MODULE] could not re-derive %s's import lineage", name, exc_info=True)
             return None
@@ -245,7 +245,7 @@ class ModuleInvalidator:
             if value_module and (value_module == mod_name or value_module.startswith(mod_name + ".")):
                 if self._keep_unchanged_from_import(var_name, var_value, processor):
                     continue
-                processor._tracking_state.from_import_components.pop(var_name, None)
+                processor.tracking_state.from_import_components.pop(var_name, None)
                 processor.executed_cell_codes.pop(var_name, None)
                 processor.executed_input_lineages.pop(var_name, None)
                 processor.current_session_hashes.pop(var_name, None)
@@ -267,7 +267,7 @@ class ModuleInvalidator:
         recomputed from that statement against the reloaded file. Anything
         missing or different falls through to clearing, as before.
         """
-        state = processor._tracking_state
+        state = processor.tracking_state
         recorded = state.from_import_components.get(var_name)
         code = processor.executed_cell_codes.get(var_name)
         if not recorded or not code:
@@ -296,14 +296,14 @@ class ModuleInvalidator:
 
     def _clear_constant_from_imports(self, mod_name: str, processor: StatementProcessor, reloaded_mod: Any) -> None:
         """Category 2: clear/refresh non-callable from-imports (constants) from *mod_name*."""
-        for var_name, src_mod in list(processor._tracking_state.from_import_sources.items()):
+        for var_name, src_mod in list(processor.tracking_state.from_import_sources.items()):
             if src_mod != mod_name and not src_mod.startswith(mod_name + "."):
                 continue
             # This map holds callables as well as constants, so this pass saw
             # -- and dropped -- every name Category 1 had just kept.
             if self._keep_unchanged_from_import(var_name, self._shell.user_ns.get(var_name), processor):
                 continue
-            processor._tracking_state.from_import_components.pop(var_name, None)
+            processor.tracking_state.from_import_components.pop(var_name, None)
             processor.executed_cell_codes.pop(var_name, None)
             processor.executed_input_lineages.pop(var_name, None)
             processor.current_session_hashes.pop(var_name, None)
@@ -364,7 +364,7 @@ class ModuleInvalidator:
             if self._debug:
                 print(f"[GRANULAR] Preserving '{var_name}': no symbols changed in '{input_var}'")
             return "preserve"
-        var_attrs = processor._tracking_state.module_attribute_deps.get(var_name, {}).get(input_var)
+        var_attrs = processor.tracking_state.module_attribute_deps.get(var_name, {}).get(input_var)
         if var_attrs:
             if var_attrs & changed_syms:
                 if self._debug:
@@ -404,14 +404,14 @@ class ModuleInvalidator:
         processor.executed_cell_codes.pop(var_name, None)
         processor.executed_input_lineages.pop(var_name, None)
         processor.current_session_hashes.pop(var_name, None)
-        processor._tracking_state.module_attribute_deps.pop(var_name, None)
+        processor.tracking_state.module_attribute_deps.pop(var_name, None)
         # The value is still in memory, built by the pre-edit module. Dropping
         # its lineage makes a READER of it recompute, but a cell further down
         # reading only something built from it compared lineages and saw
         # nothing to compare: r28s5 exported the pre-edit numbers, 5/5. Ask
         # for its binding to be re-run instead -- TrackingState.rerun_bindings.
         if var_name in self._shell.user_ns:
-            processor._tracking_state.rerun_bindings.add(var_name)
+            processor.tracking_state.rerun_bindings.add(var_name)
         if self._debug:
             print(f"[MODULE_INVALIDATE] Cleared lineage for dependent var '{var_name}'")
 
@@ -425,7 +425,7 @@ class ModuleInvalidator:
         input_map = processor.executed_input_lineages.get(var_name, {})
         for mod_name_key in old_module_lineages:
             if mod_name_key in input_map:
-                processor._tracking_state.granular_preserved_vars.setdefault(mod_name_key, set()).add(var_name)
+                processor.tracking_state.granular_preserved_vars.setdefault(mod_name_key, set()).add(var_name)
                 if self._debug:
                     print(f"[GRANULAR] Registered '{var_name}' for deferred lineage update on '{mod_name_key}'")
 
@@ -538,7 +538,7 @@ class ModuleInvalidator:
                 logger.debug("[MODULE] Could not read module file %r for hash: %s", file_path, e)
 
         dep_files: set = set()
-        for dep_path, parent_mods in ft._dep_file_to_parents.items():
+        for dep_path, parent_mods in ft.dep_file_to_parents.items():
             if mod_name in parent_mods:
                 dep_files.add(dep_path)
 

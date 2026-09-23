@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..purity import is_pure
-from ..tracking.file_tracker import _installed_roots, _nc
+from ..tracking.file_tracker import installed_roots, normcase_path
 
 __all__ = [
     # Primary API
@@ -691,7 +691,7 @@ def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
     if not isinstance(func, types.FunctionType) or is_pure(func) or _depth > 3:
         return None
     code_obj = func.__code__
-    if _nc(os.path.abspath(code_obj.co_filename)).startswith(_installed_roots()):
+    if normcase_path(os.path.abspath(code_obj.co_filename)).startswith(installed_roots()):
         return None
     try:
         source = textwrap.dedent(inspect.getsource(func))
@@ -878,12 +878,12 @@ def _call_repeatability(call: ast.Call, local_handles: frozenset[str] = frozense
         if mode is None:
             return None  # no mode argument -> defaults to 'r', a read
         if not (isinstance(mode, ast.Constant) and isinstance(mode.value, str)):
-            # A computed mode proves nothing. `_is_open_write_mode` reports
+            # A computed mode proves nothing. `is_open_write_mode` reports
             # False here, which the write-DETECTION path reads as "not a
             # write" -- but a `.write` on this handle still makes the statement
             # a writer, and the mode could be 'a' at runtime.
             return REPEATABILITY_UNKNOWN
-        if not _is_open_write_mode(call):
+        if not is_open_write_mode(call):
             return None  # provably a read mode
         return REPEATABILITY_ACCUMULATING if "a" in mode.value else REPEATABILITY_REPLACING
     if isinstance(func, ast.Attribute):
@@ -939,8 +939,8 @@ def statement_write_repeatability(code: str, tree: "ast.Module | None" = None) -
             verdicts.add(verdict)
         # Module-level writers (os.remove, shutil.move, ...) are recognised
         # through the side-effect table rather than the call shapes above.
-        name = _get_call_name(node.func)
-        module = _get_call_module(node.func)
+        name = get_call_name(node.func)
+        module = get_call_module(node.func)
         if not name or not module:
             continue
         key = (module, name)
@@ -1004,7 +1004,7 @@ _PATH_KWARG_NAMES: frozenset[str] = frozenset(
 )
 
 
-def _resolve_literal_path(node: ast.AST, namespace: dict[str, Any] | None) -> str | None:
+def resolve_literal_path(node: ast.AST, namespace: dict[str, Any] | None) -> str | None:
     """Resolve a call argument to an output-path string, or ``None``.
 
     Only a string literal, or a simple ``Name`` bound to a ``str`` /
@@ -1034,8 +1034,8 @@ def _resolve_literal_path(node: ast.AST, namespace: dict[str, Any] | None) -> st
     # every downstream cell (R5). Each part must itself resolve, so anything
     # genuinely computed still returns None.
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-        left = _resolve_literal_path(node.left, namespace)
-        right = _resolve_literal_path(node.right, namespace)
+        left = resolve_literal_path(node.left, namespace)
+        right = resolve_literal_path(node.right, namespace)
         if left is not None and right is not None:
             return os.path.join(left, right)
         return None
@@ -1045,7 +1045,7 @@ def _resolve_literal_path(node: ast.AST, namespace: dict[str, Any] | None) -> st
         and node.args
         and (_is_path_constructor(node.func) or _is_os_path_join(node.func))
     ):
-        parts = [_resolve_literal_path(a, namespace) for a in node.args]
+        parts = [resolve_literal_path(a, namespace) for a in node.args]
         if all(p is not None for p in parts):
             return os.path.join(*parts)
         return None
@@ -1100,10 +1100,10 @@ def _call_path_argument(
 ) -> str | None:
     """Resolve the path from *call*'s positional arg *index* or a path keyword."""
     if len(call.args) > index and not isinstance(call.args[index], ast.Starred):
-        return _resolve_literal_path(call.args[index], namespace)
+        return resolve_literal_path(call.args[index], namespace)
     for kw in call.keywords:
         if kw.arg and kw.arg in kwarg_names:
-            return _resolve_literal_path(kw.value, namespace)
+            return resolve_literal_path(kw.value, namespace)
     return None
 
 
@@ -1121,7 +1121,7 @@ def _write_call_path(
     func = call.func
     # open(PATH, 'w'|'a'|...) — only a write mode counts.
     if isinstance(func, ast.Name) and func.id == "open":
-        if _is_open_write_mode(call):
+        if is_open_write_mode(call):
             return _call_path_argument(call, 0, namespace, _PATH_KWARG_NAMES), True
         return None, False
     if isinstance(func, ast.Attribute):
@@ -1132,8 +1132,8 @@ def _write_call_path(
         # out as unread, and a cell below it re-ran the whole report after a
         # restart (round 23, r23s2).
         if method in ("mkdir", "rmdir") and not call.args:
-            return _resolve_literal_path(func.value, namespace), True
-        if _get_base_name(func.value) in ("os", "shutil") and method in _FOLDER_FUNCTIONS:
+            return resolve_literal_path(func.value, namespace), True
+        if get_base_name(func.value) in ("os", "shutil") and method in _FOLDER_FUNCTIONS:
             return _call_path_argument(call, 0, namespace, _PATH_KWARG_NAMES), True
         # Path(PATH).write_text(...) / Path(PATH).write_bytes(...)
         if method in ("write_text", "write_bytes"):
@@ -1145,7 +1145,7 @@ def _write_call_path(
         # torch.save(obj, PATH) puts the path second and PIL ``img.save(PATH)``
         # is ambiguous, so a non-numpy ``save`` stays conservative.
         if method == "save":
-            base = _get_base_name(func.value)
+            base = get_base_name(func.value)
             if base in ("np", "numpy"):
                 return _call_path_argument(call, 0, namespace), True
             return None, True
@@ -1202,7 +1202,7 @@ def statement_written_paths(
 
 
 # Cheap textual pre-filter for statement_read_paths.
-_READ_TEXT_MARKERS: tuple[str, ...] = ("open(", "read", "load")
+READ_TEXT_MARKERS: tuple[str, ...] = ("open(", "read", "load")
 
 
 def _read_call_path(
@@ -1222,7 +1222,7 @@ def _read_call_path(
     func = call.func
     # open(PATH) / open(PATH, 'r'|'rb'|...) -- only a NON-write mode counts.
     if isinstance(func, ast.Name) and func.id == "open":
-        if _is_open_write_mode(call):
+        if is_open_write_mode(call):
             return None, False
         return _call_path_argument(call, 0, namespace, _PATH_KWARG_NAMES), True
     if isinstance(func, ast.Attribute):
@@ -1235,7 +1235,7 @@ def _read_call_path(
             return None, True
         # np.load / numpy.load / joblib.load(PATH); pickle/json.load(open(PATH)).
         if method == "load":
-            base = _get_base_name(func.value)
+            base = get_base_name(func.value)
             if call.args and isinstance(call.args[0], ast.Call):
                 inner = call.args[0]
                 if isinstance(inner.func, ast.Name) and inner.func.id == "open":
@@ -1264,7 +1264,7 @@ def statement_read_paths(
     statically resolvable (f-string / computed) -- so the caller treats the read
     set as unknown and never suppresses a writer it cannot prove is unread.
     """
-    if not any(m in code for m in _READ_TEXT_MARKERS):
+    if not any(m in code for m in READ_TEXT_MARKERS):
         return set()
     if tree is None:
         try:
@@ -1305,7 +1305,7 @@ def resolve_path_list(node: ast.AST, namespace: dict[str, Any] | None) -> list[s
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         if len(node.elts) > _PATH_LIST_MAX:
             return None
-        out = [_resolve_literal_path(e, namespace) for e in node.elts]
+        out = [resolve_literal_path(e, namespace) for e in node.elts]
         return None if any(p is None for p in out) else out
     if isinstance(node, ast.Name) and namespace is not None:
         val = namespace.get(node.id)
@@ -1414,7 +1414,7 @@ def statement_saves_current_pyplot_figure(
     return False
 
 
-def _get_call_name(func_node: ast.AST) -> str | None:
+def get_call_name(func_node: ast.AST) -> str | None:
     """Extract the function name from a call's func node."""
     if isinstance(func_node, ast.Name):
         return func_node.id
@@ -1423,7 +1423,7 @@ def _get_call_name(func_node: ast.AST) -> str | None:
     return None
 
 
-def _get_call_module(func_node: ast.AST) -> str | None:
+def get_call_module(func_node: ast.AST) -> str | None:
     """Extract the module/object prefix from a call's func node."""
     if isinstance(func_node, ast.Attribute):
         if isinstance(func_node.value, ast.Name):
@@ -1441,20 +1441,20 @@ def _get_call_module(func_node: ast.AST) -> str | None:
     return None
 
 
-def _get_base_name(node: ast.AST) -> str | None:
+def get_base_name(node: ast.AST) -> str | None:
     """Extract a human-readable name for the object a method is called on."""
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
-        base = _get_base_name(node.value)
+        base = get_base_name(node.value)
         return f"{base}.{node.attr}" if base else node.attr
     if isinstance(node, ast.Subscript):
-        base = _get_base_name(node.value)
+        base = get_base_name(node.value)
         return f"{base}[...]" if base else None
     return None
 
 
-def _is_open_write_mode(call_node: ast.Call) -> bool:
+def is_open_write_mode(call_node: ast.Call) -> bool:
     """Return True if an open() call uses a write mode."""
     # Check positional arg (2nd argument is mode)
     if len(call_node.args) >= 2:
@@ -1476,8 +1476,8 @@ class _SideEffectVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         """Detect function/method calls with side effects."""
-        func_name = _get_call_name(node.func)
-        module_name = _get_call_module(node.func)
+        func_name = get_call_name(node.func)
+        module_name = get_call_module(node.func)
 
         if func_name:
             key = (module_name or "", func_name)
@@ -1485,7 +1485,7 @@ class _SideEffectVisitor(ast.NodeVisitor):
             if named:
                 kind = _IO_SIDE_EFFECT_FUNCTIONS[key]
                 if func_name == "open" and not module_name:
-                    if _is_open_write_mode(node):
+                    if is_open_write_mode(node):
                         self.effects.append(
                             SideEffectInfo(
                                 kind="file_write",
@@ -1524,7 +1524,7 @@ class _SideEffectVisitor(ast.NodeVisitor):
             if isinstance(node.func, ast.Attribute) and not named:
                 method = node.func.attr
                 if method in _WRITE_METHODS and not _writes_to_console(node):
-                    base = _get_base_name(node.func.value)
+                    base = get_base_name(node.func.value)
                     self.effects.append(
                         SideEffectInfo(
                             kind="file_write",
@@ -2115,7 +2115,7 @@ def called_function_global_mutations(
         out.append(compute(y))      # call path (CAS-243)
 
     Both are ``ast.Call`` nodes anywhere in the statement, which is exactly
-    what :func:`_called_function_names` already collects, so this is that
+    what :func:`called_function_names` already collects, so this is that
     walk plus the same per-callee :func:`_free_vars_mutated_in_function`
     analysis. A rule that fired for one spelling and not the other is the
     CAS-145 defect this project has already paid for.
@@ -2166,7 +2166,7 @@ def called_function_global_mutations(
     # including through a loop. The statement path asks without it -- it acts
     # per STATEMENT, and a body statement claiming the whole accumulator was
     # measured wrong (CAS-265).
-    names = _called_function_names(tree) if include_control_bodies else _cell_level_called_function_names(tree)
+    names = called_function_names(tree) if include_control_bodies else _cell_level_called_function_names(tree)
     for name in names:
         fdef = _resolve_function_def(name, resolve_source)
         if fdef is not None:
@@ -2219,7 +2219,7 @@ _CONTROL_STATEMENTS = (
 def _cell_level_called_function_names(tree) -> frozenset[str]:
     """``name(...)`` callees reachable WITHOUT entering a control structure.
 
-    :func:`_called_function_names` walks everything; this stops at a ``for`` /
+    :func:`called_function_names` walks everything; this stops at a ``for`` /
     ``while`` / ``if`` / ``with`` / ``try``, so a call in the body of one is not
     reported. The control structure's own header expressions ARE walked --
     ``for t in gen(): ...`` reads ``gen()`` once, outside any iteration, so it
@@ -2319,7 +2319,7 @@ def _function_mutates_own_object(func: ast.FunctionDef | ast.AsyncFunctionDef) -
     return False
 
 
-def _called_function_names(tree: ast.Module) -> frozenset[str]:
+def called_function_names(tree: ast.Module) -> frozenset[str]:
     """Names called as ``name(...)`` anywhere in the cell (bare OR captured)."""
     return frozenset(n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name))
 
@@ -2336,7 +2336,7 @@ def stateful_self_functions(tree: ast.Module | None, resolve_source) -> frozense
     if tree is None:
         return frozenset()
     out: set[str] = set()
-    for name in _called_function_names(tree):
+    for name in called_function_names(tree):
         fdef = _resolve_function_def(name, resolve_source)
         if fdef is not None and _function_mutates_own_object(fdef):
             out.add(name)
@@ -2381,7 +2381,7 @@ def partial_arg_mutations(tree: ast.Module | None, resolve_partial, resolve_sour
     if tree is None:
         return frozenset()
     out: set[str] = set()
-    for name in _called_function_names(tree):
+    for name in called_function_names(tree):
         binding = resolve_partial(name)
         if binding is None:
             continue
@@ -2410,7 +2410,7 @@ def mutating_partials(tree: ast.Module | None, resolve_partial, resolve_source) 
     if tree is None:
         return frozenset()
     out: set[str] = set()
-    for name in _called_function_names(tree):
+    for name in called_function_names(tree):
         binding = resolve_partial(name)
         if binding is None:
             continue
@@ -2493,7 +2493,7 @@ def stateful_closure_vars(tree: ast.Module | None, resolve_var_factory) -> froze
     if tree is None:
         return frozenset()
     out: set[str] = set()
-    for name in _called_function_names(tree):
+    for name in called_function_names(tree):
         factory = resolve_var_factory(name)
         if factory is not None and _factory_returns_stateful_closure(factory):
             out.add(name)

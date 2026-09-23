@@ -24,7 +24,7 @@ def test_a_nested_store_does_not_make_the_cache_dir_an_outer_dependency(tmp_path
     back -- forced here, so the scan it makes happens on the calling thread."""
     from cash.backends import _base
 
-    monkeypatch.setattr(_base, "_in_multiprocessing_child", lambda: True)
+    monkeypatch.setattr(_base, "in_multiprocessing_child", lambda: True)
     cache_dir = tmp_path / "custom_cache_name"  # not ".cash": no name-based guard
     c = Cash(cache_dir=str(cache_dir), register_magic=False)
     runs = []

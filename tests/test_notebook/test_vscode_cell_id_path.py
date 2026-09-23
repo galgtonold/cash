@@ -220,14 +220,14 @@ class TestEarlyCellIdCapture:
             m.shell = shell
             m._auto_cache_enabled = True
             m._benchmark_config = None
-            m._badge_mode = "off"
+            m.badge_mode = "off"
             m._debug = False
-            m._current_cell_id = None
+            m.current_cell_id = None
             m._in_sync_cell = False
             m._statement_processor = MagicMock()
             m._upstream_checker = MagicMock()
             m._original_run_cell = MagicMock()
-            m._global_ttl = None
+            m.global_ttl = None
             m._control_structure_processor = MagicMock()
             m._cash_instance = MagicMock()
             # CellExecutor needs to exist so _execute_cell can delegate; the
@@ -251,14 +251,14 @@ class TestEarlyCellIdCapture:
         """cell_id should be extracted from shell.get_parent() metadata."""
         m = magics_fixture
         m.shell.get_parent.return_value = {"metadata": {"cellId": "vscode-notebook-cell:/fake/path.ipynb#W1s"}}
-        # We need _execute_cell to run far enough to set _current_cell_id.
+        # We need _execute_cell to run far enough to set current_cell_id.
         # It will error somewhere after the cell_id capture, which is fine.
         import contextlib
 
         with contextlib.suppress(Exception):
             m._execute_cell("x = 1")
 
-        assert m._current_cell_id == "vscode-notebook-cell:/fake/path.ipynb#W1s"
+        assert m.current_cell_id == "vscode-notebook-cell:/fake/path.ipynb#W1s"
 
     def test_captures_cellid_from_vscode_nested_metadata(self, magics_fixture):
         """cell_id under metadata.vscode.cellId should also be captured."""
@@ -269,7 +269,7 @@ class TestEarlyCellIdCapture:
         with contextlib.suppress(Exception):
             m._execute_cell("x = 1")
 
-        assert m._current_cell_id == "vscode-notebook-cell:/nested/path.ipynb#W2s"
+        assert m.current_cell_id == "vscode-notebook-cell:/nested/path.ipynb#W2s"
 
     def test_no_parent_metadata_sets_none(self, magics_fixture):
         """When get_parent returns None, cell_id should be None."""
@@ -278,7 +278,7 @@ class TestEarlyCellIdCapture:
         with contextlib.suppress(Exception):
             m._execute_cell("x = 1")
 
-        assert m._current_cell_id is None
+        assert m.current_cell_id is None
 
     def test_seeds_notebook_path_from_vscode_cellid(self, magics_fixture, tmp_path):
         """If cell_id is a valid VS Code URI, notebook path should be seeded."""
@@ -315,7 +315,7 @@ class TestEarlyCellIdCapture:
         del m.shell.get_parent  # Remove get_parent entirely
         with contextlib.suppress(Exception):
             m._execute_cell("x = 1")
-        assert m._current_cell_id is None
+        assert m.current_cell_id is None
 
     def test_exception_in_parent_does_not_crash(self, magics_fixture):
         """If get_parent raises, _execute_cell should continue."""

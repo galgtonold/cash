@@ -23,7 +23,7 @@ from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
 from ..tracking.file_tracker import register_cache_dir, untracked
 from ._base import CacheBackend, MetadataDict, PendingWrites, gdsf_value
-from .adaptive_caps import _free_bytes_on_volume, adaptive_disk_cap_for, human_bytes
+from .adaptive_caps import adaptive_disk_cap_for, free_bytes_on_volume, human_bytes
 from .entry_format import (
     ENTRY_SUFFIX,
     MAGIC,
@@ -1677,7 +1677,7 @@ class FileBackend(CacheBackend):
         evicted_recent = False
         n_evicted = 0
         rebuilt = False
-        own_key = getattr(self._writes._tls, "current_key", None)
+        own_key = self._writes.current_worker_key()
 
         while self._current_size_bytes > target:
             candidate = self._pop_candidate()
@@ -1736,7 +1736,7 @@ class FileBackend(CacheBackend):
         if evicted_recent:
             self._warn_evict_after_write(n_evicted)
 
-    def _promotion_size_cap(self) -> int | None:
+    def promotion_size_cap(self) -> int | None:
         """Refuse (skip) any single object larger than this tier's WHOLE cap.
 
         The threshold was half the cap, to keep one big entry from leaving less
@@ -1830,7 +1830,7 @@ class FileBackend(CacheBackend):
         self._warned_evict_after_write = True
 
         cap = human_bytes(self._max_size_bytes)
-        free = _free_bytes_on_volume(self.cache_dir)
+        free = free_bytes_on_volume(self.cache_dir)
         if free >= (self._max_size_bytes or 0):
             room = f"raise max_cache_size -- there is {human_bytes(free)} free on that volume, so there is room for it."
         else:

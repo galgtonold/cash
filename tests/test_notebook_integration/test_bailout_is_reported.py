@@ -10,7 +10,7 @@ way to find out why, and the bug behind it left no trace anyone could report.
 The bail-out now emits ``NOTEBOOK-BAILOUT`` as a real warning, so the exception
 that caused it lands next to the cell.
 
-Forcing it: ``CodeAnalyzer._parse_cell`` is called early in the pipeline inside
+Forcing it: ``CodeAnalyzer.parse_cell`` is called early in the pipeline inside
 a ``try/except SyntaxError``. Raising something that is NOT a SyntaxError --
 and not one of the three exception types with their own branches -- lands in
 ``_handle_pipeline_exception``'s final else, which is the bail-out under test.
@@ -26,7 +26,7 @@ SETUP = "import cash\n%cash_on\nimport warnings\nwarnings.simplefilter('always')
 
 BREAK_THE_PIPELINE = (
     "from cash.analysis.code_analyzer import CodeAnalyzer\n"
-    "CodeAnalyzer._parse_cell = staticmethod(\n"
+    "CodeAnalyzer.parse_cell = staticmethod(\n"
     "    lambda *a, **k: (_ for _ in ()).throw(ValueError('probe: forced internal failure')))\n"
     "print('pipeline broken')\n"
 )
@@ -36,7 +36,7 @@ WORK = "answer = 6 * 7\nprint('answer', answer)\n"
 
 @pytest.mark.fresh_kernel
 def test_a_bailout_tells_the_user_why(nb_runner):
-    """Needs its own kernel: it patches ``CodeAnalyzer._parse_cell`` at class
+    """Needs its own kernel: it patches ``CodeAnalyzer.parse_cell`` at class
     level, and a warm kernel would carry that break into the next test -- as
     it did, failing the control arm below with a leaked ValueError."""
     r = nb_runner.create_notebook([SETUP, BREAK_THE_PIPELINE, WORK])

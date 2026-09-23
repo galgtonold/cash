@@ -9,7 +9,7 @@ call:
 * ``c.cache(len)`` / ``c.cache(np.add)`` — a builtin / ufunc with no source and
   no ``__code__`` — raised ``ValueError`` from ``get_source_hash``.
 * ``c.cache(functools.partial(...))`` — no ``__name__``/``__qualname__`` — raised
-  ``AttributeError`` from ``_get_func_key``.
+  ``AttributeError`` from ``get_func_key``.
 
 Opaque callables are now keyed on a stable identity, source/dependency analysis
 is skipped for them, and they cache without crashing.

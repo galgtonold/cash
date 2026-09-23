@@ -1,6 +1,6 @@
 """Isolated regression test for the labextension-install probe.
 
-``_labextension_installed()`` gates the ``%cash_on`` save-hint suppression.
+``labextension_installed()`` gates the ``%cash_on`` save-hint suppression.
 ``TestSaveHintLiveReaderAware`` in
 ``test_magics_coverage.py`` monkeypatches the probe itself away in every one
 of its cases (by design -- see that class's docstring: the probe reads the
@@ -33,7 +33,7 @@ def test_true_when_the_extension_dir_exists_under_sys_prefix(tmp_path, monkeypat
     monkeypatch.setattr(site, "getuserbase", lambda: "")  # isolate: no second root
     tmp_path.joinpath(*sd._LABEXT_RELPATH).mkdir(parents=True)
 
-    assert sd._labextension_installed() is True
+    assert sd.labextension_installed() is True
 
 
 def test_false_when_the_extension_dir_is_absent(tmp_path, monkeypatch):
@@ -41,7 +41,7 @@ def test_false_when_the_extension_dir_is_absent(tmp_path, monkeypatch):
     monkeypatch.setattr(site, "getuserbase", lambda: "")  # isolate: no second root
     # tmp_path exists (pytest creates it) but nothing under _LABEXT_RELPATH does.
 
-    assert sd._labextension_installed() is False
+    assert sd.labextension_installed() is False
 
 
 def test_a_user_base_only_install_is_still_found(tmp_path, monkeypatch):
@@ -59,4 +59,4 @@ def test_a_user_base_only_install_is_still_found(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "prefix", str(prefix_dir))
     monkeypatch.setattr(site, "getuserbase", lambda: str(user_base_dir))
 
-    assert sd._labextension_installed() is True
+    assert sd.labextension_installed() is True

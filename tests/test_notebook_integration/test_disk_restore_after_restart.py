@@ -4,7 +4,7 @@ Reproduces issue where disk-cached entries were not restored after kernel restar
 because the simulation's cache key excluded module_component, causing a mismatch
 with the key stored at runtime.
 
-Root cause: _update_virtual_lineage and _try_virtual_restore computed cache keys
+Root cause: _update_virtual_lineage and try_virtual_restore computed cache keys
 without including module lineages (e.g., np, pd), while _analyze_and_hash included
 them via module_component. This meant any statement using a module input could never
 match its disk entry during virtual restore.

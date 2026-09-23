@@ -9,7 +9,7 @@ One probe per static-review lead:
  3. test_forward_probe_placeholder_earlier_reader
     forward probe plants placeholder; earlier output-less stmt reads it.
  4. test_unsaved_extension_with_user_function_rejected
-    _is_valid_extension omits func component -> valid unsaved edit discarded.
+    is_valid_extension omits func component -> valid unsaved edit discarded.
  5. test_unrelated_upstream_edit_reruns_loop
     loop-mutated lineage runtime/sim divergence; any upstream edit re-runs loop.
  6. test_empty_cached_value_restore_blocked

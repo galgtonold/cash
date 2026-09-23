@@ -24,7 +24,7 @@ windows_only = pytest.mark.skipif(os.name != "nt", reason="listings replace stat
 @pytest.fixture(autouse=True)
 def _no_digest_reuse(monkeypatch):
     """Every check hashes afresh: what is under test is the stat, not the memo."""
-    monkeypatch.setattr(file_dep_snapshot, "_HASH_EPOCH", None)
+    monkeypatch.setattr(file_dep_snapshot, "HASH_EPOCH", None)
     monkeypatch.setattr(file_dep_snapshot, "_HASH_MEMO_TTL_SECONDS", 0.0)
     file_dep_snapshot._HASH_MEMO.clear()
 
@@ -100,10 +100,10 @@ def test_a_size_change_is_caught(tmp_path):
 def test_a_sampled_file_gets_a_stat_of_its_own(tmp_path, monkeypatch, per_file_stats):
     """Above the full-hash cap the timestamps back up a sampled hash, and a
     listing's timestamps are the one thing that can lag."""
-    monkeypatch.setattr(file_dep_snapshot, "_full_hash_max_bytes", lambda: 16)
+    monkeypatch.setattr(file_dep_snapshot, "full_hash_max_bytes", lambda: 16)
     import cash.notebook.statement.freshness as freshness
 
-    monkeypatch.setattr(freshness, "_full_hash_max_bytes", lambda: 16)
+    monkeypatch.setattr(freshness, "full_hash_max_bytes", lambda: 16)
     paths = _inputs(tmp_path)
     checker, metadata = _check(paths)
     per_file_stats.clear()

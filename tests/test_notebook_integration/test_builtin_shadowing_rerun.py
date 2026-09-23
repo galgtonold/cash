@@ -1,7 +1,7 @@
 """A user variable that shadows a builtin name (sum/list/max/id/...) must be
 tracked as a real dependency, not skipped as a builtin.
 
-The lineage layer skips `_BUILTIN_NAMES` so genuine builtins are never tracked
+The lineage layer skips `BUILTIN_NAMES` so genuine builtins are never tracked
 as data dependencies. That skip was unconditional, so a user variable named
 `sum` was also skipped: editing its definition did not invalidate a downstream
 consumer, which served a stale value. The skip is now guarded by

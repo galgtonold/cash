@@ -532,13 +532,13 @@ class TestGranularInvalidation:
         sp.variable_lineage["result"] = "result_hash"
         sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
         sp.executed_input_lineages["result"] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
+        sp.tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
 
         # Setup: variable 'version_str' depends on module.VERSION
         sp.variable_lineage["version_str"] = "version_hash"
         sp.executed_cell_codes["version_str"] = f"version_str = {module_name}.VERSION"
         sp.executed_input_lineages["version_str"] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps["version_str"] = {module_name: {"VERSION"}}
+        sp.tracking_state.module_attribute_deps["version_str"] = {module_name: {"VERSION"}}
 
         # Only 'compute' changed
         changed_modules = {module_name: module_file}
@@ -570,12 +570,12 @@ class TestGranularInvalidation:
         sp.variable_lineage["result"] = "result_hash"
         sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
         sp.executed_input_lineages["result"] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
+        sp.tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
 
         sp.variable_lineage["version_str"] = "version_hash"
         sp.executed_cell_codes["version_str"] = f"version_str = {module_name}.VERSION"
         sp.executed_input_lineages["version_str"] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps["version_str"] = {module_name: {"VERSION"}}
+        sp.tracking_state.module_attribute_deps["version_str"] = {module_name: {"VERSION"}}
 
         # No granular info (None)
         changed_modules = {module_name: module_file}
@@ -627,7 +627,7 @@ class TestGranularInvalidation:
         sp.variable_lineage["result"] = "result_hash"
         sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
         sp.executed_input_lineages["result"] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
+        sp.tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
 
         # Empty set = module mtime changed but no AST-level symbol changes
         changed_modules = {module_name: module_file}
@@ -687,19 +687,19 @@ class TestGranularInvalidation:
         sp.variable_lineage["var_x"] = "x_hash"
         sp.executed_cell_codes["var_x"] = f"var_x = {mod_a_name}.func_a()"
         sp.executed_input_lineages["var_x"] = {mod_a_name: old_lineage_a}
-        sp._tracking_state.module_attribute_deps["var_x"] = {mod_a_name: {"func_a"}}
+        sp.tracking_state.module_attribute_deps["var_x"] = {mod_a_name: {"func_a"}}
 
         # var_y uses mod_a.CONST_A
         sp.variable_lineage["var_y"] = "y_hash"
         sp.executed_cell_codes["var_y"] = f"var_y = {mod_a_name}.CONST_A"
         sp.executed_input_lineages["var_y"] = {mod_a_name: old_lineage_a}
-        sp._tracking_state.module_attribute_deps["var_y"] = {mod_a_name: {"CONST_A"}}
+        sp.tracking_state.module_attribute_deps["var_y"] = {mod_a_name: {"CONST_A"}}
 
         # var_z uses mod_b.func_b
         sp.variable_lineage["var_z"] = "z_hash"
         sp.executed_cell_codes["var_z"] = f"var_z = {mod_b_name}.func_b()"
         sp.executed_input_lineages["var_z"] = {mod_b_name: old_lineage_b}
-        sp._tracking_state.module_attribute_deps["var_z"] = {mod_b_name: {"func_b"}}
+        sp.tracking_state.module_attribute_deps["var_z"] = {mod_b_name: {"func_b"}}
 
         # Only func_a changed in mod_a, only CONST_B changed in mod_b
         changed_modules = {
@@ -949,13 +949,13 @@ class TestGranularEdgeCases:
             sp.variable_lineage[var] = f"{var}_hash"
             sp.executed_cell_codes[var] = f"{var} = {module_name}.compute(1)"
             sp.executed_input_lineages[var] = {module_name: old_lineage}
-            sp._tracking_state.module_attribute_deps[var] = {module_name: {"compute"}}
+            sp.tracking_state.module_attribute_deps[var] = {module_name: {"compute"}}
 
         # c uses format_result (unchanged)
         sp.variable_lineage["c"] = "c_hash"
         sp.executed_cell_codes["c"] = f"c = {module_name}.format_result(1)"
         sp.executed_input_lineages["c"] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps["c"] = {module_name: {"format_result"}}
+        sp.tracking_state.module_attribute_deps["c"] = {module_name: {"format_result"}}
 
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: {"compute"}}
@@ -983,7 +983,7 @@ class TestGranularEdgeCases:
         sp.variable_lineage["mixed"] = "mixed_hash"
         sp.executed_cell_codes["mixed"] = f"mixed = {module_name}.compute(int({module_name}.VERSION))"
         sp.executed_input_lineages["mixed"] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps["mixed"] = {module_name: {"compute", "VERSION"}}
+        sp.tracking_state.module_attribute_deps["mixed"] = {module_name: {"compute", "VERSION"}}
 
         # Only compute changed
         changed_modules = {module_name: module_file}
@@ -1009,7 +1009,7 @@ class TestGranularEdgeCases:
         sp.variable_lineage["result"] = "result_hash"
         sp.executed_cell_codes["result"] = f"result = {module_name}.compute(5)"
         sp.executed_input_lineages["result"] = {module_name: old_lineage}
-        sp._tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
+        sp.tracking_state.module_attribute_deps["result"] = {module_name: {"compute"}}
 
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: {"compute"}}
@@ -1020,7 +1020,7 @@ class TestGranularEdgeCases:
             per_module_changed_symbols,
         )
 
-        assert "result" not in sp._tracking_state.module_attribute_deps
+        assert "result" not in sp.tracking_state.module_attribute_deps
 
     def test_class_change_detected(self, tmp_path):
         """Changing a class body should be detected as a symbol change."""

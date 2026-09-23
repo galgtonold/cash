@@ -101,7 +101,7 @@ _HASH_FULL_MAX_BYTES_DEFAULT = 256 * 1024 * 1024  # 256 MiB
 ACTIVE_CONFIG: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_active_config", default=None)
 
 
-def _full_hash_max_bytes() -> int:
+def full_hash_max_bytes() -> int:
     """Largest file hashed IN FULL rather than sampled.
 
     Configurable (``file_hash_full_max_bytes``) because the sampled regime has
@@ -203,7 +203,7 @@ _HASH_MEMO_MAX = 1 << 17
 _HASH_MEMO_TTL_SECONDS = 5.0
 _HASH_MEMO_MIN_AGE_SECONDS = 10.0
 #: The current cell run's number, or None between runs.
-_HASH_EPOCH: int | None = None
+HASH_EPOCH: int | None = None
 _EPOCH_COUNT = 0
 #: A cell run started inside another (`%%cash` within a hooked cell) is the
 #: same run.
@@ -212,19 +212,19 @@ _EPOCH_DEPTH = 0
 
 def begin_file_state_epoch() -> None:
     """A cell run starts: digests from earlier runs are looked at again."""
-    global _HASH_EPOCH, _EPOCH_COUNT, _EPOCH_DEPTH
+    global HASH_EPOCH, _EPOCH_COUNT, _EPOCH_DEPTH
     _EPOCH_DEPTH += 1
     if _EPOCH_DEPTH == 1:
         _EPOCH_COUNT += 1
-        _HASH_EPOCH = _EPOCH_COUNT
+        HASH_EPOCH = _EPOCH_COUNT
 
 
 def end_file_state_epoch() -> None:
     """The cell run that `begin_file_state_epoch` started is over."""
-    global _HASH_EPOCH, _EPOCH_DEPTH
+    global HASH_EPOCH, _EPOCH_DEPTH
     _EPOCH_DEPTH = max(0, _EPOCH_DEPTH - 1)
     if _EPOCH_DEPTH == 0:
-        _HASH_EPOCH = None
+        HASH_EPOCH = None
 
 
 #: ``realpath`` answers for the current cell run, keyed on the path as given
@@ -256,10 +256,10 @@ def realpath_of_read_this_run(path: str) -> tuple[str, os.stat_result | None]:
     missing file, a short ``~`` name -- is resolved in full.
     """
 
-    if _HASH_EPOCH is None:
+    if HASH_EPOCH is None:
         return os.path.realpath(path), None
     key = ("" if os.path.isabs(path) else os.getcwd(), path)
-    if _REALPATH_MEMO_EPOCH == _HASH_EPOCH:
+    if _REALPATH_MEMO_EPOCH == HASH_EPOCH:
         resolved = _REALPATH_MEMO.get(key)
         if resolved is not None:
             return resolved, None
@@ -293,7 +293,7 @@ def realpath_this_run(path: str) -> str:
     mid-cell resolves anew.
     """
     global _REALPATH_MEMO_EPOCH
-    epoch = _HASH_EPOCH
+    epoch = HASH_EPOCH
     if epoch is None:
         return os.path.realpath(path)
     if _REALPATH_MEMO_EPOCH != epoch:
@@ -315,7 +315,7 @@ def file_content_hash(
 ) -> str | None:
     """Return a stable content hash for *path*, or ``None`` if unreadable.
 
-    Small files (``<= _full_hash_max_bytes()``) are hashed in full. Larger files
+    Small files (``<= full_hash_max_bytes()``) are hashed in full. Larger files
     are sampled at three deterministic, size-derived offsets (head, middle,
     tail) so the cost is bounded while still catching the overwhelming majority
     of edits. The byte length is folded into the digest so a change that leaves
@@ -364,7 +364,7 @@ def file_content_hash(
             )
             cached = _HASH_MEMO.get(memo_key)
             if cached is not None and (
-                (cached[2] is not None and cached[2] == _HASH_EPOCH)
+                (cached[2] is not None and cached[2] == HASH_EPOCH)
                 or time.monotonic() - cached[0] < _HASH_MEMO_TTL_SECONDS
             ):
                 return cached[1]
@@ -373,7 +373,7 @@ def file_content_hash(
         return None
     try:
         if full_hash_max is None:
-            full_hash_max = _full_hash_max_bytes()
+            full_hash_max = full_hash_max_bytes()
         h = hashlib.sha256()
         h.update(str(size).encode("ascii"))
         # FileIO, not `open`: cash's own read of a file must not be tracked as
@@ -402,7 +402,7 @@ def file_content_hash(
         if memo_key is not None:
             if len(_HASH_MEMO) >= _HASH_MEMO_MAX:
                 _HASH_MEMO.clear()
-            _HASH_MEMO[memo_key] = (time.monotonic(), digest, _HASH_EPOCH)
+            _HASH_MEMO[memo_key] = (time.monotonic(), digest, HASH_EPOCH)
         return digest
     except OSError:
         logger.debug("[FILE_DEP] Could not hash file for freshness: %s", path)
@@ -425,7 +425,7 @@ def snapshot_file_deps(
     file as the body read it (see ``FileAccessTracker.read_digests``).
     """
     snapshot: dict[str, dict[str, Any]] = {}
-    full_hash_max = _full_hash_max_bytes()
+    full_hash_max = full_hash_max_bytes()
     for f in paths:
         try:
             st = os.stat(f)
@@ -608,7 +608,7 @@ def _timestamps_match(st: os.stat_result, stored: dict[str, Any], field: str) ->
 
 #: A directory holding at least this many of one lookup's dependencies is read
 #: with one listing rather than a stat per file.
-_LISTING_MIN_FILES = 16
+LISTING_MIN_FILES = 16
 
 
 def stats_from_listings(paths: Iterable[str]) -> dict[str, os.stat_result]:
@@ -638,7 +638,7 @@ def stats_from_listings(paths: Iterable[str]) -> dict[str, os.stat_result]:
     scandir = getattr(os.scandir, "_original_func", os.scandir)
     found: dict[str, os.stat_result] = {}
     for directory, wanted in by_dir.items():
-        if len(wanted) < _LISTING_MIN_FILES:
+        if len(wanted) < LISTING_MIN_FILES:
             continue
         try:
             with scandir(directory or ".") as entries:
@@ -709,7 +709,7 @@ def file_dep_is_fresh(
     (the file could not be read when it was taken) is fresh only while its
     mtime is unchanged to the nanosecond.
 
-    **Sampled-file backstop.** For files larger than ``_full_hash_max_bytes()``
+    **Sampled-file backstop.** For files larger than ``full_hash_max_bytes()``
     the content hash only covers three fixed head/middle/tail regions (see
     :func:`file_content_hash`), so a same-size edit *outside* those regions
     produces an identical hash and would silently pass as FRESH — serving stale
@@ -743,7 +743,7 @@ def file_dep_is_fresh(
     stored_size = stored.get("size")
     stored_hash = stored.get("hash")
     if full_hash_max is None and listed is not None:
-        full_hash_max = _full_hash_max_bytes()
+        full_hash_max = full_hash_max_bytes()
     # A listed stat (``stats_from_listings``) stands in for one only where the
     # file is hashed in full: there content is the authority, not the size or
     # the time the listing reports. A sampled file keeps its timestamps as a
@@ -767,7 +767,7 @@ def file_dep_is_fresh(
         if _unchanged_since_hashed(st, stored):
             return True, None
         if full_hash_max is None:
-            full_hash_max = _full_hash_max_bytes()
+            full_hash_max = full_hash_max_bytes()
         cur_hash = file_content_hash(resolved_path, st.st_size, full_hash_max, st)
         if cur_hash != stored_hash:
             # Recorded in one regime and checked in the other -- the size is

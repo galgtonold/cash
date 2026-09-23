@@ -11,11 +11,11 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ...analysis.annotations import extract_annotations_for_statements, get_statement_annotations, parse_annotation_line
 from ...analysis.cacheability import (
-    _called_function_names,
     alias_mutation_sources,
     aliased_sources,
     analyze_statement,
     called_function_global_mutations,
+    called_function_names,
     crossref_reassigned_vars,
     function_arg_mutations,
     mutating_partials,
@@ -51,7 +51,7 @@ from ..server_discovery import (
 )
 from ..staleness import StalenessTracker
 from .simulator import NotebookSimulator
-from .virtual_lineage import _BUILTIN_NAMES
+from .virtual_lineage import BUILTIN_NAMES
 
 if TYPE_CHECKING:
     from ..statement import ProcessResult
@@ -246,7 +246,7 @@ class UpstreamChecker:
         Kept as a separate method so ``set_tracking_state`` can also forward
         to the simulator.
         """
-        self._tracking_state = state
+        self.tracking_state = state
         self.executed_cell_codes = state.executed_cell_codes
         self.executed_cell_hashes = state.executed_cell_hashes
         self.variable_lineage = state.variable_lineage
@@ -368,13 +368,13 @@ class UpstreamChecker:
             if cell_id:
                 logger.debug("[UPSTREAM_DEBUG]   cell_id: %s", cell_id)
 
-        self._current_cell_id = cell_id
+        self.current_cell_id = cell_id
         self.simulator.set_current_cell_id(cell_id)
         # Keep simulator's function_tracker in sync. CashMagics sets
         # ``upstream_checker.function_tracker`` after construction (see
         # magics.py); we propagate it lazily so the simulator picks up the
         # latest reference.
-        self.simulator._virtual_lineage.function_tracker = self.function_tracker
+        self.simulator.virtual_lineage.function_tracker = self.function_tracker
 
         # Resolve the notebook path ONCE for the whole cell check and
         # thread it through the analysis helpers + Phase 2, instead of each site
@@ -394,7 +394,7 @@ class UpstreamChecker:
         # `d.update`) so Phase 2 can restore a no-lineage in-place accumulator.
         # The classifier re-simulates this cell to tell its own earlier run
         # apart from an upstream edit (MismatchClassifier._current_cell_reproduces).
-        classifier = getattr(self.simulator, "_classifier", None)
+        classifier = getattr(self.simulator, "classifier", None)
         if classifier is not None:
             classifier.current_cell_code = cell_code
         try:
@@ -411,7 +411,7 @@ class UpstreamChecker:
             # global there disables the very reset that makes the statement's
             # key converge (measured: [1, 1] where inline gives [1]).
             _cell_resolver = None
-            if _called_function_names(ast.parse(cell_code)):
+            if called_function_names(ast.parse(cell_code)):
                 _cell_resolver = self._notebook_function_sources(cell_code, notebook_path).get
             current_cell_mutated = set(
                 analyze_statement(cell_code, None, resolve_source=_cell_resolver).all_mutated_vars
@@ -458,7 +458,7 @@ class UpstreamChecker:
             # Everything that needs the notebook-wide function sources and is
             # keyed on ANY call in the cell (captured or bare), rather than on a
             # bare-``Expr`` call the way the argument-mutation block above is.
-            if _called_function_names(ast.parse(cell_code)):
+            if called_function_names(ast.parse(cell_code)):
                 func_sources_all = self._notebook_function_sources(cell_code, notebook_path)
                 # A called function that mutates a module GLOBAL / free variable
                 # in place (``def bump(): global g; g += 1`` + ``bump()``) leaves
@@ -1029,7 +1029,7 @@ class UpstreamChecker:
         missing_inputs: set[str] = set()
         if required_inputs:
             for inp in required_inputs:
-                if inp in _BUILTIN_NAMES or inp.startswith("_"):
+                if inp in BUILTIN_NAMES or inp.startswith("_"):
                     continue
                 if inp not in self.shell.user_ns:
                     missing_inputs.add(inp)
@@ -1081,7 +1081,7 @@ class UpstreamChecker:
             logger.debug("[UPSTREAM_DEBUG] Found %d notebook cells", len(notebook_cells))
 
         cells_with_ids = get_notebook_cells_with_ids(notebook_path)
-        cell_id = getattr(self, "_current_cell_id", None)
+        cell_id = getattr(self, "current_cell_id", None)
 
         current_cell_idx = self._resolve_current_cell_idx(
             cell_code, notebook_cells, cell_id, cells_with_ids, required_inputs, current_cell_outputs
@@ -1163,7 +1163,7 @@ class UpstreamChecker:
                     to_evict.add(var)
                     changed = True
 
-        state = self._tracking_state
+        state = self.tracking_state
         dict_attrs = (
             "variable_lineage",
             "executed_input_lineages",
@@ -1363,7 +1363,7 @@ class UpstreamChecker:
         """Emit a visible warning for any UPSTREAM cell that cannot be parsed.
 
         A half-written cell the user has SAVED but not run makes the upstream
-        simulator SKIP that cell (see ``VirtualLineage._simulate_one_cell``)
+        simulator SKIP that cell (see ``VirtualLineage.simulate_one_cell``)
         so unrelated downstream cells keep caching. But the user must
         still be told: the broken cell will not run, and any cell that depends
         on it can no longer have its dependency tracked. Without this, caching
@@ -1469,12 +1469,12 @@ class UpstreamChecker:
             )
             if notebook_cells is None or current_cell_idx is None:
                 return UpstreamResult([], 0.0, 0.0)
-            self._tracking_state.read_by_later_cells = frozenset().union(
+            self.tracking_state.read_by_later_cells = frozenset().union(
                 *(_cell_reads(code) for code in notebook_cells[current_cell_idx + 1 :])
             )
 
             # disclose any unparseable UPSTREAM cell BEFORE simulating.
-            # The simulator skips such a cell (VirtualLineage._simulate_one_cell)
+            # The simulator skips such a cell (VirtualLineage.simulate_one_cell)
             # so unrelated downstream cells keep caching, but the user must be
             # told which cell is broken — otherwise caching degrades silently
             # mid-edit while the badge and auto_cache_enabled still say it is on.
@@ -1549,7 +1549,7 @@ class UpstreamChecker:
                 current_cell_idx,
             )
             rng_rerun = {
-                s for s in statements_to_reexecute if s not in _before_rng_prepend and self._cell_touches_rng(s)
+                s for s in statements_to_reexecute if s not in _before_rng_prepend and self.cell_touches_rng(s)
             }
 
             executed_metrics = []
@@ -1670,9 +1670,9 @@ class UpstreamChecker:
         result runs as it would have, in order, after the restores.
         """
         try:
-            vl = self.simulator._virtual_lineage
-            planner = self.simulator._planner
-            classifier = self.simulator._classifier
+            vl = self.simulator.virtual_lineage
+            planner = self.simulator.planner
+            classifier = self.simulator.classifier
             virtual_lineage = dict(self.variable_lineage)
             virtual_modules: set[str] = set()
             trace: list = []
@@ -1680,7 +1680,7 @@ class UpstreamChecker:
             counts = dict(occurrence_counts)
             for node in nodes:
                 before = len(trace)
-                vl._simulate_one_node(
+                vl.simulate_one_node(
                     0,
                     node,
                     counts,
@@ -1711,7 +1711,7 @@ class UpstreamChecker:
             restored_by_index: dict[int, dict] = {}
             run: list[int] = []
             if broken:
-                run, restored, _ = classifier._backward_scan_pass(
+                run, restored, _ = classifier.backward_scan_pass(
                     trace,
                     broken,
                     set(),
@@ -1736,10 +1736,10 @@ class UpstreamChecker:
                             p
                             for i in run
                             for v in (trace[i][2] or ())
-                            if (p := planner._latest_producer(trace, v, before=i)) is not None
+                            if (p := planner.latest_producer(trace, v, before=i)) is not None
                         }
                     )
-                    run = planner._complete_later_producers(run, trace)
+                    run = planner.complete_later_producers(run, trace)
                     if len(run) == size:
                         break
                 for info in restored:
@@ -1890,7 +1890,7 @@ class UpstreamChecker:
             # Restrict to genuine upstream cells; a None index means "treat all
             # as upstream" (the checker's own fallback), so scan everything then.
             upstream = notebook_cells if current_cell_idx is None else notebook_cells[:current_cell_idx]
-            executed = self._tracking_state.executed_cell_source_hashes
+            executed = self.tracking_state.executed_cell_source_hashes
             stale = seed_cells_not_yet_run(drawing, upstream, executed)
             if not stale:
                 return statements
@@ -1901,7 +1901,7 @@ class UpstreamChecker:
             prepend: list[str] = []
             for idx in range(earliest, len(upstream)):
                 src = upstream[idx]
-                if not self._cell_touches_rng(src):
+                if not self.cell_touches_rng(src):
                     continue
                 if src not in already and src not in prepend:
                     prepend.append(src)
@@ -2058,7 +2058,7 @@ class UpstreamChecker:
             except (SyntaxError, ValueError, TypeError):
                 continue
             for name in inputs:
-                if name in live or name in _BUILTIN_NAMES:
+                if name in live or name in BUILTIN_NAMES:
                     continue
                 if definers is None:
                     definers = {}
@@ -2107,7 +2107,7 @@ class UpstreamChecker:
         """
         modules = set(get_drawing_rng_modules(cell_code))
         digest = hashlib.sha256(cell_code.encode("utf-8")).hexdigest()
-        modules |= self._tracking_state.observed_rng_cells.get(digest, set())
+        modules |= self.tracking_state.observed_rng_cells.get(digest, set())
         return modules
 
     @staticmethod
@@ -2133,12 +2133,12 @@ class UpstreamChecker:
                 return True
         return False
 
-    def _cell_touches_rng(self, src: str) -> bool:
+    def cell_touches_rng(self, src: str) -> bool:
         """True if *src* seeds or draws — statically or by prior observation."""
         if get_seeding_rng_modules(src) or get_drawing_rng_modules(src):
             return True
         digest = hashlib.sha256(src.encode("utf-8")).hexdigest()
-        return bool(self._tracking_state.observed_rng_cells.get(digest))
+        return bool(self.tracking_state.observed_rng_cells.get(digest))
 
     def _restore_position_rng_state(
         self,
@@ -2167,7 +2167,7 @@ class UpstreamChecker:
             # apply the OLD seed's position. Defer to the reseed path
             # (_prepend_stale_seed_cells) instead of using a stale snapshot.
             upstream = notebook_cells[:end]
-            if seed_cells_not_yet_run(drawing, upstream, self._tracking_state.executed_cell_source_hashes):
+            if seed_cells_not_yet_run(drawing, upstream, self.tracking_state.executed_cell_source_hashes):
                 return
             # PRIMARY: the position this cell itself started from last time.
             # That is precisely what re-executing its draw needs, and it is exact
@@ -2177,7 +2177,7 @@ class UpstreamChecker:
             # Safe to prefer because the fingerprint expires it as soon as the
             # seed behind it changes, the same lineage check that invalidates any
             # other value.
-            own = self._tracking_state.rng_pre_states.get(hashlib.sha256(cell_code.encode("utf-8")).hexdigest())
+            own = self.tracking_state.rng_pre_states.get(hashlib.sha256(cell_code.encode("utf-8")).hexdigest())
             if own is not None:
                 own_state, own_fingerprint = own
                 if own_fingerprint == rng_lineage_fingerprint(
@@ -2192,10 +2192,10 @@ class UpstreamChecker:
             # this cell has no recorded start of its own (never run this session)
             # or its seed moved on, and it stays fresher than a stale own-position
             # when an upstream cell re-ran more recently than this one.
-            post_states = self._tracking_state.rng_post_states
+            post_states = self.tracking_state.rng_post_states
             for idx in range(end - 1, -1, -1):
                 src = notebook_cells[idx]
-                if not self._cell_touches_rng(src):
+                if not self.cell_touches_rng(src):
                     continue
                 digest = hashlib.sha256(src.encode("utf-8")).hexdigest()
                 state = post_states.get(digest)

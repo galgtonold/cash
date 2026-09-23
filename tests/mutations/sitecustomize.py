@@ -2,7 +2,7 @@
 
 The integration suite drives a REAL Jupyter kernel in a separate process, so a
 monkeypatch applied in the pytest process never reaches the code under test.
-That is not a theoretical gap: patching ``_backward_scan_pass`` from a pytest
+That is not a theoretical gap: patching ``backward_scan_pass`` from a pytest
 plugin and watching 57 upstream integration tests pass reads exactly like "the
 suite does not cover upstream", and is in fact "the patch was never there".
 Every conclusion drawn that way is worthless.

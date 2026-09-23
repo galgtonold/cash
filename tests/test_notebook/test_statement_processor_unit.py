@@ -9,8 +9,8 @@ imported and instantiated directly, improving test coverage visibility.
 from cash.notebook._protocols import TrackingState
 from cash.notebook.statement import (
     ProcessResult,
+    ProcessResultRequired,
     StatementProcessor,
-    _ProcessResultRequired,
 )
 
 
@@ -18,8 +18,8 @@ class TestProcessResultTypes:
     """Test the ProcessResult TypedDict structure."""
 
     def test_required_keys_present(self):
-        """_ProcessResultRequired defines the mandatory keys."""
-        required: _ProcessResultRequired = {
+        """ProcessResultRequired defines the mandatory keys."""
+        required: ProcessResultRequired = {
             "status": CacheStatus.COMPUTED,
             "code": "x = 1",
             "outputs": ["x"],
@@ -33,7 +33,7 @@ class TestProcessResultTypes:
         assert required["code"] == "x = 1"
 
     def test_optional_keys_allowed(self):
-        """ProcessResult extends _ProcessResultRequired with optional keys."""
+        """ProcessResult extends ProcessResultRequired with optional keys."""
         result: ProcessResult = {
             "status": CacheStatus.RESTORED,
             "code": "y = x + 1",
@@ -64,7 +64,7 @@ class TestStatementProcessorImport:
         """The class should define key methods for statement processing.
 
         `_capture_and_track_variables` moved to StatementLineageBuilder
-        (now reached via ``processor._lineage.capture_and_track_variables``).
+        (now reached via ``processor.lineage_builder.capture_and_track_variables``).
         """
         expected_methods = [
             "process_statement",

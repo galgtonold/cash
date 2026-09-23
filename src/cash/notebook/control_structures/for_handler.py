@@ -157,7 +157,7 @@ class ForLoopHandler:
 
     # Builtin callables that PRODUCE an iterable without side effects, so the
     # single-unit fast path may re-evaluate the loop header a second time
-    # (once here, once inside ``_execute_as_single_unit``) and get the same
+    # (once here, once inside ``execute_as_single_unit``) and get the same
     # iteration.  Any *other* call in the loop iterable (a bare user function
     # like ``drain()``, or an unknown name) may be a one-shot consumable whose
     # second evaluation drains an already-exhausted source — those are routed
@@ -374,7 +374,7 @@ class ForLoopHandler:
                             "[CONTROL] Single-unit accumulator loop -> force_outputs=%s",
                             force_outputs,
                         )
-                return self.dispatcher._execute_as_single_unit(
+                return self.dispatcher.execute_as_single_unit(
                     node,
                     ttl,
                     silent,
@@ -806,7 +806,7 @@ class ForLoopHandler:
         if metrics.get("status") == CacheStatus.ERROR:
             err = metrics.get("error", RuntimeError(f"Error executing: {stmt_code}"))
             # Annotate with the body statement's original line number from the
-            # cell AST so _show_clean_error can point to the exact line, not
+            # cell AST so show_clean_error can point to the exact line, not
             # the for-loop header.
             with contextlib.suppress(AttributeError, TypeError):
                 err._cash_error_lineno = getattr(body_node, "lineno", None)
@@ -982,7 +982,7 @@ class ForLoopHandler:
             logger.debug("[LOOP_SPLIT] executing split at k=%d (force_outputs=%s)", k, force_outputs)
 
         head_res = self.process(head, ttl, silent, parent_context, raw_cell, inherited_annotation)
-        tail_res = self.dispatcher._execute_as_single_unit(
+        tail_res = self.dispatcher.execute_as_single_unit(
             tail,
             ttl,
             silent,

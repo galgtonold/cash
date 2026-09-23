@@ -54,7 +54,7 @@ def test_restore_variable_returns_metrics(magics, cash_instance):
     # Construct cache key
     # Key usually is var_sources lookup.
     cache_key = "stmt:test_hash"
-    magics._tracking_state.variable_sources[var_name] = cache_key
+    magics.tracking_state.variable_sources[var_name] = cache_key
 
     metadata = {
         "inputs": [],

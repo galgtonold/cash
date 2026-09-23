@@ -44,14 +44,14 @@ def test_rerunning_an_accumulator_init_reruns_the_loop_that_fills_it():
     planner = _planner(
         {"families": [], "results": {}, "evaluate": len, "summarize": len, "draw_best": len, "comparison": 0}
     )
-    scheduled = planner._complete_later_producers([1, 4, 5], TRACE)
+    scheduled = planner.complete_later_producers([1, 4, 5], TRACE)
     assert 2 in scheduled, "results = {} was re-run without the loop that fills it"
     assert 3 not in scheduled, "a reader that is not a producer was dragged in"
 
 
 def test_a_last_producer_needs_nothing_after_it():
     planner = _planner({"results": {}})
-    assert planner._complete_later_producers([2, 4], TRACE) == [2, 4]
+    assert planner.complete_later_producers([2, 4], TRACE) == [2, 4]
 
 
 # What actually put `results = {}` in that plan (traced on the original repro):

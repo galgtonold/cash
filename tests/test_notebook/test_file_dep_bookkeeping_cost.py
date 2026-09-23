@@ -79,7 +79,7 @@ def test_a_restored_variable_carries_exactly_its_entry_files(tmp_path):
 @pytest.fixture(autouse=True)
 def _no_cell_run_leaks(monkeypatch):
     """Each test starts and ends outside any cell run."""
-    monkeypatch.setattr(file_dep_snapshot, "_HASH_EPOCH", None)
+    monkeypatch.setattr(file_dep_snapshot, "HASH_EPOCH", None)
     monkeypatch.setattr(file_dep_snapshot, "_EPOCH_DEPTH", 0)
 
 
@@ -149,7 +149,7 @@ def test_a_nested_cell_run_is_the_same_run(tmp_path, monkeypatch, count_hashes):
 def test_outside_a_cell_run_the_window_still_bounds_reuse(tmp_path, monkeypatch, count_hashes):
     """Scripts never begin an epoch: the 5 s window is what they get."""
     path = _aged(tmp_path, "a.csv")
-    monkeypatch.setattr(file_dep_snapshot, "_HASH_EPOCH", None)
+    monkeypatch.setattr(file_dep_snapshot, "HASH_EPOCH", None)
     clock = [1000.0]
     monkeypatch.setattr(file_dep_snapshot.time, "monotonic", lambda: clock[0])
     file_dep_snapshot.file_content_hash(path)

@@ -1,7 +1,7 @@
 """Call-unit events reach the badge through the existing contract.
 
 ``CallUnit`` used to rely on ``CallCache`` rebuilding a ``module.qualname`` via
-``Cash._get_func_key`` and stashing it in ``wrapped_names`` so the processor
+``Cash.get_func_key`` and stashing it in ``wrapped_names`` so the processor
 could reconcile a drained decorator-log entry against "something this instance
 actually wrapped" -- two independent renderings of the same name that had to
 agree exactly, or the badge silently stopped marking intercepted calls. Each

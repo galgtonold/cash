@@ -34,7 +34,7 @@ class TestCacheExplorer(unittest.TestCase):
         self.assertEqual(len(entries), 2)
 
         func_names = sorted([e.get("func_name") for e in entries])
-        expected_names = sorted([Cash._get_func_key(func1), Cash._get_func_key(func2)])
+        expected_names = sorted([Cash.get_func_key(func1), Cash.get_func_key(func2)])
         self.assertEqual(func_names, expected_names)
 
         # Check metadata

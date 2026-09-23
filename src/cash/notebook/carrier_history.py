@@ -1,6 +1,6 @@
 """What a chart's picture depends on, in a form that survives a kernel restart.
 
-A write provenance record (``_persist_write_provenance``) vouches for a file
+A write provenance record (``persist_write_provenance``) vouches for a file
 by the lineages of what its writer read, and the re-execution planner compares
 them with the simulation's after a restart. That works for data. It does not
 work for a matplotlib figure: the lineage the runtime gives ``fig`` comes from
@@ -32,7 +32,7 @@ import ast
 import hashlib
 from typing import Mapping, Sequence
 
-from ..analysis.cacheability import _READ_TEXT_MARKERS
+from ..analysis.cacheability import READ_TEXT_MARKERS
 from .stateful_carriers import carrier_kind_from_producer
 
 __all__ = ["FIGURE_KINDS", "carrier_history_fingerprint"]
@@ -136,7 +136,7 @@ def carrier_history_fingerprint(
         # A branch or a `with` still cannot vouch.
         if any(isinstance(node, _CONTROL) and not isinstance(node, _LOOPS) for node in tree.body):
             return None
-        if any(marker in code for marker in _READ_TEXT_MARKERS):
+        if any(marker in code for marker in READ_TEXT_MARKERS):
             return None
         read = sorted((name, lin) for name, lin in lineages.items() if name not in siblings)
         digest.update(code.strip().encode("utf-8"))

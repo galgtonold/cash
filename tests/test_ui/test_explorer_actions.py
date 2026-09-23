@@ -35,13 +35,13 @@ class TestExplorerActions(unittest.TestCase):
         self.assertEqual(len(entries), 3)
 
         # Clear func_a (use module-qualified key)
-        func_a_key = Cash._get_func_key(func_a)
+        func_a_key = Cash.get_func_key(func_a)
         count = explorer.clear_function(func_a_key)
         self.assertEqual(count, 2)
 
         entries = explorer.list_entries()
         self.assertEqual(len(entries), 1)
-        func_b_key = Cash._get_func_key(func_b)
+        func_b_key = Cash.get_func_key(func_b)
         self.assertEqual(entries[0]["func_name"], func_b_key)
 
 

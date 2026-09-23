@@ -54,7 +54,7 @@ def policy(execution_time: float, size_bytes: int) -> bool:
     return execution_time - est_restore > min_savings * execution_time
 ```
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._cost_model_promote @4ce289bd, cash/cost_model.py:estimated_restore_time @19d51f03, cash/backends/value_policy.py:worth_its_bytes, cash/backends/value_policy.py:WORTH_CEILING_BYTES_PER_SECOND == 134217728, cash/backends/value_policy.py:WORTH_FLOOR_BYTES == 8388608 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._cost_model_promote @d5775c1e, cash/cost_model.py:estimated_restore_time @19d51f03, cash/backends/value_policy.py:worth_its_bytes, cash/backends/value_policy.py:WORTH_CEILING_BYTES_PER_SECOND == 134217728, cash/backends/value_policy.py:WORTH_FLOOR_BYTES == 8388608 -->
 Three things gate the promotion:
 
 1. **Hard floor at 100 ms.** Anything that ran faster than `0.1 s` never reaches disk — the I/O alone would cost more than recomputing.
@@ -75,7 +75,7 @@ The rate ceiling exists because the first two gates, on their own, filled five u
 > single-tier persistent backend (`Cash(backend=FileBackend(...))` or
 > `SQLiteBackend`), which writes every entry regardless of compute time.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.end_cell_persistence @286a964a, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @b2f824c9 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.end_cell_persistence @ff62d1a9, cash/backends/tiered_backend.py:TieredBackend.persist_from_memory @b2f824c9 -->
 In a notebook, "cheaper to re-run" is judged once more at the end of each cell.
 A statement is often fast only because its inputs are there: `latest =
 sales['week'].max()` takes milliseconds, but after a restart `sales` is gone too,
@@ -91,7 +91,7 @@ holds while the cell runs: a statement whose every output a later statement of
 the cell writes again (`sales = sales.merge(...)` three times over) keeps its
 result in RAM, and `# @cash:persist` still writes it.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.plan_cell_run @555e00f1, cash/notebook/ipython/cell_executor.py:_writes_only_into_its_own_objects @9faf10be -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.plan_cell_run @8f7c5c5a, cash/notebook/ipython/cell_executor.py:_writes_only_into_its_own_objects @9faf10be -->
 Running that cell again after a restart does not rebuild the versions in
 between. Cash simulates the cell's run of assignments the way it simulates a
 cell above, restores the last versions it has on disk, and runs only what they
@@ -125,7 +125,7 @@ The policy knobs exposed via `CashConfig`:
 
 | Field | Default | Effect |
 |---|---|---|
-| `smart_persistence` | `True` | Master toggle. When `False`, the `TieredBackend` is built without the cost-model policy and falls back to `_default_promotion_policy` (still serialization-aware, but with a 1.0 s floor). |
+| `smart_persistence` | `True` | Master toggle. When `False`, the `TieredBackend` is built without the cost-model policy and falls back to `default_promotion_policy` (still serialization-aware, but with a 1.0 s floor). |
 | `min_cache_savings_pct` | `0.20` | Required time-savings fraction. A cache hit must save at least this fraction of the compute cost to be worth promoting past RAM. |
 
 Set them via any layer (`pyproject.toml [tool.cash]`, `CASH_*` env vars, or kwargs):
@@ -137,7 +137,7 @@ cash.configure(min_cache_savings_pct=0.10)        # promote when a hit saves >10
 cash.configure(smart_persistence=False)           # fall back to the default policy
 ```
 
-<!-- claim: cash/__init__.py:configure @7436c67c, cash/backends/factory.py:apply_persistence_settings @463e0c5d -->
+<!-- claim: cash/__init__.py:configure @6b47c643, cash/backends/factory.py:apply_persistence_settings @3d11b6d6 -->
 `cash.configure` hands a change to either setting straight to the running
 backend (`apply_persistence_settings`), so it applies from the next write
 without rebuilding the backend or dropping what the RAM tier holds. The
@@ -201,7 +201,7 @@ For a deep dive into the notebook filter and its skip-reason taxonomy, see [Cost
 
 Two override mechanisms exist, and they apply to different paths:
 
-<!-- claim: cash/analysis/annotations.py:CacheAnnotation.persist == False, cash/notebook/statement/processor.py:StatementProcessor._should_skip_large_object_caching @4b8c4a48 -->
+<!-- claim: cash/analysis/annotations.py:CacheAnnotation.persist == False, cash/notebook/statement/processor.py:StatementProcessor._should_skip_large_object_caching @a0905cbf -->
 - **Notebook `# @cash:persist` annotation.** When a `%%cash` cell carries a `# @cash:persist` comment, the parser sets `force_persist=True` on the entry's metadata. The notebook filter then bypasses its skip checks (`StatementProcessor._should_skip_large_object_caching` returns early), and the `TieredBackend` also reads `metadata['force_persist']` and bypasses its promotion policy (in `TieredBackend.set`). The annotation is the only way to force a single statement past both filters.
 - **`smart_persistence=False`.** Disables the policy for every call. Useful for benchmarking, debugging, or workloads where you've measured that the heuristic is wrong on your data.
 - **`%cash_persist on` / `cash.configure(persist_all=True)`.** Force-caches *every* statement, bypassing the cost-aware floors globally — the blanket equivalent of putting `# @cash:persist` on all of them. Good for reproducibility and benchmarking; wasteful for trivial statements in normal use.
@@ -227,13 +227,13 @@ The promotion policy decides *whether to write past tier 0*. Each tier's `max_si
 
 See [Choosing a Backend](choosing-a-backend.md) for how to wire `TieredBackend` stacks and what each tier's cap means in practice.
 
-## Built-in `_default_promotion_policy` fallback
+## Built-in `default_promotion_policy` fallback
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._default_promotion_policy @c919ec7c, cash/backends/tiered_backend.py:TieredBackend.__init__ @694d21ad -->
-When `smart_persistence=False` (so the factory wires in no cost-model closure), or when a user constructs `TieredBackend(..., promotion_policy=None)` directly, the backend falls back to its own bound method `_default_promotion_policy`:
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.default_promotion_policy @033b4061, cash/backends/tiered_backend.py:TieredBackend.__init__ @ae3a39da -->
+When `smart_persistence=False` (so the factory wires in no cost-model closure), or when a user constructs `TieredBackend(..., promotion_policy=None)` directly, the backend falls back to its own bound method `default_promotion_policy`:
 
 ```python
-def _default_promotion_policy(self, execution_time, size_bytes):
+def default_promotion_policy(self, execution_time, size_bytes):
     # Serialization-aware like the smart policy, but with only size_bytes to go
     # on it assumes the slowest (_GENERIC) family, and keeps a 1.0 s floor.
     return self._cost_model_promote(
@@ -255,13 +255,13 @@ It applies the same restore-vs-recompute rule as the smart policy, just with a 1
 
 | Symbol | Surface | Effect |
 |---|---|---|
-| `smart_persistence` | `CashConfig` field / `CASH_SMART_PERSISTENCE` | Master toggle. Default `True`. False falls back to `_default_promotion_policy`. |
+| `smart_persistence` | `CashConfig` field / `CASH_SMART_PERSISTENCE` | Master toggle. Default `True`. False falls back to `default_promotion_policy`. |
 | `min_cache_savings_pct` | `CashConfig` field | Required savings fraction for promotion — used by **both** the tier policy and the notebook Gate A. Default `0.20`. |
 | `min_execution_time_to_cache_seconds` | `CashConfig` field | **Notebook path only.** Per-statement floor. Default `0.01 s`. |
 | `min_cache_fixed_budget_seconds` | `CashConfig` field | **Notebook path only.** Flat restore-time budget floor. Default `0.05 s`. |
 | `_build_smart_persistence_policy` | Internal (`src/cash/backends/factory.py`) | Returns the cost-model closure that `TieredBackend` calls on each set. |
 | `TieredBackend.promotion_policy` | `Callable[(float, int), bool]` | Per-`set` gate that decides whether to write past tier 0. Replaceable via constructor `promotion_policy=` kwarg. |
-| `TieredBackend._default_promotion_policy` | Internal (`src/cash/backends/tiered_backend.py`) | Fallback policy when `promotion_policy=None` is passed to the constructor. |
+| `TieredBackend.default_promotion_policy` | Internal (`src/cash/backends/tiered_backend.py`) | Fallback policy when `promotion_policy=None` is passed to the constructor. |
 | `metadata['force_persist']` | Backend metadata | Set by `# @cash:persist` notebook annotation. Bypasses the policy. |
 | `metadata['cost_model_family']` / `['cost_model_size_bytes']` | Backend metadata | Written by the statement processor; let `TieredBackend.set` predict restore time with the real type. |
 | `metadata['storage']` | Backend metadata (list[str]) | Records which tiers accepted the write — `["RAM"]`, `["RAM", "FileBackend"]`, etc. |

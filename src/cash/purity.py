@@ -195,7 +195,7 @@ def is_known_pure(name: str) -> bool:
 # ============================================================================
 
 # Operations that indicate impurity (side effects or global state access)
-_IMPURE_FUNCTION_CALLS = frozenset(
+IMPURE_FUNCTION_CALLS = frozenset(
     {
         "print",
         "input",
@@ -209,7 +209,7 @@ _IMPURE_FUNCTION_CALLS = frozenset(
     }
 )
 
-_IMPURE_MODULE_CALLS = frozenset(
+IMPURE_MODULE_CALLS = frozenset(
     {
         "os.system",
         "os.remove",
@@ -266,7 +266,7 @@ _IMPURE_MODULE_CALLS = frozenset(
 #: answers, through no argument the caller passed. `os.path.exists` fails that
 #: bar (it is about a file, which the file-dependency tracker already owns);
 #: `os.getpid` passes it but is not worth the noise.
-_AMBIENT_READ_CALLS = frozenset(
+AMBIENT_READ_CALLS = frozenset(
     {
         "datetime.now",
         "datetime.utcnow",
@@ -293,21 +293,21 @@ _AMBIENT_READ_CALLS = frozenset(
 
 #: Constructors that read the clock only when a string argument says so:
 #: ``pd.to_datetime("today")``, ``pd.Timestamp("now")``, ``np.datetime64("now")``.
-_AMBIENT_WHEN_ARG_CALLS = frozenset(
+AMBIENT_WHEN_ARG_CALLS = frozenset(
     {
         "pandas.to_datetime",
         "pandas.Timestamp",
         "numpy.datetime64",
     }
 )
-_AMBIENT_ARG_VALUES = frozenset({"now", "today"})
+AMBIENT_ARG_VALUES = frozenset({"now", "today"})
 
 #: Functions that read the clock when their time argument is LEFT OUT: called
 #: with at most this many positional arguments. ``time.strftime("%Y-%m")``
 #: froze a report's period with no warning (round 20), while
 #: ``time.strftime("%Y-%m", t)`` only formats ``t`` -- as ``time.localtime(ts)``
 #: only converts, which the flat list above used to warn about.
-_AMBIENT_WHEN_ARGS_OMITTED: dict[str, int] = {
+AMBIENT_WHEN_ARGS_OMITTED: dict[str, int] = {
     "time.strftime": 1,
     "time.asctime": 0,
     "time.ctime": 0,
@@ -334,7 +334,7 @@ _AMBIENT_WHEN_ARGS_OMITTED: dict[str, int] = {
 #: client object still cannot be reached by name at all. A false positive here
 #: costs an advisory warning; a false negative costs a write that silently
 #: stops happening on every cache hit.
-_WRITE_METHODS = frozenset(
+WRITE_METHODS = frozenset(
     {
         "write",
         "writelines",

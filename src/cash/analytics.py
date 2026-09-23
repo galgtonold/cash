@@ -21,7 +21,7 @@ import weakref
 from pathlib import Path
 from typing import Any
 
-from .config import _per_user_cache_root
+from .config import per_user_cache_root
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ _MAX_DB_BYTES = 64 * 1024 * 1024  # 64 MiB
 def default_db_path() -> Path:
     """Where the analytics db lives unless a path is given: the per-user cache root."""
 
-    return _per_user_cache_root() / "analytics.db"
+    return per_user_cache_root() / "analytics.db"
 
 
 def _write_events(db_path: str, buffer: list[tuple]) -> None:

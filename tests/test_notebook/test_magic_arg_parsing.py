@@ -101,18 +101,18 @@ def test_persist_unknown_argument_refuses_and_leaves_mode_alone(cash_magics, cap
 
 
 def test_badge_mode_with_trailing_comment_is_applied(cash_magics, capsys):
-    cash_magics._badge_mode = "html"
+    cash_magics.badge_mode = "html"
 
     cash_magics.cash_badge("off  # too noisy")
 
-    assert cash_magics._badge_mode == "off"
+    assert cash_magics.badge_mode == "off"
 
 
 def test_cash_on_ttl_with_trailing_comment_is_parsed(cash_magics, capsys):
     cash_magics.cash_on("ttl=3600  # one hour")
 
     assert cash_magics._auto_cache_enabled is True
-    assert cash_magics._global_ttl == 3600
+    assert cash_magics.global_ttl == 3600
 
 
 def test_cash_on_rejects_a_bad_ttl_visibly(cash_magics, capsys):

@@ -95,11 +95,11 @@ class TestHotReloadNotification:
             "changed_functions": ["helper", "process"],
         }
 
-        # Test rendering via _render_interactive_badge with patched display
+        # Test rendering via render_interactive_badge with patched display
         with patch.object(magics, "shell") as mock_shell:
             mock_shell.user_ns = shell.user_ns
             with patch("cash.notebook.ipython.magics.display"):
-                magics._render_interactive_badge([notification], display_id="test-id", status="DONE")
+                magics.render_interactive_badge([notification], display_id="test-id", status="DONE")
                 # Should have called display
                 assert True  # May not display in test env
 

@@ -3,7 +3,7 @@
 Blocking, 1/1 replaying the user's notebook, reproduced with a trace: after an upstream fix that dropped some rows, the export cell's
 repair re-ran ``for r in sorted(obs.run.unique()): ...`` -- it builds the run
 summary the export writes. A later producer of ``r`` then had to run too
-(``_complete_later_producers``, there for ``results = {}`` followed by the loop
+(``complete_later_producers``, there for ``results = {}`` followed by the loop
 that fills it): the QC-histogram loop, which also has a ``for r``, and from its
 ``ax`` the UMAP loop ``for ax, col in zip(axes, ...)``. That loop drew the new
 labels over the old embedding -- nothing needed the embedding, so nothing

@@ -230,7 +230,7 @@ def test_default_stack_uses_the_tenth_of_a_second_compute_floor(tmp_path):
         "the documented smart-persistence floor changed; docs/how-it-works/storage.md "
         "and the promotion-explorer widget quote 0.1s"
     )
-    assert getattr(backend, "_min_persist_compute_s", None) == 0.1, (
+    assert getattr(backend, "min_persist_compute_s", None) == 0.1, (
         "the default backend no longer carries the 0.1s floor -- statements between "
         "0.1s and 1.0s would stop persisting across a kernel restart"
     )
@@ -240,7 +240,7 @@ def test_default_stack_keeps_the_twenty_percent_savings_test(tmp_path):
     from cash.backends.factory import build_backend_from_config
 
     backend = build_backend_from_config(_default_config(tmp_path))
-    assert getattr(backend, "_min_persist_savings_pct", None) == 0.20
+    assert getattr(backend, "min_persist_savings_pct", None) == 0.20
 
 
 def test_smart_persistence_off_falls_back_to_the_one_second_floor(tmp_path):
@@ -256,7 +256,7 @@ def test_smart_persistence_off_falls_back_to_the_one_second_floor(tmp_path):
     config = _default_config(tmp_path)
     config.smart_persistence = False
     backend = build_backend_from_config(config)
-    assert getattr(backend, "_min_persist_compute_s", None) == 1.0
+    assert getattr(backend, "min_persist_compute_s", None) == 1.0
 
 
 def test_floor_decides_promotion_either_side_of_the_boundary(tmp_path):

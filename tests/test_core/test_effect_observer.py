@@ -9,7 +9,7 @@ function whose return value was used.
 
 These tests pin both halves of the answer:
 
-* the widened name list (``cash.purity._WRITE_METHODS``), which catches
+* the widened name list (``cash.purity.WRITE_METHODS``), which catches
   ``session.post`` / ``cur.execute`` statically, and
 * :mod:`cash.effect_observer`, which watches the first call for a file write,
   an outbound connection, or a spawned process.
@@ -201,7 +201,7 @@ def test_a_file_write_inside_an_unnamed_call_is_observed(tmp_path):
     target = tmp_path / "written.txt"
 
     # shutil.copyfile is a real write; it is stdlib (so not walked into) and it
-    # is NOT in _IMPURE_MODULE_CALLS, which lists copy/copy2/move/rmtree but
+    # is NOT in IMPURE_MODULE_CALLS, which lists copy/copy2/move/rmtree but
     # not copyfile. No name matches, the return value is used -- exactly the
     # combination that was silent.
     def uses_stdlib_writer():

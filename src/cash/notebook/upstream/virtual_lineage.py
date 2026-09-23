@@ -1,8 +1,8 @@
 """Phase 1 of the notebook simulator: forward simulation + cache probing.
 
 Extracted from ``NotebookSimulator``. Owns the simulator-internal caches
-(``_simulation_cache``, ``_ast_cache``, ``_simulation_cell_hashes``,
-``_cell_id_to_last_index``) and shares ``tracking_state`` dict references
+(``simulation_cache``, ``_ast_cache``, ``_simulation_cell_hashes``,
+``cell_id_to_last_index``) and shares ``tracking_state`` dict references
 with :class:`NotebookSimulator` and :class:`MismatchClassifier`. Pure-phase
 invariants land in a later refactor.
 """
@@ -49,7 +49,7 @@ from ...analysis.cacheability_decision import receiver_is_identity_coupled
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...source_norm import source_identity_digest
 from ...tracking import file_dep_snapshot as _fds
-from ...tracking.file_dep_snapshot import _LISTING_MIN_FILES, file_dep_is_fresh, stats_from_listings
+from ...tracking.file_dep_snapshot import LISTING_MIN_FILES, file_dep_is_fresh, stats_from_listings
 from ...tracking.randomness import (
     hidden_lineage_reads,
     hidden_lineage_writes,
@@ -85,7 +85,7 @@ from ..lineage_formula import (
 from ..loop_split import is_split_half, loop_source_hash, split_nodes, store_for_backend
 from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
-from ..statement.processor import _is_control_body
+from ..statement.processor import is_control_body
 from ._types import (
     IncrementalStartResult,
     RestoreCollector,
@@ -99,7 +99,7 @@ __all__ = ["VirtualLineage"]
 logger = logging.getLogger(__name__)
 
 # Canonical built-ins to skip during lineage tracking (mirrors upstream.py).
-_BUILTIN_NAMES: frozenset[str] = frozenset(
+BUILTIN_NAMES: frozenset[str] = frozenset(
     {
         "get_ipython",
         "__builtins__",
@@ -142,7 +142,7 @@ _BUILTIN_NAMES: frozenset[str] = frozenset(
 )
 
 
-def _normalize_stmt(s: str) -> str:
+def normalize_stmt(s: str) -> str:
     """Strip iteration-context comments and whitespace for code comparison."""
     s = re.sub(r"# __iteration_context__:.*?\n", "", s)
     return s.strip()
@@ -171,7 +171,7 @@ class _InputHashes(dict):
         self.callee_lineages = callee_lineages
 
 
-def _key_lineages(input_hashes: dict[str, str]) -> dict[str, str]:
+def key_lineages(input_hashes: dict[str, str]) -> dict[str, str]:
     """*input_hashes* plus any callee lineages riding on it (``_InputHashes``)."""
     callee = getattr(input_hashes, "callee_lineages", None)
     return {**callee, **input_hashes} if callee else input_hashes
@@ -193,7 +193,7 @@ _FILE_STATE_THIS_RUN: dict = {}
 def _file_state_this_run() -> dict | None:
     """This cell run's per-file memo, or None outside a run."""
 
-    epoch = _fds._HASH_EPOCH
+    epoch = _fds.HASH_EPOCH
     if epoch is None:
         return None
     if _FILE_STATE_THIS_RUN.get("epoch") != epoch:
@@ -231,7 +231,7 @@ def _locate_files(paths: Iterable[str], run: dict | None) -> dict[str, tuple[str
     where = run["where"] if run is not None else {}
     paths = list(paths)
     todo = [p for p in paths if p not in where]
-    listed = stats_from_listings(todo) if len(todo) >= _LISTING_MIN_FILES else {}
+    listed = stats_from_listings(todo) if len(todo) >= LISTING_MIN_FILES else {}
     found: dict[str, tuple[str | None, Any]] = {}
     for p in todo:
         st = listed.get(p)
@@ -285,7 +285,7 @@ class VirtualLineage:
         self.compute_hash_fn = compute_hash_fn
         self.debug = debug
         self.function_tracker: Any | None = None
-        self._current_cell_id: str | None = None
+        self.current_cell_id: str | None = None
 
         # Shared state refs (same dicts as NotebookSimulator / UpstreamChecker).
         self.set_tracking_state(tracking_state)
@@ -296,9 +296,9 @@ class VirtualLineage:
         self._split_store = None
         self._ast_cache: dict[str, ast.Module] = {}
         self._ast_cache_max_size: int = 200
-        self._simulation_cache: list[SimulationCacheEntry] = []
+        self.simulation_cache: list[SimulationCacheEntry] = []
         self._simulation_cell_hashes: dict[int, str] = {}
-        self._cell_id_to_last_index: dict[str, int] = {}
+        self.cell_id_to_last_index: dict[str, int] = {}
         #: Simulated ``def``s by lineage (``VirtualCallable``). Content-
         #: addressed, so an entry never goes stale; the cap bounds memory.
         self._virtual_callables: dict[str, VirtualCallable] = {}
@@ -308,10 +308,10 @@ class VirtualLineage:
         self._imported_classes: dict[str, str] = {}
         #: The lineage ``_propagate_import_lineage`` last gave each name, so a
         #: later import of that name can replace it -- but not one the runtime set.
-        self._propagated_imports: dict[str, str] = {}
+        self.propagated_imports: dict[str, str] = {}
 
         # Buffered TrackingState mutations; orchestrator drains after the phase.
-        self._restores = RestoreCollector()
+        self.restores = RestoreCollector()
 
         # Derivation-alias vars bumped during the most recent cache-hit
         # propagation; read back by _update_virtual_lineage.
@@ -319,7 +319,7 @@ class VirtualLineage:
 
     def set_tracking_state(self, state: TrackingState) -> None:
         """Re-wire shared state refs (mirrors NotebookSimulator.set_tracking_state)."""
-        self._tracking_state = state
+        self.tracking_state = state
         self.executed_cell_codes = state.executed_cell_codes
         self.executed_cell_hashes = state.executed_cell_hashes
         self.variable_lineage = state.variable_lineage
@@ -422,11 +422,11 @@ class VirtualLineage:
         entry the runtime wrote, and reschedule work that was already cached.
 
         Control-structure bodies are excluded on the runtime's own rule (see
-        :func:`~cash.notebook.statement.processor._is_control_body`): the
+        :func:`~cash.notebook.statement.processor.is_control_body`): the
         simulation treats a loop as one unit, so a body statement must not
         claim the accumulator here either.
         """
-        if tree is None or _is_control_body(stmt_code):
+        if tree is None or is_control_body(stmt_code):
             return set()
         try:
             names = called_function_global_mutations(tree, self._resolve_sim_function_source)
@@ -563,7 +563,7 @@ class VirtualLineage:
 
     def reset_caches(self) -> None:
         """Clear simulation and AST caches."""
-        self._simulation_cache.clear()
+        self.simulation_cache.clear()
         self._simulation_cell_hashes.clear()
         self._ast_cache.clear()
         self.__dict__.pop("_import_bindings_memo", None)
@@ -583,7 +583,7 @@ class VirtualLineage:
             return None
         return backend.get_metadata(cache_key)
 
-    def _get_cached_ast(self, code: str) -> ast.Module | None:
+    def get_cached_ast(self, code: str) -> ast.Module | None:
         """Parse code with AST caching. Returns None on SyntaxError."""
         if code in self._ast_cache:
             return self._ast_cache[code]
@@ -620,7 +620,7 @@ class VirtualLineage:
         """
         if not rerecorded:
             return
-        for entry in self._simulation_cache:
+        for entry in self.simulation_cache:
             for trace_entry in entry.trace_segment:
                 for var in set(trace_entry[1]) & rerecorded:
                     for path in self.executed_file_deps.get(var, ()):
@@ -669,10 +669,10 @@ class VirtualLineage:
         """
         first_changed_cell = 0
         cache_had_hash_mismatch = False
-        for idx in range(min(current_cell_idx, len(self._simulation_cache))):
+        for idx in range(min(current_cell_idx, len(self.simulation_cache))):
             cell_code = notebook_cells[idx].replace("\r\n", "\n")
             cell_hash = hashlib.sha256(cell_code.encode("utf-8")).hexdigest()
-            cached = self._simulation_cache[idx]
+            cached = self.simulation_cache[idx]
             if cached.cell_code_hash != cell_hash:
                 cache_had_hash_mismatch = True
                 if self.debug:
@@ -710,7 +710,7 @@ class VirtualLineage:
 
         Returns True if a hash mismatch was detected.
         """
-        cache_range_end = min(current_cell_idx, len(self._simulation_cache)) if self._simulation_cache else 0
+        cache_range_end = min(current_cell_idx, len(self.simulation_cache)) if self.simulation_cache else 0
         for idx in range(cache_range_end, current_cell_idx):
             if idx not in self._simulation_cell_hashes:
                 continue
@@ -735,16 +735,16 @@ class VirtualLineage:
         Returns ``(virtual_lineage, virtual_modules, simulation_trace,
         vars_mutated_by_loops, vars_with_stale_files)``.
         """
-        cached_entry = self._simulation_cache[first_changed_cell - 1]
+        cached_entry = self.simulation_cache[first_changed_cell - 1]
         virtual_lineage = dict(cached_entry.virtual_lineage)
         virtual_modules = set(cached_entry.virtual_modules)
         simulation_trace: list = []
         vars_mutated_by_loops: set[str] = set()
         vars_with_stale_files: set[str] = set()
         for ci in range(first_changed_cell):
-            simulation_trace.extend(self._simulation_cache[ci].trace_segment)
-            vars_mutated_by_loops.update(self._simulation_cache[ci].vars_mutated_by_loops)
-            vars_with_stale_files.update(self._simulation_cache[ci].vars_with_stale_files)
+            simulation_trace.extend(self.simulation_cache[ci].trace_segment)
+            vars_mutated_by_loops.update(self.simulation_cache[ci].vars_mutated_by_loops)
+            vars_with_stale_files.update(self.simulation_cache[ci].vars_with_stale_files)
         if self.debug:
             logger.debug(
                 "[UPSTREAM_DEBUG] Incremental simulation: reusing cache for cells 0-%d, simulating from cell %d",
@@ -753,7 +753,7 @@ class VirtualLineage:
             )
         return virtual_lineage, virtual_modules, simulation_trace, vars_mutated_by_loops, vars_with_stale_files
 
-    def _find_incremental_start(
+    def find_incremental_start(
         self,
         current_cell_idx: int,
         notebook_cells: list[str],
@@ -771,7 +771,7 @@ class VirtualLineage:
         vars_with_stale_files: set[str] = set()
 
         first_changed_cell = 0
-        had_prior_cache = bool(self._simulation_cache)
+        had_prior_cache = bool(self.simulation_cache)
         cache_had_hash_mismatch = False
 
         if self.debug:
@@ -780,11 +780,11 @@ class VirtualLineage:
                 "had_prior_cache=%s, cache_size=%d, cell_hashes_size=%d",
                 current_cell_idx,
                 had_prior_cache,
-                len(self._simulation_cache) if self._simulation_cache else 0,
+                len(self.simulation_cache) if self.simulation_cache else 0,
                 len(self._simulation_cell_hashes),
             )
 
-        if self._simulation_cache:
+        if self.simulation_cache:
             first_changed_cell, cache_had_hash_mismatch = self._scan_main_cache_for_changes(
                 current_cell_idx, notebook_cells
             )
@@ -797,7 +797,7 @@ class VirtualLineage:
         # from the import. Like a file change, this is not flagged as an
         # upstream CODE modification, which would withdraw trust from every
         # loop in the notebook.
-        state = self._tracking_state
+        state = self.tracking_state
         generation = getattr(state, "module_generation", 0)
         reloaded: set[str] = set()
         if generation != getattr(self, "_simulated_module_generation", 0):
@@ -822,7 +822,7 @@ class VirtualLineage:
         # what type of change was detected (code hash OR file dep staleness).
         # Without this, stale file deps would cause ALL cached state to be lost,
         # even for cells before the stale cell.
-        if first_changed_cell > 0 and self._simulation_cache and first_changed_cell <= len(self._simulation_cache):
+        if first_changed_cell > 0 and self.simulation_cache and first_changed_cell <= len(self.simulation_cache):
             (virtual_lineage, virtual_modules, simulation_trace, vars_mutated_by_loops, vars_with_stale_files) = (
                 self._restore_cached_state(first_changed_cell)
             )
@@ -837,7 +837,7 @@ class VirtualLineage:
             if live and isinstance(self.shell.user_ns.get(name), types.ModuleType):
                 virtual_lineage[name] = live
 
-        new_cache_entries = list(self._simulation_cache[:first_changed_cell]) if self._simulation_cache else []
+        new_cache_entries = list(self.simulation_cache[:first_changed_cell]) if self.simulation_cache else []
 
         return IncrementalStartResult(
             first_changed_cell=first_changed_cell,
@@ -861,7 +861,7 @@ class VirtualLineage:
             try:
                 clean_code = CodeAnalyzer.strip_magics(cell_code.replace("\r\n", "\n"))
                 if clean_code.strip():
-                    tree = self._get_cached_ast(clean_code)
+                    tree = self.get_cached_ast(clean_code)
                     if tree is not None:
                         for node in tree.body:
                             try:
@@ -873,7 +873,7 @@ class VirtualLineage:
                 logger.debug("Failed to parse notebook cell for unsaved extension check")
         return all_notebook_stmts
 
-    def _reapply_unsaved_extensions(
+    def reapply_unsaved_extensions(
         self,
         broken_vars: set[str],
         vars_updated_by_trace: set[str],
@@ -929,7 +929,7 @@ class VirtualLineage:
         "finally:",
     )
 
-    def _loop_accumulators_with_external_init(
+    def loop_accumulators_with_external_init(
         self,
         vars_mutated_by_loops: set[str],
         simulation_trace: list,
@@ -964,7 +964,7 @@ class VirtualLineage:
                 if stmt_code.lstrip().startswith(self._CTRL_PREFIXES):
                     continue  # loop/control wrapper; iterable feeds via the loop
                 for inp in inputs:
-                    if inp in loop_target_vars or inp in _BUILTIN_NAMES:
+                    if inp in loop_target_vars or inp in BUILTIN_NAMES:
                         continue
                     val = self.shell.user_ns.get(inp)
                     if val is not None and isinstance(val, types.ModuleType):
@@ -975,7 +975,7 @@ class VirtualLineage:
                     break
         return tainted
 
-    def _loops_reading_changed_data(
+    def loops_reading_changed_data(
         self,
         vars_mutated_by_loops: set[str],
         simulation_trace: list,
@@ -1000,7 +1000,7 @@ class VirtualLineage:
         their lineages disagree by construction.
         """
         changed: set[str] = set()
-        outcomes = self._tracking_state.control_outcomes
+        outcomes = self.tracking_state.control_outcomes
         for entry in simulation_trace:
             stmt_code, outputs, inputs, input_hashes = entry[0], entry[1], entry[2], entry[3] or {}
             accs = outputs & vars_mutated_by_loops
@@ -1010,7 +1010,7 @@ class VirtualLineage:
             if recorded is None:
                 continue
             for inp in inputs:
-                if inp in outputs or inp in loop_target_vars or inp in vars_derived_from_loops or inp in _BUILTIN_NAMES:
+                if inp in outputs or inp in loop_target_vars or inp in vars_derived_from_loops or inp in BUILTIN_NAMES:
                     continue
                 if isinstance(self.shell.user_ns.get(inp), types.ModuleType):
                     continue
@@ -1020,7 +1020,7 @@ class VirtualLineage:
                     break
         return changed
 
-    def _propagate_loop_derived_vars(
+    def propagate_loop_derived_vars(
         self,
         vars_mutated_by_loops: set[str],
         simulation_trace: list,
@@ -1064,7 +1064,7 @@ class VirtualLineage:
                     variable_lineage=self.variable_lineage,
                     user_ns=self.shell.user_ns,
                     function_tracker=self.function_tracker if hasattr(self, "function_tracker") else None,
-                    virtual_lineage=_key_lineages(input_hashes),
+                    virtual_lineage=key_lineages(input_hashes),
                     virtual_modules=virtual_modules,
                     compute_hash_fn=self.compute_hash_fn,
                     virtual_callables=self._virtual_callables,
@@ -1110,7 +1110,7 @@ class VirtualLineage:
                 logger.debug("[UPSTREAM] Error checking skipped stmt: %s", e)
             return None
 
-    def _collect_skipped_statement_metrics(
+    def collect_skipped_statement_metrics(
         self,
         simulation_trace: list,
         stmts_to_run_indices: list[int],
@@ -1230,7 +1230,7 @@ class VirtualLineage:
                     fully_rerun_mutated.add(mv)
         return fully_rerun_mutated
 
-    def _filter_accumulator_reinits(
+    def filter_accumulator_reinits(
         self,
         stmts_to_run_indices: list[int],
         simulation_trace: list,
@@ -1325,7 +1325,7 @@ class VirtualLineage:
             return stmts_to_run_indices + additional
         return stmts_to_run_indices
 
-    def _check_loop_derived_trust_override(
+    def check_loop_derived_trust_override(
         self,
         upstream_has_modifications: bool,
         vars_mutated_by_loops: set[str],
@@ -1358,7 +1358,7 @@ class VirtualLineage:
                 return True
         return False
 
-    def _build_loop_var_input_lineages(
+    def build_loop_var_input_lineages(
         self,
         simulation_trace: list,
         vars_derived_from_loops: set[str],
@@ -1383,7 +1383,7 @@ class VirtualLineage:
                     loop_var_input_lineages[out] = data_input_lineages
         return loop_var_input_lineages
 
-    def _build_simulation_trace_codes(self, simulation_trace: list) -> set[str]:
+    def build_simulation_trace_codes(self, simulation_trace: list) -> set[str]:
         """Return the set of normalised statement codes present in *simulation_trace*.
 
         Includes body-level statements from control structures so that
@@ -1395,7 +1395,7 @@ class VirtualLineage:
             normalized = re.sub(r"# __iteration_context__:.*?\n", "", stmt_code).strip()
             simulation_trace_codes.add(normalized)
             try:
-                tree = self._get_cached_ast(normalized)
+                tree = self.get_cached_ast(normalized)
                 if tree and len(tree.body) == 1 and is_control_structure(tree.body[0]):
                     for body_node in self._iter_body_nodes(tree.body[0]):
                         try:
@@ -1424,7 +1424,7 @@ class VirtualLineage:
         if stmt_has_stale_deps:
             vars_with_stale_files.update(outputs)
 
-    def _simulate_one_node(
+    def simulate_one_node(
         self,
         i: int,
         node: ast.AST,
@@ -1469,7 +1469,7 @@ class VirtualLineage:
                 # Local: import cycle upstream.virtual_lineage -> ipython.cell_executor -> ... -> upstream.virtual_lineage.
                 from ..ipython.cell_executor import CellExecutor
 
-                if CellExecutor._expr_has_trailing_semicolon(raw_cell, node):
+                if CellExecutor.expr_has_trailing_semicolon(raw_cell, node):
                     stmt_code += ";"
         except (ValueError, TypeError, AttributeError) as e:
             logger.debug("[UPSTREAM] Error processing node in cell %d: %s", i, e)
@@ -1525,7 +1525,7 @@ class VirtualLineage:
             if statement_writes_files(stmt_code) or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
                 simulation_trace.append(TraceEntry(stmt_code, outputs, inputs, input_hashes, {}, files_stale))
 
-    def _simulate_one_cell(
+    def simulate_one_cell(
         self,
         i: int,
         cell_code: str,
@@ -1577,7 +1577,7 @@ class VirtualLineage:
                 )
                 return
 
-            tree = self._get_cached_ast(clean_cell_code)
+            tree = self.get_cached_ast(clean_cell_code)
             if tree is None:
                 ast.parse(clean_cell_code)  # will raise SyntaxError
 
@@ -1592,7 +1592,7 @@ class VirtualLineage:
                 # .
                 if isinstance(node, ast.Raise):
                     break
-                self._simulate_one_node(
+                self.simulate_one_node(
                     i,
                     node,
                     cell_stmt_occurrence_counts,
@@ -1651,7 +1651,7 @@ class VirtualLineage:
             )
         )
 
-    def _simulate_cells_pass1(
+    def simulate_cells_pass1(
         self,
         first_changed_cell: int,
         current_cell_idx: int,
@@ -1672,7 +1672,7 @@ class VirtualLineage:
         self._sim_func_sources = self._build_function_sources(notebook_cells)
         for i in range(first_changed_cell, current_cell_idx):
             cell_code = notebook_cells[i].replace("\r\n", "\n")
-            self._simulate_one_cell(
+            self.simulate_one_cell(
                 i,
                 cell_code,
                 simulation_trace,
@@ -1690,7 +1690,7 @@ class VirtualLineage:
         # Entries beyond that are discarded to avoid stale lineage data.
         # For hash change detection across intermediate cell runs, we use
         # _simulation_cell_hashes (a separate lightweight structure).
-        self._simulation_cache = new_cache_entries
+        self.simulation_cache = new_cache_entries
 
         # This persists across intermediate cell runs so that a later cell can
         # detect code changes in cells that were truncated from the main cache.
@@ -1933,7 +1933,7 @@ class VirtualLineage:
         # What the runtime left behind when it last ran this very structure
         # (see TrackingState.control_outcomes): the files it read, and the
         # lineages it produced.
-        recorded = self._tracking_state.control_outcomes.get(hashlib.sha256(stmt_code.encode("utf-8")).hexdigest())
+        recorded = self.tracking_state.control_outcomes.get(hashlib.sha256(stmt_code.encode("utf-8")).hexdigest())
         if recorded is None:
             recorded = self._persisted_control_outcome(stmt_code, virtual_lineage)
         if recorded is not None:
@@ -1993,7 +1993,7 @@ class VirtualLineage:
             # ``if PACK.exists(): shutil.rmtree(PACK)`` binds nothing, so it had
             # no trace entry, and a replay after a restart re-ran the cell's
             # ``PACK.mkdir()`` without it (round 23, r23s2: FileExistsError).
-            # The same rule simple statements follow in _simulate_one_node.
+            # The same rule simple statements follow in simulate_one_node.
             simulation_trace.append(TraceEntry(stmt_code, set(), inputs, input_hashes, {}, files_stale))
 
     def _persisted_mutation_verdict(self, source_hash: str) -> set[str] | None:
@@ -2089,7 +2089,7 @@ class VirtualLineage:
         repeat the answer.
         """
 
-        epoch = _fds._HASH_EPOCH
+        epoch = _fds.HASH_EPOCH
         memo = _FRESH_ENTRY_VERDICTS
         if memo_key is not None and epoch is not None:
             if memo.get("epoch") != epoch:
@@ -2098,7 +2098,7 @@ class VirtualLineage:
                 memo["keys"] = set()
             if memo_key in memo["keys"]:
                 return True
-        full_hash_max = _fds._full_hash_max_bytes() if hist_files else None
+        full_hash_max = _fds.full_hash_max_bytes() if hist_files else None
         run = _file_state_this_run()
         fresh_this_run = run["fresh"] if run is not None else set()
         pending = {(fpath, _snapshot_token(stored)): (fpath, stored) for fpath, stored in hist_files.items()}
@@ -2254,7 +2254,7 @@ class VirtualLineage:
         # deterministic formula as the runtime and the miss path. Bumped vars are
         # threaded back so the caller can union them into ``outputs``.
         self._last_hit_bumped = bump_derived_lineages(
-            self._tracking_state.derivation_edges,
+            self.tracking_state.derivation_edges,
             virtual_lineage,
             outputs,
             inputs,
@@ -2266,7 +2266,7 @@ class VirtualLineage:
                 if out not in self.variable_lineage:
                     lineage_val = output_lineages.get(out)
                     if lineage_val:
-                        self._restores.record_restore(var_name=out, lineage_hash=lineage_val)
+                        self.restores.record_restore(var_name=out, lineage_hash=lineage_val)
                         if self.debug:
                             logger.debug(
                                 "[LINEAGE_DEBUG] Propagated module '%s' lineage (from cache): %s...",
@@ -2274,7 +2274,7 @@ class VirtualLineage:
                                 lineage_val[:12],
                             )
         # Mid-simulation drain: same reasoning as in _propagate_import_lineage.
-        apply_collected_mutations(self._restores, self._tracking_state)
+        apply_collected_mutations(self.restores, self.tracking_state)
         stmt_file_deps = self._stat_file_deps(hist_files)
         return ("hit", 0.0, stmt_file_deps)
 
@@ -2684,9 +2684,9 @@ class VirtualLineage:
             if out not in lineage_by_out:
                 continue
             held = self.variable_lineage.get(out)
-            if held is None or held == self._propagated_imports.get(out):
-                self._restores.record_restore(var_name=out, lineage_hash=lineage_by_out[out])
-                self._propagated_imports[out] = lineage_by_out[out]
+            if held is None or held == self.propagated_imports.get(out):
+                self.restores.record_restore(var_name=out, lineage_hash=lineage_by_out[out])
+                self.propagated_imports[out] = lineage_by_out[out]
                 if self.debug:
                     logger.debug(
                         "[LINEAGE_DEBUG] Propagated module '%s' lineage to variable_lineage: %s...",
@@ -2696,7 +2696,7 @@ class VirtualLineage:
         # Mid-simulation drain: subsequent statements' compute_cache_key reads
         # variable_lineage to include module components, so the write must be
         # visible before the next _update_virtual_lineage call.
-        apply_collected_mutations(self._restores, self._tracking_state)
+        apply_collected_mutations(self.restores, self.tracking_state)
 
     def _update_virtual_lineage(
         self,
@@ -2736,7 +2736,7 @@ class VirtualLineage:
             # or per the recorded broad-precise verdict) so the simulated lineage
             # is bumped with the SAME source-based formula -- keeping the engines
             # in sync (a runtime-only bump desyncs cross-cell restore).
-            mutation_tree = self._get_cached_ast(stmt_code)
+            mutation_tree = self.get_cached_ast(stmt_code)
             if mutation_tree is not None:
                 outputs = outputs | self._mutation_receivers(stmt_code, mutation_tree, virtual_modules)
 
@@ -2854,7 +2854,7 @@ class VirtualLineage:
 
             # Build file hash component
             file_hash_component = self._build_file_hash_component(file_deps_to_check, stmt_file_deps)
-            own_reads = self._tracking_state.statement_file_reads.get(cache_key)
+            own_reads = self.tracking_state.statement_file_reads.get(cache_key)
             if own_reads is not None:
                 # The runtime hashed the files THIS statement read -- not the
                 # ones its outputs inherited -- with compute_file_hash_component.
@@ -2906,7 +2906,7 @@ class VirtualLineage:
             # producer of the aliased base and reschedules it on an isolated
             # re-run (the base's own cache is the stale pre-mutation value).
             bumped = bump_derived_lineages(
-                self._tracking_state.derivation_edges,
+                self.tracking_state.derivation_edges,
                 virtual_lineage,
                 outputs,
                 inputs,
@@ -3043,12 +3043,12 @@ class VirtualLineage:
                     # routes through lineage.record, attaching _cash_lineage_hash
                     # to the live object. Drain immediately so the attribute is
                     # visible before _update_tracking_after_restore runs.
-                    self._restores.record_restore(
+                    self.restores.record_restore(
                         var_name=var,
                         lineage_hash=new_lineage,
                         value=val,
                     )
-                    apply_collected_mutations(self._restores, self._tracking_state)
+                    apply_collected_mutations(self.restores, self.tracking_state)
                 else:
                     # Variable wasn't tracked in the lineage store before, but
                     # we still want the attribute attached so future cache-key
@@ -3090,7 +3090,7 @@ class VirtualLineage:
 
         for var in restored_vars:
             lin = output_lineages.get(var) if output_lineages else None
-            self._restores.record_restore(
+            self.restores.record_restore(
                 var_name=var,
                 lineage_hash=lin,  # may be None — apply step skips lineage write if so
                 code=stored_code if stored_code else None,
@@ -3099,7 +3099,7 @@ class VirtualLineage:
                 file_deps=set(resolved_paths) if resolved_paths else None,
             )
 
-    def _eliminate_broken_vars_via_current_cell_probe(
+    def eliminate_broken_vars_via_current_cell_probe(
         self,
         broken_vars: set[str],
         notebook_cells: list[str],
@@ -3202,15 +3202,15 @@ class VirtualLineage:
                             # cached value when _restore_from_cache runs.
                             for var in produced:
                                 if var in virtual_lineage:
-                                    self._restores.record_restore(
+                                    self.restores.record_restore(
                                         var_name=var,
                                         lineage_hash=virtual_lineage[var],
                                     )
                                     # Drain so subsequent statements probing the
                                     # cache see the placeholder lineage.
                                     apply_collected_mutations(
-                                        self._restores,
-                                        self._tracking_state,
+                                        self.restores,
+                                        self.tracking_state,
                                     )
                                 if var not in self.shell.user_ns:
                                     self.shell.user_ns[var] = _FORWARD_PROBE_PLACEHOLDER
@@ -3234,7 +3234,7 @@ class VirtualLineage:
                     broken_vars,
                 )
 
-    def _try_virtual_restore(
+    def try_virtual_restore(
         self,
         stmt_code: str,
         outputs: set[str],
@@ -3269,7 +3269,7 @@ class VirtualLineage:
                     variable_lineage=self.variable_lineage,
                     user_ns=self.shell.user_ns,
                     function_tracker=self.function_tracker if hasattr(self, "function_tracker") else None,
-                    virtual_lineage=_key_lineages(input_hashes),
+                    virtual_lineage=key_lineages(input_hashes),
                     virtual_modules=virtual_modules,
                     compute_hash_fn=self.compute_hash_fn,
                     debug=self.debug,
@@ -3323,7 +3323,7 @@ class VirtualLineage:
 
         return set(), time_module.time() - start_time, 0.0
 
-    def _code_exists_in_notebook(self, mem_code: str, notebook_cells: list[str]) -> bool:
+    def code_exists_in_notebook(self, mem_code: str, notebook_cells: list[str]) -> bool:
         """Return True if the normalized form of *mem_code* appears as a top-level
         statement in any notebook cell.
 
@@ -3332,18 +3332,18 @@ class VirtualLineage:
         replaced.  On any parse/IO failure, returns False (conservative).
         """
         try:
-            normalized_mem_code = _normalize_stmt(mem_code)
+            normalized_mem_code = normalize_stmt(mem_code)
             for cell_code in notebook_cells:
                 clean_cell = CodeAnalyzer.strip_magics(cell_code.replace("\r\n", "\n"))
                 if not clean_cell.strip():
                     continue
                 try:
-                    cell_tree = self._get_cached_ast(clean_cell)
+                    cell_tree = self.get_cached_ast(clean_cell)
                     if cell_tree is None:
                         continue
                     for node in cell_tree.body:
                         try:
-                            node_code = _normalize_stmt(ast.unparse(node))
+                            node_code = normalize_stmt(ast.unparse(node))
                             if node_code == normalized_mem_code:
                                 return True
                         except (ValueError, TypeError):
@@ -3392,7 +3392,7 @@ class VirtualLineage:
                     directly_mismatched.add(vname)
         return directly_mismatched
 
-    def _compute_tainted_vars_from_unsaved_edits(
+    def compute_tainted_vars_from_unsaved_edits(
         self,
         virtual_lineage: dict[str, str],
         simulation_trace: list,
@@ -3442,7 +3442,7 @@ class VirtualLineage:
             )
         return vars_tainted
 
-    def _is_valid_extension(
+    def is_valid_extension(
         self, code: str, actual_lineage: str, virtual_lineage: dict[str, str], required_dependency: str | None = None
     ) -> bool:
         """
@@ -3464,7 +3464,7 @@ class VirtualLineage:
             # However, the lineage hash construction below sorts them anyway.
             sorted_inputs = sorted(inputs)
             for inp in sorted_inputs:
-                if inp in _BUILTIN_NAMES:
+                if inp in BUILTIN_NAMES:
                     continue
 
                 if inp in virtual_lineage:
@@ -3566,7 +3566,7 @@ class VirtualLineage:
                 mutated_vars.update(selfref_reassignment_targets(body_node))
 
         # Filter out built-ins and loop targets
-        return mutated_vars - _BUILTIN_NAMES - loop_targets
+        return mutated_vars - BUILTIN_NAMES - loop_targets
 
 
 def _first_cell_reading(notebook_cells: list[str], limit: int, names: set[str]) -> int | None:

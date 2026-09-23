@@ -18,14 +18,15 @@ from cash import __version__
 from cash.backends.adaptive_caps import adaptive_disk_cap_for, human_bytes, resolve_ram_cap
 from cash.backends.entry_format import ENTRY_SUFFIX, read_entry
 from cash.config import (
-    _SIZE_FIELDS,
+    SIZE_FIELDS,
     TOML_FLAT,
     TOML_MISSING,
     TOML_NOT_CASH,
     TOML_SECTION,
-    _per_user_cache_root,
+    config_provenance,
     format_size,
     get_config,
+    per_user_cache_root,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ def tool_cache_dir(name: str) -> str:
     names it.
     """
 
-    return str(_per_user_cache_root() / name)
+    return str(per_user_cache_root() / name)
 
 
 def _target_dir(args: argparse.Namespace) -> str:
@@ -119,7 +120,7 @@ def _entry_totals(cache_dir: str) -> tuple[int, int] | None:
 def _per_user_tool_caches() -> list[tuple[str, str, int, int]]:
     """``(tool, path, entries, bytes)`` for every per-user tool cache."""
     try:
-        root = _per_user_cache_root()
+        root = per_user_cache_root()
         children = sorted(p for p in root.iterdir() if p.is_dir())
     except (OSError, RuntimeError):
         return []
@@ -147,7 +148,7 @@ def cmd_info(args: argparse.Namespace) -> None:
 
     config = get_config(config_path=getattr(args, "config", None))
 
-    origins = getattr(config, "_origins", {})
+    source, origins, files = config_provenance(config)
 
     print(f"Cash v{get_version()}")
     print(f"  Backend:    {config.backend}")
@@ -209,7 +210,6 @@ def cmd_info(args: argparse.Namespace) -> None:
         TOML_MISSING: "not found",
         TOML_NOT_CASH: "no [tool.cash] section",
     }
-    files = getattr(config, "_files", [])
     if files:
         print("  Config files:")
         for layer, path, found in files:
@@ -220,7 +220,7 @@ def cmd_info(args: argparse.Namespace) -> None:
             print(f"    {key + ' = ' + _setting_text(config, key):<40} {origins[key]}")
     else:
         print("  Settings:   all defaults")
-    print(f"  Source:     {config._source}")
+    print(f"  Source:     {source}")
     # Installed tools run from outside a project cache per user, per tool --
     # somewhere this command cannot reach by default, because it is a
     # different console script. Say where they are, so an operator does not
@@ -262,7 +262,7 @@ def _setting_text(config, key: str) -> str:
         return ", ".join(_tier_text(t) for t in value) or "[]"
     if key == "redis_password" and value:
         return "***"
-    if key in _SIZE_FIELDS and isinstance(value, int):
+    if key in SIZE_FIELDS and isinstance(value, int):
         return format_size(value)
     return repr(value)
 

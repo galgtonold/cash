@@ -126,7 +126,7 @@ def adaptive_ram_cap(total_ram_bytes: int | None) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _free_bytes_on_volume(path: str) -> int:
+def free_bytes_on_volume(path: str) -> int:
     """Free bytes on the volume holding *path*.
 
     The cache directory may not exist yet at resolution time (the file
@@ -217,7 +217,7 @@ def _memory_budget() -> int | None:
 
 def resolve_disk_cap(cache_dir: str) -> int:
     """Adaptive disk-tier cap for the volume that holds *cache_dir*."""
-    cap = adaptive_disk_cap(_free_bytes_on_volume(cache_dir))
+    cap = adaptive_disk_cap(free_bytes_on_volume(cache_dir))
     logger.debug("[CAPS] adaptive disk cap for %s: %d bytes (%.1f GiB)", cache_dir, cap, cap / _GIB)
     return cap
 
@@ -248,7 +248,7 @@ def adaptive_disk_cap_for(cache_dir: str, own_bytes: int) -> int:
     becomes a property of the volume rather than of how full the cache happens
     to be. A cache with nothing in it gets exactly the same answer as before.
     """
-    return adaptive_disk_cap(_free_bytes_on_volume(cache_dir) + max(0, own_bytes))
+    return adaptive_disk_cap(free_bytes_on_volume(cache_dir) + max(0, own_bytes))
 
 
 def resolve_ram_cap() -> int:

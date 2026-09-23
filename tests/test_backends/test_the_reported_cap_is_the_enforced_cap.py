@@ -59,7 +59,7 @@ def volume(tmp_path, monkeypatch):
     cache.mkdir()
     state = {"free": 118 * GIB, "own": 0}
 
-    monkeypatch.setattr(caps, "_free_bytes_on_volume", lambda path: state["free"])
+    monkeypatch.setattr(caps, "free_bytes_on_volume", lambda path: state["free"])
     monkeypatch.setattr(FileBackend, "_scan_size_bytes", lambda self: state["own"])
     return cache, state
 
@@ -143,13 +143,13 @@ def test_the_re_derivation_is_throttled(volume):
     """
     cache, state = volume
     calls = {"n": 0}
-    real = caps._free_bytes_on_volume
+    real = caps.free_bytes_on_volume
 
     def counted(path):
         calls["n"] += 1
         return real(path)
 
-    caps._free_bytes_on_volume = counted
+    caps.free_bytes_on_volume = counted
     try:
         b = _backend(cache)
         for i in range(25):
@@ -157,7 +157,7 @@ def test_the_re_derivation_is_throttled(volume):
         b._writes.wait_all()
         b.shutdown()
     finally:
-        caps._free_bytes_on_volume = real
+        caps.free_bytes_on_volume = real
 
     assert calls["n"] <= 3, (
         f"25 writes measured free space {calls['n']} times; the re-derivation is meant to be throttled, not per-write"

@@ -24,7 +24,7 @@ callables so this module does not have to import ``purity`` or
 every input the decision reads is in the signature.
 
 The "should this input be skipped for lineage-check purposes?" predicate
-is inlined as ``_is_lineage_exempt`` — it's purely a property of the
+is inlined as ``is_lineage_exempt`` — it's purely a property of the
 value (module type, private callable, etc.) and has no production
 override, so no hook indirection is justified.
 """
@@ -101,7 +101,7 @@ _BUILTIN_NAMES: frozenset[str] = frozenset(dir(builtins))
 _SKIP_INPUT_NAMES: frozenset[str] = frozenset({"get_ipython", "__builtins__", "print", "__name__", "__doc__"})
 
 
-def _is_lineage_exempt(var_name: str, val: Any) -> bool:
+def is_lineage_exempt(var_name: str, val: Any) -> bool:
     """Return True if *val* is a kind of input that never needs lineage tracking.
 
     Modules, ``get_ipython``, and bound / private callables (whose source
@@ -264,6 +264,6 @@ def _has_missing_lineage(
             return True
         if var_name not in variable_lineage:
             val = user_ns[var_name]
-            if not _is_lineage_exempt(var_name, val):
+            if not is_lineage_exempt(var_name, val):
                 return True
     return False

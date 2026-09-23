@@ -48,7 +48,7 @@ from .analysis.annotations import parse_annotation_line
 from .analysis.cacheability_decision import identity_coupled_reason
 from .analysis.code_analyzer import CodeAnalyzer
 from .backends import CacheBackend, CacheMetadata, TieredBackend
-from .backends._base import _in_multiprocessing_child
+from .backends._base import in_multiprocessing_child
 from .backends.factory import build_backend_from_config
 from .backends.file_backend import recreate_cache_dir
 from .backends.serialization import get_serializer
@@ -69,7 +69,7 @@ from .diagnostics import (
     warn_diagnostic,
     warn_diagnostic_message,
 )
-from .effect_observer import EffectObserver, _line_waived
+from .effect_observer import EffectObserver, line_waived
 from .effectiveness import EffectivenessLedger
 from .exceptions import (
     SOURCE_RETRIEVAL_ERRORS,
@@ -83,7 +83,7 @@ from .exceptions import (
 from .graph import DependencyGraph
 from .lineage_tag import own_tag
 from .object_hashing import estimate_object_size
-from .purity import _WRITE_METHODS
+from .purity import WRITE_METHODS
 from .purity_analyzer import (
     ISSUE_AMBIENT_READ,
     ISSUE_IMPURE_CALL,
@@ -91,20 +91,20 @@ from .purity_analyzer import (
     ISSUE_UNTRACKABLE_DEP,
     PurityIssue,
     PurityReport,
-    _local_import_map,
-    _own_code_is_user,
-    _resolve_local_import,
     bindings_changed,
     callable_layers,
     get_analyzer,
     is_mock,
+    local_import_map,
+    own_code_is_user,
     own_source,
     resolve_binding,
+    resolve_local_import,
 )
 from .remote_source import measured_validation, validation_is_expensive, warn_validation_cost_once
 from .source_norm import (
-    _class_functions,
     bytecode_identity,
+    class_functions,
     code_consts_without_docstring,
     loaded_class_identity,
     loaded_code_matches_disk,
@@ -112,16 +112,16 @@ from .source_norm import (
 )
 from .tracking.file_dep_snapshot import (
     ACTIVE_CONFIG,
-    _full_hash_max_bytes,
     attach_code_relative,
     dep_path_for_this_process,
     file_dep_is_fresh,
+    full_hash_max_bytes,
     snapshot_dependencies,
 )
 from .tracking.file_tracker import (
     FileAccessTracker,
     FileDependencyRegistry,
-    _active_tracker,
+    active_tracker,
     credited_reads,
     install_read_watch,
     untracked,
@@ -1263,10 +1263,10 @@ _SOURCE_CHANGED_WARNED: set[str] = set()
 #: `CASH_DEBUG=1` or `verbose=True` asks for it.
 _calls_logger = logging.getLogger("cash.calls")
 
-#: The stderr handler `_enable_cash_logging` installed, if it installed one.
+#: The stderr handler `enable_cash_logging` installed, if it installed one.
 _CASH_STDERR_HANDLER: logging.Handler | None = None
 
-#: The level `_enable_cash_logging` last set on the `cash` logger; a level
+#: The level `enable_cash_logging` last set on the `cash` logger; a level
 #: anyone else set is theirs.
 _CASH_LEVEL_SET: int | None = None
 
@@ -1303,7 +1303,7 @@ def _real_handlers(logger: logging.Logger) -> list[logging.Handler]:
     return found
 
 
-def _enable_cash_logging(level: int) -> None:
+def enable_cash_logging(level: int) -> None:
     """Make `cash` log records at *level* reach the user.
 
     Sets the `cash` logger's level unless someone else already has, and --
@@ -2011,7 +2011,7 @@ class Cash:
         # nothing but this attribute, and a script has no logging configured,
         # so `CASH_DEBUG=1` printed not one line (round 17, three testers).
         if debug or verbose:
-            _enable_cash_logging(logging.DEBUG if debug else logging.INFO)
+            enable_cash_logging(logging.DEBUG if debug else logging.INFO)
 
         # What a miss was, for the people asking "why did that recompute?".
         # All three are in-process memory only, and bounded: they explain,
@@ -2131,13 +2131,18 @@ class Cash:
         """Allow direct assignment (e.g. ``c.backend = MyBackend()``)."""
         self._backend = value
 
+    @property
+    def backend_if_built(self) -> CacheBackend | None:
+        """The backend if one has been built, else ``None``; never builds one."""
+        return self._backend
+
     def __repr__(self) -> str:
         backend_name = type(self._backend).__name__ if self._backend is not None else "<deferred>"
         n_funcs = len(self.functions)
         return f"Cash(backend={backend_name}, functions={n_funcs}, debug={self.debug})"
 
     @staticmethod
-    def _get_func_key(func: Callable) -> str:
+    def get_func_key(func: Callable) -> str:
         """Return a module-qualified key for a function.
 
         Uses ``func.__module__ + '.' + func.__qualname__`` to avoid collisions
@@ -2157,7 +2162,7 @@ class Cash:
             # attacking the decorator before round 26). Name it after what it
             # wraps, plus what it binds -- two partials of one function stay
             # two namespaces, and each is the same in every process.
-            inner = Cash._get_func_key(func.func)
+            inner = Cash.get_func_key(func.func)
             try:
                 bound = hashlib.sha256(
                     repr((func.args, sorted(func.keywords.items()))).encode("utf-8"),
@@ -2397,7 +2402,7 @@ class Cash:
         if _EXPLAINING.get():
             return
 
-        functions = _class_functions(carrier) if isinstance(carrier, type) else [getattr(carrier, "__func__", carrier)]
+        functions = class_functions(carrier) if isinstance(carrier, type) else [getattr(carrier, "__func__", carrier)]
         for fn in functions:
             if not isinstance(fn, types.FunctionType):
                 continue
@@ -2672,8 +2677,8 @@ class Cash:
         """
         parts: list[str] = []
         seen_carriers: set[int] = set()
-        # A clock test double's date is the date, not code (`_fake_clock`).
-        fake_dates = _plain_data._fake_clock()[0]
+        # A clock test double's date is the date, not code (`fake_clock`).
+        fake_dates = _plain_data.fake_clock()[0]
         for param, value in (*((None, a) for a in args), *kwargs.items()):
             for carrier in self._iter_code_carriers(value):
                 if fake_dates and (type(carrier) in fake_dates or carrier in fake_dates):
@@ -2725,7 +2730,7 @@ class Cash:
         """
 
         if isinstance(carrier, type):
-            functions = _class_functions(carrier)
+            functions = class_functions(carrier)
         else:
             fn = getattr(carrier, "__func__", carrier)
             functions = [fn] if isinstance(fn, types.FunctionType) else []
@@ -3068,7 +3073,7 @@ class Cash:
         file_depends_on: str | list[str] | None,
     ) -> str:
         """Register a function in the cache graph and return its key."""
-        func_name = self._get_func_key(func)
+        func_name = self.get_func_key(func)
         self.functions[func_name] = func
         new_hash = CodeAnalyzer.get_source_hash(func)
         old_hash = self.source_hashes.get(func_name)
@@ -3114,9 +3119,9 @@ class Cash:
 
         for _, path in self._declared_files.get(func_name, ()):
             if os.path.exists(path):
-                tracker._add_tracked(normalize_path(os.path.realpath(path)))
+                tracker.add_tracked(normalize_path(os.path.realpath(path)))
             else:
-                tracker._add_tracked_absent(normalize_path(path))
+                tracker.add_tracked_absent(normalize_path(path))
 
     def _pin_own_source(self, func: Callable, source_hash: str | None = None) -> str:
         """Identity of *func* itself, pinned per function object.
@@ -3146,7 +3151,7 @@ class Cash:
         # on a repr carrying the wrapped function's ADDRESS -- a different pin
         # in every process, so a cached partial never hit across processes.
         # What it wraps is the code that runs; what it binds is already in the
-        # namespace name (`_get_func_key`).
+        # namespace name (`get_func_key`).
         depth = 0
         while isinstance(func, functools.partial) and depth < 8:
             func = func.func
@@ -4504,24 +4509,24 @@ class Cash:
         if not snap:
             return
         try:
-            tracker = _active_tracker.get()
+            tracker = active_tracker.get()
         except Exception:  # noqa: BLE001 - tracking is best-effort
             return
         if tracker is None:
             return
         for path, recorded in snap.items():
             # A remote entry must go back onto the remote channel: routed to
-            # ``_add_tracked`` it would enter the file set, be stat'ed, and be
+            # ``add_tracked`` it would enter the file set, be stat'ed, and be
             # dropped - so the outer entry would silently lose the dependency.
             if isinstance(recorded, dict) and recorded.get("remote"):
-                tracker._add_tracked_remote(path)
+                tracker.add_tracked_remote(path)
             else:
                 # The file THIS process would read -- another install's copy
                 # would give the enclosing entry the writer's path (CAS-108).
                 # The hit just checked this file against the recorded hash, so
                 # that hash is the file as it is: no second read to take it.
                 digest = recorded.get("hash") if isinstance(recorded, dict) else None
-                tracker._add_tracked(dep_path_for_this_process(path, recorded), digest)
+                tracker.add_tracked(dep_path_for_this_process(path, recorded), digest)
 
     def _auto_file_deps_fresh(self, metadata: CacheMetadata) -> bool:
         """Return True if every file recorded in ``metadata.auto_file_deps``
@@ -4551,7 +4556,7 @@ class Cash:
         # directory tree looking for the project marker: profiling a 50-file hit
         # found 7,000 stat calls and 130 ms in there, three times the checking
         # it was guarding.
-        full_hash_max = _full_hash_max_bytes()
+        full_hash_max = full_hash_max_bytes()
 
         # Remote entries cost a network round trip each to check, so the check
         # itself is worth measuring - see _warn_if_validation_is_expensive.
@@ -5344,7 +5349,7 @@ class Cash:
                 self.data_sources[dep_id] = dep
                 self.graph.add_dependency(func_name, dep_id)
             elif callable(dep):
-                dep_key = self._get_func_key(dep)
+                dep_key = self.get_func_key(dep)
                 self.graph.add_dependency(func_name, dep_key)
                 # A declared callable dep that is NOT a decorated cached function
                 # would contribute nothing to the state hash (the hasher only
@@ -5588,7 +5593,7 @@ class Cash:
         unsafe: set[str] = set()
         write_methods: frozenset[str] = frozenset()
         if mutating_methods_only:
-            write_methods = _WRITE_METHODS
+            write_methods = WRITE_METHODS
         for node in ast.walk(tree):
             if waived is not None and isinstance(node, (ast.Call, ast.stmt)) and waived(node):
                 continue
@@ -5644,7 +5649,7 @@ class Cash:
             if start is None:
                 return False
             end = getattr(node, "end_lineno", None) or start
-            return any(_line_waived(filename, offset + n) for n in range(start, end + 1))
+            return any(line_waived(filename, offset + n) for n in range(start, end + 1))
 
         return waived
 
@@ -6325,7 +6330,7 @@ class Cash:
         if getattr(fn, "_cash_cached", False):
             inner = getattr(fn, "__wrapped__", None)
             if inner is not None:
-                name = self._get_func_key(inner)
+                name = self.get_func_key(inner)
                 if name in self.functions:
                     if name not in self._populated:
                         self._ensure_closure_analyzed(inner)
@@ -6335,7 +6340,7 @@ class Cash:
             return self._hash_callable_source(fn)
         own = self._hash_helper_identity(fn)
 
-        if not _own_code_is_user(fn, getattr(fn, "__module__", None)):
+        if not own_code_is_user(fn, getattr(fn, "__module__", None)):
             return own
         try:
             report = get_analyzer().analyze(fn)
@@ -7438,7 +7443,7 @@ class Cash:
                     return None
                 method = getattr(value, "__name__", "")
 
-                if method in _WRITE_METHODS or method in _LOG_METHOD_NAMES:
+                if method in WRITE_METHODS or method in _LOG_METHOD_NAMES:
                     # `record = RESULTS.append`, `log = logger.info`: what the
                     # owner holds is the call's OUTPUT, not an input.
                     return None
@@ -7459,7 +7464,7 @@ class Cash:
                         return None
                     payload = ("reduce", cls.__module__, cls.__qualname__, reduced)
             if verdict is None:
-                runs_user_code = any(_own_code_is_user(layer, root_module) for layer in callable_layers(value))
+                runs_user_code = any(own_code_is_user(layer, root_module) for layer in callable_layers(value))
                 if runs_user_code:
                     # Its code is the helper walk's. What a LIBRARY wrapper
                     # around that code holds besides is still data the user
@@ -7817,7 +7822,7 @@ class Cash:
                 (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))), None
             )
             if func_def is not None:
-                imports = _local_import_map(func_def, func)
+                imports = local_import_map(func_def, func)
                 watched = set(imports) | set(code.co_freevars or ())
                 attr_reads: dict[str, set[str]] = {}
                 bare_reads: set[str] = set()
@@ -7871,7 +7876,7 @@ class Cash:
         def resolve(name: str) -> Any:
             if name in imports:
                 module_name, prefix = imports[name]
-                return _resolve_local_import(module_name, prefix, root_module)
+                return resolve_local_import(module_name, prefix, root_module)
             cell = cells.get(name)
             if cell is None:
                 return None
@@ -9421,7 +9426,7 @@ class Cash:
             # would read as a memo of a fixed file.
             chosen = (remembered.keys() & arg_paths) or set(remembered)
             for path in sorted(chosen - have):
-                tracker._add_tracked(path)
+                tracker.add_tracked(path)
                 then = remembered[path]
                 if then is not None and tracker.read_stats.get(path, then) != then:
                     tracker.stale_memo_reads.add(path)
@@ -10188,7 +10193,7 @@ class Cash:
         text = " ".join((ast.get_source_segment(source, best) or "").split())
         if len(text) > 80:
             text = text[:77] + "..."
-        inside = "" if reader is cached else f" in {Cash._get_func_key(reader)}"
+        inside = "" if reader is cached else f" in {Cash.get_func_key(reader)}"
         return f" -- through `{text}`{inside} ({filename}:{lineno})"
 
     def _refuses_identity_coupled(self, func_name: str, result: Any) -> bool:
@@ -10843,7 +10848,7 @@ class Cash:
         try:
             text = self.run_summary()
             if text:
-                if _in_multiprocessing_child():
+                if in_multiprocessing_child():
                     # One table per worker process: say whose it is.
                     text = text.replace("cash:", f"cash (pid {os.getpid()}):", 1)
                 # stderr: stdout is the program's output -- a report, a pipe, a
@@ -10944,7 +10949,7 @@ class Cash:
         warnings fire or when.
         """
         self._ensure_closure_analyzed(func)
-        func_name = self._get_func_key(func)
+        func_name = self.get_func_key(func)
         report = self._purity_reports.get(func_name) or PurityReport()
         mode = self._purity_modes.get(func_name, "warn")
         self._surface_purity(func_name, report, mode)
@@ -10976,7 +10981,7 @@ class Cash:
         seen: set[str] = set()
         while stack:
             f = stack.pop()
-            fname = self._get_func_key(f)
+            fname = self.get_func_key(f)
             if fname in seen:
                 continue
             seen.add(fname)

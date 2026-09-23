@@ -40,7 +40,7 @@ are pinned here so none regresses silently:
   putting an UNDIRECTED function on the recovery path and re-opening the
   exact cross-path hash instability above for a user who wrote no
   annotation at all. Fixed by gating on
-  ``purity_analyzer._audited_lines(body)`` instead -- the same function the
+  ``purity_analyzer.audited_lines(body)`` instead -- the same function the
   analyzer itself calls to decide whether a line is waived, so the gate and
   the analyzer agree about what counts as "directed" BY CONSTRUCTION rather
   than by a second, independently-fallible guess. See
@@ -205,7 +205,7 @@ def test_a_non_waiver_directive_between_the_decorator_and_def_is_not_recovered()
     RECONSTRUCTED PREFIX (between the decorator and the ``def`` keyword),
     not in ``ast.get_source_segment``'s own span -- a different code path
     than the three cases above, which all sit inside the segment itself.
-    ``_audited_lines`` recognises ``assume-safe`` only, so a comment
+    ``audited_lines`` recognises ``assume-safe`` only, so a comment
     documenting a DIFFERENT ``@cash:`` directive here (meaningless in this
     position regardless) must not fire the gate either."""
     cell = "@c.cache\n# @cash:no-cache - not real here, just documenting the syntax\ndef f(n):\n    return n\n"

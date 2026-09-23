@@ -100,9 +100,9 @@ class TestUpstreamASTCache:
         checker = UpstreamChecker(mock_shell)
 
         code = "x = 1 + 2"
-        tree1 = checker.simulator._virtual_lineage._get_cached_ast(code)
+        tree1 = checker.simulator.virtual_lineage.get_cached_ast(code)
         assert tree1 is not None
-        tree2 = checker.simulator._virtual_lineage._get_cached_ast(code)
+        tree2 = checker.simulator.virtual_lineage.get_cached_ast(code)
         assert tree2 is tree1
 
     def test_ast_cache_syntax_error(self):
@@ -110,19 +110,19 @@ class TestUpstreamASTCache:
         mock_shell.user_ns = {}
         checker = UpstreamChecker(mock_shell)
 
-        tree = checker.simulator._virtual_lineage._get_cached_ast("def :")
+        tree = checker.simulator.virtual_lineage.get_cached_ast("def :")
         assert tree is None
 
     def test_ast_cache_eviction(self):
         mock_shell = MagicMock()
         mock_shell.user_ns = {}
         checker = UpstreamChecker(mock_shell)
-        checker.simulator._virtual_lineage._ast_cache_max_size = 4
+        checker.simulator.virtual_lineage._ast_cache_max_size = 4
 
         for i in range(6):
-            checker.simulator._virtual_lineage._get_cached_ast(f"x_{i} = {i}")
+            checker.simulator.virtual_lineage.get_cached_ast(f"x_{i} = {i}")
 
-        assert len(checker.simulator._virtual_lineage._ast_cache) <= 6
+        assert len(checker.simulator.virtual_lineage._ast_cache) <= 6
 
 
 class TestUpdateTrackingAfterRestoreFileDeps:
@@ -151,7 +151,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             "source_hash": "hash1",
             "file_dependencies": {csv_path: {"mtime": csv_file.stat().st_mtime}},
         }
-        checker.simulator._virtual_lineage._update_tracking_after_restore({"df"}, metadata, {"data_path": "lin1"})
+        checker.simulator.virtual_lineage._update_tracking_after_restore({"df"}, metadata, {"data_path": "lin1"})
         checker.simulator._apply_phase_mutations()
 
         assert "df" in checker.executed_file_deps
@@ -165,7 +165,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             "code": "x = 42",
             "source_hash": "hash1",
         }
-        checker.simulator._virtual_lineage._update_tracking_after_restore({"x"}, metadata, {})
+        checker.simulator.virtual_lineage._update_tracking_after_restore({"x"}, metadata, {})
         checker.simulator._apply_phase_mutations()
 
         assert "x" not in checker.executed_file_deps
@@ -189,7 +189,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
                 "source_hash": "hash1",
                 "file_dependencies": {stale_path: {"mtime": 0.0}},
             }
-            checker.simulator._virtual_lineage._update_tracking_after_restore({"df"}, metadata, {})
+            checker.simulator.virtual_lineage._update_tracking_after_restore({"df"}, metadata, {})
             checker.simulator._apply_phase_mutations()
 
             assert "df" in checker.executed_file_deps
@@ -209,7 +209,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             "source_hash": "hash1",
             "file_dependencies": {"/no/such/file/ever_unique_xyz.csv": {"mtime": 0.0}},
         }
-        checker.simulator._virtual_lineage._update_tracking_after_restore({"df"}, metadata, {})
+        checker.simulator.virtual_lineage._update_tracking_after_restore({"df"}, metadata, {})
         checker.simulator._apply_phase_mutations()
 
         # No resolved path → nothing added
@@ -228,7 +228,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             "source_hash": "hash1",
             "file_dependencies": {csv_path: {"mtime": csv_file.stat().st_mtime}},
         }
-        checker.simulator._virtual_lineage._update_tracking_after_restore({"df", "df2"}, metadata, {})
+        checker.simulator.virtual_lineage._update_tracking_after_restore({"df", "df2"}, metadata, {})
         checker.simulator._apply_phase_mutations()
 
         assert csv_path in checker.executed_file_deps["df"]
@@ -279,7 +279,7 @@ class TestUpstreamFindCellIndex:
 
 
 class TestForwardProbePopulatesState:
-    """Verify _eliminate_broken_vars_via_current_cell_probe injects
+    """Verify eliminate_broken_vars_via_current_cell_probe injects
     placeholder values and lineages for resolved broken vars."""
 
     def _make_checker(self):
@@ -314,7 +314,7 @@ class TestForwardProbePopulatesState:
         virtual_lineage = {"df": "lineage_hash_abc"}
         cells = ["x = 10", "df['col'] = x * 2"]
 
-        checker.simulator._virtual_lineage._eliminate_broken_vars_via_current_cell_probe(
+        checker.simulator.virtual_lineage.eliminate_broken_vars_via_current_cell_probe(
             broken,
             cells,
             1,
@@ -340,7 +340,7 @@ class TestForwardProbePopulatesState:
         virtual_lineage = {"df": "lineage_hash_abc"}
         cells = ["x = 10", "df['col'] = x * 2"]
 
-        checker.simulator._virtual_lineage._eliminate_broken_vars_via_current_cell_probe(
+        checker.simulator.virtual_lineage.eliminate_broken_vars_via_current_cell_probe(
             broken,
             cells,
             1,
@@ -367,7 +367,7 @@ class TestForwardProbePopulatesState:
         virtual_lineage = {"df": "lineage_hash_abc"}
         cells = ["x = 10", "df['col'] = x * 2"]
 
-        checker.simulator._virtual_lineage._eliminate_broken_vars_via_current_cell_probe(
+        checker.simulator.virtual_lineage.eliminate_broken_vars_via_current_cell_probe(
             broken,
             cells,
             1,

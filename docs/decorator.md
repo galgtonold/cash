@@ -145,7 +145,7 @@ A notebook shows a badge on every statement. A script shows nothing by
 default, which makes it easy to assume caching is working when it isn't — so
 there are several ways to look.
 
-<!-- claim: cash/core.py:Cash.run_summary @5e2a67c4, cash/core.py:Cash._summary_reasons @0d5a6d85, cash/core.py:Cash._print_run_summary @9b43a38c -->
+<!-- claim: cash/core.py:Cash.run_summary @5e2a67c4, cash/core.py:Cash._summary_reasons @0d5a6d85, cash/core.py:Cash._print_run_summary @edd281cb -->
 **What recomputed just now, and why?** Set `CASH_SUMMARY=1` and a
 per-function table prints to **stderr** when the process exits — stderr, so it
 never lands in a report, a pipe or a JSON response your program writes to
@@ -233,7 +233,7 @@ says so — `-- trusts the timestamps of big.npy (sampled: ...)` — because onl
 three regions of such a file are hashed and the rest is trusted to its
 timestamps ([why](known-limitations.md)).
 
-<!-- claim: cash/core.py:_StandDownWhenTheAppLogs.filter @1f08254a, cash/core.py:Cash._print_run_summary @9b43a38c -->
+<!-- claim: cash/core.py:_StandDownWhenTheAppLogs.filter @1f08254a, cash/core.py:Cash._print_run_summary @edd281cb -->
 With `CASH_DEBUG` they come with cash's other debug records. If your program configures `logging`
 itself, those records go to your handlers in your format instead, and no
 stderr handler is added. That holds when it configures logging *after*
@@ -287,7 +287,7 @@ Worth understanding before any parameter. With a bare `@cash.cache` and nothing
 configured, a cached result is discarded and recomputed when **any** of these
 change:
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/core.py:Cash._analyze_dependencies @d32aeb90 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @5007a8fe, cash/core.py:Cash._analyze_dependencies @9de1e072 -->
 | What changed | How it's detected |
 |---|---|
 | The **arguments** | Hashed by *content* — so DataFrames and arrays work, and two equal-but-distinct objects share one entry |
@@ -389,7 +389,7 @@ cached function counts as your code even after `pip install .`, so a changed
 checkout. If you do need a third-party function's identity in the key, name it
 with [`depends_on=`](#depends_on-explicit-dependency-graph).
 
-<!-- claim: cash/core.py:Cash._local_binding_parts @662ffcb4, cash/purity_analyzer.py:_resolve_local_import @6a618af2 -->
+<!-- claim: cash/core.py:Cash._local_binding_parts @440fccdc, cash/purity_analyzer.py:resolve_local_import @e2289266 -->
 An import written **inside** the function (`from .models import auc`, the usual
 way out of an import cycle) is followed the same way as one at the top of the
 file -- a function it imports, a constant (`from .settings import ROUNDING`),
@@ -410,7 +410,7 @@ used to count.
 
 ### File reads are tracked automatically
 
-<!-- claim: cash/tracking/file_tracker.py:_install_module_patches @027b224f, cash/tracking/file_tracker.py:FileDependencyRegistry @c82e6618 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
+<!-- claim: cash/tracking/file_tracker.py:_install_module_patches @f95eedc5, cash/tracking/file_tracker.py:FileDependencyRegistry @0748485a broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
 You usually don't need to declare files at all: cash intercepts file reads
 *inside* a cached function — `pd.read_csv`, `np.load`, `open()`, `joblib.load`,
 … — and folds each file's fingerprint into the entry, so changing the file on
@@ -431,7 +431,7 @@ coming back False is an input — it chose the defaults branch — so the entry 
 produced stops being valid once that file appears, including when the same
 relative name resolves into a directory that has one.
 
-<!-- claim: cash/tracking/file_tracker.py:_patch_thread_pool_submit @1a74031b -->
+<!-- claim: cash/tracking/file_tracker.py:_patch_thread_pool_submit @3168a570 -->
 Reads in a **thread pool** the function starts count too:
 `ThreadPoolExecutor(4).map(np.load, shards)` records every shard, the same as a
 serial loop would — it used to record none of them. A thread you start
@@ -439,7 +439,7 @@ yourself with `threading.Thread(target=...)` begins with nothing cash can see,
 so a file read only there is not tracked; read it in the function, hand the work
 to a `ThreadPoolExecutor`, or name the file with `file_depends_on=`.
 
-<!-- claim: cash/tracking/file_tracker.py:_patch_process_pool_submit @9e495aaf, cash/tracking/file_tracker.py:_ReadsInWorker.__call__ @288a0a53 -->
+<!-- claim: cash/tracking/file_tracker.py:_patch_process_pool_submit @1d42b2f6, cash/tracking/file_tracker.py:_ReadsInWorker.__call__ @288a0a53 -->
 A **`ProcessPoolExecutor`** the function starts reads in other processes, and
 cash brings those reads back: each task runs in its worker under a tracker of
 its own and returns what it read with its result, so `ex.map(read_region,
@@ -449,7 +449,7 @@ import of cash's file tracker. `multiprocessing.Pool` and joblib's workers are
 not wrapped: files read only there are not seen, so name them with
 `file_depends_on=`.
 
-<!-- claim: cash/core.py:Cash._credit_remembered_reads @b5583940, cash/tracking/file_tracker.py:_credit_read_to_stack @a47279d7 -->
+<!-- claim: cash/core.py:Cash._credit_remembered_reads @22499d44, cash/tracking/file_tracker.py:_credit_read_to_stack @a47279d7 -->
 A read your code **memoises** counts for every call that uses it. With
 `parse = functools.lru_cache()(parse_csv)` — or a module-level dict of parsed
 files — only the first cached function to call `parse(path)` actually opens
@@ -520,7 +520,7 @@ normally.
 The same rule applies to variables a closure captures, not just module
 globals.
 
-<!-- claim: cash/core.py:Cash._carried_global_hash @f88bf42c -->
+<!-- claim: cash/core.py:Cash._carried_global_hash @55330164 -->
 **A callable built from data counts as that data.** A global that is a
 library callable carrying values — `SMOOTH = partial(ndimage.gaussian_filter,
 sigma=SIGMA)`, `POLY = np.poly1d(COEFFS)`, `CAL = interp1d(X, Y)`,
@@ -629,7 +629,7 @@ def build(schema):
 build(Schema)                    # edit Schema, call again -> used to return the old answer
 ```
 
-<!-- claim: cash/core.py:Cash._fold_code_args @ba57fd9c, cash/core.py:Cash._iter_code_carriers @ef2a0021 -->
+<!-- claim: cash/core.py:Cash._fold_code_args @1945cfc2, cash/core.py:Cash._iter_code_carriers @ef2a0021 -->
 Your code reached through the arguments now folds into `state_hash`, so editing
 it invalidates. cash finds it in a class, a function, an instance (through its
 class), any of those nested in a list/tuple/set/dict, and an instance whose
@@ -720,7 +720,7 @@ flowchart TD
     F -->|Yes| G[Return cached value]
 ```
 
-<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @ba57fd9c -->
+<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @1945cfc2 -->
 The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
 
 - `state_hash` folds in the function's own source hash + every
@@ -862,7 +862,7 @@ def parse_config():
     return yaml.safe_load(open("config.yaml"))
 ```
 
-<!-- claim: cash/core.py:Cash._track_declared_files @dea974d8 -->
+<!-- claim: cash/core.py:Cash._track_declared_files @1a1a4d66 -->
 Pass a list for multiple files. A declared file is recorded exactly as if the
 function had read it: its **content** fingerprint is stored with the entry and
 checked on every lookup, the same check automatic tracking uses. A `touch` that
@@ -996,7 +996,7 @@ By default, `@cash.cache` runs a static analyzer on the function body
   `globals()[name]()` → a warning, and the function is **still cached**.
   Editing the callable such a table holds does not invalidate; name it with
   `depends_on=[...]` and it will. A **module-level** table (`HANDLERS[key]()`)
-  needs none of this — <!-- claim: cash/core.py:Cash._data_callable_identity_of @c5465b9e -->cash hashes it as a global already, and each function
+  needs none of this — <!-- claim: cash/core.py:Cash._data_callable_identity_of @000f2d06 -->cash hashes it as a global already, and each function
   in it counts as what calling it runs: its source, the helpers it calls, and
   for a `@cash.cache` function its whole dependency state, so an edit to a
   step's helper, or to a cached step's own body, recomputes the function that

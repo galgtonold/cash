@@ -56,7 +56,7 @@ def volume(tmp_path, monkeypatch):
     def fake_free(path):
         return total_free_when_empty - used["bytes"]
 
-    monkeypatch.setattr(caps, "_free_bytes_on_volume", fake_free)
+    monkeypatch.setattr(caps, "free_bytes_on_volume", fake_free)
     # The directory walk is what turns bytes on disk into `_current_size_bytes`;
     # it is exercised in its own tests. Here it is only the courier for the
     # footprint, and paying 12 GiB of I/O to move one integer is what broke CI.
@@ -83,7 +83,7 @@ def test_the_cap_does_not_shrink_as_the_cache_fills(volume):
 
     full = FileBackend(
         str(cache),
-        max_size_bytes=adaptive_disk_cap(caps._free_bytes_on_volume(str(cache))),
+        max_size_bytes=adaptive_disk_cap(caps.free_bytes_on_volume(str(cache))),
         adaptive_cap=True,
         flush_interval=0,
     )
@@ -132,19 +132,19 @@ def test_the_cap_still_follows_the_volume(volume):
 
     # Something else on the volume eats 40 GiB.
     monkey = free_when_empty - 40 * GIB
-    orig = caps._free_bytes_on_volume
-    caps._free_bytes_on_volume = lambda path: monkey
+    orig = caps.free_bytes_on_volume
+    caps.free_bytes_on_volume = lambda path: monkey
     try:
         cramped = adaptive_disk_cap_for(str(cache), 0)
     finally:
-        caps._free_bytes_on_volume = orig
+        caps.free_bytes_on_volume = orig
 
     assert cramped < roomy, f"cap did not fall when the volume filled: {roomy} -> {cramped}"
 
 
 def test_own_usage_is_added_to_free(tmp_path, monkeypatch):
     """The arithmetic, directly."""
-    monkeypatch.setattr(caps, "_free_bytes_on_volume", lambda path: 30 * GIB)
+    monkeypatch.setattr(caps, "free_bytes_on_volume", lambda path: 30 * GIB)
     assert adaptive_disk_cap_for(str(tmp_path), 10 * GIB) == adaptive_disk_cap(40 * GIB)
     # A negative or nonsense own-size must not shrink the answer below free.
     assert adaptive_disk_cap_for(str(tmp_path), -5) == adaptive_disk_cap(30 * GIB)

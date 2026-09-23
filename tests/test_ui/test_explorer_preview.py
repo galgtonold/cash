@@ -18,7 +18,7 @@ def app(tmp_path):
 
 
 def _key_of(explorer, func):
-    [entry] = [e for e in explorer.list_entries() if e.get("func_name") == Cash._get_func_key(func)]
+    [entry] = [e for e in explorer.list_entries() if e.get("func_name") == Cash.get_func_key(func)]
     return entry["key"]
 
 

@@ -722,7 +722,7 @@ class CodeAnalyzer:
         # return it untouched and avoid any line surgery on multi-line code.
         # Await-tolerant so an async cell takes this path too.
         try:
-            CodeAnalyzer._parse_cell(code)
+            CodeAnalyzer.parse_cell(code)
             return code
         except SyntaxError:
             pass
@@ -748,7 +748,7 @@ class CodeAnalyzer:
         return "\n".join(out)
 
     @staticmethod
-    def _parse_cell(code: str) -> ast.Module:
+    def parse_cell(code: str) -> ast.Module:
         """Parse a notebook cell (or statement) to an AST, tolerating a
         top-level ``await``.
 
@@ -811,7 +811,7 @@ class CodeAnalyzer:
         """
         if tree is None:
             clean_code = CodeAnalyzer.strip_magics(code)
-            tree = CodeAnalyzer._parse_cell(clean_code)  # tolerate top-level await
+            tree = CodeAnalyzer.parse_cell(clean_code)  # tolerate top-level await
 
         visitor = _FlowVisitor()
         visitor.visit(tree)

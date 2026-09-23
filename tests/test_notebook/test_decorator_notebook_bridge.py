@@ -37,7 +37,7 @@ class TestDecoratorCallLogging:
         calls = c.drain_decorator_calls()
 
         assert len(calls) == 1
-        assert calls[0]["func_name"] == Cash._get_func_key(compute)
+        assert calls[0]["func_name"] == Cash.get_func_key(compute)
         assert calls[0]["cache_hit"] is False
         assert calls[0]["execution_time"] > 0
         assert calls[0]["args_hash"] != ""
@@ -491,7 +491,7 @@ class TestSourceAwareCacheInvalidation:
             return x * 2
 
         # Get the module-qualified key used internally
-        func_key = Cash._get_func_key(compute)
+        func_key = Cash.get_func_key(compute)
         hash1 = c.source_hashes.get(func_key)
         assert hash1, f"Source hash should be non-empty, got: {hash1!r} (key: {func_key})"
 
@@ -500,7 +500,7 @@ class TestSourceAwareCacheInvalidation:
         def compute(x):
             return x * 3
 
-        func_key2 = Cash._get_func_key(compute)
+        func_key2 = Cash.get_func_key(compute)
         hash2 = c.source_hashes.get(func_key2)
         assert hash2, f"Source hash should be non-empty, got: {hash2!r}"
         assert hash1 != hash2, "Different function bodies should produce different hashes"

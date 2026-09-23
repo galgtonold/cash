@@ -279,7 +279,7 @@ def test_a_pushed_snapshot_suppresses_the_disabled_advisory(monkeypatch):
 
 def test_colab_suppresses_the_disabled_advisory(monkeypatch):
     sd.reset_notebook_discovery_warning()
-    monkeypatch.setattr(sd, "_in_colab", lambda: True)
+    monkeypatch.setattr(sd, "in_colab", lambda: True)
 
     assert _advisories(sd.warn_notebook_not_found_once) == 0, (
         "Colab has no discoverable notebook path by design, but reads its cells "
@@ -324,7 +324,7 @@ def test_no_live_reader_still_warns(monkeypatch):
 
     sd.reset_notebook_discovery_warning()
     monkeypatch.setattr(live_cells, "_store", {"seq": 0, "cells": None})
-    monkeypatch.setattr(sd, "_in_colab", lambda: False)
+    monkeypatch.setattr(sd, "in_colab", lambda: False)
 
     assert _advisories(sd.warn_notebook_not_found_once) == 1
 
@@ -334,6 +334,6 @@ def test_a_broken_live_reader_probe_keeps_the_advisory(monkeypatch):
     papermill/CI session loses the one signal that its headline feature is off.
     """
     sd.reset_notebook_discovery_warning()
-    monkeypatch.setattr(sd, "_in_colab", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(sd, "in_colab", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
 
     assert _advisories(sd.warn_notebook_not_found_once) == 1

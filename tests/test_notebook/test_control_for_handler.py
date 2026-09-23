@@ -193,7 +193,7 @@ def test_fast_loop_falls_back_to_single_unit(handler, mock_dispatcher):
     node = _parse_for(f"for i in range(1000):\n    {body}")
     handler.process(node, None, True, parent_context=None)
     # Should have called the dispatcher's single-unit fallback exactly once.
-    assert mock_dispatcher._execute_as_single_unit.call_count == 1
+    assert mock_dispatcher.execute_as_single_unit.call_count == 1
 
 
 def test_fast_loop_fires_even_when_nested(handler, mock_dispatcher, mock_statement_processor):
@@ -205,7 +205,7 @@ def test_fast_loop_fires_even_when_nested(handler, mock_dispatcher, mock_stateme
     body = "\n    ".join([f"x{i} = {i}" for i in range(200)])
     node = _parse_for(f"for i in range(1000):\n    {body}")
     handler.process(node, None, True, parent_context={"outer": 1})
-    assert mock_dispatcher._execute_as_single_unit.call_count == 1
+    assert mock_dispatcher.execute_as_single_unit.call_count == 1
     # Per-iteration processing did NOT happen — single-unit short-circuited it.
     assert mock_statement_processor.process_statement.call_count == 0
 
@@ -215,7 +215,7 @@ def test_fast_loop_skipped_for_small_loop(handler, mock_dispatcher, mock_stateme
     # 10 iterations is well below _MIN_ITERATIONS_FOR_SINGLE_UNIT (50).
     node = _parse_for("for i in range(10): x = i")
     handler.process(node, None, True, None)
-    assert mock_dispatcher._execute_as_single_unit.call_count == 0
+    assert mock_dispatcher.execute_as_single_unit.call_count == 0
     assert mock_statement_processor.process_statement.call_count == 10
 
 
@@ -236,13 +236,13 @@ def test_fast_loop_skipped_when_body_has_file_io(handler, mock_dispatcher, mock_
     # so the thresholds are genuinely met.
     clean_body = "\n    ".join([f"x{i} = {i}" for i in range(n_stmts)])
     handler.process(_parse_for(f"for i in range({n_iter}):\n    {clean_body}"), None, True, None)
-    assert mock_dispatcher._execute_as_single_unit.call_count == 1, (
+    assert mock_dispatcher.execute_as_single_unit.call_count == 1, (
         "control: identical loop without file I/O should fire single-unit"
     )
 
-    mock_dispatcher._execute_as_single_unit.reset_mock()
+    mock_dispatcher.execute_as_single_unit.reset_mock()
 
     # With file I/O in the body, single-unit is disabled (per-iteration only).
     io_body = "\n    ".join([f"x{i} = {i}" for i in range(n_stmts)] + ["pd.read_csv('f.csv')"])
     handler.process(_parse_for(f"for i in range({n_iter}):\n    {io_body}"), None, True, None)
-    assert mock_dispatcher._execute_as_single_unit.call_count == 0
+    assert mock_dispatcher.execute_as_single_unit.call_count == 0

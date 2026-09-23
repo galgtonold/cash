@@ -19,7 +19,7 @@ from cash.utils import normalize_path
 
 @pytest.fixture(autouse=True)
 def _outside_any_run(monkeypatch):
-    monkeypatch.setattr(file_dep_snapshot, "_HASH_EPOCH", None)
+    monkeypatch.setattr(file_dep_snapshot, "HASH_EPOCH", None)
     monkeypatch.setattr(file_dep_snapshot, "_EPOCH_DEPTH", 0)
     file_dep_snapshot._REALPATH_MEMO.clear()
 

@@ -32,7 +32,7 @@ def _make_lineage(shell_ns: dict):
     shell.user_ns = shell_ns
     checker = UpstreamChecker(shell, cash_instance, debug=False)
     checker.variable_lineage = {}
-    return checker.simulator._virtual_lineage, shell, cash_instance
+    return checker.simulator.virtual_lineage, shell, cash_instance
 
 
 class TestLineageConfirmedVars:
@@ -136,7 +136,7 @@ class TestEndToEndThroughVirtualRestore:
             {"variables": {"rows": []}},
         )
 
-        restored, _, _ = vl._try_virtual_restore(
+        restored, _, _ = vl.try_virtual_restore(
             "rows = [r for r in data if r.matches(q)]",
             {"rows"},
             {"data", "q"},
@@ -154,7 +154,7 @@ class TestEndToEndThroughVirtualRestore:
             {"variables": {"rows": []}},
         )
 
-        restored, _, _ = vl._try_virtual_restore(
+        restored, _, _ = vl.try_virtual_restore(
             "rows = [r for r in data if r.matches(q)]",
             {"rows"},
             {"data", "q"},

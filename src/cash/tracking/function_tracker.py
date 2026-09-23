@@ -20,7 +20,7 @@ from typing import Any
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_norm import read_code_file, read_code_text, source_identity_digest
-from .module_symbols import _analysis_for
+from .module_symbols import analysis_for
 
 __all__ = ["FunctionTracker", "is_local_module"]
 
@@ -197,12 +197,12 @@ class FunctionTracker:
         # Maps function_name -> source_hash (for tracking changes)
         self._function_hashes: dict[str, str] = {}
         # Module file tracking: module_name -> last known mtime
-        self._module_mtimes: dict[str, float] = {}
+        self.module_mtimes: dict[str, float] = {}
         # Set of module names user explicitly asked to track
-        self._tracked_modules: set[str] = set()
+        self.tracked_modules: set[str] = set()
         # Transitive dependency tracking:
         # Maps sub-dependency file path -> set of tracked (parent) module names that depend on it
-        self._dep_file_to_parents: dict[str, set[str]] = {}
+        self.dep_file_to_parents: dict[str, set[str]] = {}
         # Maps sub-dependency file path -> last known mtime
         self._dep_file_mtimes: dict[str, float] = {}
         # Per-symbol hash tracking for granular invalidation:
@@ -211,7 +211,7 @@ class FunctionTracker:
 
     def _tracked_module_file_changed(self, func_module: str | None) -> bool:
         """Return True if *func_module* is tracked and its file mtime has changed."""
-        if not func_module or func_module not in self._tracked_modules:
+        if not func_module or func_module not in self.tracked_modules:
             return False
         module_obj = sys.modules.get(func_module)
         if not module_obj:
@@ -221,7 +221,7 @@ class FunctionTracker:
             return False
         try:
             current_mtime = os.path.getmtime(file_path)
-            stored_mtime = self._module_mtimes.get(func_module)
+            stored_mtime = self.module_mtimes.get(func_module)
             return stored_mtime is not None and current_mtime != stored_mtime
         except OSError:
             return False
@@ -412,9 +412,9 @@ class FunctionTracker:
     def clear(self):
         self._source_cache.clear()
         self._function_hashes.clear()
-        self._module_mtimes.clear()
-        self._tracked_modules.clear()
-        self._dep_file_to_parents.clear()
+        self.module_mtimes.clear()
+        self.tracked_modules.clear()
+        self.dep_file_to_parents.clear()
         self._dep_file_mtimes.clear()
         self._module_symbol_hashes.clear()
 
@@ -436,7 +436,7 @@ class FunctionTracker:
             The file path of the module, or None if not found
         """
 
-        self._tracked_modules.add(module_name)
+        self.tracked_modules.add(module_name)
 
         module = sys.modules.get(module_name)
         if module is None:
@@ -446,7 +446,7 @@ class FunctionTracker:
         if file_path and os.path.isfile(file_path):
             try:
                 mtime = os.path.getmtime(file_path)
-                self._module_mtimes[module_name] = mtime
+                self.module_mtimes[module_name] = mtime
                 logger.debug("Tracking module '%s' at %s, mtime=%s", module_name, file_path, mtime)
                 # Snapshot per-symbol hashes for granular invalidation
                 self.snapshot_module_symbols(module_name)
@@ -478,18 +478,18 @@ class FunctionTracker:
         """Record a sub-dependency file and schedule it for further walking."""
         norm_path = os.path.normcase(os.path.realpath(sub_file))
 
-        if norm_path not in self._dep_file_to_parents:
-            self._dep_file_to_parents[norm_path] = set()
-        self._dep_file_to_parents[norm_path].add(module_name)
+        if norm_path not in self.dep_file_to_parents:
+            self.dep_file_to_parents[norm_path] = set()
+        self.dep_file_to_parents[norm_path].add(module_name)
 
         if norm_path not in self._dep_file_mtimes:
             with contextlib.suppress(OSError):
                 self._dep_file_mtimes[norm_path] = os.path.getmtime(sub_file)
 
-        if sub_name not in self._tracked_modules:
-            self._tracked_modules.add(sub_name)
+        if sub_name not in self.tracked_modules:
+            self.tracked_modules.add(sub_name)
             with contextlib.suppress(OSError):
-                self._module_mtimes[sub_name] = os.path.getmtime(sub_file)
+                self.module_mtimes[sub_name] = os.path.getmtime(sub_file)
 
         if sub_name not in visited:
             stack.append(sub_name)
@@ -499,7 +499,7 @@ class FunctionTracker:
 
         For each local module that ``module_name`` (transitively) imports, we
         record:
-        * ``_dep_file_to_parents[dep_file_path]`` → set of parent module names
+        * ``dep_file_to_parents[dep_file_path]`` → set of parent module names
         * ``_dep_file_mtimes[dep_file_path]`` → current mtime
 
         This way, ``check_tracked_modules`` can detect changes in sub-dependency
@@ -543,9 +543,9 @@ class FunctionTracker:
         (e.g. a module that now imports an additional helper) are tracked.
         """
         # Clear existing dependency data and rebuild
-        self._dep_file_to_parents.clear()
+        self.dep_file_to_parents.clear()
         self._dep_file_mtimes.clear()
-        for mod_name in list(self._tracked_modules):
+        for mod_name in list(self.tracked_modules):
             # Only rebuild for top-level tracked modules (those the notebook imported)
             mod = sys.modules.get(mod_name)
             if mod is None:
@@ -705,7 +705,7 @@ class FunctionTracker:
         # functions and classes only, so `TABLE = build_table()` recorded no
         # edge and an edit to `build_table` left TABLE, and every reader of it,
         # counted as unchanged -- a lineage the invalidator could wrongly keep.
-        analysis = _analysis_for(file_path)
+        analysis = analysis_for(file_path)
         if analysis is None:
             return {}
         deps: dict[str, set[str]] = {}
@@ -877,7 +877,7 @@ class FunctionTracker:
     def _check_direct_modules(self) -> set[str]:
         """Check each directly tracked module file; return names of changed modules."""
         changed: set[str] = set()
-        for module_name in self._tracked_modules:
+        for module_name in self.tracked_modules:
             module = sys.modules.get(module_name)
             if module is None:
                 continue
@@ -888,7 +888,7 @@ class FunctionTracker:
                 current_mtime = os.path.getmtime(file_path)
             except OSError:
                 continue
-            old_mtime = self._module_mtimes.get(module_name)
+            old_mtime = self.module_mtimes.get(module_name)
             logger.debug(
                 "[MODULE_CHECK] %s: current_mtime=%s, old_mtime=%s, changed=%s",
                 module_name,
@@ -898,16 +898,16 @@ class FunctionTracker:
             )
             if old_mtime is not None and current_mtime != old_mtime:
                 changed.add(module_name)
-                self._module_mtimes[module_name] = current_mtime
+                self.module_mtimes[module_name] = current_mtime
                 logger.info("Module '%s' changed on disk", module_name)
             elif old_mtime is None:
-                self._module_mtimes[module_name] = current_mtime
+                self.module_mtimes[module_name] = current_mtime
         return changed
 
     def _check_dep_files(self) -> set[str]:
         """Check transitive dep files; return parent module names that are affected."""
         changed: set[str] = set()
-        for dep_path, parent_modules in list(self._dep_file_to_parents.items()):
+        for dep_path, parent_modules in list(self.dep_file_to_parents.items()):
             if not os.path.isfile(dep_path):
                 continue
             try:
@@ -971,7 +971,7 @@ class FunctionTracker:
 
             _reload_from_source(module)
             if file_path and os.path.isfile(file_path):
-                self._module_mtimes[module_name] = os.path.getmtime(file_path)
+                self.module_mtimes[module_name] = os.path.getmtime(file_path)
             # Clear source cache for functions from this module
             self._invalidate_module_functions(module_name)
             logger.info("Reloaded module '%s'", module_name)
@@ -1023,7 +1023,7 @@ class FunctionTracker:
 
         newly_tracked = set()
         for mod_name in module_names:
-            if mod_name in self._tracked_modules:
+            if mod_name in self.tracked_modules:
                 continue  # Already tracked
 
             module = sys.modules.get(mod_name)
@@ -1099,8 +1099,8 @@ class FunctionTracker:
               (None means full invalidation — no granular info available)
         """
         # Save module mtimes BEFORE checking for changes, because
-        # check_tracked_modules() updates _module_mtimes in-place.
-        pre_check_mtimes: dict[str, float] = dict(self._module_mtimes)
+        # check_tracked_modules() updates module_mtimes in-place.
+        pre_check_mtimes: dict[str, float] = dict(self.module_mtimes)
 
         changed_modules = self.check_tracked_modules()
         if not changed_modules:
@@ -1145,7 +1145,7 @@ class FunctionTracker:
     def _build_tracked_imports_map(self) -> dict[str, set[str]]:
         """Return a map of tracked_module → set of other tracked modules it imports."""
         imports_map: dict[str, set[str]] = {}
-        for mod_name in self._tracked_modules:
+        for mod_name in self.tracked_modules:
             mod = sys.modules.get(mod_name)
             if mod is None:
                 continue
@@ -1158,7 +1158,7 @@ class FunctionTracker:
             except (SyntaxError, OSError, UnicodeDecodeError):
                 continue
             imported_names = _collect_imported_names(tree)
-            imports_map[mod_name] = imported_names & self._tracked_modules
+            imports_map[mod_name] = imported_names & self.tracked_modules
         return imports_map
 
     def _compute_reload_set(self, changed_modules: set[str]) -> set[str]:

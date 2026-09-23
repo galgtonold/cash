@@ -62,7 +62,7 @@ def test_running_badge_without_step_info_is_not_reported_as_finished() -> None:
     """The reported bug, at its actual source.
 
     ``CellExecutor._init_cell_timing_and_badge`` opens EVERY cell with
-    ``_render_interactive_badge([], status="RUNNING")`` -- no rows yet, and no
+    ``render_interactive_badge([], status="RUNNING")`` -- no rows yet, and no
     step information either. RUNNING used to be inferred from step information
     rather than carried on the header, so this fell through to the EXECUTED
     default and every cell began by claiming it had finished in 0.00s.

@@ -316,7 +316,7 @@ class StatementLineageBuilder:
                 # name read missed `import tickets_lib as tl` (see 9785293).
                 if (
                     isinstance(input_val, types.ModuleType)
-                    and getattr(input_val, "__name__", input_name) in self.function_tracker._tracked_modules
+                    and getattr(input_val, "__name__", input_name) in self.function_tracker.tracked_modules
                 ):
                     mod_deps[input_name] = attrs
             if mod_deps:

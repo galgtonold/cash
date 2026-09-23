@@ -792,7 +792,7 @@ def loaded_code_matches_disk(fn: object) -> bool:
     if isinstance(fn, type):
         # A class has no code of its own; its methods do, and an edit to any
         # of them is an edit to the class.
-        return all(loaded_code_matches_disk(m) for m in _class_functions(fn))
+        return all(loaded_code_matches_disk(m) for m in class_functions(fn))
     code = getattr(fn, "__code__", None)
     if not isinstance(code, types.CodeType):
         return True
@@ -831,7 +831,7 @@ def loaded_code_matches_disk(fn: object) -> bool:
     return False
 
 
-def _class_functions(cls: type) -> list[types.FunctionType]:
+def class_functions(cls: type) -> list[types.FunctionType]:
     """The plain functions defined directly in *cls*, unwrapping descriptors."""
     found = []
     for value in vars(cls).values():
@@ -853,7 +853,7 @@ def loaded_class_identity(cls: type) -> str | None:
     """A digest of *cls* from its LOADED methods, for when disk is not them."""
     try:
         parts = [cls.__qualname__]
-        for func in sorted(_class_functions(cls), key=lambda f: f.__qualname__):
+        for func in sorted(class_functions(cls), key=lambda f: f.__qualname__):
             parts.append(f"{func.__qualname__}={bytecode_identity(func)}")
         return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
     except (AttributeError, TypeError, ValueError):

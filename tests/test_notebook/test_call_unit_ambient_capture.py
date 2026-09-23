@@ -6,7 +6,7 @@ does not, because the callee never runs. ``CallUnit`` closes that gap on a
 hit by replaying what the ORIGINAL execution observed:
 
 * ``_replay_deps`` re-declares the entry's recorded file/remote reads onto
-  the ambient tracker (``_active_tracker``), mirroring ``core.py``'s
+  the ambient tracker (``active_tracker``), mirroring ``core.py``'s
   ``_propagate_file_deps_to_active_tracker`` -- the ``@cash.cache``
   decorator's own defence against exactly this failure mode.
 * ``_replay_output`` writes the entry's recorded stdout/stderr onto the
@@ -38,7 +38,7 @@ import time
 
 import cash
 from cash.notebook.call_interception import CallCache, CallSite
-from cash.tracking.file_tracker import FileAccessTracker, _active_tracker
+from cash.tracking.file_tracker import FileAccessTracker, active_tracker
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 # ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ def test_two_reads_of_the_same_path_in_one_tracker_window_both_stay_correct(call
     twice inside one ``FileAccessTracker`` window.
 
     The original implementation computed ``after - before`` against
-    ``_active_tracker.get()`` -- the SHARED tracker for the whole statement
+    ``active_tracker.get()`` -- the SHARED tracker for the whole statement
     (or, inside a loop, the whole loop-as-one-unit execution: this is the
     call unit's PRIMARY use case, and the exact shape
     ``call_interception.py``'s own module docstring uses as its running
@@ -145,7 +145,7 @@ def test_two_reads_of_the_same_path_in_one_tracker_window_both_stay_correct(call
     One-line mutation that resurrects the bug: in ``wrap``, replace
     ``call_tracker.get_accessed_files()`` / ``get_accessed_remote_urls()``
     (the fresh, per-call tracker's own sets) with a before/after diff against
-    ``_active_tracker.get()`` -- i.e. revert to the pre-fix delta. Applied
+    ``active_tracker.get()`` -- i.e. revert to the pre-fix delta. Applied
     and observed: after the file changes, the SECOND call in the shared
     window (``k=20``) still returns the stale ``200`` instead of the
     recomputed ``2000``, while the first call (``k=10``) correctly recomputes
@@ -230,7 +230,7 @@ def test_call_hit_propagates_remote_dependency_through_resolve(tmp_path, monkeyp
         # What a real registered remote-reader handler does: tell the
         # ACTIVE tracker about the read. `_track_path` routes a URL-shaped
         # string to the remote channel on its own (see file_tracker.py).
-        tracker = _active_tracker.get()
+        tracker = active_tracker.get()
         if tracker is not None:
             tracker._track_path(u)
         return f"DATA-{token['value']}"

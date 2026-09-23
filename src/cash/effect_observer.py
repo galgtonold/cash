@@ -4,7 +4,7 @@ Static analysis stops at library boundaries -- that is deliberate, since
 folding every installed package into the walk would be both slow and useless.
 The cost is that a side effect *inside* a library is reachable only by the
 method's NAME (``session.post``, ``cur.execute``; see
-``cash.purity._WRITE_METHODS``), and a name cannot reach everything:
+``cash.purity.WRITE_METHODS``), and a name cannot reach everything:
 ``session.get(...)`` collides with ``dict.get``, and an arbitrary vendor
 function like ``client.emit_metric(...)`` has no effect-shaped name at all.
 
@@ -62,9 +62,9 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 #: The observer whose block is currently executing, per thread and per
-#: asyncio Task. Mirrors ``file_tracker._active_tracker`` on purpose: same
+#: asyncio Task. Mirrors ``file_tracker.active_tracker`` on purpose: same
 #: install-once-dispatch-dynamically shape, same isolation properties.
-_active_observer: contextvars.ContextVar["EffectObserver | None"] = contextvars.ContextVar(
+active_observer: contextvars.ContextVar["EffectObserver | None"] = contextvars.ContextVar(
     "_cash_active_observer", default=None
 )
 
@@ -75,7 +75,7 @@ _PATCHED = False
 
 
 def _record(kind: str, detail: str) -> None:
-    observer = _active_observer.get()
+    observer = active_observer.get()
     if observer is not None:
         observer.record_effect(kind, detail)
 
@@ -100,24 +100,24 @@ def _is_library_file(filename: str) -> bool:
                 answer = True
             else:
                 # Local: import cycle effect_observer -> config -> tracking.file_tracker -> effect_observer.
-                from .config import _is_installed_path
+                from .config import is_installed_path
 
-                answer = _is_installed_path(Path(path).resolve())
+                answer = is_installed_path(Path(path).resolve())
         except (OSError, ValueError):
             answer = True
     _LIBRARY_FILE[filename] = answer
     return answer
 
 
-def _line_waived(filename: str, lineno: int) -> bool:
+def line_waived(filename: str, lineno: int) -> bool:
     """Does ``# @cash:assume-safe`` cover *lineno* -- on it, or alone above it?"""
     # Local: import cycle effect_observer -> purity_analyzer -> ... -> effect_observer.
-    from .purity_analyzer import _ASSUME_SAFE_RE
+    from .purity_analyzer import ASSUME_SAFE_RE
 
-    if _ASSUME_SAFE_RE.search(linecache.getline(filename, lineno)):
+    if ASSUME_SAFE_RE.search(linecache.getline(filename, lineno)):
         return True
     above = linecache.getline(filename, lineno - 1)
-    return above.lstrip().startswith("#") and bool(_ASSUME_SAFE_RE.search(above))
+    return above.lstrip().startswith("#") and bool(ASSUME_SAFE_RE.search(above))
 
 
 def _install_patches() -> None:
@@ -246,13 +246,13 @@ class EffectObserver:
         _install_patches()
         _hook_mock_calls()
         self._mock_calls_at.append(_mock_calls)
-        self._tokens.append(_active_observer.set(self))
+        self._tokens.append(active_observer.set(self))
         self._outer.append(sys._getframe(1))
         return self
 
     def __exit__(self, *exc_info: Any) -> bool:
         if self._tokens:
-            _active_observer.reset(self._tokens.pop())
+            active_observer.reset(self._tokens.pop())
         if self._outer:
             self._outer.pop()  # a frame must not outlive its call
         if self._mock_calls_at and self._mock_calls_at.pop() != _mock_calls:
@@ -261,10 +261,10 @@ class EffectObserver:
 
     def suspend(self):
         """Stop observing until :meth:`resume`. Mirrors `FileAccessTracker`."""
-        return _active_observer.set(None)
+        return active_observer.set(None)
 
     def resume(self, token) -> None:
-        _active_observer.reset(token)
+        active_observer.reset(token)
 
     # -- recording ---------------------------------------------------------
     def record(self, kind: str, detail: str) -> None:
@@ -284,7 +284,7 @@ class EffectObserver:
         silences every effect added to the function later (round 18).
         """
         sites = self._user_sites()
-        if any(_line_waived(filename, lineno) for filename, lineno in sites):
+        if any(line_waived(filename, lineno) for filename, lineno in sites):
             return
         if sites:
             inner = f"{os.path.basename(sites[0][0])}:{sites[0][1]}"

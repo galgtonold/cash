@@ -28,9 +28,9 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from ...tracking.file_dep_snapshot import (
-    _LISTING_MIN_FILES,
-    _full_hash_max_bytes,
+    LISTING_MIN_FILES,
     file_dep_is_fresh,
+    full_hash_max_bytes,
     stats_from_listings,
 )
 from ...utils import resolve_file_dep_path
@@ -230,15 +230,15 @@ class CacheFreshnessChecker:
         file_deps = metadata.file_dependencies or {}
         if self._known_fresh(file_deps):
             return cached_data
-        full_hash_max = _full_hash_max_bytes() if file_deps else None
-        if len(file_deps) >= _LISTING_MIN_FILES:
+        full_hash_max = full_hash_max_bytes() if file_deps else None
+        if len(file_deps) >= LISTING_MIN_FILES:
             # Many files: read their directories once rather than stat each
             # (see ``stats_from_listings``). Taken at the first lookup that
             # needs them, as current as the stats they replace.
             unlisted = [
                 p for p, s in file_deps.items() if isinstance(s, dict) and "size" in s and p not in self._listed
             ]
-            if len(unlisted) >= _LISTING_MIN_FILES:
+            if len(unlisted) >= LISTING_MIN_FILES:
                 self._listed.update(stats_from_listings(unlisted))
         for fpath, stored in file_deps.items():
             # Content is authoritative when the size matches; a bare size/mtime
@@ -345,7 +345,7 @@ class CacheFreshnessChecker:
             if not source_file_deps or self._known_fresh(source_file_deps):
                 continue
             if full_hash_max is None:
-                full_hash_max = _full_hash_max_bytes()
+                full_hash_max = full_hash_max_bytes()
             for fpath in paths:
                 if self._input_file_changed(tracking_state, input_var, fpath, source_file_deps, full_hash_max):
                     return None

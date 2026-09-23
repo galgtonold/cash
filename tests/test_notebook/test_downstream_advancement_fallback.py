@@ -94,7 +94,7 @@ class TestDownstreamAdvancementFallback:
 
         # Set up simulation cache with the virtual lineage
         # Format: (cell_code_hash, virtual_lineage, virtual_modules, trace, mutated, stale_files, file_deps)
-        upstream.simulator._virtual_lineage._simulation_cache = [
+        upstream.simulator.virtual_lineage.simulation_cache = [
             SimulationCacheEntry("hash_cell_0", {"df": virtual_lineage_df}, set(), [], set(), set(), {}),
         ]
         # The current cell was previously found at index 1 (cell 0 is the only upstream cell)
@@ -152,7 +152,7 @@ class TestDownstreamAdvancementFallback:
         actual_lineage_x = "bbbb2222" * 8
 
         upstream.variable_lineage["x"] = actual_lineage_x
-        upstream.simulator._virtual_lineage._simulation_cache = [
+        upstream.simulator.virtual_lineage.simulation_cache = [
             SimulationCacheEntry("hash_cell_0", {"x": virtual_lineage_x}, set(), [], set(), set(), {}),
         ]
         upstream.last_cell_index = 1
@@ -189,7 +189,7 @@ class TestDownstreamAdvancementFallback:
 
         actual_lineage_df = "bbbb2222" * 8
         upstream.variable_lineage["df"] = actual_lineage_df
-        upstream.simulator._virtual_lineage._simulation_cache = []  # No cache
+        upstream.simulator.virtual_lineage.simulation_cache = []  # No cache
 
         cell_code = "df['col'] = 1"
 
@@ -220,7 +220,7 @@ class TestDownstreamAdvancementFallback:
 
         same_lineage = "aaaa1111" * 8
         upstream.variable_lineage["df"] = same_lineage
-        upstream.simulator._virtual_lineage._simulation_cache = [
+        upstream.simulator.virtual_lineage.simulation_cache = [
             SimulationCacheEntry("hash_cell_0", {"df": same_lineage}, set(), [], set(), set(), {}),
         ]
         upstream.last_cell_index = 1
@@ -260,7 +260,7 @@ class TestDownstreamAdvancementFallback:
 
         upstream.variable_lineage["df1"] = ahead_df1
         upstream.variable_lineage["df2"] = ahead_df2
-        upstream.simulator._virtual_lineage._simulation_cache = [
+        upstream.simulator.virtual_lineage.simulation_cache = [
             SimulationCacheEntry("hash_cell_0", {"df1": virtual_df1, "df2": virtual_df2}, set(), [], set(), set(), {}),
         ]
         upstream.last_cell_index = 1
@@ -336,7 +336,7 @@ class TestDownstreamAdvancementFallback:
         # For testing, we'll use a known value.
         pre_cell_df_lineage = "pre_cell_hash_" + "a" * 50  # placeholder
 
-        upstream.simulator._virtual_lineage._simulation_cache = [
+        upstream.simulator.virtual_lineage.simulation_cache = [
             SimulationCacheEntry("hash_upstream_cell", {"df": pre_cell_df_lineage}, set(), [], set(), set(), {}),
         ]
         # Simulate that the current cell was previously at index 1

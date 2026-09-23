@@ -321,7 +321,7 @@ def resolve_main_module(func: Any) -> str:
     module claiming ``__main__`` is another -- taking the entry point there
     names the function after a file it was not defined in.
 
-    Shared by ``Cash._get_func_key`` and the purity analyzer's
+    Shared by ``Cash.get_func_key`` and the purity analyzer's
     ``_qualname_of``. Both feed the same cache key from different directions,
     and normalising only one of them leaves the state hash disagreeing between
     a direct run and an import while the function name agrees -- which is

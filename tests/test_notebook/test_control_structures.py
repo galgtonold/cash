@@ -599,30 +599,30 @@ class TestOutputFlushing:
 
 
 class TestTeeWriter:
-    """Tests for _TeeWriter and _tee_output used by single-unit loop streaming."""
+    """Tests for TeeWriter and tee_output used by single-unit loop streaming."""
 
     def test_tee_writer_writes_to_both_streams(self):
-        """_TeeWriter should write to both the real stream and the buffer."""
+        """TeeWriter should write to both the real stream and the buffer."""
         from io import StringIO
 
-        from cash.notebook.statement import _TeeWriter
+        from cash.notebook.statement import TeeWriter
 
         real = StringIO()
         chunks = []
-        tee = _TeeWriter(real, chunks)
+        tee = TeeWriter(real, chunks)
         tee.write("hello world")
         assert real.getvalue() == "hello world"
         assert tee.getvalue() == "hello world"
 
     def test_tee_writer_forwards_flush(self):
-        """_TeeWriter.flush should flush the real stream."""
+        """TeeWriter.flush should flush the real stream."""
         from io import StringIO
 
-        from cash.notebook.statement import _TeeWriter
+        from cash.notebook.statement import TeeWriter
 
         real = StringIO()
         chunks = []
-        tee = _TeeWriter(real, chunks)
+        tee = TeeWriter(real, chunks)
         tee.write("data")
         tee.flush()
         # StringIO doesn't need flushing, but the call shouldn't error
@@ -630,22 +630,22 @@ class TestTeeWriter:
         assert tee.getvalue() == "data"
 
     def test_tee_writer_getattr_delegation(self):
-        """_TeeWriter should forward unknown attributes to the real stream."""
+        """TeeWriter should forward unknown attributes to the real stream."""
         from io import StringIO
 
-        from cash.notebook.statement import _TeeWriter
+        from cash.notebook.statement import TeeWriter
 
         real = StringIO()
         chunks = []
-        tee = _TeeWriter(real, chunks)
+        tee = TeeWriter(real, chunks)
         # StringIO has 'encoding' attribute — forwarded via __getattr__
         assert hasattr(tee, "readable")
 
     def test_tee_writer_batched_flush(self):
-        """_TeeWriter should NOT flush on every write — only after the interval."""
+        """TeeWriter should NOT flush on every write — only after the interval."""
         from io import StringIO
 
-        from cash.notebook.statement import _TeeWriter
+        from cash.notebook.statement import TeeWriter
 
         flush_count = [0]
         real = StringIO()
@@ -658,7 +658,7 @@ class TestTeeWriter:
         real.flush = counting_flush
 
         chunks = []
-        tee = _TeeWriter(real, chunks)
+        tee = TeeWriter(real, chunks)
         # Write many times rapidly — should NOT flush each time
         for i in range(1000):
             tee.write(f"line {i}\n")
@@ -668,16 +668,16 @@ class TestTeeWriter:
         assert tee.getvalue().count("\n") == 1000
 
     def test_tee_output_captures_stdout(self):
-        """_tee_output should record stdout while letting it through."""
+        """tee_output should record stdout while letting it through."""
         import sys
         from io import StringIO
 
-        from cash.notebook.statement import _tee_output
+        from cash.notebook.statement import tee_output
 
         old_stdout = sys.stdout
         sys.stdout = StringIO()  # Controlled real stream
         try:
-            with _tee_output() as teed:
+            with tee_output() as teed:
                 print("hello")
             assert teed.stdout == "hello\n"
             # The "real" stdout (our StringIO) should also have it
@@ -686,16 +686,16 @@ class TestTeeWriter:
             sys.stdout = old_stdout
 
     def test_tee_output_captures_stderr(self):
-        """_tee_output should record stderr while letting it through."""
+        """tee_output should record stderr while letting it through."""
         import sys
         from io import StringIO
 
-        from cash.notebook.statement import _tee_output
+        from cash.notebook.statement import tee_output
 
         old_stderr = sys.stderr
         sys.stderr = StringIO()
         try:
-            with _tee_output() as teed:
+            with tee_output() as teed:
                 print("warning", file=sys.stderr)
             assert teed.stderr == "warning\n"
             assert "warning\n" in sys.stderr.getvalue()
@@ -703,15 +703,15 @@ class TestTeeWriter:
             sys.stderr = old_stderr
 
     def test_tee_output_restores_streams_on_exception(self):
-        """_tee_output should restore sys.stdout/stderr even on exception."""
+        """tee_output should restore sys.stdout/stderr even on exception."""
         import sys
 
-        from cash.notebook.statement import _tee_output
+        from cash.notebook.statement import tee_output
 
         orig_stdout = sys.stdout
         orig_stderr = sys.stderr
         try:
-            with _tee_output():
+            with tee_output():
                 raise RuntimeError("boom")
         except RuntimeError:
             pass
@@ -719,16 +719,16 @@ class TestTeeWriter:
         assert sys.stderr is orig_stderr
 
     def test_tee_output_has_empty_outputs_list(self):
-        """_tee_output's TeedOutput should have an empty outputs list (no rich display capture)."""
-        from cash.notebook.statement import _tee_output
+        """tee_output's TeedOutput should have an empty outputs list (no rich display capture)."""
+        from cash.notebook.statement import tee_output
 
-        with _tee_output() as teed:
+        with tee_output() as teed:
             pass
         assert teed.outputs == []
 
 
 class TestSingleUnitStreamOutput:
-    """Tests for stream_output in _execute_as_single_unit via statement_processor.process_statement()."""
+    """Tests for stream_output in execute_as_single_unit via statement_processor.process_statement()."""
 
     @pytest.fixture
     def mock_shell(self):
@@ -751,7 +751,7 @@ class TestSingleUnitStreamOutput:
         return ControlStructureProcessor(mock_shell, mock_statement_processor, debug=False)
 
     def test_single_unit_passes_stream_output(self, control_processor, mock_shell, mock_statement_processor):
-        """_execute_as_single_unit should pass stream_output=True to process()."""
+        """execute_as_single_unit should pass stream_output=True to process()."""
         mock_statement_processor.process_statement = MagicMock(
             return_value={
                 "status": CacheStatus.COMPUTED,

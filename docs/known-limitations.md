@@ -132,7 +132,7 @@ Literal unpacking — flat (`(y,) = (x,)`) *and* nested (`(p, (q,)) = (x, (y,))`
 
 ### Mutating global state inside a function
 
-<!-- claim: cash/analysis/cacheability.py:called_function_global_mutations @2b38c37d -->
+<!-- claim: cash/analysis/cacheability.py:called_function_global_mutations @2fb7ed3d -->
 Cash analyses what a *statement* reads and writes, and it tracks the **arguments**
 a called function mutates — including imported helpers and bare calls (`proc(df)`
 that mutates `df`). It also tracks a function mutating a **global** it wasn't
@@ -296,7 +296,7 @@ A thread that mutates data after the cell that created it has finished is outsid
 
 ### Reads through a loader cash cannot see
 
-<!-- claim: cash/tracking/file_tracker.py:_install_module_patches @027b224f -->
+<!-- claim: cash/tracking/file_tracker.py:_install_module_patches @f95eedc5 -->
 Cash records a file dependency by intercepting the *read*: `pd.read_*`, `np.load`, `joblib.load`, `polars`, `sqlite3.connect`, plain `open()`, and friends — including a read that finds the file MISSING, whichever way it is spelled (`os.path.exists`, or `open()` raising `FileNotFoundError`). A read that goes through none of them — a C extension that opens the file itself, a third-party client, a `subprocess` — is invisible. Two known gaps of that kind: `os.open`/`os.read` (the descriptor-level API, below `open()`), and a SQLite database in **WAL** mode, where a commit lands in the sidecar `-wal` file and the database file cash records may not move.
 
 The consequence is easy to mis-guess, so it is worth stating plainly: cash **does not** refuse to cache such a statement. It caches it exactly like any other, with *no file recorded*. Change the file on disk afterwards and nothing invalidates; you get the old value back with a `CACHED` badge and no warning.
@@ -400,7 +400,7 @@ for i, base in enumerate([[1], [1]]):
 
 > Ambiguous cell execution! The current cell content appears 2 times in the notebook and no cell ID could be resolved.
 
-<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2, cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @8b25634c broad="the claim is about when this exception type exists to be raised at all" -->
+<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2, cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @d2a395fa broad="the claim is about when this exception type exists to be raised at all" -->
 Raised when two cells have **byte-identical content** *and* cash cannot resolve a cell ID. Cash fails loudly here rather than guessing, because guessing wrong would silently serve one cell's result for the other.
 
 In JupyterLab and VS Code with IPython ≥ 8.3, cell IDs normally resolve and this does not occur. It shows up in environments that do not supply them.
@@ -627,7 +627,7 @@ jupyter labextension enable cash-live-cells
 That lock behaviour is JupyterLab's own and applies to any extension, not just
 this one.
 
-<!-- claim: cash/notebook/server_discovery.py:_labextension_installed @e4930904 -->
+<!-- claim: cash/notebook/server_discovery.py:labextension_installed @925707f4 -->
 Disabling does not remove the installed directory, and the proactive `Ctrl+S` tip
 `%cash_on` prints is gated on that directory being present — so a disabled
 extension, like a split install, keeps the tip suppressed. You are still told,
@@ -729,7 +729,7 @@ Two large objects that differ only outside the sampled region therefore hash ide
 
 ## An edit that keeps the size and timestamps
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:_unchanged_since_hashed @e3a8e057, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @ab9621f0, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:_unchanged_since_hashed @e3a8e057, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @3dd62608, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0 -->
 Whether a file you read has changed is answered by its metadata first. If its
 size, its modification time to the nanosecond, which file it is, and on Linux
 and macOS its inode change time are all as they were when Cash hashed it — and

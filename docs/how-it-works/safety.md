@@ -53,7 +53,7 @@ The split looks arbitrary until you write the two forms side by side.
 statement's outputs; `d.update(o)` is a bare expression with no target at all.
 The first can be re-derived from the statement that made it; the second cannot.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @8b25634c, cash/analysis/cacheability.py:selfref_inplace_write_vars @f9e28262 -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @d2a395fa, cash/analysis/cacheability.py:selfref_inplace_write_vars @f9e28262 -->
 !!! note "…but only when the base was made in the same cell"
     The **Cached** verdicts above are this classifier's per-statement decision.
     A separate rule sits on top, in the upstream checker: a variable the cell
@@ -190,7 +190,7 @@ Replaying them from cache would skip the action (a file never gets written, a
 request never gets sent). Cash's side-effect analysis flags these statements as
 **uncacheable** so they always run:
 
-<!-- claim: cash/analysis/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @a2946490, cash/analysis/cacheability.py:_SideEffectVisitor @2923ce80 broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
+<!-- claim: cash/analysis/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @a2946490, cash/analysis/cacheability.py:_SideEffectVisitor @2da2ebf4 broad="the table enumerates every call shape the visitor flags; a new branch is a missing row" -->
 | Pattern | Examples | Why it's unsafe to replay |
 |---------|----------|---------------------------|
 | File writes | `open('f', 'w')`, `df.to_csv()`, `df.to_parquet()`, `Path(p).write_text()` | The file wouldn't be written on a cache hit |
@@ -209,7 +209,7 @@ Writing to the console is output, not a file: `os.write(2, ...)`, `sys.stderr.wr
 and `sys.stdout.write(...)` count as a `print` does, so a step marker in a helper does
 not make every statement that calls it a file writer.
 
-<!-- claim: cash/analysis/cacheability.py:_WRITE_METHODS @11ba6ecb, cash/analysis/cacheability.py:_WRITE_MODES @07565e83, cash/analysis/cacheability.py:_is_open_write_mode @1acb03f6, cash/analysis/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @a2946490 -->
+<!-- claim: cash/analysis/cacheability.py:_WRITE_METHODS @11ba6ecb, cash/analysis/cacheability.py:_WRITE_MODES @07565e83, cash/analysis/cacheability.py:is_open_write_mode @5ed73806, cash/analysis/cacheability.py:_IO_SIDE_EFFECT_FUNCTIONS @a2946490 -->
 Detection is by call shape, so it works without importing anything, with two
 consequences worth knowing. A bare `open(...)` counts only when its mode
 argument is **statically** a write mode: `open(p, 'w')` is flagged, and
@@ -223,7 +223,7 @@ colliding: `rename`, `replace` and `touch` are deliberately absent, because
 that has one writes to a filesystem, and an `OUT.mkdir(exist_ok=True)` restored
 instead of run leaves an emptied output folder missing.
 
-<!-- claim: cash/analysis/cacheability.py:statement_write_repeatability @d361c0c9, cash/analysis/cacheability.py:_REPLACING_WRITE_METHODS @b3158e08, cash/analysis/cacheability.py:_is_append_mode_call @d7aef5f5 -->
+<!-- claim: cash/analysis/cacheability.py:statement_write_repeatability @0fbfbfca, cash/analysis/cacheability.py:_REPLACING_WRITE_METHODS @b3158e08, cash/analysis/cacheability.py:_is_append_mode_call @d7aef5f5 -->
 Being uncacheable is not the end of the story for a writer. Because a file
 write has no variable edge, nothing in the lineage graph would ever re-run one,
 so Cash separately records which statements wrote which paths and re-fires a

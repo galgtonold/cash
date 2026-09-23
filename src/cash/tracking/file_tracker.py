@@ -53,13 +53,13 @@ logger = logging.getLogger(__name__)
 # `open`, so an import executed there would run during arbitrary user code --
 # including at interpreter shutdown, while sys.modules is being torn down.
 # `cash.effect_observer` imports nothing from cash, so this cannot cycle.
-from cash.effect_observer import _active_observer as _active_effect_observer
+from cash.effect_observer import active_observer as _active_effect_observer
 
 # Active tracker for the current asyncio task / thread.
 # Read by the patched I/O dispatchers to decide whether to record the
 # access. Isolated per task/thread by contextvars semantics.
-_active_tracker: contextvars.ContextVar[Optional["FileAccessTracker"]] = contextvars.ContextVar(
-    "_active_tracker", default=None
+active_tracker: contextvars.ContextVar[Optional["FileAccessTracker"]] = contextvars.ContextVar(
+    "active_tracker", default=None
 )
 
 
@@ -79,14 +79,14 @@ class untracked:
     __slots__ = ("_token", "_observer_token")
 
     def __enter__(self) -> None:
-        self._token = _active_tracker.set(None)
+        self._token = active_tracker.set(None)
         # Nor anyone's observed side effect: cash writing its own bookkeeping
         # file inside a nested call is not the OUTER function writing a file.
         self._observer_token = _active_effect_observer.set(None)
 
     def __exit__(self, *exc: Any) -> None:
         _active_effect_observer.reset(self._observer_token)
-        _active_tracker.reset(self._token)
+        active_tracker.reset(self._token)
 
 
 # Per-target install lock: the dispatcher wrappers are installed once
@@ -229,7 +229,7 @@ def _in_modules(module: str, names: tuple[str, ...]) -> bool:
     return any(module == n or module.startswith(n + ".") for n in names)
 
 
-def _nc(path: str) -> str:
+def normcase_path(path: str) -> str:
     """*path* case-folded where the OS is, with forward slashes.
 
     ``normcase`` on Windows turns ``/`` back into ``\\``, so it has to come
@@ -239,7 +239,7 @@ def _nc(path: str) -> str:
 
 
 def _norm_dir(path: str) -> str:
-    return _nc(os.path.abspath(path)).rstrip("/") + "/"
+    return normcase_path(os.path.abspath(path)).rstrip("/") + "/"
 
 
 @functools.lru_cache(maxsize=1)
@@ -291,7 +291,7 @@ def _site_roots() -> tuple[str, ...]:
 
 
 @functools.lru_cache(maxsize=1)
-def _installed_roots() -> tuple[str, ...]:
+def installed_roots() -> tuple[str, ...]:
     """Where installed packages live: site-packages and the standard library."""
     return tuple(sorted(set(_interpreter_roots()) | set(_site_roots())))
 
@@ -357,12 +357,12 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
     package directory. *own_package* is the top-level package of the code
     being cached -- its own files are its data, even when it is installed.
     """
-    path_nc = _nc(path)
+    path_nc = normcase_path(path)
     if _under(path_nc, _interpreter_roots()) and not _under(path_nc, _site_roots()):
         return "interpreter"
     if _installed_data_file(path_nc, own_package):
         return "installed package data"
-    installed = _installed_roots()
+    installed = installed_roots()
     frame = sys._getframe(1)
     reader_seen = False
     while frame is not None:
@@ -386,7 +386,11 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
                 # worker, a launcher) must not turn every read into one.
                 spec = frame.f_globals.get("__spec__")
                 origin = getattr(spec, "origin", None)
-                if getattr(spec, "_initializing", False) and isinstance(origin, str) and _under(_nc(origin), installed):
+                if (
+                    getattr(spec, "_initializing", False)
+                    and isinstance(origin, str)
+                    and _under(normcase_path(origin), installed)
+                ):
                     return "library import"
             if not reader_seen and not is_plumbing:
                 reader_seen = True
@@ -503,7 +507,7 @@ _LIBRARY_ROOTS: tuple[str, ...] | None = None
 _FILE_IS_USER: dict[str, bool] = {}
 
 
-def _is_user_file(filename: str) -> bool:
+def is_user_file(filename: str) -> bool:
     """Is *filename* code outside cash, the standard library and site-packages?"""
     verdict = _FILE_IS_USER.get(filename)
     if verdict is not None:
@@ -579,7 +583,7 @@ def _frame_kind(filename: str) -> str:
             else "cash"
             if filename and os.path.normcase(filename).startswith(_CASH_PACKAGE_DIR)
             else "user"
-            if _is_user_file(filename)
+            if is_user_file(filename)
             else "other"
         )
         if len(_FRAME_KIND) < 8192:
@@ -682,12 +686,12 @@ def _dispatch_track(path: Any) -> None:
     """Module-level tracker-dispatching shim. Custom handler factories
     registered via :func:`cash.register_file_handler` receive this as
     their ``tracker_callback`` argument. The shim consults
-    ``_active_tracker`` at *call* time, so old-signature factories
+    ``active_tracker`` at *call* time, so old-signature factories
     (whose wrappers do ``tracker_callback(path)``) transparently route
     to whichever tracker is active on the current asyncio task or
     thread — same isolation guarantees as the built-in handlers.
     """
-    _tracker = _active_tracker.get()
+    _tracker = active_tracker.get()
     if _tracker is not None:
         _tracker._track_path(path)
 
@@ -708,7 +712,7 @@ def _install_module_patches(module_name: str, module_obj: Any) -> None:
 
     Called from :meth:`FileAccessTracker._apply_patches` and from
     :class:`_PatchingLoader.exec_module` (post-import). The dispatcher
-    wrappers route via ``_active_tracker`` so they're tracker-agnostic
+    wrappers route via ``active_tracker`` so they're tracker-agnostic
     — one install serves all trackers.
     """
     registry = FileDependencyRegistry()
@@ -824,7 +828,7 @@ def _track_regular_file(path: Any) -> None:
     ``os.stat``, not ``os.path.isfile``: that one is patched to record a
     NEGATIVE answer as an absent dependency.
     """
-    tracker = _active_tracker.get()
+    tracker = active_tracker.get()
     if tracker is None or not isinstance(path, (str, bytes, os.PathLike)):
         return
     try:
@@ -854,7 +858,7 @@ def _patch_pathlib_stat() -> None:
     @functools.wraps(original)
     def tracked_path_stat(self, *args, **kwargs):
         result = original(self, *args, **kwargs)
-        if _active_tracker.get() is not None and stat.S_ISREG(result.st_mode):
+        if active_tracker.get() is not None and stat.S_ISREG(result.st_mode):
             _track_regular_file(self)
         return result
 
@@ -887,7 +891,7 @@ def _patch_thread_pool_submit() -> None:
 
     @functools.wraps(original)
     def submit(self, fn, /, *args, **kwargs):
-        if _active_tracker.get() is None or getattr(self, "_cash_internal", False):
+        if active_tracker.get() is None or getattr(self, "_cash_internal", False):
             return original(self, fn, *args, **kwargs)
         return original(self, contextvars.copy_context().run, fn, *args, **kwargs)
 
@@ -967,7 +971,7 @@ def _patch_process_pool_submit() -> None:
 
     @functools.wraps(original)
     def submit(self, fn, /, *args, **kwargs):
-        tracker = _active_tracker.get()
+        tracker = active_tracker.get()
         if tracker is None or getattr(self, "_cash_internal", False):
             return original(self, fn, *args, **kwargs)
         inner = original(self, _ReadsInWorker(fn), *args, **kwargs)
@@ -984,7 +988,7 @@ def _patch_process_pool_submit() -> None:
             result = done.result()
             if isinstance(result, _WorkerReads):
                 for path in result.files:
-                    tracker._add_tracked(path)
+                    tracker.add_tracked(path)
                 tracker.absent_files.update(result.absent)
                 result = result.value
             outer.set_result(result)
@@ -1138,7 +1142,7 @@ class FileDependencyRegistry:
         ``track_callback`` is part of the user-facing handler factory
         signature (see :meth:`FileDependencyRegistry.register`) so
         custom factories can record the access. The built-in handlers
-        ignore the argument and consult ``_active_tracker`` directly —
+        ignore the argument and consult ``active_tracker`` directly —
         that way one patch serves any number of concurrent trackers.
         """
 
@@ -1149,7 +1153,7 @@ class FileDependencyRegistry:
             # image with "w+b", and round 21 found each `savefig` recorded as a
             # dependency on its own output.
             if "r" in mode or ("+" in mode and "w" not in mode and "x" not in mode):
-                _tracker = _active_tracker.get()
+                _tracker = active_tracker.get()
                 if _tracker is not None:
                     _tracker._track_path(file)
                     try:
@@ -1186,7 +1190,7 @@ class FileDependencyRegistry:
 
         ``track_callback`` is part of the user-facing factory signature
         — see :meth:`_create_open_handler`. The built-in wrapper
-        consults ``_active_tracker`` directly.
+        consults ``active_tracker`` directly.
         """
 
         # Positional OR keyword. The wrapper used to demand the path as its
@@ -1198,7 +1202,7 @@ class FileDependencyRegistry:
         def tracked_func(*args, **kwargs):
             target = args[0] if args else next((kwargs[k] for k in _PATH_KWARGS if k in kwargs), None)
             if isinstance(target, (str, bytes, os.PathLike)):
-                _tracker = _active_tracker.get()
+                _tracker = active_tracker.get()
                 if _tracker is not None:
                     _tracker._track_path(target)
                 else:
@@ -1242,7 +1246,7 @@ class FileDependencyRegistry:
         def tracked_exists(path, *args, **kwargs):
             result = original_func(path, *args, **kwargs)
             if not result:
-                _tracker = _active_tracker.get()
+                _tracker = active_tracker.get()
                 if _tracker is not None and isinstance(path, (str, bytes, os.PathLike)):
                     _tracker._track_absent(path)
             return result
@@ -1278,7 +1282,7 @@ class FileDependencyRegistry:
             if isinstance(filename, (str, bytes, os.PathLike)):
                 text = os.fsdecode(filename) if isinstance(filename, bytes) else str(filename)
                 if not text.startswith("<") and not text.endswith(FileDependencyRegistry._SOURCE_SUFFIXES):
-                    _tracker = _active_tracker.get()
+                    _tracker = active_tracker.get()
                     if _tracker is not None:
                         try:
                             real = os.path.isfile(text)
@@ -1295,7 +1299,7 @@ class FileDependencyRegistry:
         """Track the directory a ``glob`` pattern enumerates."""
 
         def tracked_glob(pathname, *args, **kwargs):
-            _tracker = _active_tracker.get()
+            _tracker = active_tracker.get()
             if _tracker is not None:
                 base = FileDependencyRegistry._glob_base_dir(pathname)
                 if base is not None:
@@ -1310,7 +1314,7 @@ class FileDependencyRegistry:
 
         def tracked_listdir(path=".", *args, **kwargs):
             if isinstance(path, (str, bytes, os.PathLike)):
-                _tracker = _active_tracker.get()
+                _tracker = active_tracker.get()
                 if _tracker is not None:
                     _tracker._track_path(path)
             return original_func(path, *args, **kwargs)
@@ -1324,7 +1328,7 @@ class PostImportHook(importlib.abc.MetaPathFinder):
     A single shared hook is installed once on ``sys.meta_path`` (see
     ``_shared_import_hook`` below). Module patching is tracker-agnostic
     — :func:`_install_module_patches` routes file reads via
-    ``_active_tracker`` so the same patches serve every tracker.
+    ``active_tracker`` so the same patches serve every tracker.
     """
 
     def __init__(self) -> None:
@@ -1399,7 +1403,7 @@ class FileAccessTracker:
     ``builtins.open``, registered pandas/polars/numpy/joblib/pickle/json
     I/O functions, the user namespace ``open``, and a meta-path import
     hook for libraries loaded later. The wrappers consult a
-    ``ContextVar`` (``_active_tracker``) at *call* time to decide
+    ``ContextVar`` (``active_tracker``) at *call* time to decide
     whether to record the access. ``__enter__`` sets that ContextVar
     to ``self`` and stores the token; ``__exit__`` ``reset()``s it.
 
@@ -1491,13 +1495,13 @@ class FileAccessTracker:
         _ensure_import_hook_installed()
         # Capture the enclosing tracker (if any) BEFORE we become active, so a
         # read inside this block also registers with the outer tracker(s).
-        self._parent_stack.append(_active_tracker.get())
-        self._token_stack.append(_active_tracker.set(self))
+        self._parent_stack.append(active_tracker.get())
+        self._token_stack.append(active_tracker.set(self))
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self._token_stack:
-            _active_tracker.reset(self._token_stack.pop())
+            active_tracker.reset(self._token_stack.pop())
         if self._parent_stack:
             self._parent_stack.pop()
 
@@ -1511,11 +1515,11 @@ class FileAccessTracker:
         iterator is over a second of pure bookkeeping.
         """
         parent = self._parent_stack[-1] if self._parent_stack else None
-        return _active_tracker.set(parent)
+        return active_tracker.set(parent)
 
     def resume(self, token) -> None:
         """Undo :meth:`suspend`."""
-        _active_tracker.reset(token)
+        active_tracker.reset(token)
 
     def get_accessed_files(self) -> set[str]:
         return self.accessed_files
@@ -1568,7 +1572,7 @@ class FileAccessTracker:
             # ``realpath`` would mangle it into a nonexistent local path and the
             # dependency would vanish. Record it on the remote channel, where it
             # is tracked by the store's own validator. See CAS-236.
-            self._add_tracked_remote(raw_path)
+            self.add_tracked_remote(raw_path)
             return
         try:
             # Normalize path using realpath to get canonical path
@@ -1608,7 +1612,7 @@ class FileAccessTracker:
         if why is not None:
             logger.debug("[TRACKER] Ignoring %s read %r", why, abs_path)
             return
-        self._add_tracked(abs_path, lstat=read_lstat)
+        self.add_tracked(abs_path, lstat=read_lstat)
         try:
             _credit_read_to_stack(abs_path, self)
         except Exception:  # noqa: BLE001 - attribution is an aid; the read counts regardless
@@ -1625,7 +1629,7 @@ class FileAccessTracker:
             if raw and not os.path.isabs(raw):
                 rel = normalize_path(raw)
                 if rel != abs_path:
-                    self._add_tracked(rel)
+                    self.add_tracked(rel)
             elif raw:
                 # An ABSOLUTE path through a junction or symlink gets the same
                 # treatment: its unresolved form is recorded too. The realpath
@@ -1638,11 +1642,11 @@ class FileAccessTracker:
                 # catching an edit to the target itself.
                 link = normalize_path(os.path.abspath(raw))
                 if os.path.normcase(link) != os.path.normcase(abs_path):
-                    self._add_tracked(link)
+                    self.add_tracked(link)
         except (TypeError, ValueError, OSError):
             logger.debug("[TRACKER] Could not record unresolved path for %r", path)
 
-    def _add_tracked(self, abs_path: str, digest: str | None = None, lstat: Any = None) -> None:
+    def add_tracked(self, abs_path: str, digest: str | None = None, lstat: Any = None) -> None:
         """Record *abs_path* on this tracker and, when propagation is enabled,
         on the enclosing tracker(s) too - so nested cached reads count as the
         outer cached function's deps. Manual tracker nesting stays isolated.
@@ -1676,7 +1680,7 @@ class FileAccessTracker:
             return
         parent = self._parent_stack[-1] if self._parent_stack else None
         if parent is not None and parent is not self:
-            parent._add_tracked(abs_path, digest)
+            parent.add_tracked(abs_path, digest)
 
     def _digest_now(self, abs_path: str, size: int) -> str | None:
         """The file's content hash as the body is about to read it."""
@@ -1736,25 +1740,25 @@ class FileAccessTracker:
         # inside its own package is not the user's question either.
         if incidental_read(os.path.abspath(raw), self._own_package) is not None:
             return
-        self._add_tracked_absent(normalized)
+        self.add_tracked_absent(normalized)
 
-    def _add_tracked_absent(self, path: str) -> None:
+    def add_tracked_absent(self, path: str) -> None:
         """Record an absent path here and, when propagating, on the parents."""
         self.absent_files.add(path)
         if not self._propagate_to_parent:
             return
         parent = self._parent_stack[-1] if self._parent_stack else None
         if parent is not None and parent is not self:
-            parent._add_tracked_absent(path)
+            parent.add_tracked_absent(path)
 
-    def _add_tracked_remote(self, url: str) -> None:
+    def add_tracked_remote(self, url: str) -> None:
         """Record a remote *url* read, propagating to the enclosing tracker."""
         self.accessed_remote.add(url)
         if not self._propagate_to_parent:
             return
         parent = self._parent_stack[-1] if self._parent_stack else None
         if parent is not None and parent is not self:
-            parent._add_tracked_remote(url)
+            parent.add_tracked_remote(url)
 
     def _apply_patches(self):
         # 1. Patch Builtins

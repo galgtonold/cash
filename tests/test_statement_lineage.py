@@ -210,7 +210,7 @@ class TestStatementLineage(unittest.TestCase):
 
             # Verify lineage matches expectation manually
             # This helps confirm if StatementProcessor did its job right
-            self.magics._tracking_state.variable_lineage.get("d")
+            self.magics.tracking_state.variable_lineage.get("d")
 
             # 2. Run Downstream (trigger check)
             print("Running Cell 2 (Check for redundant re-execution)...")

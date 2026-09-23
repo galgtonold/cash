@@ -38,7 +38,7 @@ SEQS = (list, tuple)
 MAX_LEVELS = 16
 
 
-def _fake_clock() -> tuple[tuple, dict]:
+def fake_clock() -> tuple[tuple, dict]:
     """``(leaf types, pickler dispatch entries)`` for a loaded clock test double.
 
     Under freezegun, ``date(2025, 10, 1)`` written in a module is a
@@ -65,7 +65,7 @@ def _fake_clock() -> tuple[tuple, dict]:
     return tuple(leaves), table
 
 
-#: id(freezegun.api) -> (the module, what `_fake_clock` found in it)
+#: id(freezegun.api) -> (the module, what `fake_clock` found in it)
 _FAKE_CLOCK: dict[int, tuple[Any, tuple[tuple, dict]]] = {}
 
 
@@ -73,7 +73,7 @@ def _dump(value: Any, fast: bool) -> bytes:
     buf = io.BytesIO()
     pickler = pickle.Pickler(buf, protocol=pickle.DEFAULT_PROTOCOL)
     pickler.fast = fast
-    table = _fake_clock()[1]
+    table = fake_clock()[1]
     if table:
         pickler.dispatch_table = {**copyreg.dispatch_table, **table}
     pickler.dump(value)
@@ -82,8 +82,8 @@ def _dump(value: Any, fast: bool) -> bytes:
 
 def key_dumps(value: Any) -> bytes:
     """``pickle.dumps(value)`` for a cache key: a clock test double's date
-    pickles as the date (`_fake_clock`)."""
-    if not _fake_clock()[1]:
+    pickles as the date (`fake_clock`)."""
+    if not fake_clock()[1]:
         return pickle.dumps(value)
     return _dump(value, fast=False)
 
@@ -94,7 +94,7 @@ def _levels(value: Any):
     ``flat`` is every item one level down, ``types`` their exact types. Raises
     ``_NotPlain`` as soon as a level holds anything but leaves and sequences.
     """
-    fakes = _fake_clock()[0]
+    fakes = fake_clock()[0]
     leaves = LEAF_TYPES + fakes if fakes else LEAF_TYPES
     level = [value]
     for _ in range(MAX_LEVELS):

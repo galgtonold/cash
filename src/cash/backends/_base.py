@@ -153,12 +153,12 @@ def _shutdown_write_timeout() -> float:
 _DEFAULT_SHUTDOWN_WRITE_TIMEOUT = 60.0
 
 
-#: ``(pid, answer)`` for `_in_multiprocessing_child`. Keyed by pid because a
+#: ``(pid, answer)`` for `in_multiprocessing_child`. Keyed by pid because a
 #: forked child inherits the parent's module state, answer included.
 _CHILD_ANSWER: tuple[int, bool] = (-1, False)
 
 
-def _in_multiprocessing_child() -> bool:
+def in_multiprocessing_child() -> bool:
     """Is this process a ``multiprocessing`` worker (Pool, Process, executor)?
 
     Never imports ``multiprocessing``: a process it did not start has no
@@ -354,6 +354,10 @@ class PendingWrites:
         """
         return getattr(_WORKER_THREAD, "active", False)
 
+    def current_worker_key(self) -> str | None:
+        """The key of the write task this thread is running, or ``None`` off the worker."""
+        return getattr(self._tls, "current_key", None)
+
     def submit(self, key: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> concurrent.futures.Future:
         """Submit ``fn(*args, **kwargs)`` to run in the background, tagged with *key*.
 
@@ -370,7 +374,7 @@ class PendingWrites:
                 prev.result()
             except Exception:  # noqa: BLE001 — surfaces later via wait(key)
                 pass
-        if _in_multiprocessing_child():
+        if in_multiprocessing_child():
             # In a worker process the write is part of the task, done before
             # the result goes back. A background write there does not survive
             # the idiom everyone uses: `with Pool() as p:` TERMINATES its
@@ -892,7 +896,7 @@ class CacheBackend(ABC):
         metadata.setdefault("access_count", 0)
         return metadata
 
-    def _promotion_size_cap(self) -> int | None:
+    def promotion_size_cap(self) -> int | None:
         """Largest single object this backend accepts via *tiered* promotion.
 
         The default is the static class-level :attr:`max_size_bytes` hint

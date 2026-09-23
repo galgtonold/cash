@@ -48,7 +48,7 @@ from cash.analysis.cacheability_decision import decide_cacheability, identity_co
 from cash.backends.value_policy import worth_its_bytes
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
-from cash.notebook.call_interception import CallSite, _names_read
+from cash.notebook.call_interception import CallSite, names_read
 from cash.notebook.call_refs import (
     DIGEST_FIELD,
     ESTIMATED_FIELD,
@@ -63,7 +63,7 @@ from cash.object_hashing import (
     is_identity_fallback_hash,
 )
 from cash.tracking.file_dep_snapshot import file_dep_is_fresh, snapshot_dependencies
-from cash.tracking.file_tracker import FileAccessTracker, _active_tracker, _is_user_file
+from cash.tracking.file_tracker import FileAccessTracker, active_tracker, is_user_file
 from cash.tracking.randomness import capture_rng_state, rng_modules_changed
 
 from ..cost_model import estimated_restore_time
@@ -116,7 +116,7 @@ def call_site_is_cacheable(
     """
     tree = ast.Module(body=[ast.Expr(value=call_node)], type_ignores=[])
     code = ast.unparse(call_node)
-    inputs = _names_read(call_node) - local_names if variable_lineage is not None else set()
+    inputs = names_read(call_node) - local_names if variable_lineage is not None else set()
     return decide_cacheability(
         code=code,
         tree=tree,
@@ -597,7 +597,7 @@ class _ForwardingTee:
     statement's own ambient capture: *real_stream* IS that ambient capture's
     current stdout/stderr object during a miss, so every write still reaches
     it exactly as before this class existed. Deliberately not the processor's
-    own ``_TeeWriter`` (``statement/processor.py``) -- this module sits
+    own ``TeeWriter`` (``statement/processor.py``) -- this module sits
     beneath the processor in the import graph and must not depend on it.
 
     **Known gap, not fixed here**: ``sys.stdout.buffer`` (the underlying
@@ -788,7 +788,7 @@ def _plain_or_code(value, seen: set[int], budget: list[int]) -> bool:
 
         filename = getattr(value.__code__, "co_filename", "") or ""
         # A cell's code has a `<cash-...>` / `<ipython-...>` name: the user's.
-        if filename and not filename.startswith("<") and not _is_user_file(filename):
+        if filename and not filename.startswith("<") and not is_user_file(filename):
             # A library's function is code, as its classes are. Its module
             # state is no more in a lineage key than in a content key, and
             # walking it refused: sklearn's `normalize` is a validating
@@ -909,7 +909,7 @@ def _warnings_at_the_caller():
                     pass
 
 
-def _global_names_reached(fn, seen: set[int] | None = None, depth: int = 0) -> set[str]:
+def global_names_reached(fn, seen: set[int] | None = None, depth: int = 0) -> set[str]:
     """Global names *fn* loads, and those of the functions it reaches, bounded."""
     seen = set() if seen is None else seen
     code = getattr(fn, "__code__", None)
@@ -921,14 +921,14 @@ def _global_names_reached(fn, seen: set[int] | None = None, depth: int = 0) -> s
     for name in list(names):
         value = namespace.get(name)
         if isinstance(value, _types.FunctionType):
-            names |= _global_names_reached(value, seen, depth + 1)
+            names |= global_names_reached(value, seen, depth + 1)
         elif isinstance(value, type) and id(value) not in seen:
             # A class the callee builds or calls into: its methods read globals too.
             seen.add(id(value))
             for member in vars(value).values():
                 member = getattr(member, "__func__", member)
                 if isinstance(member, _types.FunctionType):
-                    names |= _global_names_reached(member, seen, depth + 1)
+                    names |= global_names_reached(member, seen, depth + 1)
     return names
 
 
@@ -959,7 +959,7 @@ def _loop_vars_the_call_can_read(
         bare = key.split(":", 1)[1] if ":" in key else key
         if bare in hashed:
             if reached is None:
-                reached = _global_names_reached(fn)
+                reached = global_names_reached(fn)
             if bare not in reached:
                 continue
         kept[key] = value
@@ -1328,7 +1328,7 @@ class CallUnit:
             # told to copy, and it wraps the DECORATED CALL in its own fresh
             # ``FileAccessTracker(propagate_to_parent=True)``, not a diff
             # against the caller's tracker. That distinction is load-bearing:
-            # ``_active_tracker.get()`` is shared for the whole statement (or,
+            # ``active_tracker.get()`` is shared for the whole statement (or,
             # inside a loop, the whole loop-as-one-unit execution), so a diff
             # against it goes silently wrong the moment the SAME path is read
             # twice in one tracker window -- ``hdr = read(p); total =
@@ -1413,7 +1413,7 @@ class CallUnit:
         Tees ``sys.stdout``/``sys.stderr`` through a recorder that still
         forwards every byte to the stream that was live going in -- which,
         during a real statement execution, IS the statement's own ambient
-        capture (a ``StringIO``, a ``_TeeWriter``, or the real terminal
+        capture (a ``StringIO``, a ``TeeWriter``, or the real terminal
         outside any capture). So a genuine miss looks exactly as it did
         before this method existed: the callee's output reaches the
         statement's capture "for free", untouched.
@@ -1450,7 +1450,7 @@ class CallUnit:
         if not snap:
             return
         try:
-            tracker = _active_tracker.get()
+            tracker = active_tracker.get()
         except Exception:  # noqa: BLE001 - tracking is best-effort
             return
         if tracker is None:
@@ -1458,13 +1458,13 @@ class CallUnit:
         for path, recorded in snap.items():
             try:
                 # A remote entry must go back onto the remote channel --
-                # routed to ``_add_tracked`` it would enter the file set, be
+                # routed to ``add_tracked`` it would enter the file set, be
                 # stat'ed, and be dropped, same reasoning as
                 # ``core.py``'s ``_propagate_file_deps_to_active_tracker``.
                 if isinstance(recorded, dict) and recorded.get("remote"):
-                    tracker._add_tracked_remote(path)
+                    tracker.add_tracked_remote(path)
                 else:
-                    tracker._add_tracked(path)
+                    tracker.add_tracked(path)
             except Exception:  # noqa: BLE001
                 logger.debug("call unit: could not replay dep %r", path)
 
@@ -2227,11 +2227,11 @@ class CallUnit:
     def _func_name(self, fn) -> str:
         """The name this call's events display under in the badge and stats.
 
-        Delegates to ``Cash._get_func_key`` for a stable ``module.qualname``
+        Delegates to ``Cash.get_func_key`` for a stable ``module.qualname``
         rather than rebuilding the rule here.
         """
         try:
-            return self._cash._get_func_key(fn)
+            return self._cash.get_func_key(fn)
         except Exception:  # noqa: BLE001
             return f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', '?')}"
 

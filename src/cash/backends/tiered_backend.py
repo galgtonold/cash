@@ -77,7 +77,7 @@ class TieredBackend(CacheBackend):
             promotion_policy: Callable taking (execution_time, size_bytes) and returning True if should promote.
             min_persist_compute_s: Compute floor for the serialization-aware
                 decision — nothing below this is promoted past tier 0. The
-                default (1.0 s) matches the fallback ``_default_promotion_policy``;
+                default (1.0 s) matches the fallback ``default_promotion_policy``;
                 the factory lowers it to 0.1 s for the smart-persistence stack.
             min_persist_savings_pct: Required fraction of compute time that a
                 cache hit must save to be worth promoting. Mirrors
@@ -88,9 +88,9 @@ class TieredBackend(CacheBackend):
         self._generation: Any = _UNSEEN
         self._generation_checked_at = 0.0
         self._stamp_writes_seen = 0
-        self.promotion_policy = promotion_policy or self._default_promotion_policy
-        self._min_persist_compute_s = min_persist_compute_s
-        self._min_persist_savings_pct = min_persist_savings_pct
+        self.promotion_policy = promotion_policy or self.default_promotion_policy
+        self.min_persist_compute_s = min_persist_compute_s
+        self.min_persist_savings_pct = min_persist_savings_pct
         # Once-per-session dedup for the oversize-refusal warning.
         self._warned_oversize = False
         #: Same, for the bytes-per-compute-second ceiling (`value_policy`).
@@ -221,13 +221,13 @@ class TieredBackend(CacheBackend):
         bigger objects are correctly *more* likely to persist when their
         recompute cost is high.
         """
-        if floor and execution_time < self._min_persist_compute_s:
+        if floor and execution_time < self.min_persist_compute_s:
             return False
 
         est_restore = cost_model.estimated_restore_time(type_name, size_bytes, backend_kind)
-        return execution_time - est_restore > self._min_persist_savings_pct * execution_time
+        return execution_time - est_restore > self.min_persist_savings_pct * execution_time
 
-    def _default_promotion_policy(self, execution_time: float, size_bytes: int) -> bool:
+    def default_promotion_policy(self, execution_time: float, size_bytes: int) -> bool:
         """Fallback policy used when no ``promotion_policy`` is supplied and the
         entry's metadata carries no cost-model family (so ``set`` can't predict
         with the real type).
@@ -544,7 +544,7 @@ class TieredBackend(CacheBackend):
         refused_size = cap_size  # the size that was actually compared
         for i in range(1, len(self.backends)):
             backend = self.backends[i]
-            cap = backend._promotion_size_cap()
+            cap = backend.promotion_size_cap()
             # Guard against non-numeric caps (e.g. a MagicMock tier in
             # tests) — treat anything that isn't a real number as no cap.
             if isinstance(cap, bool) or not isinstance(cap, (int, float)):

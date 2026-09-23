@@ -62,7 +62,7 @@ def magics():
 
 def test_a_real_run_records_a_set_per_variable(magics):
     magics.cash("", "a = 1\nb = a + 1\n")
-    recorded = magics._tracking_state.executed_cell_hashes
+    recorded = magics.tracking_state.executed_cell_hashes
     assert recorded, "nothing was recorded; the run never reached the writer"
     wrong = {k: type(v).__name__ for k, v in recorded.items() if not isinstance(v, set)}
     assert not wrong, f"executed_cell_hashes holds non-sets: {wrong}"
@@ -72,7 +72,7 @@ def test_redefining_a_variable_accumulates_rather_than_replaces(magics):
     """The reason it is a set at all -- one variable, two defining statements."""
     magics.cash("", "a = 1\n")
     magics.cash("", "a = 2\n")
-    assert len(magics._tracking_state.executed_cell_hashes["a"]) == 2
+    assert len(magics.tracking_state.executed_cell_hashes["a"]) == 2
 
 
 def test_the_declared_type_matches_what_is_stored():

@@ -47,8 +47,8 @@ N = 80
 #: twice -- which read as the check running twice.
 _M = "__import__('cash.tracking.file_dep_snapshot', fromlist=['_'])"
 _BUMP = (
-    "m._test_n.setdefault(getattr(m, '_HASH_EPOCH', None), [0, 0]).__setitem__({i}, "
-    "m._test_n[getattr(m, '_HASH_EPOCH', None)][{i}] + 1)"
+    "m._test_n.setdefault(getattr(m, 'HASH_EPOCH', None), [0, 0]).__setitem__({i}, "
+    "m._test_n[getattr(m, 'HASH_EPOCH', None)][{i}] + 1)"
 )
 COUNTER = (
     "(lambda m, types: (lambda s: (setattr(m, '_test_saved', s), setattr(m, '_test_n', {}),"

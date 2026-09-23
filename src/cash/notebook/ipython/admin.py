@@ -100,7 +100,7 @@ class CashAdminMagicsMixin:
 
     All methods expect ``self`` to be a fully-initialised
     :class:`~cash.notebook.ipython.magics.CashMagics` instance (i.e. attributes such
-    as ``self._cash_instance``, ``self._tracking_state.variable_lineage``, etc. are available).
+    as ``self._cash_instance``, ``self.tracking_state.variable_lineage``, etc. are available).
     """
 
     # ------------------------------------------------------------------
@@ -300,7 +300,7 @@ class CashAdminMagicsMixin:
                 print(f"    ... and {len(discarded) - 1} more.")
 
         print()
-        tracked = len(self._tracking_state.variable_lineage)
+        tracked = len(self.tracking_state.variable_lineage)
         print(f"  Tracked variables:   {tracked}")
         print()
         # Points at the CLI, not at an admin magic: there has never been
@@ -357,13 +357,13 @@ class CashAdminMagicsMixin:
 
         if export_vars:
             for var in export_vars:
-                if var in self._tracking_state.variable_lineage:
-                    export_data["lineage"][var] = self._tracking_state.variable_lineage[var]
-                if var in self._tracking_state.executed_cell_codes:
-                    export_data["cell_codes"][var] = self._tracking_state.executed_cell_codes[var]
+                if var in self.tracking_state.variable_lineage:
+                    export_data["lineage"][var] = self.tracking_state.variable_lineage[var]
+                if var in self.tracking_state.executed_cell_codes:
+                    export_data["cell_codes"][var] = self.tracking_state.executed_cell_codes[var]
         else:
-            export_data["lineage"] = dict(self._tracking_state.variable_lineage)
-            export_data["cell_codes"] = dict(self._tracking_state.executed_cell_codes)
+            export_data["lineage"] = dict(self.tracking_state.variable_lineage)
+            export_data["cell_codes"] = dict(self.tracking_state.executed_cell_codes)
 
         with open(filepath, "w") as f:
             json.dump(export_data, f, indent=2)
@@ -396,13 +396,13 @@ class CashAdminMagicsMixin:
 
         if export_vars:
             for var in export_vars:
-                if var in self._tracking_state.variable_lineage:
-                    export_data["lineage"][var] = self._tracking_state.variable_lineage[var]
-                if var in self._tracking_state.executed_cell_codes:
-                    export_data["cell_codes"][var] = self._tracking_state.executed_cell_codes[var]
+                if var in self.tracking_state.variable_lineage:
+                    export_data["lineage"][var] = self.tracking_state.variable_lineage[var]
+                if var in self.tracking_state.executed_cell_codes:
+                    export_data["cell_codes"][var] = self.tracking_state.executed_cell_codes[var]
         else:
-            export_data["lineage"] = dict(self._tracking_state.variable_lineage)
-            export_data["cell_codes"] = dict(self._tracking_state.executed_cell_codes)
+            export_data["lineage"] = dict(self.tracking_state.variable_lineage)
+            export_data["cell_codes"] = dict(self.tracking_state.executed_cell_codes)
 
         with open(filepath, "wb") as f:
             pickle.dump(export_data, f)
@@ -451,11 +451,11 @@ class CashAdminMagicsMixin:
     def _import_metadata(self: CashMagics, import_data: dict, merge_mode: bool) -> None:
         """Import lineage and cell-code metadata from an export dict."""
         for var, lin_hash in import_data.get("lineage", {}).items():
-            if not merge_mode or var not in self._tracking_state.variable_lineage:
-                self._tracking_state.variable_lineage[var] = lin_hash
+            if not merge_mode or var not in self.tracking_state.variable_lineage:
+                self.tracking_state.variable_lineage[var] = lin_hash
         for var, code in import_data.get("cell_codes", {}).items():
-            if not merge_mode or var not in self._tracking_state.executed_cell_codes:
-                self._tracking_state.executed_cell_codes[var] = code
+            if not merge_mode or var not in self.tracking_state.executed_cell_codes:
+                self.tracking_state.executed_cell_codes[var] = code
 
     @line_magic
     def cash_diff(self: CashMagics, line: str) -> None:
@@ -481,7 +481,7 @@ class CashAdminMagicsMixin:
                 return
 
             other_lineage = other_data.get("lineage", {})
-            current_lineage = dict(self._tracking_state.variable_lineage)
+            current_lineage = dict(self.tracking_state.variable_lineage)
             only_current, only_other, changed, identical = _compute_lineage_diff(current_lineage, other_lineage)
 
             print(f"Cache Diff: current session vs '{filepath}'")
@@ -520,13 +520,13 @@ class CashAdminMagicsMixin:
         ft = self._statement_processor.function_tracker
 
         if not parts or parts[0] == "--list":
-            tracked = ft._tracked_modules
+            tracked = ft.tracked_modules
             if not tracked:
                 print("No modules tracked. Use: %cash_track module_name")
             else:
                 print("Tracked modules:")
                 for mod in sorted(tracked):
-                    mtime = ft._module_mtimes.get(mod, "unknown")
+                    mtime = ft.module_mtimes.get(mod, "unknown")
                     print(f"  {mod} (mtime: {mtime})")
             return
 
@@ -827,8 +827,8 @@ class CashAdminMagicsMixin:
                 self._backend.clear()
             except (OSError, AttributeError, TypeError):
                 logger.debug("Failed to clear cache for cold start benchmark")
-        self._tracking_state.variable_lineage.clear()
-        self._tracking_state.executed_cell_codes.clear()
+        self.tracking_state.variable_lineage.clear()
+        self.tracking_state.executed_cell_codes.clear()
 
 
 # ---------------------------------------------------------------------------

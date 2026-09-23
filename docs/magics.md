@@ -41,7 +41,7 @@ parsed flag, and a working example. Behaviour is derived directly from
 ## Enabling and configuring (user-facing)
 
 ### `%cash_on`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @ca3f5fd2 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @6a93be44 -->
 
 Enable automatic caching for every subsequent cell.
 
@@ -83,7 +83,7 @@ that it did nothing and leaves every cell running uncached — see
 ```
 
 ### `%cash_off`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_off @b6796687 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_off @2c0450cd -->
 
 Disable automatic caching. Subsequent cells run uncached until you call
 `%cash_on` again.
@@ -169,7 +169,7 @@ Print bug-report and feedback URLs. Useful pointer for beta users.
 ```
 
 ### `%cash_status`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @2244b483 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @687a4c46 -->
 
 Report status of the last cell plus a snapshot of session state (lineage,
 executed-code map, auto-cache flag, backend stats).
@@ -193,7 +193,7 @@ blob   = %cash_status json # capture as JSON string
 ```
 
 ### `%cash_badge`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_badge @9456aa5f -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_badge @3519b2f6 -->
 
 Set the badge display mode for subsequent cached cells. See
 [Reading the Cash Badge](badges.md) for the full anatomy of each mode.
@@ -216,7 +216,7 @@ Set the badge display mode for subsequent cached cells. See
 ```
 
 ### `%cash_stats`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @58a2cb0d -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @711be826 -->
 
 Show cache statistics for this kernel session (a restart resets them; what the
 cache on disk holds is `cash info`'s): counts, hit rate, compute time, and the
@@ -303,7 +303,7 @@ Argument matching is case-insensitive.
 ```
 
 ### `%%cash` { #cash-cell }
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash @50fba83b -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash @bc76ef56 -->
 
 Cell magic. Explicitly cache a single cell with the same statement-level
 processing as `%cash_on` (upstream simulation, file tracking, badge rendering).
@@ -386,7 +386,7 @@ it, and (optionally) a dependency graph or timeline.
 ```
 
 ### `%cash_track`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_track @91956bbe -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_track @e168ca3c -->
 
 Watch a local Python module for source changes; reload it (and invalidate any
 cache entries that depend on it) when it changes.
@@ -413,7 +413,7 @@ cache entries that depend on it) when it changes.
 ```
 
 ### `%cash_diff`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_diff @d588aab7 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_diff @a925419e -->
 
 Compare the current session's lineage with a cache file produced by
 [`%cash_export`](#cash_export). Reports per-bucket counts (only-current,

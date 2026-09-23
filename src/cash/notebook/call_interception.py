@@ -318,7 +318,7 @@ class CallCache:
         self._wrappers: dict[tuple[int, CallSite | None], tuple[types.FunctionType, object]] = {}
         # NOTE: there is deliberately no name-reconciliation here any more.
         # This class used to rebuild ``module.qualname`` via
-        # ``Cash._get_func_key`` so the badge could tell an intercepted call
+        # ``Cash.get_func_key`` so the badge could tell an intercepted call
         # from a hand-decorated one, with a comment warning that the two "must
         # agree exactly or the badge silently stops marking intercepted calls".
         # Call-unit events set ``intercepted=True`` at the source, so the two
@@ -326,7 +326,7 @@ class CallCache:
         #: The current cell's rewrite-time site table, set by the processor
         #: right before execution via :meth:`set_sites`.
         self._sites: list[CallSite] = []
-        # Local import: call_unit.py imports CallSite/_names_read from this
+        # Local import: call_unit.py imports CallSite/names_read from this
         # module, so a module-level import here would be a circular import at
         # load time. Deferred to first construction instead.
         from .call_unit import CallUnit
@@ -535,7 +535,7 @@ def wrap_eligible_calls(
             sites.append(
                 CallSite(
                     source=source,
-                    free_names=frozenset(_names_read(call) - local),
+                    free_names=frozenset(names_read(call) - local),
                     occurrence_index=index,
                     computed_arg_positions=_computed_arg_positions(call, local),
                     has_unpacking=_call_has_unpacking(call),
@@ -579,20 +579,20 @@ def _local_arg_positions(call: ast.Call, local: frozenset[str]) -> tuple[int, ..
     if not local or _call_has_unpacking(call):
         return ()
     values = [*call.args, *(kw.value for kw in call.keywords)]
-    return tuple(i for i, v in enumerate(values) if _names_read(v) & local)
+    return tuple(i for i, v in enumerate(values) if names_read(v) & local)
 
 
 def _content_names(call: ast.Call, local: frozenset[str]) -> frozenset[str]:
     """Free names *call* reads only inside computed arguments (see
     ``CallSite.content_names``). None under unpacking, whose arguments the
     runtime keys only on what arrived (see ``_content_source``)."""
-    elsewhere = _names_read(call.func)
+    elsewhere = names_read(call.func)
     inside: set[str] = set()
     for value in [*call.args, *(kw.value for kw in call.keywords)]:
         if isinstance(value, ast.Name):
             elsewhere.add(value.id)
         else:
-            inside |= _names_read(value)
+            inside |= names_read(value)
     return frozenset(inside - elsewhere - local)
 
 
@@ -630,10 +630,10 @@ def _name_arg_positions(call: ast.Call, local: frozenset[str]) -> tuple[tuple[st
     if _call_has_unpacking(call):
         return ()
     values = [*call.args, *(kw.value for kw in call.keywords)]
-    elsewhere = set(_names_read(call.func))
+    elsewhere = set(names_read(call.func))
     for value in values:
         if not isinstance(value, ast.Name):
-            elsewhere |= _names_read(value)
+            elsewhere |= names_read(value)
     found: dict[str, int] = {}
     for i, value in enumerate(values):
         if isinstance(value, ast.Name) and value.id not in local and value.id not in elsewhere:
@@ -749,7 +749,7 @@ def _eligible_calls_in_loop(
     statically is not taken either.
     """
     # Local: import cycle call_interception -> call_unit -> call_interception.
-    from cash.notebook.call_unit import _global_names_reached
+    from cash.notebook.call_unit import global_names_reached
 
     written = frozenset(_loop_bound_names(loop))
     # And every plain name an argument reads. The unit updates no lineage
@@ -767,7 +767,7 @@ def _eligible_calls_in_loop(
         key = id(callee)
         if key not in reached:
             try:
-                reached[key] = bool(_global_names_reached(callee) & written)
+                reached[key] = bool(global_names_reached(callee) & written)
             except Exception:  # noqa: BLE001 - unknown reach: not taken
                 reached[key] = True
         return reached[key]
@@ -793,7 +793,7 @@ def _loop_argument_names(loop: ast.For, namespace: Mapping[str, object]) -> set[
         if not isinstance(node, ast.Call):
             continue
         for value in [*node.args, *(kw.value for kw in node.keywords)]:
-            for name in _names_read(value):
+            for name in names_read(value):
                 bound = namespace.get(name, _NOT_FOUND)
                 if isinstance(bound, (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)):
                     continue
@@ -864,11 +864,11 @@ def _collect(
         local = local | _bound_names(node)
     if (
         isinstance(node, ast.Call)
-        and not (_names_read(node) & targets)
+        and not (names_read(node) & targets)
         # A callee that reads a comprehension's own variable is a different
         # callable per element (`m.predict(X)` over `models.items()`), and
         # nothing in the key can see which: never intercepted.
-        and not (_names_read(node.func) & local)
+        and not (names_read(node.func) & local)
         and not (skip is not None and skip(node, local))
     ):
         found.append((node, local))
@@ -884,7 +884,7 @@ def _collect(
         _collect(child, targets, found, local, skip)
 
 
-def _names_read(node: ast.AST) -> set[str]:
+def names_read(node: ast.AST) -> set[str]:
     """Every bare name appearing anywhere under *node*.
 
     Deliberately not scope-aware: ``s.total`` and ``s[0]`` must both count as

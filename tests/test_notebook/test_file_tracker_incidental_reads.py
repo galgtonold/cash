@@ -72,7 +72,7 @@ def fake_site(tmp_path, monkeypatch):
     # raising=False: the fails-first control runs this against a tracker
     # that has neither function.
     monkeypatch.setattr(file_tracker, "_site_roots", lambda: (root,), raising=False)
-    monkeypatch.setattr(file_tracker, "_installed_roots", lambda: (root,), raising=False)
+    monkeypatch.setattr(file_tracker, "installed_roots", lambda: (root,), raising=False)
     monkeypatch.syspath_prepend(str(site))
     for name in ("fakelib", "fakelib_importer"):
         sys.modules.pop(name, None)

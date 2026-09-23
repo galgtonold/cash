@@ -66,7 +66,7 @@ class TraceEntry(_TraceFields):
 
 
 class IncrementalStartResult(NamedTuple):
-    """Result of VirtualLineage._find_incremental_start.
+    """Result of VirtualLineage.find_incremental_start.
 
     Replaces a raw 9-element tuple with named fields so call sites are
     self-documenting.

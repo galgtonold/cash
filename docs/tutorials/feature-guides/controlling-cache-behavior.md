@@ -171,7 +171,7 @@ Two ways to set a default TTL for every cached statement in scope:
 result = compute_something()
 ```
 
-`%cash_on ttl=N` sets `self._global_ttl` on the magic. `%%cash` parses the same `ttl=N` arg locally and swaps the global TTL in/out around the cell, so the cell-scoped value doesn't leak out.
+`%cash_on ttl=N` sets `self.global_ttl` on the magic. `%%cash` parses the same `ttl=N` arg locally and swaps the global TTL in/out around the cell, so the cell-scoped value doesn't leak out.
 
 A per-statement `# @cash:ttl=N` annotation always wins over both: the merge logic in `_parse_annotation` favors the annotation's TTL whenever it's set.
 
@@ -256,11 +256,11 @@ For the annotations that *don't* skip caching:
 | Annotation | Triggers (regex `#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?`) | Effect |
 |---|---|---|
 | `# @cash:no-cache` | directive=`no-cache` | Sets `CacheAnnotation.no_cache=True`. Short-circuits `decide_cacheability` to return `(False, ['@cash:no-cache annotation'])`. |
-| `# @cash:ttl=N` | directive=`ttl`, value=`N` (captured wide, then required to be ASCII digits) | Sets `CacheAnnotation.ttl=N`. Overrides global `_global_ttl` for this statement. Checked at lookup time by `_validate_ttl`. |
+| `# @cash:ttl=N` | directive=`ttl`, value=`N` (captured wide, then required to be ASCII digits) | Sets `CacheAnnotation.ttl=N`. Overrides global `global_ttl` for this statement. Checked at lookup time by `_validate_ttl`. |
 | `# @cash:persist` | directive=`persist` | Sets `CacheAnnotation.persist=True`. Forces tiered-backend promotion to the persistent tier regardless of the smart-persistence policy. |
 | `# @cash:allow-random` | directive=`allow-random` | Sets `CacheAnnotation.allow_random=True`. `check_and_warn_randomness` suppresses `CashRandomnessWarning` for the statement. |
-| `%cash_on ttl=N` | line-magic flag | Sets `self._global_ttl` on the magic. Applies to every statement unless overridden by `@cash:ttl=...`. |
-| `%%cash ttl=N` | cell-magic flag | Swaps `_global_ttl` in for the duration of the cell, then restores it. |
+| `%cash_on ttl=N` | line-magic flag | Sets `self.global_ttl` on the magic. Applies to every statement unless overridden by `@cash:ttl=...`. |
+| `%%cash ttl=N` | cell-magic flag | Swaps `global_ttl` in for the duration of the cell, then restores it. |
 | `@c.cache(ttl=N)` | decorator kwarg | Same TTL semantics, applied to function-level caching. |
 
 All annotation parsing lives in `src/cash/analysis/annotations.py`. The single regex pattern is `ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?')` — the value group is deliberately wide so a malformed value is *rejected by name* rather than silently truncated.

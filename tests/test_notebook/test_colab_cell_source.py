@@ -26,7 +26,7 @@ IPYNB = {
 
 
 def _install_fake_colab(monkeypatch, blocking_request):
-    """Make ``sd._in_colab()`` true and ``from google.colab import _message`` work."""
+    """Make ``sd.in_colab()`` true and ``from google.colab import _message`` work."""
     google = sys.modules.get("google") or types.ModuleType("google")
     colab = types.ModuleType("google.colab")
     message = types.ModuleType("google.colab._message")
@@ -78,5 +78,5 @@ def test_result_cached_within_ttl(monkeypatch):
 
 def test_no_op_when_not_in_colab(monkeypatch):
     monkeypatch.delitem(sys.modules, "google.colab", raising=False)
-    assert sd._in_colab() is False
+    assert sd.in_colab() is False
     assert sd._try_colab_notebook_cells(False) is None

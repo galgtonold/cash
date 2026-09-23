@@ -96,7 +96,7 @@ class TestTheHeaderIsRead:
         )
 
         assert shell.user_ns["ALIAS"] == {"LOC1": "GENE_A", "LOC2": "GENE_B"}
-        recorded = magics._tracking_state.executed_file_deps.get("ALIAS", set())
+        recorded = magics.tracking_state.executed_file_deps.get("ALIAS", set())
         assert any(os.path.samefile(p, data) for p in recorded if os.path.exists(p)), (
             "the loop's header was the only read of %s, and it reached "
             "nothing: ALIAS's file deps are %r" % (data, sorted(recorded))
@@ -110,7 +110,7 @@ class TestTheHeaderIsRead:
         _run_cell(magics, "OUT = []\nfor r in RUNS:\n    OUT.append(r.upper())")
 
         assert shell.user_ns["OUT"] == ["A", "B", "C"]
-        deps = magics._tracking_state.executed_file_deps.get("OUT", set())
+        deps = magics.tracking_state.executed_file_deps.get("OUT", set())
         assert not [p for p in deps if os.path.exists(p)], sorted(deps)
 
 

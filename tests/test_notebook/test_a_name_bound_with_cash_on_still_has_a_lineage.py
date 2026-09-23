@@ -127,7 +127,7 @@ class TestTheWiring:
         """Without this the fallback above has nothing to fall back to."""
         magics, shell, _backend = magics_fixture
         _run_cell(magics, "SECOND = FIRST * 2", cells=["FIRST = 21", "SECOND = FIRST * 2"])
-        simulated = magics._tracking_state.simulated_lineage
+        simulated = magics.tracking_state.simulated_lineage
         assert simulated.get("FIRST"), "the simulation knows what FIRST is worth and did not pass it on: %r" % (
             simulated,
         )
@@ -149,9 +149,9 @@ class TestTheWiring:
         import hashlib
 
         key = hashlib.sha256(ast.unparse(ast.parse(code).body[1]).encode("utf-8")).hexdigest()
-        outcome = magics._tracking_state.control_outcomes.get(key)
-        assert outcome is not None, sorted(magics._tracking_state.control_outcomes)
-        simulated = magics._tracking_state.simulated_lineage.get("DATA")
+        outcome = magics.tracking_state.control_outcomes.get(key)
+        assert outcome is not None, sorted(magics.tracking_state.control_outcomes)
+        simulated = magics.tracking_state.simulated_lineage.get("DATA")
         assert simulated, "the simulation should know what DATA is worth"
         assert outcome[0].get("DATA") == simulated, (
             "the loop read DATA and recorded nothing about it, so its outcome "

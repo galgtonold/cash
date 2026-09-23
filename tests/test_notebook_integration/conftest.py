@@ -1831,18 +1831,18 @@ try:
     _cash_magics = get_ipython().magics_manager.registry.get('CashMagics')
     if _cash_magics:
         # Clear shared tracking dicts (underscore-prefixed private attributes)
-        _cash_magics._tracking_state.variable_lineage.clear()
-        _cash_magics._tracking_state.executed_cell_codes.clear()
-        _cash_magics._tracking_state.executed_cell_hashes.clear()
-        _cash_magics._tracking_state.current_session_hashes.clear()
-        _cash_magics._tracking_state.executed_file_deps.clear()
-        _cash_magics._tracking_state.vars_with_mutation_lineage.clear()
+        _cash_magics.tracking_state.variable_lineage.clear()
+        _cash_magics.tracking_state.executed_cell_codes.clear()
+        _cash_magics.tracking_state.executed_cell_hashes.clear()
+        _cash_magics.tracking_state.current_session_hashes.clear()
+        _cash_magics.tracking_state.executed_file_deps.clear()
+        _cash_magics.tracking_state.vars_with_mutation_lineage.clear()
         # Clear statement processor's input lineages
         if hasattr(_cash_magics, '_statement_processor'):
             _cash_magics._statement_processor.executed_input_lineages.clear()
         # Clear upstream checker's simulation cache
         if hasattr(_cash_magics, '_upstream_checker'):
-            _cash_magics._upstream_checker._simulation_cache = []
+            _cash_magics._upstream_checker.simulation_cache = []
         # Clear file tracker state
         if hasattr(_cash_magics, '_file_tracker') and _cash_magics._file_tracker:
             _cash_magics._file_tracker.clear()

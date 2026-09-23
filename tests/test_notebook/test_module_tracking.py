@@ -97,14 +97,14 @@ class TestTrackModule:
 
         result = tracker.track_module(module_name)
         assert result is not None
-        assert module_name in tracker._tracked_modules
-        assert module_name in tracker._module_mtimes
+        assert module_name in tracker.tracked_modules
+        assert module_name in tracker.module_mtimes
 
     def test_track_unimported_module(self, tracker):
         """track_module returns None for module not in sys.modules."""
         result = tracker.track_module("nonexistent_xyz_module")
         # Module name is added to tracked set even if not yet imported
-        assert "nonexistent_xyz_module" in tracker._tracked_modules
+        assert "nonexistent_xyz_module" in tracker.tracked_modules
         assert result is None
 
     def test_track_builtin_module(self, tracker):
@@ -112,7 +112,7 @@ class TestTrackModule:
         result = tracker.track_module("builtins")
         # builtins has no __file__, should return None
         assert result is None
-        assert "builtins" in tracker._tracked_modules
+        assert "builtins" in tracker.tracked_modules
 
     def test_track_module_records_mtime(self, tracker, temp_module):
         """Module mtime is recorded on tracking."""
@@ -122,7 +122,7 @@ class TestTrackModule:
         importlib.import_module(module_name)
 
         tracker.track_module(module_name)
-        mtime = tracker._module_mtimes.get(module_name)
+        mtime = tracker.module_mtimes.get(module_name)
         assert mtime is not None
         assert isinstance(mtime, float)
 
@@ -186,7 +186,7 @@ class TestCheckTrackedModules:
 
     def test_unimported_module_not_in_changes(self, tracker):
         """Module in tracked set but not imported doesn't appear in changes."""
-        tracker._tracked_modules.add("nonexistent_module_xyz")
+        tracker.tracked_modules.add("nonexistent_module_xyz")
         changed = tracker.check_tracked_modules()
         assert len(changed) == 0
 
@@ -273,12 +273,12 @@ class TestClear:
         importlib.import_module(module_name)
 
         tracker.track_module(module_name)
-        assert len(tracker._tracked_modules) > 0
-        assert len(tracker._module_mtimes) > 0
+        assert len(tracker.tracked_modules) > 0
+        assert len(tracker.module_mtimes) > 0
 
         tracker.clear()
-        assert len(tracker._tracked_modules) == 0
-        assert len(tracker._module_mtimes) == 0
+        assert len(tracker.tracked_modules) == 0
+        assert len(tracker.module_mtimes) == 0
         assert len(tracker._source_cache) == 0
         assert len(tracker._function_hashes) == 0
 

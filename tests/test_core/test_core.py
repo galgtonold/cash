@@ -43,9 +43,9 @@ def reset_module_state():
     main_runs = 0
 
     # Ensure source hashes are correct (use module-qualified keys)
-    app.source_hashes[Cash._get_func_key(dep2)] = CodeAnalyzer.get_source_hash(dep2)
-    app.source_hashes[Cash._get_func_key(main_func2)] = CodeAnalyzer.get_source_hash(main_func2)
-    app.source_hashes[Cash._get_func_key(lib_func)] = CodeAnalyzer.get_source_hash(lib_func)
+    app.source_hashes[Cash.get_func_key(dep2)] = CodeAnalyzer.get_source_hash(dep2)
+    app.source_hashes[Cash.get_func_key(main_func2)] = CodeAnalyzer.get_source_hash(main_func2)
+    app.source_hashes[Cash.get_func_key(lib_func)] = CodeAnalyzer.get_source_hash(lib_func)
 
     yield
 
@@ -95,7 +95,7 @@ def test_dependency_invalidation():
     assert main_runs == 1, "main_func2 should still be called only once (cached)"
 
     # Simulate source code change in dep2
-    app.source_hashes[Cash._get_func_key(dep2)] = "changed"
+    app.source_hashes[Cash.get_func_key(dep2)] = "changed"
 
     # Call main_func2 again - the DEPENDENT must invalidate and re-execute.
     # dep2's own wrapper keys on the code object it actually executes,
@@ -116,6 +116,6 @@ def test_imported_dependency():
     assert res == 15, "Function should return correct result (5 * 3)"
 
     # Check that dependency is tracked in the graph
-    deps = app.graph.get_dependencies(Cash._get_func_key(calls_import))
-    expected_key = Cash._get_func_key(lib_func)
+    deps = app.graph.get_dependencies(Cash.get_func_key(calls_import))
+    expected_key = Cash.get_func_key(lib_func)
     assert expected_key in deps, f"lib_func ({expected_key}) should be tracked as a dependency of calls_import"

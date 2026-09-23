@@ -128,7 +128,7 @@ def test_the_summary_reaches_an_application_log_in_one_write(tmp_path, monkeypat
     handler = Grab()
     logging.getLogger("cash").addHandler(handler)
     monkeypatch.setattr(logging.getLogger("cash"), "level", logging.INFO)
-    monkeypatch.setattr("cash.core._in_multiprocessing_child", lambda: True)
+    monkeypatch.setattr("cash.core.in_multiprocessing_child", lambda: True)
     try:
         c._print_run_summary()
     finally:

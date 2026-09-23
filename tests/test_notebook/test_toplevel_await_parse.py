@@ -15,7 +15,7 @@ from cash.analysis.code_analyzer import CodeAnalyzer
 
 def test_parse_cell_tolerates_top_level_await():
     """The fix: the cell parser accepts a module-level await (no SyntaxError)."""
-    tree = CodeAnalyzer._parse_cell("result = await fetch(url)")
+    tree = CodeAnalyzer.parse_cell("result = await fetch(url)")
     assert tree is not None
 
 
@@ -34,4 +34,4 @@ def test_strip_magics_survives_await_cell():
 def test_genuine_syntax_error_still_raises():
     """A real typo is still a SyntaxError (clean-traceback path)."""
     with pytest.raises(SyntaxError):
-        CodeAnalyzer._parse_cell("x = (1 + ")
+        CodeAnalyzer.parse_cell("x = (1 + ")

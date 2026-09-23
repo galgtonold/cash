@@ -180,7 +180,7 @@ class TestUserNamespacePatching:
 class TestPermanentInstallSemantics:
     """After the ContextVar refactor the per-tracker
     install/unpatch dance is replaced by an install-once-permanently
-    dispatcher that consults ``_active_tracker``. This eliminates the
+    dispatcher that consults ``active_tracker``. This eliminates the
     leaked-wrapper class of bug entirely — once installed, the wrapper
     stays in place but is a no-op when no tracker is active. These
     tests pin the new contract.

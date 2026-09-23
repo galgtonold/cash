@@ -27,9 +27,9 @@ def progress_probe(monkeypatch):
     from cash.notebook.ipython.magics import CashMagics
 
     magics = CashMagics.__new__(CashMagics)
-    magics._badge_mode = "html"
+    magics.badge_mode = "html"
     magics._debug = False
-    magics._last_badge_render_time = 0.0
+    magics.last_badge_render_time = 0.0
     magics._BADGE_MIN_RENDER_INTERVAL = 0.05  # keep the tests quick
     magics._progress_timer = None
     magics._progress_lock = threading.Lock()
@@ -38,9 +38,9 @@ def progress_probe(monkeypatch):
     published: list[dict] = []
     lock_violations: list[str] = []
 
-    # `_arm_progress_badge`'s `fire()` calls `_build_badge_html` (outside the
+    # `arm_progress_badge`'s `fire()` calls `_build_badge_html` (outside the
     # lock) and then `_publish_badge_html` (inside it) separately -- not
-    # `_render_interactive_badge` as a single call -- so both halves need
+    # `render_interactive_badge` as a single call -- so both halves need
     # faking here, or `fire()` would fall through to the real (slow, real-
     # backend-touching) implementations instead of being observed by these
     # tests. The build fake hands the publish fake everything it captured, so
@@ -112,8 +112,8 @@ def _wait_for_publish(published, timeout: float = _PUBLISH_TIMEOUT_S) -> None:
 
 def test_a_fast_statement_publishes_no_progress_badge(progress_probe):
     magics, published, lock_violations = progress_probe
-    magics._arm_progress_badge([], display_id="d", step=1, total=2, code="x = 1")
-    magics._cancel_progress_badge()
+    magics.arm_progress_badge([], display_id="d", step=1, total=2, code="x = 1")
+    magics.cancel_progress_badge()
     time.sleep(_QUIET_PERIOD_S)
     assert published == [], f"a fast statement published {published}"
     assert lock_violations == [], lock_violations
@@ -121,14 +121,14 @@ def test_a_fast_statement_publishes_no_progress_badge(progress_probe):
 
 def test_a_slow_statement_publishes_one_badge_naming_itself(progress_probe):
     magics, published, lock_violations = progress_probe
-    magics._arm_progress_badge([], display_id="d", step=1, total=2, code="slow = f()")
+    magics.arm_progress_badge([], display_id="d", step=1, total=2, code="slow = f()")
     _wait_for_publish(published)
     # Assert BEFORE cancelling: the statement is still (notionally) running at
     # this point, and this is the claim the design makes -- that the badge is
     # on screen DURING the run, not merely that cancelling produces a correct
     # publish log afterwards. A design that only publishes when cancelled
     # (nothing ever shown while the statement is in flight) would pass this
-    # test if the assertion ran after `_cancel_progress_badge()`; asserting
+    # test if the assertion ran after `cancel_progress_badge()`; asserting
     # first is what rules that out.
     assert len(published) == 1, f"expected exactly one progress badge, got {published}"
     assert published[0]["current_code"] == "slow = f()", (
@@ -139,16 +139,16 @@ def test_a_slow_statement_publishes_one_badge_naming_itself(progress_probe):
     # into one `with self._progress_lock:` block leaves every assertion above
     # still passing -- only this one catches it.
     assert lock_violations == [], lock_violations
-    magics._cancel_progress_badge()
+    magics.cancel_progress_badge()
 
 
 def test_cancel_after_the_timer_fired_is_harmless(progress_probe):
     """Cancel always runs, whether or not the timer already fired."""
     magics, published, lock_violations = progress_probe
-    magics._arm_progress_badge([], display_id="d", step=1, total=2, code="x = 1")
+    magics.arm_progress_badge([], display_id="d", step=1, total=2, code="x = 1")
     _wait_for_publish(published)
-    magics._cancel_progress_badge()
-    magics._cancel_progress_badge()
+    magics.cancel_progress_badge()
+    magics.cancel_progress_badge()
     assert len(published) == 1
     assert lock_violations == [], lock_violations
 
@@ -156,8 +156,8 @@ def test_cancel_after_the_timer_fired_is_harmless(progress_probe):
 def test_nothing_publishes_after_the_final_badge(progress_probe):
     """The sharp edge: a late timer would overwrite DONE with a stale RUNNING."""
     magics, published, lock_violations = progress_probe
-    magics._arm_progress_badge([], display_id="d", step=1, total=2, code="x = 1")
-    magics._cancel_progress_badge()
+    magics.arm_progress_badge([], display_id="d", step=1, total=2, code="x = 1")
+    magics.cancel_progress_badge()
     published.clear()
     time.sleep(_QUIET_PERIOD_S)
     assert published == [], "a cancelled timer still fired"

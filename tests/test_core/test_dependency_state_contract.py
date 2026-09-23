@@ -38,7 +38,7 @@ def test_lone_function_hash_is_sha256_of_its_source_hash(tmp_path):
     def lonely(x):
         return x + 1
 
-    name = c._get_func_key(lonely)
+    name = c.get_func_key(lonely)
     lonely(1)  # trigger registration + lazy analysis
 
     expected = hashlib.sha256(c.source_hashes[name].encode("utf-8")).hexdigest()
@@ -63,7 +63,7 @@ def test_helper_token_format_is_helper_qual_hash(tmp_path):
     def main(x):
         return hm.helper(x)
 
-    name = c._get_func_key(main)
+    name = c.get_func_key(main)
     main(5)  # trigger analysis -> populates the purity report
 
     report = c._purity_reports[name]
@@ -108,7 +108,7 @@ def test_state_hash_is_stable_across_cash_instances(tmp_path):
             return dep(x) + 1
 
         parent(2)  # warm + analyze both nodes
-        return c, c._get_func_key(parent)
+        return c, c.get_func_key(parent)
 
     c1, p1 = build(tmp_path / "a")
     c2, p2 = build(tmp_path / "b")

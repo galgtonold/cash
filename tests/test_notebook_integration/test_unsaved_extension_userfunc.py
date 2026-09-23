@@ -1,7 +1,7 @@
 """An unsaved cell edit whose new code routes through a user function
 must be accepted as the current truth, not discarded in favour of a stale cache.
 
-The bug had two layers: (1) ``_is_valid_extension`` hand-rolled the lineage
+The bug had two layers: (1) ``is_valid_extension`` hand-rolled the lineage
 projection and omitted the function-source component, so a function-routed edit
 always projected != recorded and was rejected; (2) even once kept, the
 stale-value guard (``_mark_stale_value_inputs_broken``) re-marked the valid

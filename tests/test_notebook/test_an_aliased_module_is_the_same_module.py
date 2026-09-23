@@ -12,7 +12,7 @@ module, and BOTH have to be fixed: with either one alone the integration twin
 still fails.
 
 1. :func:`~cash.notebook.lineage_formula.module_source_component` tested
-   ``var_name in function_tracker._tracked_modules``, a set of real module
+   ``var_name in function_tracker.tracked_modules``, a set of real module
    names. For an alias that is false, so the module's source digest never
    entered the bound name's lineage and every statement reading it keyed
    identically across an edit.
@@ -37,8 +37,8 @@ class _Tracker:
     """The two attributes ``module_source_component`` reads off a tracker."""
 
     def __init__(self, tracked, dep_parents=None):
-        self._tracked_modules = set(tracked)
-        self._dep_file_to_parents = dep_parents or {}
+        self.tracked_modules = set(tracked)
+        self.dep_file_to_parents = dep_parents or {}
 
 
 @pytest.fixture

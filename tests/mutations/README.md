@@ -48,7 +48,7 @@ That is exactly what happened with `restore-dead` on 2026-08-24. It reported 0
 failures across 362 tests with 257 confirmed calls, which reads like a glaring
 coverage hole. It was filed as one. But putting the badge side by side with and
 without the mutation showed **identical output** — `^CACHED: mid = ... (saved
-0.11s)` either way. Killing `_try_virtual_restore` changes nothing a user or a
+0.11s)` either way. Killing `try_virtual_restore` changes nothing a user or a
 test can see, because the scheduler compensates.
 
 So before reading a zero as a gap, **produce a positive control**: one concrete
@@ -58,7 +58,7 @@ mutation is inert and the run is as uninformative as `calls=0`.
 The last row is why the call count exists. "Nothing failed" reads identically
 whether the suite is tolerant or the patch never landed, and those mean
 opposite things. This is not hypothetical — an earlier attempt patched
-`_backward_scan_pass` from a pytest plugin, watched 57 upstream integration
+`backward_scan_pass` from a pytest plugin, watched 57 upstream integration
 tests pass, and nearly reported a coverage hole that did not exist. The patch
 was in the pytest process; the code was in the kernel.
 

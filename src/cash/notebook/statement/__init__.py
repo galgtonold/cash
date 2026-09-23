@@ -26,18 +26,18 @@ callers (the decorator path in ``src/cash/core.py``, ``Restorer``, and
 
 from __future__ import annotations
 
-# Private re-exports kept for test files that patch / import via the package
-# path (e.g. ``from cash.notebook.statement import _TeeWriter``). These are
-# not part of the public surface — the leading underscore is the signal —
-# but co-locating the re-export here keeps test paths stable.
+# Re-exports kept for test files that patch / import via the package path
+# (e.g. ``from cash.notebook.statement import TeeWriter``). The ones missing
+# from ``__all__`` are not part of the public surface, but co-locating the
+# re-export here keeps test paths stable.
 from .processor import (  # noqa: F401
     DecoratorCallMetric,
     ProcessResult,
+    ProcessResultRequired,
     StatementCacheMetadata,
     StatementProcessor,
-    _ProcessResultRequired,
-    _tee_output,
-    _TeeWriter,
+    TeeWriter,
+    tee_output,
 )
 
 __all__ = [

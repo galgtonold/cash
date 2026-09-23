@@ -131,11 +131,11 @@ def test_a_control_body_statement_has_no_display_code(processor_fixture):
     ``try`` bodies.
     """
     processor, shell, backend, magics = processor_fixture
-    magics._badge_mode = "html"
+    magics.badge_mode = "html"
     shell.user_ns["xs"] = [1, 2, 3]
     cell = "for i in xs:\n    y = i + 1\nz = 99\n"
 
-    with patch.object(magics, "_render_interactive_badge") as mock_badge:
+    with patch.object(magics, "render_interactive_badge") as mock_badge:
         magics.cash("", cell)
 
     # Premises: both the loop body and the sibling statement actually ran,

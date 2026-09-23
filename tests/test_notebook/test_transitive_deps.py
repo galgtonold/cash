@@ -84,9 +84,9 @@ def test_direct_dependency_invalidation(transitive_magics):
     shell.user_ns["x"] = 20
 
     # Update the lineage hash for x to reflect the change
-    if hasattr(magics, "_tracking_state") and "x" in magics._tracking_state.variable_lineage:
+    if hasattr(magics, "tracking_state") and "x" in magics.tracking_state.variable_lineage:
         # Force lineage change by removing x's lineage (simulating new value)
-        del magics._tracking_state.variable_lineage["x"]
+        del magics.tracking_state.variable_lineage["x"]
 
     # Re-run Cell 2: y should be recalculated to 25
     magics.cash("", cell2)

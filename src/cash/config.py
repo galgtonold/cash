@@ -273,7 +273,7 @@ class CashConfig:
     compute floor.
 
     Setting it False does **not** persist everything: it drops to
-    ``TieredBackend``'s own ``_default_promotion_policy``, which applies
+    ``TieredBackend``'s own ``default_promotion_policy``, which applies
     the same cost-model rule at the more conservative 1.0 s floor. So the
     practical effect is *less* persistence for mid-cost values, not more.
     Use ``persist_all=True`` (or ``%cash_persist on``) if you actually want
@@ -422,6 +422,11 @@ class CashConfig:
         return out
 
 
+def config_provenance(cfg: CashConfig) -> tuple[str, dict[str, str], list[tuple[str, str, str]]]:
+    """Where *cfg* came from, for ``cash info``: its ``_source``, ``_origins`` and ``_files``."""
+    return cfg._source, cfg._origins, cfg._files
+
+
 # ---------------------------------------------------------------------------
 # Internal: type coercion helpers
 # ---------------------------------------------------------------------------
@@ -434,7 +439,7 @@ _FALSY = {"0", "false", "no", "off"}
 #: ``"512MiB"``. People write sizes that way -- a round-15 operator set
 #: ``CASH_MAX_CACHE_SIZE=500MB`` -- and a bare integer of bytes is the one
 #: spelling nobody reads correctly at a glance.
-_SIZE_FIELDS = frozenset({"max_cache_size", "file_hash_full_max_bytes", "max_size_bytes"})
+SIZE_FIELDS = frozenset({"max_cache_size", "file_hash_full_max_bytes", "max_size_bytes"})
 
 _SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([kmgt]i?b|b)?\s*$", re.IGNORECASE)
 _SIZE_UNITS = {
@@ -488,7 +493,7 @@ def _coerce(field_type: Any, raw: str, name: str | None = None) -> Any:
     Raises ``ValueError`` on failure so the caller can skip the value
     and log a warning rather than poison the whole config load.
     """
-    if name in _SIZE_FIELDS:
+    if name in SIZE_FIELDS:
         return parse_size(raw)
     # Handle Optional[X] / X | None — unwrap to the single non-None member.
     # typing.get_args normalises both typing.Union and PEP 604 (``int | None``)
@@ -855,12 +860,12 @@ def _running_script_dir() -> Path | None:
         path = Path(raw).resolve()
     except OSError:
         return None
-    if _is_installed_path(path):
+    if is_installed_path(path):
         return None
     return path.parent
 
 
-def _is_installed_path(path: Path) -> bool:
+def is_installed_path(path: Path) -> bool:
     """Does *path* live inside the interpreter's own installation?"""
     installed_roots = [Path(sys.prefix), Path(sys.base_prefix)]
     installed_roots += [Path(p) for p in site.getsitepackages()] if hasattr(site, "getsitepackages") else []
@@ -890,7 +895,7 @@ def _running_installed_module() -> bool:
     if not raw:
         return False
     try:
-        return _is_installed_path(Path(raw).resolve())
+        return is_installed_path(Path(raw).resolve())
     except OSError:
         return False
 
@@ -983,7 +988,7 @@ def _calling_code_project_root() -> Path | None:
             continue
         try:
             path = Path(name).resolve()
-            if path.is_relative_to(own) or _is_installed_path(path):
+            if path.is_relative_to(own) or is_installed_path(path):
                 continue
         except (OSError, ValueError):
             continue
@@ -1117,7 +1122,7 @@ def _running_installed_module_name() -> str | None:
     return name or None
 
 
-def _per_user_cache_root() -> Path:
+def per_user_cache_root() -> Path:
     """The platform's own place for caches, where a cache survives ``cd``."""
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA")  # not APPDATA: caches do not roam
@@ -1165,7 +1170,7 @@ def _installed_entry_point_cache_dir() -> Path | None:
     if _invocation_project_root() is not None:
         return None
     try:
-        return _per_user_cache_root() / name
+        return per_user_cache_root() / name
     except (OSError, RuntimeError):  # no home directory to speak of
         return None
 
@@ -1457,7 +1462,7 @@ def validate_value(name: str, value: Any, dataclass_type: type = CashConfig) -> 
     else:
         return value  # lists, nested configs: checked elsewhere
     expected = getattr(base, "__name__", str(base))
-    hint = " (or a size string such as '2GB')" if name in _SIZE_FIELDS else ""
+    hint = " (or a size string such as '2GB')" if name in SIZE_FIELDS else ""
     raise ValueError(f"{name}={value!r} is a {type(value).__name__}; expected {expected}{hint}")
 
 

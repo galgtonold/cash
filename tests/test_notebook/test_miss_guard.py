@@ -296,7 +296,7 @@ class _Session:
         self.magics._statement_processor._CHEAP_WRITE_SHARE = 0.0
         self.magics._auto_cache_enabled = True
         self.metrics: list[dict] = []
-        self.magics._render_interactive_badge = lambda metrics, **kw: self.metrics.extend(metrics)
+        self.magics.render_interactive_badge = lambda metrics, **kw: self.metrics.extend(metrics)
 
         # Every backend.set is one serialisation of the value — the cost the
         # guard exists to stop paying.
@@ -311,7 +311,7 @@ class _Session:
 
     def run(self, lineage: str, code: str = CODE) -> dict:
         self.shell.user_ns["big"] = list(range(1000))
-        self.magics._tracking_state.variable_lineage["big"] = lineage
+        self.magics.tracking_state.variable_lineage["big"] = lineage
         self.metrics.clear()
         self.magics.cash("", code)
         assert self.metrics, "no metrics captured"

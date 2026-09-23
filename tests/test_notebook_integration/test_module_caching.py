@@ -9,7 +9,7 @@ Bug scenario (fixed by auto-tracking local modules before _capture_variables):
 
   Call 1 (fresh session): All statements execute normally.
     - `import metrics` executes.  At this point, `metrics` is NOT in
-      `function_tracker._tracked_modules` because auto_track_local_imports
+      `function_tracker.tracked_modules` because auto_track_local_imports
       ran pre-execution when the module wasn't yet in sys.modules.
     - `_capture_variables` runs for `import metrics` and computes a lineage
       WITHOUT the module source hash component (module_lineage_component = "").
@@ -18,7 +18,7 @@ Bug scenario (fixed by auto-tracking local modules before _capture_variables):
 
   Call 2: `import metrics` is SKIPPED (redundant import optimisation).
     - `_capture_variables` runs via the skip path.  Now `metrics` IS in
-      `_tracked_modules` (from post-execution tracking at the end of call 1).
+      `tracked_modules` (from post-execution tracking at the end of call 1).
     - The lineage now INCLUDES `module_lineage_component` → different hash.
     - `print(metrics.increment(5))` uses the new `metrics` lineage as input
       → different cache key → cache miss → EXECUTED again (should be RESTORED).

@@ -58,8 +58,8 @@ class TestSaveHintLiveReaderAware:
 
     @staticmethod
     def _gates(monkeypatch, *, colab: bool, labext: bool) -> None:
-        monkeypatch.setattr("cash.notebook.ipython.magics._in_colab", lambda: colab)
-        monkeypatch.setattr("cash.notebook.ipython.magics._labextension_installed", lambda: labext)
+        monkeypatch.setattr("cash.notebook.ipython.magics.in_colab", lambda: colab)
+        monkeypatch.setattr("cash.notebook.ipython.magics.labextension_installed", lambda: labext)
 
     def test_hint_shown_when_no_live_reader(self, magics_fixture, capsys, monkeypatch):
         magics, _shell, _backend = magics_fixture
@@ -99,7 +99,7 @@ class TestSaveHintLiveReaderAware:
             raise RuntimeError("no filesystem for you")
 
         magics, _shell, _backend = magics_fixture
-        monkeypatch.setattr("cash.notebook.ipython.magics._in_colab", lambda: False)
+        monkeypatch.setattr("cash.notebook.ipython.magics.in_colab", lambda: False)
         monkeypatch.setattr("os.path.isdir", lambda *_a, **_k: _boom())
         magics._save_hint_shown = False
         magics.cash_on("")  # must not raise
@@ -118,27 +118,27 @@ class TestCashBadge:
     def test_set_badge_html(self, magics_fixture, capsys):
         magics, _, _ = magics_fixture
         magics.cash_badge("html")
-        assert magics._badge_mode == "html"
+        assert magics.badge_mode == "html"
         captured = capsys.readouterr()
         assert "Badge mode set to: html" in captured.out
 
     def test_set_badge_print(self, magics_fixture, capsys):
         magics, _, _ = magics_fixture
         magics.cash_badge("print")
-        assert magics._badge_mode == "print"
+        assert magics.badge_mode == "print"
         captured = capsys.readouterr()
         assert "Badge mode set to: print" in captured.out
 
     def test_set_badge_off(self, magics_fixture, capsys):
         magics, _, _ = magics_fixture
         magics.cash_badge("off")
-        assert magics._badge_mode == "off"
+        assert magics.badge_mode == "off"
         captured = capsys.readouterr()
         assert "Badge mode set to: off" in captured.out
 
     def test_badge_invalid_shows_current(self, magics_fixture, capsys):
         magics, _, _ = magics_fixture
-        magics._badge_mode = "print"
+        magics.badge_mode = "print"
         magics.cash_badge("invalid_mode")
         captured = capsys.readouterr()
         assert "Current badge mode: print" in captured.out
@@ -146,7 +146,7 @@ class TestCashBadge:
 
     def test_badge_empty_shows_current(self, magics_fixture, capsys):
         magics, _, _ = magics_fixture
-        magics._badge_mode = "html"
+        magics.badge_mode = "html"
         magics.cash_badge("")
         captured = capsys.readouterr()
         assert "Current badge mode: html" in captured.out
@@ -216,7 +216,7 @@ class TestCaptureCellId:
         info = MagicMock()
         info.cell_id = "test-cell-123"
         magics._capture_cell_id(info)
-        assert magics._current_cell_id == "test-cell-123"
+        assert magics.current_cell_id == "test-cell-123"
 
     def test_capture_from_vscode_metadata(self, magics_fixture):
         magics, shell, _ = magics_fixture
@@ -224,20 +224,20 @@ class TestCaptureCellId:
         # Simulate VS Code parent header
         shell.get_parent = MagicMock(return_value={"metadata": {"vscode": {"cellId": "vscode-cell-456"}}})
         magics._capture_cell_id(info)
-        assert magics._current_cell_id == "vscode-cell-456"
+        assert magics.current_cell_id == "vscode-cell-456"
 
     def test_capture_from_parent_metadata_cellId(self, magics_fixture):
         magics, shell, _ = magics_fixture
         info = MagicMock(spec=[])
         shell.get_parent = MagicMock(return_value={"metadata": {"cellId": "parent-cell-789"}})
         magics._capture_cell_id(info)
-        assert magics._current_cell_id == "parent-cell-789"
+        assert magics.current_cell_id == "parent-cell-789"
 
     def test_capture_no_cell_id_available(self, magics_fixture):
         magics, _, _ = magics_fixture
         info = MagicMock(spec=[])
         magics._capture_cell_id(info)
-        assert magics._current_cell_id is None
+        assert magics.current_cell_id is None
 
     def test_capture_exception_handled(self, magics_fixture):
         """Exceptions in capture_cell_id should not propagate."""
@@ -248,7 +248,7 @@ class TestCaptureCellId:
         shell.get_parent = MagicMock(side_effect=RuntimeError("test error"))
         # This should not raise
         magics._capture_cell_id(info)
-        assert magics._current_cell_id is None
+        assert magics.current_cell_id is None
 
     def test_capture_debug_output(self, magics_fixture, caplog):
         """cell_id capture emits a DEBUG log record, not a raw stdout print."""

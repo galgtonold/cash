@@ -6,7 +6,7 @@ on-disk layer, with a promotion policy that decides what's worth writing down.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend @61a3072c, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend broad="tier ordering and read-repair are properties of the class as a whole" -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend @7ca1b55e, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend broad="tier ordering and read-repair are properties of the class as a whole" -->
 The default `TieredBackend` stacks two layers, fastest first:
 
 | Tier | Backend | Speed | Survives restart? |
@@ -115,11 +115,11 @@ file read that only discovers the entry is a skip marker.
 `persist_all=True` — bypasses the compute floor entirely. It does not escape the
 per-tier size caps below.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.__init__ @694d21ad, cash/backends/tiered_backend.py:TieredBackend._default_promotion_policy @c919ec7c, cash/config.py:CashConfig.smart_persistence == True -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.__init__ @ae3a39da, cash/backends/tiered_backend.py:TieredBackend.default_promotion_policy @033b4061, cash/config.py:CashConfig.smart_persistence == True -->
 Two places the 0.1 s number quietly becomes 1.0 s. The 0.1 s floor is installed
 by the backend *factory* when `smart_persistence` is on (the default); setting
 `smart_persistence=False`, or constructing a `TieredBackend([...])` by hand,
-falls back to `_default_promotion_policy` — same cost-model rule, same 20%
+falls back to `default_promotion_policy` — same cost-model rule, same 20%
 savings test, but a 1.0 s floor (and the conservative `_GENERIC` family for
 entries that carry no recorded type). "Off" means "less eager", not
 "unconditional". The floor itself is not configurable in
@@ -141,7 +141,7 @@ The disk tier has a size cap (`max_cache_size`; by default a quarter of the
 room on the disk). Going over it is what makes Cash delete entries, and this
 section is about when and how that happens.
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @0e010aaf, cash/backends/file_backend.py:FileBackend._check_and_evict @92057a04 -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @0e010aaf, cash/backends/file_backend.py:FileBackend._check_and_evict @b43d8c05 -->
 **Only a write can trigger eviction.** Each time an entry lands on disk, the
 background write thread adds its size to a running total and compares that
 total to the cap. If the cache is over, it deletes entries until the cache is

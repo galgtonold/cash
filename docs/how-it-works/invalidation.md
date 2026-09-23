@@ -8,7 +8,7 @@ A change in any cell propagates transitively through the lineage chain: if `raw`
 
 ## Finding your notebook
 
-<!-- claim: cash/notebook/server_discovery.py:_NOTEBOOK_PATH_CACHE_TTL == 300.0, cash/notebook/server_discovery.py:_read_notebook_code_cells @6808d937, cash/notebook/upstream/checker.py:UpstreamChecker._load_notebook_and_find_cell @d7632d57, cash/notebook/upstream/checker.py:UpstreamChecker._resolve_notebook_path @9abe9193 -->
+<!-- claim: cash/notebook/server_discovery.py:_NOTEBOOK_PATH_CACHE_TTL == 300.0, cash/notebook/server_discovery.py:_read_notebook_code_cells @6808d937, cash/notebook/upstream/checker.py:UpstreamChecker._load_notebook_and_find_cell @0ad98dcf, cash/notebook/upstream/checker.py:UpstreamChecker._resolve_notebook_path @9abe9193 -->
 To check upstream cells, Cash needs the notebook's current cell sources — which is not always the same as needing the file. Path discovery — resolving the notebook's location on disk — runs on every cell check regardless of whether a live reader ends up supplying the cells; it is never skipped just because one will answer, because the two are separate steps. What a live reader changes is narrower: the upstream simulation reads the cell sources it supplied instead of opening the notebook file, but the resolved path is still produced and still used elsewhere in the same check (below). Discovery itself locates the file through a prioritised fallback chain: first it reads the **VS Code injected variable** (`__vsc_ipynb_file__`) set by the Jupyter extension; if that is absent it tries the **`ipynbname` library** when installed; and finally it queries the **Jupyter Server REST API** (reliable inside JupyterLab or the classic Notebook). The resolved path is cached in memory for five minutes, and the cache is cleared whenever you switch notebooks via `%cash_on`.
 
 Graceful degradation is by design. If notebook discovery fails entirely — for example in a plain IPython REPL or an environment where none of the three mechanisms succeed — **and no live reader answers either** — Cash disables upstream checking rather than guessing. Notably, it does **not** fall back to scanning the filesystem for the most-recently-modified `.ipynb`: that heuristic can silently pick the wrong notebook, so Cash skips upstream detection instead. The current cell still uses its own code and input hashes, but stale-upstream detection is simply skipped. Cash never invalidates against a notebook it cannot see.
@@ -87,7 +87,7 @@ Several independent signals can cause a miss. The first four feed the [cache key
     reprinting a cached value.
 
 === "Files"
-<!-- claim: cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/tracking/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @ab9621f0 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/tracking/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @3dd62608 -->
     A file you read (CSV, parquet, …) is snapshotted as mtime, size **and a content
     hash**. On every lookup the size is compared first. If it matches and so does
     everything else the snapshot recorded — the mtime to the nanosecond, which file

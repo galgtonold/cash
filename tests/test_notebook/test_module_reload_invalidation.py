@@ -464,7 +464,7 @@ class TestExceptionSurfacing:
 
         magics._original_run_cell = mock_run_cell
 
-        # Add showtraceback to the mock shell so _show_clean_error can call it
+        # Add showtraceback to the mock shell so show_clean_error can call it
         showtraceback_calls = []
 
         def mock_showtraceback(*args, **kwargs):
@@ -534,20 +534,20 @@ class TestTransitiveDependencyTracking:
 
         # helpers.py should appear as a dependency of metrics
         found = False
-        for dep_path, parents in ft._dep_file_to_parents.items():
+        for dep_path, parents in ft.dep_file_to_parents.items():
             if "helpers" in dep_path and "metrics" in parents:
                 found = True
                 break
         assert found, (
-            f"Expected helpers.py to be a dependency of metrics. dep_file_to_parents = {ft._dep_file_to_parents}"
+            f"Expected helpers.py to be a dependency of metrics. dep_file_to_parents = {ft.dep_file_to_parents}"
         )
 
     def test_sub_dep_tracked_in_tracked_modules(self, two_level_modules):
-        """After tracking metrics, helpers should also be in _tracked_modules."""
+        """After tracking metrics, helpers should also be in tracked_modules."""
         ft = FunctionTracker()
         ft.track_module("metrics")
 
-        assert "helpers" in ft._tracked_modules
+        assert "helpers" in ft.tracked_modules
 
     def test_sub_dep_mtime_recorded(self, two_level_modules):
         """helpers.py mtime should be recorded in _dep_file_mtimes."""
@@ -630,9 +630,9 @@ class TestTransitiveDependencyTracking:
         hasher = hl.sha256()
         with open(info["metrics_file"], "rb") as f:
             hasher.update(f.read())
-        # Find the helpers dep path in _dep_file_to_parents
+        # Find the helpers dep path in dep_file_to_parents
         dep_files = sorted(
-            dp for dp, parents in sp.function_tracker._dep_file_to_parents.items() if "metrics" in parents
+            dp for dp, parents in sp.function_tracker.dep_file_to_parents.items() if "metrics" in parents
         )
         for dp in dep_files:
             if os.path.isfile(dp):
@@ -665,12 +665,12 @@ class TestTransitiveDependencyTracking:
 
             # Check that dep_utils is a transitive dep of dep_app
             found_utils = False
-            for dep_path, parents in ft._dep_file_to_parents.items():
+            for dep_path, parents in ft.dep_file_to_parents.items():
                 if "dep_utils" in dep_path and "dep_app" in parents:
                     found_utils = True
                     break
             assert found_utils, (
-                f"dep_utils should be a transitive dep of dep_app. dep_file_to_parents = {ft._dep_file_to_parents}"
+                f"dep_utils should be a transitive dep of dep_app. dep_file_to_parents = {ft.dep_file_to_parents}"
             )
 
             # Change dep_utils
@@ -692,22 +692,22 @@ class TestTransitiveDependencyTracking:
         ft.track_module("metrics")
 
         # Confirm helpers is tracked
-        assert any("helpers" in dp for dp in ft._dep_file_to_parents)
+        assert any("helpers" in dp for dp in ft.dep_file_to_parents)
 
         # Refresh should rebuild the dependency graph
         ft.refresh_transitive_dependencies()
-        assert any("helpers" in dp for dp in ft._dep_file_to_parents)
+        assert any("helpers" in dp for dp in ft.dep_file_to_parents)
 
     def test_no_false_positive_for_stdlib_imports(self, two_level_modules):
         """Sub-dependencies that are stdlib modules should NOT be tracked."""
         ft = FunctionTracker()
         ft.track_module("metrics")
 
-        # No stdlib paths should appear in _dep_file_to_parents
+        # No stdlib paths should appear in dep_file_to_parents
         from cash.tracking.function_tracker import _get_stdlib_site_prefixes
 
         prefixes = _get_stdlib_site_prefixes()
-        for dep_path in ft._dep_file_to_parents:
+        for dep_path in ft.dep_file_to_parents:
             norm = os.path.normcase(os.path.realpath(dep_path))
             for prefix in prefixes:
                 assert not norm.startswith(prefix), f"Stdlib path {dep_path} should not be tracked as a dependency"

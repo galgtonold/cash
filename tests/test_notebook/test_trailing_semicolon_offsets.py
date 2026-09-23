@@ -1,4 +1,4 @@
-"""``_expr_has_trailing_semicolon`` must locate the ``;`` the way the parser
+"""``expr_has_trailing_semicolon`` must locate the ``;`` the way the parser
 locates the node it follows.
 
 cash recovers a trailing ``;`` (IPython display suppression) from the raw
@@ -60,7 +60,7 @@ def semicolon_follows(source: str, node: ast.stmt) -> bool:
 )
 def test_matches_the_parsers_own_coordinates(label, source):
     node = ast.parse(source).body[-1]
-    assert CellExecutor._expr_has_trailing_semicolon(source, node) == semicolon_follows(source, node), label
+    assert CellExecutor.expr_has_trailing_semicolon(source, node) == semicolon_follows(source, node), label
 
 
 def test_a_non_expression_statement_is_never_suppressed():
@@ -68,4 +68,4 @@ def test_a_non_expression_statement_is_never_suppressed():
     followed by ``;`` has no repr to suppress."""
     source = "x = 1;\n"
     node = ast.parse(source).body[0]
-    assert CellExecutor._expr_has_trailing_semicolon(source, node) is False
+    assert CellExecutor.expr_has_trailing_semicolon(source, node) is False

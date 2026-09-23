@@ -10,7 +10,7 @@ looks fine in source. Two pages shipped like this, both because a
 ``<!-- claim: … -->`` anchor was placed between the title and its body:
 
     ??? question "Why is the `func` segment module-qualified?"
-    <!-- claim: cash/core.py:Cash._get_func_key @0f005572 -->
+    <!-- claim: cash/core.py:Cash.get_func_key @0f005572 -->
         Cash keys functions on …
 
 Confirmed in a browser before fixing: the rendered ``<details>`` had a body

@@ -155,12 +155,12 @@ def test_the_guard_is_actually_wired_into_the_plan():
 
     A full pipeline test would have to stub the backward scan and five other
     collaborators, so this checks the one thing those tests cannot -- that
-    ``_build_reexecution_plan`` still invokes it, after the carrier-history pass
+    ``build_reexecution_plan`` still invokes it, after the carrier-history pass
     it backstops.
     """
     import inspect
 
-    source = inspect.getsource(ReexecutionPlanner._build_reexecution_plan)
+    source = inspect.getsource(ReexecutionPlanner.build_reexecution_plan)
     assert "_guard_unfilled_figure_writes" in source, (
         "the guard is no longer called from the plan builder; the unit tests above would not have caught this"
     )

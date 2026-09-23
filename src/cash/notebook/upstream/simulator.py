@@ -25,9 +25,9 @@ from collections.abc import Callable
 from typing import Any
 
 from ...analysis.cacheability import (
-    _resolve_literal_path,
     analyze_statement,
     consumed_input_names,
+    resolve_literal_path,
     resolve_path_list,
     statement_read_paths,
 )
@@ -40,7 +40,7 @@ from ..consumables import consumable_state, has_diverged, is_consumable_unrestor
 from ._types import SimulationCacheEntry, apply_collected_mutations
 from .mismatch_classifier import MismatchClassifier
 from .reexecution_planner import ReexecutionPlanner
-from .virtual_lineage import _BUILTIN_NAMES, VirtualLineage
+from .virtual_lineage import BUILTIN_NAMES, VirtualLineage
 
 __all__ = ["NotebookSimulator"]
 
@@ -59,7 +59,7 @@ def _statement_codes(cell_source: str) -> list[str]:
     codes = []
     for node in tree.body:
         code = ast.unparse(node)
-        if CellExecutor._expr_has_trailing_semicolon(clean, node):
+        if CellExecutor.expr_has_trailing_semicolon(clean, node):
             code += ";"
         codes.append(code)
     return codes
@@ -81,7 +81,7 @@ def _bind_literal_paths(stmt: str, bound: dict, namespace) -> None:
         name = node.targets[0].id
         value = resolve_path_list(node.value, namespace)
         if value is None:
-            value = _resolve_literal_path(node.value, namespace)
+            value = resolve_literal_path(node.value, namespace)
         if value is not None:
             bound[name] = value
             return
@@ -121,7 +121,7 @@ class NotebookSimulator:
 
         # Phase-1 simulator. Shares ``shell``/``cash_instance``/tracking-state
         # references with us so writes are visible on both sides.
-        self._virtual_lineage = VirtualLineage(
+        self.virtual_lineage = VirtualLineage(
             shell=shell,
             cash_instance=cash_instance,
             tracking_state=tracking_state,
@@ -130,24 +130,24 @@ class NotebookSimulator:
         )
 
         # Phase-2 classifier. Shares tracking-state references and routes
-        # back to ``_virtual_lineage`` for cache-probing helpers.
-        self._classifier = MismatchClassifier(
-            virtual_lineage=self._virtual_lineage,
+        # back to ``virtual_lineage`` for cache-probing helpers.
+        self.classifier = MismatchClassifier(
+            virtual_lineage=self.virtual_lineage,
             tracking_state=tracking_state,
             debug=debug,
         )
 
         # Phase-3 planner. Routes into VL + Classifier for helpers that
         # still live on those phases.
-        self._planner = ReexecutionPlanner(
-            virtual_lineage=self._virtual_lineage,
-            classifier=self._classifier,
+        self.planner = ReexecutionPlanner(
+            virtual_lineage=self.virtual_lineage,
+            classifier=self.classifier,
             debug=debug,
         )
 
     def set_tracking_state(self, state: TrackingState) -> None:
         """Re-wire shared state refs (mirrors UpstreamChecker.set_tracking_state)."""
-        self._tracking_state = state
+        self.tracking_state = state
         self.executed_cell_codes = state.executed_cell_codes
         self.executed_cell_hashes = state.executed_cell_hashes
         self.variable_lineage = state.variable_lineage
@@ -156,10 +156,10 @@ class NotebookSimulator:
         self.vars_with_mutation_lineage = state.vars_with_mutation_lineage
         self.executed_input_lineages = state.executed_input_lineages
         # Propagate to the Phase-1 simulator so its dict refs stay in sync.
-        if hasattr(self, "_virtual_lineage"):
-            self._virtual_lineage.set_tracking_state(state)
-        if hasattr(self, "_classifier"):
-            self._classifier.set_tracking_state(state)
+        if hasattr(self, "virtual_lineage"):
+            self.virtual_lineage.set_tracking_state(state)
+        if hasattr(self, "classifier"):
+            self.classifier.set_tracking_state(state)
 
     def reset_caches(self) -> None:
         """Clear simulation and AST caches.
@@ -167,7 +167,7 @@ class NotebookSimulator:
         Called only by ``%cash_on``, so it also arms the one adoption of
         untracked names -- see ``_adopt_untracked_names``.
         """
-        self._virtual_lineage.reset_caches()
+        self.virtual_lineage.reset_caches()
         self._adopt_untracked_pending = True
 
     def _track_modules_bound_before_cash_on(self) -> None:
@@ -182,7 +182,7 @@ class NotebookSimulator:
         r28s4, exported). Done before pass 1, so this very simulation already
         keys the module's readers on its source.
         """
-        ft = getattr(self._virtual_lineage, "function_tracker", None)
+        ft = getattr(self.virtual_lineage, "function_tracker", None)
         user_ns = getattr(self.shell, "user_ns", None)
         if ft is None or not user_ns:
             return
@@ -197,7 +197,7 @@ class NotebookSimulator:
                     names.add(owner)
         for mod_name in names:
             module = sys.modules.get(mod_name)
-            if module is None or mod_name in ft._tracked_modules:
+            if module is None or mod_name in ft.tracked_modules:
                 continue
             # cash itself is "local" in a development checkout, and `cash` is
             # bound in every notebook: without this it watched its own source.
@@ -243,15 +243,15 @@ class NotebookSimulator:
         user_ns = getattr(self.shell, "user_ns", None)
         if not user_ns:
             return
-        runtime = self._tracking_state.variable_lineage
-        imported = self._virtual_lineage._propagated_imports
-        restores = self._virtual_lineage._restores
+        runtime = self.tracking_state.variable_lineage
+        imported = self.virtual_lineage.propagated_imports
+        restores = self.virtual_lineage.restores
         binder: dict[str, str] = {}
         for entry in simulation_trace or ():
             for out in entry[1] or ():
                 binder[out] = entry[0]
         adopted = []
-        untracked = self._tracking_state.rerun_bindings
+        untracked = self.tracking_state.rerun_bindings
         untracked.clear()
         for name, lineage_hash in virtual_lineage.items():
             if not lineage_hash or name in runtime or name in imported or name.startswith("_") or name not in user_ns:
@@ -264,7 +264,7 @@ class NotebookSimulator:
                 continue
             restores.record_restore(var_name=name, lineage_hash=lineage_hash, value=user_ns[name])
             adopted.append(name)
-        apply_collected_mutations(restores, self._tracking_state)
+        apply_collected_mutations(restores, self.tracking_state)
         if adopted and self.debug:
             logger.debug(
                 "[UPSTREAM_DEBUG] Adopted simulated lineage for names bound before %%cash_on: %s", sorted(adopted)
@@ -278,34 +278,34 @@ class NotebookSimulator:
         mid-simulation reads see writes immediately). This safety-net drain
         catches anything left over after the full pipeline runs.
         """
-        apply_collected_mutations(self._virtual_lineage._restores, self._tracking_state)
-        apply_collected_mutations(self._classifier._restores, self._tracking_state)
+        apply_collected_mutations(self.virtual_lineage.restores, self.tracking_state)
+        apply_collected_mutations(self.classifier.restores, self.tracking_state)
 
     # --- Narrow public API for UpstreamChecker (avoid private reach-ins) ---
 
     def set_current_cell_id(self, cell_id: str | None) -> None:
-        self._virtual_lineage._current_cell_id = cell_id
+        self.virtual_lineage.current_cell_id = cell_id
 
     def get_cached_ast(self, code: str):
-        return self._virtual_lineage._get_cached_ast(code)
+        return self.virtual_lineage.get_cached_ast(code)
 
     def last_index_for_cell(self, cell_id: str) -> int | None:
-        return self._virtual_lineage._cell_id_to_last_index.get(cell_id)
+        return self.virtual_lineage.cell_id_to_last_index.get(cell_id)
 
     def record_cell_id_index(self, cell_id: str, idx: int) -> None:
-        self._virtual_lineage._cell_id_to_last_index[cell_id] = idx
+        self.virtual_lineage.cell_id_to_last_index[cell_id] = idx
 
     def simulation_cache_entry(self, idx: int) -> SimulationCacheEntry | None:
-        cache = self._virtual_lineage._simulation_cache
+        cache = self.virtual_lineage.simulation_cache
         if 0 <= idx < len(cache):
             return cache[idx]
         return None
 
     def record_replayed_file_deps(self, rerecorded: set[str]) -> None:
-        self._virtual_lineage.record_replayed_file_deps(rerecorded)
+        self.virtual_lineage.record_replayed_file_deps(rerecorded)
 
     def simulation_cache_size(self) -> int:
-        return len(self._virtual_lineage._simulation_cache)
+        return len(self.virtual_lineage.simulation_cache)
 
     def _mark_stale_value_inputs_broken(
         self,
@@ -389,7 +389,7 @@ class NotebookSimulator:
         for var_name in required_inputs:
             # A user variable shadowing a builtin name is tracked in
             # variable_lineage; only skip genuine (untracked) builtins.
-            if var_name in _BUILTIN_NAMES and var_name not in self.variable_lineage:
+            if var_name in BUILTIN_NAMES and var_name not in self.variable_lineage:
                 continue
             if var_name not in self_written:
                 continue
@@ -529,7 +529,7 @@ class NotebookSimulator:
                 if (
                     prod_code is not None
                     and not produced_by_current_cell
-                    and self._virtual_lineage._is_valid_extension(
+                    and self.virtual_lineage.is_valid_extension(
                         prod_code, recorded, virtual_lineage, required_dependency=var_name
                     )
                 ):
@@ -634,15 +634,15 @@ class NotebookSimulator:
         if not cell_src:
             return flagged
         try:
-            consumed = consumed_input_names(self._virtual_lineage._get_cached_ast(cell_src))
+            consumed = consumed_input_names(self.virtual_lineage.get_cached_ast(cell_src))
         except (SyntaxError, ValueError, TypeError):
             return flagged
         candidates = required_inputs & consumed
         if not candidates:
             return flagged
-        bases = getattr(self._tracking_state, "consumable_bases", {})
+        bases = getattr(self.tracking_state, "consumable_bases", {})
         for var_name in candidates:
-            if var_name in _BUILTIN_NAMES and var_name not in self.variable_lineage:
+            if var_name in BUILTIN_NAMES and var_name not in self.variable_lineage:
                 continue
             live_value = self.shell.user_ns.get(var_name)
             if live_value is None:
@@ -730,7 +730,7 @@ class NotebookSimulator:
             return
         if self.compute_hash_fn is None:
             return
-        session_hashes = getattr(self._tracking_state, "current_session_hashes", {})
+        session_hashes = getattr(self.tracking_state, "current_session_hashes", {})
         base_content = session_hashes.get(var_name)
         if base_content is None:
             return
@@ -817,7 +817,7 @@ class NotebookSimulator:
 
     def _persisted_reads(self, code: str) -> set[str] | None:
         """Files *code* read when it last ran, from the backend, or ``None``."""
-        cash = getattr(self._virtual_lineage, "cash_instance", None)
+        cash = getattr(self.virtual_lineage, "cash_instance", None)
         backend = getattr(cash, "backend", None) if cash is not None else None
         if backend is None or not hasattr(backend, "get_metadata"):
             return None
@@ -931,7 +931,7 @@ class NotebookSimulator:
         fully_known = True
         user_ns = getattr(self.shell, "user_ns", None)
 
-        efd = getattr(self._tracking_state, "executed_file_deps", None) or {}
+        efd = getattr(self.tracking_state, "executed_file_deps", None) or {}
         for v in required_inputs or ():
             dep = efd.get(v)
             if not dep:
@@ -1052,9 +1052,9 @@ class NotebookSimulator:
             new_cache_entries,
             vars_mutated_by_loops,
             vars_with_stale_files,
-        ) = self._virtual_lineage._find_incremental_start(current_cell_idx, notebook_cells)
+        ) = self.virtual_lineage.find_incremental_start(current_cell_idx, notebook_cells)
 
-        self._virtual_lineage._simulate_cells_pass1(
+        self.virtual_lineage.simulate_cells_pass1(
             first_changed_cell,
             current_cell_idx,
             notebook_cells,
@@ -1074,7 +1074,7 @@ class NotebookSimulator:
         # none to record -- see TrackingState.simulated_lineage. Taken here,
         # after pass 1 and before the cell runs, so it describes the state the
         # cell is about to start from.
-        self._tracking_state.simulated_lineage = dict(virtual_lineage)
+        self.tracking_state.simulated_lineage = dict(virtual_lineage)
         self._adopt_untracked_names(virtual_lineage, simulation_trace)
 
         # Detect whether any upstream cell was actually modified since last simulation.
@@ -1102,7 +1102,7 @@ class NotebookSimulator:
         # such accumulators so they follow the baseline lineage-mismatch path
         # (which re-executes correctly); a constant-init accumulator keeps the
         # new trust so one-shot iterables are not re-drained.
-        externally_tainted = self._virtual_lineage._loop_accumulators_with_external_init(
+        externally_tainted = self.virtual_lineage.loop_accumulators_with_external_init(
             vars_mutated_by_loops, simulation_trace, loop_target_vars
         )
         if externally_tainted:
@@ -1113,20 +1113,20 @@ class NotebookSimulator:
                     externally_tainted,
                 )
 
-        vars_derived_from_loops = self._virtual_lineage._propagate_loop_derived_vars(
+        vars_derived_from_loops = self.virtual_lineage.propagate_loop_derived_vars(
             vars_mutated_by_loops, simulation_trace
         )
 
         # A loop whose data changed underneath it (a new file, not a code
         # edit) loses the trust, and so does everything built from it.
-        changed_loops = self._virtual_lineage._loops_reading_changed_data(
+        changed_loops = self.virtual_lineage.loops_reading_changed_data(
             vars_mutated_by_loops,
             simulation_trace,
             loop_target_vars,
             vars_derived_from_loops,
         )
         if changed_loops:
-            untrusted = self._virtual_lineage._propagate_loop_derived_vars(changed_loops, simulation_trace)
+            untrusted = self.virtual_lineage.propagate_loop_derived_vars(changed_loops, simulation_trace)
             vars_mutated_by_loops = vars_mutated_by_loops - untrusted
             vars_derived_from_loops = vars_derived_from_loops - untrusted
             trace_event("loop_trust_dropped", vars=untrusted)
@@ -1134,7 +1134,7 @@ class NotebookSimulator:
         if self.debug and loop_target_vars:
             logger.debug("[UPSTREAM_DEBUG] Loop target variables (iteration vars): %s", loop_target_vars)
 
-        broken_vars, simulation_trace_codes, vars_tainted = self._classifier._run_pass2_identify_broken_vars(
+        broken_vars, simulation_trace_codes, vars_tainted = self.classifier.run_pass2_identify_broken_vars(
             simulation_trace,
             virtual_lineage,
             virtual_modules,
@@ -1218,7 +1218,7 @@ class NotebookSimulator:
         # depends on is stale. The plan must still be built so
         # the planner can schedule the writer.
         has_stale_file_writers = bool(
-            self._planner._find_stale_file_writer_indices(
+            self.planner.find_stale_file_writer_indices(
                 simulation_trace,
                 virtual_lineage=virtual_lineage,
                 relevant_read_paths=relevant_read_paths,
@@ -1236,7 +1236,7 @@ class NotebookSimulator:
         # first df-consuming statement is a disk cache hit that restores df,
         # we don't need to re-execute upstream cells that produce df.
         if broken_vars:
-            self._virtual_lineage._eliminate_broken_vars_via_current_cell_probe(
+            self.virtual_lineage.eliminate_broken_vars_via_current_cell_probe(
                 broken_vars,
                 notebook_cells,
                 current_cell_idx,
@@ -1250,7 +1250,7 @@ class NotebookSimulator:
             self._apply_phase_mutations()
             return [], [], 0.0
 
-        result = self._planner._build_reexecution_plan(
+        result = self.planner.build_reexecution_plan(
             simulation_trace,
             broken_vars,
             vars_tainted,

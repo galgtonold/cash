@@ -36,7 +36,7 @@ from cash.notebook.statement.processor import StatementProcessor
 def _attribute(*, variable_lineage, executed_input_lineages, inputs, outputs):
     """Run the attributor over a minimal tracking state, return miss_reason."""
     stub = SimpleNamespace(
-        _tracking_state=SimpleNamespace(
+        tracking_state=SimpleNamespace(
             variable_lineage=dict(variable_lineage),
             executed_input_lineages=dict(executed_input_lineages),
         )

@@ -25,7 +25,7 @@ import pytest
 pytest.importorskip("IPython")
 
 from cash import Cash
-from cash.notebook.ipython.cell_executor import _PipelineSyntaxError
+from cash.notebook.ipython.cell_executor import PipelineSyntaxError
 from cash.notebook.ipython.magics import CashMagics
 from tests.conftest import MockShell
 
@@ -37,7 +37,7 @@ def cell_runner():
     cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
     magics = CashMagics(shell, cash)
     magics.cash_on("")
-    magics._badge_mode = "off"  # keep the badge out of the captured output
+    magics.badge_mode = "off"  # keep the badge out of the captured output
     shell.user_ns["c"] = cash
 
     def run(cell: str) -> int:
@@ -93,7 +93,7 @@ def test_a_pep614_parenthesised_decorator_does_not_kill_the_cell():
     cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
     magics = CashMagics(shell, cash)
     magics.cash_on("")
-    magics._badge_mode = "off"
+    magics.badge_mode = "off"
     shell.user_ns["c"] = cash
 
     cell = "@(\n    c.cache\n)\ndef f(n):\n    return n  # @cash:assume-safe\nf(3)\n"
@@ -127,7 +127,7 @@ def async_cell_runner():
     cash = Cash(cache_dir=tempfile.mkdtemp(), register_magic=False)
     magics = CashMagics(shell, cash)
     magics.cash_on("")
-    magics._badge_mode = "off"  # keep the badge out of the captured output
+    magics.badge_mode = "off"  # keep the badge out of the captured output
     shell.user_ns["c"] = cash
 
     async def _tick(n):
@@ -140,7 +140,7 @@ def async_cell_runner():
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             result = asyncio.run(magics._cell_executor.execute_cell_async(cell))
-        assert not isinstance(result, _PipelineSyntaxError), (
+        assert not isinstance(result, PipelineSyntaxError), (
             "a cell with a top-level await must not fail to parse on the async path"
         )
         return len([w for w in caught if "Impurity" in type(w.message).__name__])

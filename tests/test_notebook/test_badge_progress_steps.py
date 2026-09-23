@@ -1,6 +1,6 @@
 """The progress counter never names a statement that has not started.
 
-Two sources publish it. `_arm_progress_badge` announces the statement that is
+Two sources publish it. `arm_progress_badge` announces the statement that is
 running, on a timer, so only a slow one gets named. The post-statement render
 fires the moment a statement finishes -- and used to announce the NEXT one,
 which at that instant had not begun.
@@ -30,20 +30,20 @@ CELL = "a = 1\nb = 2\nc = 3\nd = slow()\ne = d + 1\nprint(e)\n"
 class _RecordingMagics:
     """Stands in for CashMagics, recording every step the badge is told about."""
 
-    _badge_mode = "html"
-    _global_ttl = None
+    badge_mode = "html"
+    global_ttl = None
 
     def __init__(self) -> None:
         self.armed: list[tuple[int, int, str | None]] = []
         self.reported: list[tuple[int, int]] = []
 
-    def _arm_progress_badge(self, metrics, display_id, step, total, code):
+    def arm_progress_badge(self, metrics, display_id, step, total, code):
         self.armed.append((step, total, code))
 
-    def _maybe_progress_badge(self, metrics, display_id, step, total, code):
+    def maybe_progress_badge(self, metrics, display_id, step, total, code):
         self.reported.append((step, total))
 
-    def _cancel_progress_badge(self):
+    def cancel_progress_badge(self):
         pass
 
 

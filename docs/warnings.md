@@ -391,7 +391,7 @@ warning on this page most worth reading, and the last one to filter.
 
 ## CACHE-THRASH {#cache-thrash}
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._warn_evict_after_write @8907ef9b -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._warn_evict_after_write @1b66980f -->
 **What happened.** The cache reached its size cap and is evicting entries
 within a couple of writes of storing them, so it re-writes and re-evicts
 instead of caching durably. The message names the cap, how much room is left on
@@ -508,7 +508,7 @@ rather than leaving it to chance.
 
 ## CACHE-VALUE-TOO-BIG {#cache-value-too-big}
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @a641a652, cash/backends/file_backend.py:FileBackend._promotion_size_cap @cc93a731 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @a641a652, cash/backends/file_backend.py:FileBackend.promotion_size_cap @5572dc82 -->
 **What happened.** A single value is larger than every persistent tier's whole
 cap, so there is nowhere durable to put it and Cash offered it to the RAM tier
 instead. The message names the value's size and the cap it was measured
@@ -943,7 +943,7 @@ that moved — shows it again.
 
 ## KEY-AMBIENT-READ {#key-ambient-read}
 
-<!-- claim: cash/purity.py:_AMBIENT_READ_CALLS @a533ea58, cash/purity_analyzer.py:_PurityVisitor.visit_Subscript @c1d3b6a0 -->
+<!-- claim: cash/purity.py:AMBIENT_READ_CALLS @8b0e48fe, cash/purity_analyzer.py:_PurityVisitor.visit_Subscript @9378a32e -->
 **What happened.** Reading the source of the function you decorated found a
 call that asks the world what time it is, what the environment says, where the
 process is running, or for a fresh UUID: `datetime.now()`, `date.today()`,
@@ -952,13 +952,13 @@ process is running, or for a fresh UUID: `datetime.now()`, `date.today()`,
 `pd.to_datetime("today")`. The named line ran, and the result was cached as
 normal.
 
-<!-- claim: cash/purity.py:_AMBIENT_WHEN_ARGS_OMITTED @778ab09c, cash/purity_analyzer.py:_reads_clock_when_omitted @00b78d02 -->
+<!-- claim: cash/purity.py:AMBIENT_WHEN_ARGS_OMITTED @6fec5a70, cash/purity_analyzer.py:_reads_clock_when_omitted @71a49435 -->
 `time.strftime("%Y-%m")`, `time.asctime()`, `time.ctime()`,
 `time.localtime()` and `time.gmtime()` count when the time argument is left
 out, which is when they read the clock; `time.strftime("%Y-%m", t)` and
 `time.localtime(ts)` only format or convert the time you give them.
 
-<!-- claim: cash/purity_analyzer.py:_ambient_call @46c1f682 -->
+<!-- claim: cash/purity_analyzer.py:_ambient_call @3ab99ecc -->
 It is recognised by what the names refer to, not by how they are spelled:
 `import datetime as _dt; _dt.datetime.now()`, `from datetime import datetime as
 DateTime; DateTime.now()`, `import time as _time` and `from time import time as
@@ -1133,7 +1133,7 @@ seriously only when the opaque target is code you compile yourself.
 
 ## KEY-DYNAMIC-DEPENDENCY {#key-dynamic-dependency}
 
-<!-- claim: cash/core.py:Cash._warn_untrackable_in_carrier_once @88fa8a24 -->
+<!-- claim: cash/core.py:Cash._warn_untrackable_in_carrier_once @a8ef1ded -->
 **What happened.** An object you passed to a cached function carries code — a
 method of its class, or the function itself — and that code picks what it calls
 from a value at runtime: `getattr(module, name)()` with `name` in a variable,
@@ -1319,7 +1319,7 @@ is exactly backwards here: a library callable would not have warned.
 
 ## KEY-SOURCE-CHANGED {#key-source-changed}
 
-<!-- claim: cash/source_norm.py:loaded_code_matches_disk @3d850578, cash/core.py:_warn_source_changed_since_load @fe9845a0 -->
+<!-- claim: cash/source_norm.py:loaded_code_matches_disk @f140e8b2, cash/core.py:_warn_source_changed_since_load @fe9845a0 -->
 **What happened.** A file holding your cached function, or a helper it calls,
 was edited after this process imported it. The process is still running the
 *old* code; the file now holds the *new* code. cash noticed the difference the
@@ -1500,7 +1500,7 @@ actually read. If the cell is not really code — pasted output, a traceback,
 notes you were half-way through typing — delete it or turn it into a markdown
 cell. Markdown cells are not parsed and never trip this.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._warn_broken_upstream_cells @ef12eb7f -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._warn_broken_upstream_cells @34c3c6c3 -->
 The warning repeats when the break changes and stays quiet while it does not, so
 re-running cells *below* the broken one will not spam you; fixing it and later
 breaking it again will warn again. One gap in that promise: the scan only looks

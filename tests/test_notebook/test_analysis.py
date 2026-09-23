@@ -46,7 +46,7 @@ def func_references_ambiguous():
 
 
 # Module-qualified key for func_a (matches the format returned by find_called_functions)
-_func_a_key = Cash._get_func_key(func_a)
+_func_a_key = Cash.get_func_key(func_a)
 
 
 def test_simple_call():

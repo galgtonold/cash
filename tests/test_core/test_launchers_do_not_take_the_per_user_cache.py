@@ -108,7 +108,7 @@ def test_a_tool_run_from_nowhere_still_gets_its_per_user_cache(launched_as, tmp_
     if not _no_project_above(tmp_path):
         pytest.skip("a project marker above the temp dir decides this case")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(config, "_per_user_cache_root", lambda: tmp_path / "peruser")
+    monkeypatch.setattr(config, "per_user_cache_root", lambda: tmp_path / "peruser")
     launched_as("reportgen")
 
     assert _config_cache_dir() == str(tmp_path / "peruser" / "reportgen")

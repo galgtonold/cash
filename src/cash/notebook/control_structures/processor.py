@@ -434,7 +434,7 @@ class ControlStructureProcessor:
         Returns:
             ControlStructureResult with metrics
         """
-        state = getattr(self.statement_processor, "_tracking_state", None)
+        state = getattr(self.statement_processor, "tracking_state", None)
         outcomes = getattr(state, "control_outcomes", None)
         if parent_context is not None or not isinstance(outcomes, dict):
             return self._dispatch(node, ttl, silent, parent_context, raw_cell, inherited_annotation, prev_node)
@@ -487,14 +487,14 @@ class ControlStructureProcessor:
             if not any(_status(m) == CacheStatus.RESTORED for m in result.metrics):
                 self._persist_outcome(node, code, reads, before, outcome, rng_before)
                 # What the loop read, for the planner of a later kernel -- as a
-                # statement's reads are kept (``_persist_read_provenance``). A
+                # statement's reads are kept (``persist_read_provenance``). A
                 # restored iteration records no read, hence the same condition.
                 # ``for f in files: pd.read_csv(f)`` names no path a reader can
                 # resolve, so without it the read set of every cell below was
                 # unknown after a restart, no writer could be ruled out as
                 # unread, and a table cell under a chart cell re-drew the charts
                 # with everything they read (round 23, r23s2).
-                self.statement_processor._persist_read_provenance(code, files)
+                self.statement_processor.persist_read_provenance(code, files)
         return result
 
     def _record_writes(self, code: str, reads, written: set[str]) -> None:
@@ -512,8 +512,8 @@ class ControlStructureProcessor:
             written = sp.user_written_paths(written)
             if not written:
                 return
-            sp._tracking_state.executed_write_stmt_codes.add(code)
-            sp._persist_write_provenance(code, set(reads), None, written)
+            sp.tracking_state.executed_write_stmt_codes.add(code)
+            sp.persist_write_provenance(code, set(reads), None, written)
         except Exception:  # noqa: BLE001 - never let bookkeeping break the user's loop
             logger.debug("[CONTROL] write provenance failed", exc_info=True)
 
@@ -621,7 +621,7 @@ class ControlStructureProcessor:
             if contains_break_or_continue(node.body):
                 if self.debug:
                     logger.debug("[CONTROL] Loop contains break/continue, executing as single unit")
-                return self._execute_as_single_unit(
+                return self.execute_as_single_unit(
                     node,
                     ttl,
                     silent,
@@ -653,7 +653,7 @@ class ControlStructureProcessor:
                 raw_cell,
                 inherited_annotation,
             )
-        return self._execute_as_single_unit(
+        return self.execute_as_single_unit(
             node,
             ttl,
             silent,
@@ -665,7 +665,7 @@ class ControlStructureProcessor:
     # Single-unit execution (for while/with and break/continue loops)
     # ------------------------------------------------------------------
 
-    def _execute_as_single_unit(
+    def execute_as_single_unit(
         self,
         node: ast.AST,
         ttl: int | None,
@@ -776,7 +776,7 @@ class ControlStructureProcessor:
     ) -> ControlStructureResult:
         """Shared post-execution bookkeeping for a single-unit control structure.
 
-        Called by BOTH the sync (:meth:`_execute_as_single_unit`) and awaited
+        Called by BOTH the sync (:meth:`execute_as_single_unit`) and awaited
         (:meth:`process_await_unit`) paths so their lineage update, badge
         annotation, and clean-traceback line offset can never drift — the drift
         between a flagged and an unflagged compile path is exactly what produced it.
@@ -803,7 +803,7 @@ class ControlStructureProcessor:
         # Extract error and annotate with line info for clean traceback.
         # For single-unit control structures, the <cash> frame has a line
         # number relative to the unparsed code.  We need to offset it by
-        # the node's starting line in the cell so _show_clean_error points
+        # the node's starting line in the cell so show_clean_error points
         # to the correct cell line.
         error = metrics.get("error") if metrics.get("status") == CacheStatus.ERROR else None
         if error is not None:

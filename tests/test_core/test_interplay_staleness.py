@@ -118,5 +118,5 @@ def test_ttl_not_propagated_without_ttld_dependency():
         return plain(x) + 1
 
     derived(5)  # trigger analysis -> graph populated
-    key = c._get_func_key(derived.__wrapped__)
+    key = c.get_func_key(derived.__wrapped__)
     assert c._effective_ttl(key, None) is None  # never expires

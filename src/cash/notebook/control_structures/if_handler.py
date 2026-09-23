@@ -65,7 +65,7 @@ class IfHandler:
            so the badge can group them.
         3. Only the executed branch is shown in the badge.
 
-        Falls back to ``_execute_as_single_unit`` if condition evaluation fails.
+        Falls back to ``execute_as_single_unit`` if condition evaluation fails.
         """
 
         all_metrics: list[ProcessResult] = []

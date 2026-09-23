@@ -34,7 +34,7 @@ pytestmark = [pytest.mark.upstream, pytest.mark.libraries, pytest.mark.timeout(1
 # the write while its ``plt.subplots()`` producer stays out of the plan.
 _CLEAR_WRITE_RECORD = (
     "# @cash:no-cache\n"
-    "_ts = get_ipython().magics_manager.registry.get('CashMagics')._tracking_state\n"
+    "_ts = get_ipython().magics_manager.registry.get('CashMagics').tracking_state\n"
     "_ts.executed_write_stmt_codes.clear()\n"
     "print('write-record cleared')"
 )

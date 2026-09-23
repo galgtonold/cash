@@ -63,7 +63,7 @@ from ...exceptions import (
     ForwardReferenceError,
     UpstreamStateError,
 )
-from ...purity_analyzer import _audited_lines
+from ...purity_analyzer import audited_lines
 from ...remote_source import measured_validation as _measured_validation
 from ...tracking.file_dep_snapshot import begin_file_state_epoch, end_file_state_epoch
 from ...tracking.randomness import get_drawing_rng_modules, rng_lineage_fingerprint
@@ -88,7 +88,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class _EarlyReturn:
+class EarlyReturn:
     """Sentinel wrapper for early-exit values that flow back up to the
     hook proxy unchanged.  Carries an IPython ``run_cell`` result."""
 
@@ -98,7 +98,7 @@ class _EarlyReturn:
         self.value = value
 
 
-class _PipelineSyntaxError:
+class PipelineSyntaxError:
     """Sentinel returned by :meth:`CellExecutor.execute_cell` when the cell's
     own AST fails to parse.  Caller decides how to react."""
 
@@ -432,8 +432,8 @@ def _exec_source_for_node(
     """The text to EXECUTE for *node*, diverging from ``stmt_display`` (the
     text to DISPLAY) only for a top-level ``def``/``class`` whose body the
     purity analyzer recognises as carrying an ``# @cash:assume-safe`` waiver
-    (``purity_analyzer._audited_lines`` reports a waived line -- see "Why the
-    gate is ``_audited_lines``" below for why that, and not a hand-rolled
+    (``purity_analyzer.audited_lines`` reports a waived line -- see "Why the
+    gate is ``audited_lines``" below for why that, and not a hand-rolled
     text check, is what this gates on).
 
     ``_statement_source`` withholds a ``def``/``class`` body on purpose --
@@ -457,7 +457,7 @@ def _exec_source_for_node(
     dedent step relies on.
 
     **A cheap early-out skips even that second extraction for the ordinary
-    def/class.** The eventual gate (below) is ``_audited_lines(body)``
+    def/class.** The eventual gate (below) is ``audited_lines(body)``
     finding a waived line, and a waiver can only be found where the literal
     text ``"@cash:"`` itself appears -- so ``"@cash:" not in raw_cell`` is a
     valid, if coarser, pre-filter, since ``body`` is always a substring of
@@ -511,7 +511,7 @@ def _exec_source_for_node(
     very next same-session re-run (measured: ``compute_f``'s tick file
     incremented once where 0 was expected).
 
-    **Why the gate is ``purity_analyzer._audited_lines(body)``, not a
+    **Why the gate is ``purity_analyzer.audited_lines(body)``, not a
     hand-rolled text check (final whole-branch review, finding 1).** An
     earlier version of this gate was ``"@cash:" in body`` -- the same
     substring test ``_drop_audited`` uses as ITS fast path, reused here as
@@ -529,7 +529,7 @@ def _exec_source_for_node(
     wrote no annotation whatsoever, which is precisely what this module's
     binding constraint rules out: an undirected ``def``/``class`` must be
     byte-for-byte unaffected on every path. Gating on
-    ``purity_analyzer._audited_lines(body)`` instead -- the EXACT function
+    ``purity_analyzer.audited_lines(body)`` instead -- the EXACT function
     the analyzer itself calls (from ``_drop_audited``) to decide whether a
     line is waived -- means this function and the analyzer agree about what
     counts as "directed" BY CONSTRUCTION. That is a stronger property than
@@ -538,11 +538,11 @@ def _exec_source_for_node(
     silently diverge from it. ``"@cash:" not in raw_cell`` stays as the
     cheap early-out a few lines below -- a pure performance pre-filter, not
     the decision itself -- since ``body`` is always a substring of
-    ``raw_cell``, so ``_audited_lines`` can only find a waiver in ``body``
+    ``raw_cell``, so ``audited_lines`` can only find a waiver in ``body``
     when the substring is present somewhere in the cell too.
 
     Narrower than that old substring gate in one respect, and deliberately
-    so: ``_audited_lines`` recognises ``# @cash:assume-safe`` only, never
+    so: ``audited_lines`` recognises ``# @cash:assume-safe`` only, never
     the OTHER ``@cash:`` directives (``no-cache``, ``ttl``, ``persist``,
     ...), whereas the substring gate it replaces matched every one of them.
     That is correct, not an under-fix -- a statement-level directive like
@@ -595,7 +595,7 @@ def _exec_source_for_node(
     untouched (only the first/last lines of a multi-line segment are
     column-trimmed), so this only bites the specific case of the waiver
     sitting on the function's very last physical line. Recovered the same
-    way ``_expr_has_trailing_semicolon`` reads past a node's end elsewhere in
+    way ``expr_has_trailing_semicolon`` reads past a node's end elsewhere in
     this module: byte-offset slice the end line past ``end_col_offset``, and
     append it ONLY when what remains, stripped, is empty or starts with
     ``#``. For a top-level ``def``/``class`` -- the only node types this
@@ -603,7 +603,7 @@ def _exec_source_for_node(
     cautious: the header's suite consumes everything after the colon on its
     own last line, so nothing else can start on that same physical line the
     way a semicolon-separated statement can follow an ordinary simple
-    statement (contrast ``_expr_has_trailing_semicolon``, where that
+    statement (contrast ``expr_has_trailing_semicolon``, where that
     same-line-sibling hazard is real -- e.g. ``x = 1; y = 2``). Kept anyway
     as cheap defence-in-depth rather than removed, in case this function's
     scope ever widens to a node type where it would matter.
@@ -637,7 +637,7 @@ def _exec_source_for_node(
     executor, unchanged from before this function existed -- for every other
     reason ``stmt_display`` came back empty (a control body, a loop-split
     iteration, a rewritten statement, or a genuinely unrecoverable segment),
-    for a def/class whose body ``_audited_lines`` finds no waiver in, and for
+    for a def/class whose body ``audited_lines`` finds no waiver in, and for
     one whose recovered text fails the ``compile()`` check above. Never
     raises: this must never be able to break a cell.
     """
@@ -645,13 +645,13 @@ def _exec_source_for_node(
         return stmt_display
     if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
         return None
-    # A NECESSARY precondition for the `_audited_lines(body)` gate below --
+    # A NECESSARY precondition for the `audited_lines(body)` gate below --
     # `body` is always a substring of `raw_cell`, so if the substring isn't
-    # anywhere in the cell, `_audited_lines` cannot find a waiver in `body`
+    # anywhere in the cell, `audited_lines` cannot find a waiver in `body`
     # either -- but cheaper: it skips `ast.get_source_segment` and the
     # whole-cell `_splitlines_like_the_parser` too, not just the bookkeeping
     # around them. This is a performance pre-filter only, never the decision
-    # itself (see "Why the gate is `_audited_lines`" above) -- it may return
+    # itself (see "Why the gate is `audited_lines`" above) -- it may return
     # early in cases the real gate would also reject, but never in a case
     # the real gate would accept.
     if "@cash:" not in raw_cell:
@@ -673,15 +673,15 @@ def _exec_source_for_node(
             if trailing.strip() == "" or trailing.lstrip().startswith("#"):
                 body = body + trailing
         # THE GATE. Delegates to the analyzer's own definition of "waived"
-        # (`purity_analyzer._audited_lines`, the same helper `_drop_audited`
+        # (`purity_analyzer.audited_lines`, the same helper `_drop_audited`
         # calls) rather than re-testing the raw substring here -- see "Why
-        # the gate is `_audited_lines`" above. `_audited_lines` returns the
+        # the gate is `audited_lines`" above. `audited_lines` returns the
         # marked line numbers and a function-scope flag; the flag can only
         # ever be set from a line already in the marked set (it is derived
         # BY scanning `marked`), so an empty marked set already means no
         # waiver of either kind -- the flag itself is irrelevant here.
-        audited_lines, _ = _audited_lines(body)
-        if not audited_lines:
+        waived_lines, _ = audited_lines(body)
+        if not waived_lines:
             return None
         # Sanity-check against the sharp edge documented above (PEP 614 and
         # any future recovery bug alike): if this does not compile, fall
@@ -935,7 +935,7 @@ class CellExecutor:
         self.shell = shell
         self._cash_instance = cash_instance
         self._magics = magics  # back-ref for badge rendering — scaffold for typed ProgressEvent callback
-        self._tracking_state = tracking_state
+        self.tracking_state = tracking_state
         self._statement_processor = statement_processor
         self._upstream_checker = upstream_checker
         self._restorer = restorer
@@ -953,13 +953,13 @@ class CellExecutor:
         args: tuple = (),
         kwargs: dict | None = None,
         original_run_cell: Callable[..., Any] | None = None,
-    ) -> _PipelineCompleted | _PipelineSyntaxError | _EarlyReturn:
+    ) -> _PipelineCompleted | PipelineSyntaxError | EarlyReturn:
         """Run *raw_cell* through the 7-phase cached-execution pipeline.
 
         Returns one of:
         - :class:`_PipelineCompleted` — caller invokes the finaliser
-        - :class:`_PipelineSyntaxError` — the cell's own AST failed to parse
-        - :class:`_EarlyReturn` — propagate the wrapped value (hook only)
+        - :class:`PipelineSyntaxError` — the cell's own AST failed to parse
+        - :class:`EarlyReturn` — propagate the wrapped value (hook only)
         """
         # Each file is hashed at most once per cell run (file_dep_snapshot).
         begin_file_state_epoch()
@@ -978,7 +978,7 @@ class CellExecutor:
     def _cell_warning_backend(self):
         """The backend that batches this cell's warnings, if it does."""
         try:
-            cash = self._statement_processor._get_cash_instance()
+            cash = self._statement_processor.get_cash_instance()
             backend = getattr(cash, "backend", None)
         except Exception:  # noqa: BLE001 - batching is cosmetic; never block a cell
             return None
@@ -991,7 +991,7 @@ class CellExecutor:
         args: tuple,
         kwargs: dict | None,
         original_run_cell: Callable[..., Any] | None,
-    ) -> _PipelineCompleted | _PipelineSyntaxError | _EarlyReturn:
+    ) -> _PipelineCompleted | PipelineSyntaxError | EarlyReturn:
         """The body of :meth:`execute_cell`."""
         kwargs = kwargs or {}
 
@@ -1018,18 +1018,18 @@ class CellExecutor:
             kwargs,
             original_run_cell,
         )
-        if isinstance(upstream_result, _EarlyReturn):
+        if isinstance(upstream_result, EarlyReturn):
             return upstream_result
         upstream_metrics, _restore_time, _execution_time = upstream_result
 
         # 5. AST parse (tolerate a top-level ``await``; a bare
         # ast.parse rejects module-level await and would silently skip the cell)
         try:
-            tree = CodeAnalyzer._parse_cell(raw_cell)
+            tree = CodeAnalyzer.parse_cell(raw_cell)
         except SyntaxError:
-            self._magics._cancel_progress_badge()
-            self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
-            return _PipelineSyntaxError()
+            self._magics.cancel_progress_badge()
+            self._magics.render_interactive_badge([], display_id=badge_display_id, status="DONE")
+            return PipelineSyntaxError()
 
         # 6. Pre-execution notifications
         all_metrics = self._build_pre_execution_notifications(
@@ -1064,7 +1064,7 @@ class CellExecutor:
         t_persist = time.time()
         self._statement_processor.end_cell_persistence()
         timing_breakdown["persist_final"] = time.time() - t_persist
-        if isinstance(result, _EarlyReturn):
+        if isinstance(result, EarlyReturn):
             return result
 
         all_metrics, buffered_result_outputs, badge_render_time = result
@@ -1103,7 +1103,7 @@ class CellExecutor:
         drawing cell something to rewind to — until the per-cell snapshot recorded each
         cell's own start position instead."""
         try:
-            state = self._statement_processor._tracking_state
+            state = self._statement_processor.tracking_state
             digest = hashlib.sha256(raw_cell.encode("utf-8")).hexdigest()
             state.executed_cell_source_hashes.add(digest)
             changed, pre, post = self._statement_processor.cell_rng_observation()
@@ -1132,7 +1132,7 @@ class CellExecutor:
         args: tuple = (),
         kwargs: dict | None = None,
         original_run_cell: Callable[..., Any] | None = None,
-    ) -> _PipelineCompleted | _PipelineSyntaxError | _EarlyReturn:
+    ) -> _PipelineCompleted | PipelineSyntaxError | EarlyReturn:
         """Async twin of :meth:`execute_cell` for top-level-await cells.
 
         Runs the identical 7-phase pipeline — cell id, badge/timing init, module
@@ -1162,7 +1162,7 @@ class CellExecutor:
         args: tuple,
         kwargs: dict | None,
         original_run_cell: Callable[..., Any] | None,
-    ) -> _PipelineCompleted | _PipelineSyntaxError | _EarlyReturn:
+    ) -> _PipelineCompleted | PipelineSyntaxError | EarlyReturn:
         """The body of :meth:`execute_cell_async`."""
         kwargs = kwargs or {}
 
@@ -1189,18 +1189,18 @@ class CellExecutor:
             kwargs,
             original_run_cell,
         )
-        if isinstance(upstream_result, _EarlyReturn):
+        if isinstance(upstream_result, EarlyReturn):
             return upstream_result
         upstream_metrics, _restore_time, _execution_time = upstream_result
 
         # 5. AST parse (tolerate a top-level ``await``; a bare
         # ast.parse rejects module-level await and would silently skip the cell)
         try:
-            tree = CodeAnalyzer._parse_cell(raw_cell)
+            tree = CodeAnalyzer.parse_cell(raw_cell)
         except SyntaxError:
-            self._magics._cancel_progress_badge()
-            self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
-            return _PipelineSyntaxError()
+            self._magics.cancel_progress_badge()
+            self._magics.render_interactive_badge([], display_id=badge_display_id, status="DONE")
+            return PipelineSyntaxError()
 
         # 6. Pre-execution notifications
         all_metrics = self._build_pre_execution_notifications(
@@ -1230,7 +1230,7 @@ class CellExecutor:
         t_persist = time.time()
         self._statement_processor.end_cell_persistence()
         timing_breakdown["persist_final"] = time.time() - t_persist
-        if isinstance(result, _EarlyReturn):
+        if isinstance(result, EarlyReturn):
             return result
 
         all_metrics, buffered_result_outputs, badge_render_time = result
@@ -1258,9 +1258,9 @@ class CellExecutor:
         the back-reference.
         """
         try:
-            cell_id = self._magics._cell_id_from_parent_metadata(self.shell)
-            self._magics._current_cell_id = cell_id
-            self._magics._maybe_seed_notebook_path(cell_id)
+            cell_id = self._magics.cell_id_from_parent_metadata(self.shell)
+            self._magics.current_cell_id = cell_id
+            self._magics.maybe_seed_notebook_path(cell_id)
 
             # Debug-level logging (not a raw print): silent unless %cash_debug
             # is on. The "No cell_id" branch otherwise fires on every cell in
@@ -1281,12 +1281,12 @@ class CellExecutor:
         timing_breakdown: "TimingBreakdown" = {}
         cell_start = time.time()
 
-        self._magics._badge_cell_start_time = cell_start
-        self._magics._last_badge_render_time = 0.0
+        self._magics.badge_cell_start_time = cell_start
+        self._magics.last_badge_render_time = 0.0
 
         t_badge_init = time.time()
-        if self._magics._badge_mode == "html":
-            self._magics._render_interactive_badge(
+        if self._magics.badge_mode == "html":
+            self._magics.render_interactive_badge(
                 [],
                 display_id=badge_display_id,
                 status="RUNNING",
@@ -1370,8 +1370,8 @@ class CellExecutor:
             cell_code,
             required_inputs,
             self._statement_processor.process_statement,
-            self._magics._global_ttl,
-            cell_id=self._magics._current_cell_id,
+            self._magics.global_ttl,
+            cell_id=self._magics.current_cell_id,
             progress_callback=progress_callback,
             control_structure_callback=self._control_structure_processor.process,
         )
@@ -1385,7 +1385,7 @@ class CellExecutor:
         rebound variable cannot be compared against an unrelated predecessor's
         token.
         """
-        state = self._statement_processor._tracking_state
+        state = self._statement_processor.tracking_state
         bases = state.consumable_bases
         user_ns = self.shell.user_ns
         for var_name in inputs:
@@ -1491,7 +1491,7 @@ class CellExecutor:
         args: tuple,
         kwargs: dict,
         original_run_cell: Callable[..., Any] | None,
-    ) -> tuple[list[ProcessResult], float, float] | _EarlyReturn:
+    ) -> tuple[list[ProcessResult], float, float] | EarlyReturn:
         """Run upstream dependency checking and state restoration.
 
         On error: if *original_run_cell* is provided (hook path), fall back
@@ -1509,7 +1509,7 @@ class CellExecutor:
         ) -> None:
             combined = pre_upstream_metrics + upstream_metrics_so_far
             upstream_label = f"↑ {current_stmt_code}" if current_stmt_code else current_stmt_code
-            self._magics._maybe_progress_badge(
+            self._magics.maybe_progress_badge(
                 combined,
                 display_id=badge_display_id,
                 step=current_step if current_step is not None else len(combined),
@@ -1569,7 +1569,7 @@ class CellExecutor:
         args: tuple,
         kwargs: dict,
         original_run_cell: Callable[..., Any] | None,
-    ) -> _EarlyReturn:
+    ) -> EarlyReturn:
         """Surface an upstream-resolution failure to the user with a clean traceback.
 
         Deliberately called AFTER :meth:`_resolve_upstream_state`'s try/except
@@ -1603,14 +1603,14 @@ class CellExecutor:
             # SyntaxError path).  Any other exception propagates so the
             # magic's caller sees the real error.
             if isinstance(caught, SyntaxError):
-                self._magics._cancel_progress_badge()
-                self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
-                return _EarlyReturn(None)
+                self._magics.cancel_progress_badge()
+                self._magics.render_interactive_badge([], display_id=badge_display_id, status="DONE")
+                return EarlyReturn(None)
             raise caught
         if isinstance(caught, SyntaxError):
-            self._magics._cancel_progress_badge()
-            self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
-            return _EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
+            self._magics.cancel_progress_badge()
+            self._magics.render_interactive_badge([], display_id=badge_display_id, status="DONE")
+            return EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
         if isinstance(caught, (RuntimeError, AmbiguousCellError, UpstreamStateError, ForwardReferenceError)):
             # Re-raise inside the user's cell so IPython renders the traceback
             # as if the cell itself raised.  Import the exception class
@@ -1626,9 +1626,9 @@ class CellExecutor:
             # code cash wrote, with the real failure nowhere in sight. repr()
             # also handles the newlines this message routinely carries.
             error_code = f"from {cls.__module__} import {cls.__name__}; raise {cls.__name__}({str(caught)!r}) from None"
-            self._magics._cancel_progress_badge()
-            self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
-            return _EarlyReturn(original_run_cell(error_code, *args, **kwargs))
+            self._magics.cancel_progress_badge()
+            self._magics.render_interactive_badge([], display_id=badge_display_id, status="DONE")
+            return EarlyReturn(original_run_cell(error_code, *args, **kwargs))
         # An internal failure, and the cell is about to run UNCACHED. This used
         # to be logger.error only -- invisible in a notebook, where nobody is
         # watching the kernel log -- so the sole trace was an empty badge, which
@@ -1655,9 +1655,9 @@ class CellExecutor:
             )
         except Exception:  # noqa: BLE001 - a diagnostic must never break a cell
             pass
-        self._magics._cancel_progress_badge()
-        self._magics._render_interactive_badge([], display_id=badge_display_id, status="BYPASSED")
-        return _EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
+        self._magics.cancel_progress_badge()
+        self._magics.render_interactive_badge([], display_id=badge_display_id, status="BYPASSED")
+        return EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
 
     # ------------------------------------------------------------------
     # Phase 6: pre-execution notifications
@@ -1801,7 +1801,7 @@ class CellExecutor:
         return buffered_result_outputs
 
     @staticmethod
-    def _expr_has_trailing_semicolon(raw_cell: str, node: ast.stmt) -> bool:
+    def expr_has_trailing_semicolon(raw_cell: str, node: ast.stmt) -> bool:
         """True if expression statement *node* is followed by a ``;`` in the raw
         source (IPython display suppression). ``ast.unparse`` discards it, so we
         recover it from the original cell text.
@@ -1890,7 +1890,7 @@ class CellExecutor:
         """
         metrics = self._statement_processor.process_statement(
             stmt_code,
-            self._magics._global_ttl,
+            self._magics.global_ttl,
             silent=True,
             annotation=annotation,
             display_code=display_code,
@@ -1929,7 +1929,7 @@ class CellExecutor:
         """
         metrics = await self._statement_processor.process_statement_async(
             stmt_code,
-            self._magics._global_ttl,
+            self._magics.global_ttl,
             silent=True,
             annotation=annotation,
             display_code=display_code,
@@ -1985,19 +1985,19 @@ class CellExecutor:
         # A statement that just raised may have an armed progress timer
         # (it hadn't finished, so nothing cancelled it yet) -- stop it before
         # rendering the DONE badge below so a late fire can't overwrite it.
-        self._magics._cancel_progress_badge()
-        self._magics._show_clean_error(e, raw_cell, node)
+        self._magics.cancel_progress_badge()
+        self._magics.show_clean_error(e, raw_cell, node)
         hook_total = time.time() - hook_start
-        if self._magics._badge_mode == "html":
-            self._magics._render_interactive_badge(
+        if self._magics.badge_mode == "html":
+            self._magics.render_interactive_badge(
                 all_metrics,
                 display_id=badge_display_id,
                 cell_total_time=hook_total,
                 timing_breakdown=timing_breakdown,
                 status="DONE",
             )
-        elif self._magics._badge_mode == "print":
-            self._magics._print_text_badge(all_metrics, cell_total_time=hook_total)
+        elif self._magics.badge_mode == "print":
+            self._magics.print_text_badge(all_metrics, cell_total_time=hook_total)
 
     def _execute_cell_statements(
         self,
@@ -2007,7 +2007,7 @@ class CellExecutor:
         badge_display_id: str,
         hook_start: float,
         timing_breakdown: "TimingBreakdown",
-    ) -> _EarlyReturn | tuple[list[ProcessResult], list, float]:
+    ) -> EarlyReturn | tuple[list[ProcessResult], list, float]:
         """Iterate over AST statements, executing or caching each one.
 
         Returns ``(all_metrics, buffered_result_outputs, badge_render_time)``
@@ -2025,7 +2025,7 @@ class CellExecutor:
         written_later = _written_later_in_cell(tree.body)
         checker = getattr(self, "_upstream_checker", None)
         try:
-            jump_runs = _jumpable_runs(tree.body, raw_cell, checker._cell_touches_rng) if checker is not None else {}
+            jump_runs = _jumpable_runs(tree.body, raw_cell, checker.cell_touches_rng) if checker is not None else {}
         except Exception:  # noqa: BLE001 - no jump is the ordinary run
             jump_runs = {}
         #: Statements a restore of a later version made unnecessary.
@@ -2050,7 +2050,7 @@ class CellExecutor:
             # suppression rides through the cache key AND the execution path
             # (``_execute_statement`` skips the display), so a cached re-run
             # doesn't emit a phantom repr.
-            if self._expr_has_trailing_semicolon(raw_cell, node):
+            if self.expr_has_trailing_semicolon(raw_cell, node):
                 stmt_code = stmt_code + ";"
 
             occ = stmt_occurrence_counts.get(stmt_code, 0)
@@ -2063,7 +2063,7 @@ class CellExecutor:
             unified_step = upstream_step_count + i + 1
 
             t_badge_pre = time.time()
-            self._magics._arm_progress_badge(
+            self._magics.arm_progress_badge(
                 all_metrics,
                 display_id=badge_display_id,
                 step=unified_step,
@@ -2091,7 +2091,7 @@ class CellExecutor:
                         try:
                             ctrl_result = self._control_structure_processor.process(
                                 node,
-                                ttl=self._magics._global_ttl,
+                                ttl=self._magics.global_ttl,
                                 silent=True,
                                 raw_cell=raw_cell,
                                 prev_node=tree.body[i - 1] if i > 0 else None,
@@ -2127,7 +2127,7 @@ class CellExecutor:
                         finally:
                             _set_written_later(self, frozenset())
 
-                    self._magics._cancel_progress_badge()
+                    self._magics.cancel_progress_badge()
                     t_badge = time.time()
                     # `unified_step`, NOT `unified_step + 1`. This fires when a
                     # statement has FINISHED; the next one has not started, and
@@ -2140,9 +2140,9 @@ class CellExecutor:
                     # drops these renders when they arrive in a burst, and both
                     # show up as soon as a render is slow enough to escape it.
                     # The number now means "the furthest statement cash has
-                    # reached", which is what `_arm_progress_badge` publishes
+                    # reached", which is what `arm_progress_badge` publishes
                     # too, so the two sources agree instead of leapfrogging.
-                    self._magics._maybe_progress_badge(
+                    self._magics.maybe_progress_badge(
                         all_metrics,
                         display_id=badge_display_id,
                         step=unified_step,
@@ -2173,7 +2173,7 @@ class CellExecutor:
                 # armed, that timer fires up to _BADGE_MIN_RENDER_INTERVAL
                 # after the interrupt, on whatever cell is running by then.
                 # Safe to call unconditionally: a no-op once already cancelled.
-                self._magics._cancel_progress_badge()
+                self._magics.cancel_progress_badge()
 
         return (all_metrics, buffered_result_outputs, badge_render_time)
 
@@ -2185,7 +2185,7 @@ class CellExecutor:
         badge_display_id: str,
         hook_start: float,
         timing_breakdown: "TimingBreakdown",
-    ) -> _EarlyReturn | tuple[list[ProcessResult], list, float]:
+    ) -> EarlyReturn | tuple[list[ProcessResult], list, float]:
         """Async twin of :meth:`_execute_cell_statements` for top-level-await cells.
 
         Identical badge / occurrence / trailing-semicolon / control-structure /
@@ -2207,7 +2207,7 @@ class CellExecutor:
         written_later = _written_later_in_cell(tree.body)
         checker = getattr(self, "_upstream_checker", None)
         try:
-            jump_runs = _jumpable_runs(tree.body, raw_cell, checker._cell_touches_rng) if checker is not None else {}
+            jump_runs = _jumpable_runs(tree.body, raw_cell, checker.cell_touches_rng) if checker is not None else {}
         except Exception:  # noqa: BLE001 - no jump is the ordinary run
             jump_runs = {}
         #: Statements a restore of a later version made unnecessary.
@@ -2227,7 +2227,7 @@ class CellExecutor:
             stmt_display = _statement_source(raw_cell, node)
             stmt_exec_source = _exec_source_for_node(raw_cell, node, stmt_display)
 
-            if self._expr_has_trailing_semicolon(raw_cell, node):
+            if self.expr_has_trailing_semicolon(raw_cell, node):
                 stmt_code = stmt_code + ";"
 
             occ = stmt_occurrence_counts.get(stmt_code, 0)
@@ -2240,7 +2240,7 @@ class CellExecutor:
             unified_step = upstream_step_count + i + 1
 
             t_badge_pre = time.time()
-            self._magics._arm_progress_badge(
+            self._magics.arm_progress_badge(
                 all_metrics,
                 display_id=badge_display_id,
                 step=unified_step,
@@ -2265,7 +2265,7 @@ class CellExecutor:
                             try:
                                 ctrl_result = await self._control_structure_processor.process_await_unit(
                                     node,
-                                    ttl=self._magics._global_ttl,
+                                    ttl=self._magics.global_ttl,
                                     silent=True,
                                     raw_cell=raw_cell,
                                 )
@@ -2286,7 +2286,7 @@ class CellExecutor:
                             try:
                                 ctrl_result = self._control_structure_processor.process(
                                     node,
-                                    ttl=self._magics._global_ttl,
+                                    ttl=self._magics.global_ttl,
                                     silent=True,
                                     raw_cell=raw_cell,
                                     prev_node=tree.body[i - 1] if i > 0 else None,
@@ -2322,7 +2322,7 @@ class CellExecutor:
                         finally:
                             _set_written_later(self, frozenset())
 
-                    self._magics._cancel_progress_badge()
+                    self._magics.cancel_progress_badge()
                     t_badge = time.time()
                     # `unified_step`, NOT `unified_step + 1`. This fires when a
                     # statement has FINISHED; the next one has not started, and
@@ -2335,9 +2335,9 @@ class CellExecutor:
                     # drops these renders when they arrive in a burst, and both
                     # show up as soon as a render is slow enough to escape it.
                     # The number now means "the furthest statement cash has
-                    # reached", which is what `_arm_progress_badge` publishes
+                    # reached", which is what `arm_progress_badge` publishes
                     # too, so the two sources agree instead of leapfrogging.
-                    self._magics._maybe_progress_badge(
+                    self._magics.maybe_progress_badge(
                         all_metrics,
                         display_id=badge_display_id,
                         step=unified_step,
@@ -2364,6 +2364,6 @@ class CellExecutor:
                 # interrupted await -- the more exposed case on THIS path)
                 # must still cancel a pending timer, or it fires later on
                 # whatever cell happens to be running by then.
-                self._magics._cancel_progress_badge()
+                self._magics.cancel_progress_badge()
 
         return (all_metrics, buffered_result_outputs, badge_render_time)

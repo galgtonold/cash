@@ -3,7 +3,7 @@
 A mutation harness that silently fails to apply is worse than none: it reports
 that the suite tolerates a broken engine, when in fact the engine was never
 broken. That mistake has already been made here once, patching
-``_backward_scan_pass`` from a pytest plugin and reading 57 passing upstream
+``backward_scan_pass`` from a pytest plugin and reading 57 passing upstream
 integration tests as a coverage hole. The patch was in the pytest process; the
 code under test was in the kernel.
 
@@ -52,7 +52,7 @@ def _run_kernelless_probe(tmp_path, mutation: str | None):
         "import cash.notebook.upstream.mismatch_classifier as m\n"
         "import json as _j\n"
         "from cash.notebook.upstream.mismatch_classifier import MismatchClassifier as C\n"
-        "print('PATCHED' if C._backward_scan_pass.__name__ == 'dead' else 'ORIGINAL')\n"
+        "print('PATCHED' if C.backward_scan_pass.__name__ == 'dead' else 'ORIGINAL')\n"
     )
     proc = subprocess.run(
         [sys.executable, "-c", code],

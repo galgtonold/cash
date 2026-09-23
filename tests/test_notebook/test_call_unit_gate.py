@@ -103,7 +103,7 @@ def test_omitting_variable_lineage_never_asks_the_missing_lineage_question():
     variable_lineage omitted, the missing-lineage source is not asked at all,
     rather than answered "nothing is missing" by a fabricated always-tracked
     mapping. This is the asymmetry that motivates gating `inputs` itself
-    (``inputs = _names_read(call_node) if variable_lineage is not None else
+    (``inputs = names_read(call_node) if variable_lineage is not None else
     set()``): the AST-only half decided at rewrite time has no lineage table
     to consult yet, and a caller who "simplified" that back into a sentinel
     mapping passed everywhere would make this test fail exactly like the one
