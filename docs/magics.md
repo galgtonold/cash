@@ -2,7 +2,7 @@
 
 Cash registers a suite of IPython magic commands that control caching, inspect
 session state, and move cache data between sessions. This page is the canonical
-reference for all **15** magics — each entry lists the exact signature, every
+reference for all **14** magics — each entry lists the exact signature, every
 parsed flag, and a working example. Behaviour is derived directly from
 `src/cash/notebook/ipython/magics.py` and `src/cash/notebook/ipython/admin.py`.
 
@@ -27,7 +27,6 @@ parsed flag, and a working example. Behaviour is derived directly from
 | [`%cash_debug`](#cash_debug) | Toggle / configure debug logging. |
 | [`%%cash`](#cash-cell) | Cache a single cell explicitly. |
 | [`%cash_provenance`](#cash_provenance) | Variable computation history. |
-| [`%cash_track`](#cash_track) | Watch a local module for source changes. |
 | [`%cash_diff`](#cash_diff) | Diff current session against an exported cache file. |
 | [`%cash_export`](#cash_export) | Serialize cache (and/or lineage) to a file. |
 | [`%cash_import`](#cash_import) | Load cache from a file written by `%cash_export`. |
@@ -368,33 +367,6 @@ it, and (optionally) a dependency graph or timeline.
 %cash_provenance df --graph --time
 %cash_provenance df --json
 %cash_provenance --clear
-```
-
-### `%cash_track`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_track @e168ca3c -->
-
-Watch a local Python module for source changes; reload it (and invalidate any
-cache entries that depend on it) when it changes.
-
-**Signature:** `%cash_track [<module>|--list|--check] [--reload]`
-
-**Arguments:**
-
-- *(no argument)* / `--list` — List tracked modules with their last-seen
-  `mtime`. Prints a usage hint if no modules are tracked.
-- `--check` — Re-check every tracked module and reload any that changed.
-- `<module>` — Start tracking `<module>`. If the module isn't already
-  imported, the magic calls `importlib.import_module(<module>)` first.
-- `--reload` — Combined with `<module>`: force-reload it now in addition to
-  starting tracking.
-
-**Example:**
-
-```python
-%cash_track my_helpers
-%cash_track my_helpers --reload
-%cash_track --list
-%cash_track --check
 ```
 
 ### `%cash_diff`

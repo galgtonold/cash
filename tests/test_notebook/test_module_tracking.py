@@ -1,41 +1,22 @@
 """
-Tests for module file tracking and %cash_track magic.
+Tests for module file tracking.
 
 Tests the FunctionTracker module tracking features:
 - track_module: Register a module for file change detection
 - check_tracked_modules: Detect file modifications
 - reload_module: Force reload of changed modules
-- %cash_track magic: IPython line magic interface
 """
 
 import sys
 import time
-from unittest.mock import MagicMock
 
 import pytest
-from traitlets.config.configurable import Configurable
 
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
 from cash.tracking.function_tracker import FunctionTracker
 
 # ============================================================================
 # Fixtures
 # ============================================================================
-
-
-class MockShell(Configurable):
-    """Mock IPython shell for testing."""
-
-    def __init__(self):
-        super().__init__()
-        self.user_ns = {}
-        self.input_transformers_cleanup = []
-        self.run_cell = MagicMock()
-        self.events = MagicMock()
-        self.ast_transformers = []
-        self.user_global_ns = self.user_ns
 
 
 @pytest.fixture
@@ -44,19 +25,6 @@ def tracker():
     ft = FunctionTracker()
     yield ft
     ft.clear()
-
-
-@pytest.fixture
-def magics_fixture():
-    """Provide CashMagics instance for testing %cash_track."""
-    backend = InMemoryBackend()
-    cash = Cash(backend=backend, register_magic=False)
-    shell = MockShell()
-    magics = CashMagics(shell, cash)
-    magics._auto_cache_enabled = True
-    yield magics, shell, backend
-    backend.clear()
-    shell.user_ns.clear()
 
 
 @pytest.fixture
@@ -281,132 +249,3 @@ class TestClear:
         assert len(tracker.module_mtimes) == 0
         assert len(tracker._source_cache) == 0
         assert len(tracker._function_hashes) == 0
-
-
-# ============================================================================
-# %cash_track magic tests
-# ============================================================================
-
-
-class TestCashTrackMagic:
-    """Tests for the %cash_track IPython line magic."""
-
-    def test_list_no_modules(self, magics_fixture, capsys):
-        """--list with no tracked modules shows help message."""
-        magics, shell, backend = magics_fixture
-        magics.cash_track("--list")
-        captured = capsys.readouterr()
-        assert "No modules tracked" in captured.out
-
-    def test_list_empty_args(self, magics_fixture, capsys):
-        """No arguments defaults to --list behavior."""
-        magics, shell, backend = magics_fixture
-        magics.cash_track("")
-        captured = capsys.readouterr()
-        assert "No modules tracked" in captured.out
-
-    def test_track_module(self, magics_fixture, temp_module, capsys):
-        """Track a real module via magic command."""
-        magics, shell, backend = magics_fixture
-        module_name, module_file = temp_module
-
-        # Import it first
-        import importlib
-
-        importlib.import_module(module_name)
-
-        magics.cash_track(module_name)
-        captured = capsys.readouterr()
-        assert f"Tracking module '{module_name}'" in captured.out
-
-    def test_track_nonexistent_module(self, magics_fixture, capsys):
-        """Track a module that doesn't exist shows error."""
-        magics, shell, backend = magics_fixture
-        magics.cash_track("totally_nonexistent_module_xyz_999")
-        captured = capsys.readouterr()
-        assert "not found" in captured.out
-
-    def test_track_and_list(self, magics_fixture, temp_module, capsys):
-        """Track a module then list shows it."""
-        magics, shell, backend = magics_fixture
-        module_name, module_file = temp_module
-
-        import importlib
-
-        importlib.import_module(module_name)
-
-        magics.cash_track(module_name)
-        capsys.readouterr()  # clear capture
-
-        magics.cash_track("--list")
-        captured = capsys.readouterr()
-        assert module_name in captured.out
-        assert "Tracked modules:" in captured.out
-
-    def test_check_no_changes(self, magics_fixture, temp_module, capsys):
-        """--check with no changes reports clean."""
-        magics, shell, backend = magics_fixture
-        module_name, module_file = temp_module
-
-        import importlib
-
-        importlib.import_module(module_name)
-
-        magics.cash_track(module_name)
-        capsys.readouterr()  # clear
-
-        magics.cash_track("--check")
-        captured = capsys.readouterr()
-        assert "No tracked modules have changed" in captured.out
-
-    def test_check_detects_change(self, magics_fixture, temp_module, capsys):
-        """--check detects file modification and auto-reloads."""
-        magics, shell, backend = magics_fixture
-        module_name, module_file = temp_module
-
-        import importlib
-
-        importlib.import_module(module_name)
-
-        magics.cash_track(module_name)
-        capsys.readouterr()  # clear
-
-        # Modify the module file
-        time.sleep(0.1)
-        with open(module_file, "w") as f:
-            f.write("def helper(x):\n    return x * 100\n")
-
-        magics.cash_track("--check")
-        captured = capsys.readouterr()
-        assert "Changed modules:" in captured.out
-        assert module_name in captured.out
-        assert "Reloaded:" in captured.out
-
-    def test_reload_flag(self, magics_fixture, temp_module, capsys):
-        """--reload forces module reload."""
-        magics, shell, backend = magics_fixture
-        module_name, module_file = temp_module
-
-        import importlib
-
-        mod = importlib.import_module(module_name)
-        assert mod.helper(5) == 10
-
-        magics.cash_track(f"{module_name} --reload")
-        captured = capsys.readouterr()
-        assert "Tracking module" in captured.out
-        assert "Reloaded:" in captured.out
-
-    def test_auto_import_and_track(self, magics_fixture, temp_module, capsys):
-        """Module not yet imported gets auto-imported and tracked."""
-        magics, shell, backend = magics_fixture
-        module_name, module_file = temp_module
-
-        # Don't import it - let the magic do it
-        assert module_name not in sys.modules
-
-        magics.cash_track(module_name)
-        captured = capsys.readouterr()
-        assert f"Tracking module '{module_name}'" in captured.out
-        # Module should now be imported
-        assert module_name in sys.modules

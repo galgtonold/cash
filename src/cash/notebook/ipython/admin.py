@@ -7,7 +7,6 @@ so that IPython recognises these commands automatically.
 
 from __future__ import annotations
 
-import importlib
 import json
 import logging
 import pickle
@@ -491,41 +490,6 @@ class CashAdminMagicsMixin:
             print(f"[Error] Diff failed: {e}")
 
     # ------------------------------------------------------------------
-    # Module tracking
-    # ------------------------------------------------------------------
-
-    @line_magic
-    def cash_track(self: CashMagics, line: str) -> None:
-        """Track a local Python module for changes.
-
-        Usage::
-
-            %cash_track my_helpers         - Track my_helpers module
-            %cash_track my_helpers --reload - Force reload now
-            %cash_track --list             - List tracked modules
-            %cash_track --check            - Check for changes
-        """
-        parts = strip_inline_comment(line).split()
-        ft = self._statement_processor.function_tracker
-
-        if not parts or parts[0] == "--list":
-            tracked = ft.tracked_modules
-            if not tracked:
-                print("No modules tracked. Use: %cash_track module_name")
-            else:
-                print("Tracked modules:")
-                for mod in sorted(tracked):
-                    mtime = ft.module_mtimes.get(mod, "unknown")
-                    print(f"  {mod} (mtime: {mtime})")
-            return
-
-        if parts[0] == "--check":
-            _check_tracked_modules(ft)
-            return
-
-        _track_or_import_module(ft, parts[0], "--reload" in parts)
-
-    # ------------------------------------------------------------------
     # Provenance
     # ------------------------------------------------------------------
 
@@ -749,41 +713,6 @@ def _print_diff_details(
         print(f"  [~] Changed:         {', '.join(sorted(changed))}")
     if identical:
         print(f"  [=] Identical:       {', '.join(sorted(identical))}")
-
-
-def _check_tracked_modules(ft: Any) -> None:
-    """Check tracked modules for changes and reload any that changed."""
-    changed = ft.check_tracked_modules()
-    if changed:
-        print(f"Changed modules: {', '.join(sorted(changed))}")
-        for mod in changed:
-            ft.reload_module(mod)
-            print(f"  Reloaded: {mod}")
-    else:
-        print("No tracked modules have changed.")
-
-
-def _track_or_import_module(ft: Any, module_name: str, force_reload: bool) -> None:
-    """Track a module by name, importing it first if necessary."""
-    file_path = ft.track_module(module_name)
-    if file_path:
-        print(f"Tracking module '{module_name}' ({file_path})")
-        if force_reload:
-            if ft.reload_module(module_name):
-                print(f"  Reloaded: {module_name}")
-            else:
-                print(f"  Reload failed for: {module_name}")
-        return
-
-    try:
-        importlib.import_module(module_name)
-        file_path = ft.track_module(module_name)
-        if file_path:
-            print(f"Tracking module '{module_name}' ({file_path})")
-        else:
-            print(f"[Warning] Module '{module_name}' imported but has no file (built-in?)")
-    except ImportError:
-        print(f"[Error] Module '{module_name}' not found")
 
 
 def _print_timing_section(label: str, times: list[float], statistics: Any) -> None:

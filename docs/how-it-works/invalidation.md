@@ -122,7 +122,7 @@ Several independent signals can cause a miss. The first four feed the [cache key
     A method call that mutates its receiver bumps the receiver's lineage, so
     everything downstream of it misses.
 
-File tracking is covered in depth in [Dynamic Dependencies](../tutorials/feature-guides/dynamic-dependencies.md). Module tracking — including the `%cash_track` magic that brings third-party modules into scope — is documented in [Magic Commands](../magics.md).
+File tracking is covered in depth in [Dynamic Dependencies](../tutorials/feature-guides/dynamic-dependencies.md). Local modules — ones outside the standard library and `site-packages` — are tracked automatically as soon as a cell imports them; installed packages are not watched for edits.
 
 ```mermaid
 flowchart TD

@@ -144,12 +144,6 @@ import cash
 %cash_debug off    # Disable
 ```
 
-### Track external modules
-```python
-%cash_track my_utils        # Track module file changes
-%cash_track my_utils --reload  # Force reload
-```
-
 ### View variable provenance
 ```python
 %cash_provenance df         # Show history of 'df'
