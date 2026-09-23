@@ -141,12 +141,15 @@ a plain local `pytest` still includes them.
 #### Unit Tests
 
 Use the `cash_magics` and `mock_shell` fixtures from `tests/conftest.py` for
-testing notebook components:
+testing notebook components, and `run_cash_cell` from `tests/_cell_driver.py`
+to run one cell through cash:
 
 ```python
+from tests._cell_driver import run_cash_cell
+
 def test_feature(cash_magics, mock_shell):
     mock_shell.user_ns["x"] = 10
-    cash_magics.cash("", "y = x * 2")
+    run_cash_cell(cash_magics, "y = x * 2")
     assert mock_shell.user_ns["y"] == 20
 ```
 
