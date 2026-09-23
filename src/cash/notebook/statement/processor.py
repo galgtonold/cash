@@ -504,19 +504,12 @@ def capture_output(stdout: bool = True, stderr: bool = True, display: bool = Tru
 
 from ...analysis.annotations import CacheAnnotation
 from ...analysis.cacheability import (
-    RECEIVER_READONLY_WRITE_METHODS,
     StatementAnalysis,
     analyze_statement,
     assigned_method_call_receivers,
     bare_call_arguments,
-    chain_is_pure,
     fits_its_receiver,
-    is_pandas_plot_call,
-    module_setting_receivers,
-    standalone_method_call_inner_methods,
     standalone_method_call_receivers,
-    standalone_method_mutation_receivers,
-    top_level_call_argument_bases,
 )
 from ...analysis.cacheability_decision import (
     decide_cacheability,
@@ -524,7 +517,7 @@ from ...analysis.cacheability_decision import (
     receiver_is_identity_coupled,
 )
 from ...analysis.code_analyzer import CodeAnalyzer
-from ...analysis.mutation_effects import StatementEffects, statement_effects
+from ...analysis.mutation_effects import StatementEffects, classify_receivers, drawn_on_arguments, statement_effects
 from ...analytics import AnalyticsManager
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import (
@@ -3429,12 +3422,7 @@ class StatementProcessor:
         # too -- the same ``drawn_args`` rule `_classify_method_mutations`
         # applies outside a loop. In a loop body it was missed, and a re-run
         # saved every chart blank (round 23, a plotting helper per model).
-        receivers |= {
-            name
-            for name in top_level_call_argument_bases(tree)
-            if receiver_is_identity_coupled(self.shell.user_ns.get(name))
-        }
-        return receivers
+        return receivers | drawn_on_arguments(tree, self.shell.user_ns)
 
     def _fitted_receivers(self, tree: ast.Module | None) -> set[str]:
         """Estimators a statement fits in place (``km.fit_predict(Z)``).
@@ -3473,108 +3461,27 @@ class StatementProcessor:
           (recorded into the verdict so the simulation reproduces them).
         * ``record_verdict`` — True when this statement's verdict is being learned.
         """
-        candidates = standalone_method_call_receivers(tree)
-        # captured-return draws (``counts, bins, _ = ax.hist(...)``) are
-        # assignments, so they never appear in the bare-``Expr`` candidate set;
-        # they are classified by the identity-coupled pass below and must not be
-        # short-circuited by the ``not candidates`` guard.
-        assigned = assigned_method_call_receivers(tree)
-        # An Axes/Figure handed to a call is drawn on (``df.plot(ax=ax)``) --
-        # also by a plain function, ``forest(axes[0], df)``, which has no
-        # method-call receiver at all. Behind the early return below, that
-        # call was served from the cache and the saved chart had an empty
-        # panel (round 22, tester-session tests).
-        drawn_args = {
-            name
-            for name in top_level_call_argument_bases(tree)
-            if receiver_is_identity_coupled(self.shell.user_ns.get(name))
-        }
-        arg_watch = self._bare_call_arguments(tree, outputs) - drawn_args
-        if not candidates and not assigned and not drawn_args and not arg_watch:
-            return set(), set(), set(), False
-        tier1 = standalone_method_mutation_receivers(tree)
-        inner = standalone_method_call_inner_methods(tree)
-        settings = module_setting_receivers(tree)
         verdict = self.mutation_verdicts.get(source_hash)
-        pre_route: set[str] = set()
+        classes = classify_receivers(
+            tree, self.shell.user_ns, lambda: verdict, arguments=self._bare_call_arguments(tree, outputs)
+        )
+        pre_route = set(classes.mutated)
         observe: set[str] = set()
         assumed: set[str] = set()
-        for base, method in candidates:
-            receiver = self.shell.user_ns.get(base)
-            if isinstance(receiver, types.ModuleType):
-                # ``time.sleep()`` / ``np.foo()`` is a module function call, not
-                # a method mutation of the receiver -- unless it changes a
-                # setting the module keeps (``pd.set_option``,
-                # ``plt.rcParams.update``): that is the module's own state, and
-                # it is replayed with the module only if it is counted as such.
-                if base in settings:
-                    pre_route.add(base)
-                continue
-            if base in tier1:
-                pre_route.add(base)
-                continue
-            if method in RECEIVER_READONLY_WRITE_METHODS:
-                # ``df.to_csv(path)`` READS the frame and writes a file; it does
-                # not mutate ``df``, so it must not bump its lineage.
-                # The file-write side effect is scheduled elsewhere. (``savefig``
-                # is intentionally NOT here — see the identity-coupled branch.)
-                continue
-            if receiver_is_identity_coupled(receiver):
-                # A method call on a live matplotlib Axes/Figure DRAWS on it — it
-                # adds artists / sets state — whatever it returns. ``ax.hist(...)``
-                # returns a data tuple yet mutates the Axes just like ``ax.bar()``;
-                # route it to the mutation path so the figure's fill statements are
-                # rebuilt with it and never cached as an ordinary value.
-                # ``fig.savefig(...)`` lands here too: bumping an identity-coupled
-                # Figure is idempotent + load-bearing for chart coherence.
-                pre_route.add(base)
-                continue
-            if chain_is_pure(method, inner.get((base, method), frozenset())) or is_pandas_plot_call(method, receiver):
-                continue
-            if verdict is not None:
-                if base in verdict:
-                    pre_route.add(base)
-                continue
-            # tier-3, verdict unknown: observe if cheaply+reliably hashable,
-            # otherwise assume-mutate (conservative, correctness-first).
+        # A receiver no rule or verdict decides is observed when it can be
+        # hashed reliably, otherwise assumed to change (correctness first).
+        for base in classes.unknown_receivers:
             if self._receiver_observable(base):
                 observe.add(base)
             else:
                 assumed.add(base)
                 pre_route.add(base)
-        # the CAPTURED-return form ``counts, bins, _ = ax.hist(...)`` is
-        # an ``ast.Assign``, so the bare-``Expr`` candidate set above never saw
-        # it. Route its receiver as a draw too — but ONLY when it is identity-
-        # coupled (a live Axes/Figure). That single discriminator is what keeps a
-        # genuine pure capture (``m = df.mean()``, DataFrame receiver) on the
-        # caching path: the general tier-3 "assume-mutate" logic above is
-        # deliberately NOT applied here, so a non-coupled captured receiver is
-        # never over-invalidated.
-        for base, _method in assigned:
-            if base in pre_route:
-                continue
-            receiver = self.shell.user_ns.get(base)
-            if isinstance(receiver, types.ModuleType):
-                continue
-            if receiver_is_identity_coupled(receiver) or fits_its_receiver(_method, receiver):
-                pre_route.add(base)
-        pre_route |= drawn_args
-        # Objects handed to a bare call: `im.add_qc(df)`, `sc.tl.leiden(hv)`.
-        # A callee reached through a module is skipped above as "a module
-        # function call", so what it did to its ARGUMENTS was never asked.
-        # scanpy works entirely this way, and a hit "restored" the statement
-        # as a no-op: the column or key it adds was simply missing (round 28,
-        # r28s4, KeyError: 'total_counts' / 'leiden' after a restart).
-        # Observed like a tier-3 receiver, but with a full before/after
-        # fingerprint -- the cache hash samples -- and learned into the same
-        # verdict, so the next run (and the simulation) neither re-observes
-        # nor serves it: `print(df)` is learned as reading only.
+        # An object handed to a bare call (`im.add_qc(df)`, `sc.tl.leiden(hv)`)
+        # gets a full before/after fingerprint, since the cache hash samples.
+        # The result is learned into the verdict, so neither the next run nor
+        # the simulation asks again: `print(df)` is learned as reading only.
         snapshots: dict[str, str] = {}
-        for name in arg_watch:
-            if verdict is not None:
-                if name in verdict:
-                    pre_route.add(name)
-                continue
+        for name in classes.unknown_args:
             fingerprint = mutation_fingerprint(self.shell.user_ns.get(name))
             if fingerprint is None:
                 assumed.add(name)

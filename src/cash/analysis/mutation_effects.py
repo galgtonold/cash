@@ -25,30 +25,43 @@ from typing import Any
 from .annotations import extract_annotations_for_statements
 from .ast_util import called_names
 from .cacheability import (
+    RECEIVER_READONLY_WRITE_METHODS,
     alias_mutation_sources,
     aliased_sources,
     analyze_statement,
+    assigned_method_call_receivers,
     callee_global_mutations,
+    chain_is_pure,
     crossref_reassigned_vars,
+    fits_its_receiver,
     function_arg_mutations,
+    is_pandas_plot_call,
+    module_setting_receivers,
     mutating_partials,
     object_protocol_mutations,
     partial_arg_mutations,
     reduce_free_mutations,
     selfref_inplace_write_vars,
     standalone_call_arg_targets,
+    standalone_method_call_inner_methods,
+    standalone_method_call_receivers,
     standalone_method_mutation_receivers,
     stateful_closure_vars,
     stateful_self_functions,
     subscript_view_bindings,
+    top_level_call_argument_bases,
 )
+from .cacheability_decision import receiver_is_identity_coupled
 from .code_analyzer import CodeAnalyzer
 
 __all__ = [
     "CellEffects",
     "NotebookSources",
+    "ReceiverClasses",
     "StatementEffects",
     "cell_effects",
+    "classify_receivers",
+    "drawn_on_arguments",
     "is_module_name",
     "nocache_written_vars",
     "statement_effects",
@@ -533,3 +546,111 @@ def statement_effects(
     except (SyntaxError, ValueError, RecursionError):
         arg_mutations = frozenset()
     return StatementEffects(frozenset(inputs), frozenset(outputs), callee_globals, arg_mutations)
+
+
+# ---------------------------------------------------------------------------
+# Receivers: which objects a statement's calls change in place
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReceiverClasses:
+    """A statement's call receivers and arguments, decided as far as the
+    rules and the recorded verdict go.
+
+    What is left over depends on what the engine can do: the runtime watches
+    the statement run, the simulation cannot.
+    """
+
+    #: Changed in place: a known mutator, a draw on a Figure/Axes, a fit, a
+    #: module setting, or a name the recorded verdict lists.
+    mutated: frozenset[str] = frozenset()
+    #: Method receivers no rule decides and no verdict covers. The runtime
+    #: observes or assumes them; the simulation assumes they change.
+    unknown_receivers: frozenset[str] = frozenset()
+    #: Bare-call arguments no verdict covers. The runtime fingerprints them;
+    #: the simulation leaves them alone, since treating every ``print(df)``
+    #: as a change would bump ``df`` for every reader.
+    unknown_args: frozenset[str] = frozenset()
+
+
+def drawn_on_arguments(tree: ast.Module | None, namespace: Mapping[str, Any]) -> frozenset[str]:
+    """Figures and Axes handed to a call, which draws on them: by a method
+    (``df.plot(ax=ax)``) or by a plain function (``forest(axes[0], df)``)."""
+    return frozenset(
+        name for name in top_level_call_argument_bases(tree) if receiver_is_identity_coupled(namespace.get(name))
+    )
+
+
+def classify_receivers(
+    tree: ast.Module | None,
+    namespace: Mapping[str, Any],
+    load_verdict: Callable[[], Iterable[str] | None],
+    *,
+    arguments: Iterable[str],
+    virtual_modules: Iterable[str] = (),
+) -> ReceiverClasses:
+    """Decide which receivers and arguments of *tree*'s calls change in place.
+
+    One rule set for the runtime and the simulation, so both bump the same
+    lineages (the unified-key rule). *load_verdict* returns what the runtime
+    recorded for this statement (None when it has not run); it is called only
+    when the statement has a receiver or argument to decide, since the
+    simulation reads it from the backend. *arguments* are the
+    bare-call arguments the engine considers (see ``bare_call_arguments``).
+    A module is never a receiver: ``pd.set_option(...)`` is a module
+    function call, counted only as a change to a setting the module keeps.
+    """
+    candidates = standalone_method_call_receivers(tree)
+    # A captured return (``counts, bins, _ = ax.hist(...)``) is an assignment,
+    # so it is not a bare-``Expr`` candidate; it must not hit the early return.
+    assigned = assigned_method_call_receivers(tree)
+    drawn_args = drawn_on_arguments(tree, namespace)
+    args = frozenset(arguments) - drawn_args
+    if not candidates and not assigned and not drawn_args and not args:
+        return ReceiverClasses()
+    tier1 = standalone_method_mutation_receivers(tree)
+    inner = standalone_method_call_inner_methods(tree)
+    settings = module_setting_receivers(tree)
+    verdict = load_verdict()
+    mutated: set[str] = set()
+    unknown: set[str] = set()
+    for base, method in candidates:
+        receiver = namespace.get(base)
+        if is_module_name(base, namespace, virtual_modules):
+            if base in settings:  # pd.set_option, plt.rcParams.update
+                mutated.add(base)
+            continue
+        if base in tier1:
+            mutated.add(base)
+            continue
+        if method in RECEIVER_READONLY_WRITE_METHODS:
+            continue  # df.to_csv reads the frame and writes a file
+        if receiver_is_identity_coupled(receiver):
+            # Any method on a Figure/Axes draws on it, whatever it returns
+            # (ax.hist returns a data tuple). fig.savefig lands here too: a
+            # Figure is never cached, so bumping it is harmless, and the edge
+            # keeps the chart re-derived as a unit.
+            mutated.add(base)
+            continue
+        if chain_is_pure(method, inner.get((base, method), frozenset())) or is_pandas_plot_call(method, receiver):
+            continue
+        if verdict is None:
+            unknown.add(base)
+        elif base in verdict:
+            mutated.add(base)
+    # A captured return routes its receiver only when it is a Figure/Axes or
+    # an estimator being fitted, so a pure capture (m = df.mean()) caches.
+    for base, method in assigned:
+        if is_module_name(base, namespace, virtual_modules):
+            continue
+        receiver = namespace.get(base)
+        if receiver_is_identity_coupled(receiver) or fits_its_receiver(method, receiver):
+            mutated.add(base)
+    mutated |= drawn_args
+    if verdict is None:
+        unknown_args = args
+    else:
+        mutated |= {name for name in args if name in verdict}
+        unknown_args = frozenset()
+    return ReceiverClasses(frozenset(mutated), frozenset(unknown), unknown_args)

@@ -10,7 +10,9 @@ import os
 from cash.analysis.mutation_effects import (
     CellEffects,
     NotebookSources,
+    ReceiverClasses,
     cell_effects,
+    classify_receivers,
     is_module_name,
     statement_effects,
 )
@@ -135,3 +137,45 @@ def test_is_module_name():
     assert not is_module_name("os", {"os": 1}, {"os"})
     assert is_module_name("np", {}, {"np"})
     assert not is_module_name("np", {})
+
+
+class TestClassifyReceivers:
+    def _c(self, code, namespace, verdict=None, arguments=(), **kwargs):
+        return classify_receivers(ast.parse(code), namespace, lambda: verdict, arguments=arguments, **kwargs)
+
+    def test_rules_decide_without_a_verdict(self):
+        ns = {"lst": [1], "d": {"a": 1}}
+        assert self._c("lst.append(1)", ns) == ReceiverClasses(mutated=frozenset({"lst"}))
+        assert self._c("d.head()", ns) == ReceiverClasses()
+
+    def test_an_undecided_receiver_is_left_to_the_engine(self):
+        classes = self._c("thing.refresh()", {"thing": object()})
+        assert classes.unknown_receivers == {"thing"} and not classes.mutated
+        assert self._c("thing.refresh()", {"thing": object()}, verdict={"thing"}).mutated == {"thing"}
+        assert self._c("thing.refresh()", {"thing": object()}, verdict=set()) == ReceiverClasses()
+
+    def test_a_module_call_is_not_a_receiver(self):
+        assert self._c("os.getcwd()", {"os": os}) == ReceiverClasses()
+        assert self._c("np.foo()", {}, virtual_modules={"np"}) == ReceiverClasses()
+        assert self._c("np.foo()", {}).unknown_receivers == {"np"}
+
+    def test_arguments_are_decided_by_the_verdict_only(self):
+        assert self._c("show(df)", {}, arguments={"df"}).unknown_args == {"df"}
+        assert self._c("show(df)", {}, verdict={"df"}, arguments={"df"}).mutated == {"df"}
+        assert self._c("show(df)", {}, verdict=set(), arguments={"df"}) == ReceiverClasses()
+
+    def test_the_verdict_is_read_only_when_something_needs_it(self):
+        reads = []
+        classify_receivers(ast.parse("x = 1"), {}, lambda: reads.append(1), arguments=())
+        assert reads == []
+
+    def test_a_captured_fit_routes_its_estimator(self):
+        class Est:
+            def fit(self, x):
+                return self
+
+            def get_params(self):
+                return {}
+
+        assert self._c("X = vec.fit_transform(t)", {"vec": Est()}).mutated == {"vec"}
+        assert self._c("m = df.mean()", {"df": [1]}) == ReceiverClasses()

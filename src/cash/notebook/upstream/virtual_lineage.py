@@ -29,25 +29,14 @@ from cash.control_markers import iteration_digest, strip_markers
 
 from ...analysis.ast_util import called_names
 from ...analysis.cacheability import (
-    RECEIVER_READONLY_WRITE_METHODS,
     analyze_statement,
-    assigned_method_call_receivers,
     bare_call_argument_names,
     bare_call_arguments,
-    chain_is_pure,
-    fits_its_receiver,
-    is_pandas_plot_call,
-    module_setting_receivers,
     selfref_reassignment_targets,
-    standalone_method_call_inner_methods,
-    standalone_method_call_receivers,
-    standalone_method_mutation_receivers,
     statement_writes_files,
-    top_level_call_argument_bases,
 )
-from ...analysis.cacheability_decision import receiver_is_identity_coupled
 from ...analysis.code_analyzer import CodeAnalyzer
-from ...analysis.mutation_effects import statement_effects
+from ...analysis.mutation_effects import classify_receivers, statement_effects
 from ...source_norm import source_identity_digest
 from ...tracking import file_dep_snapshot as _fds
 from ...tracking.file_dep_snapshot import LISTING_MIN_FILES, FreshnessMemo, snapshot_is_fresh, stats_from_listings
@@ -354,113 +343,32 @@ class VirtualLineage:
         tree: ast.Module,
         virtual_modules: set[str] | None = None,
     ) -> set[str]:
-        """Receivers of standalone method calls in *tree* that mutate, per the
-        runtime's broad-precise classification.
+        """Names *tree*'s calls change in place, decided as the runtime decides
+        them (``classify_receivers``).
 
-        Statically-known mutators (``MUTATING_METHODS`` / ``inplace=True``) and
-        known-pure methods are decided the same way as the runtime, without a
-        verdict. For everything else this reads ``mutation_verdicts`` (keyed by
-        the statement's ``source_hash`` — the same SHA-256 of the code the
-        runtime uses) so the simulation reproduces the runtime's observed
-        decision; an unknown verdict (statement not yet executed) is treated as
-        mutating (conservative).
-
-        A module is never a receiver: the runtime skips a call on one
-        (``pd.set_option(...)``) as a module function call. After a restart the
-        module is not in ``user_ns`` yet, and the verdict died with the kernel,
-        so the call read as an unknown method -- "mutating" -- and bumped
-        ``pd``'s lineage, and with it the key of every statement that reads
-        ``pd`` (round 23, r23s2: nothing restored). *virtual_modules* names the
-        modules the simulation bound.
+        The runtime's verdict for the statement is read from this session, else
+        from the backend (an earlier kernel). *virtual_modules* names modules
+        the simulation bound but the kernel does not hold yet: after a restart
+        ``pd.set_option(...)`` must still read as a module call, not as an
+        unknown method that bumps ``pd`` for every reader.
         """
         user_ns = self.shell.user_ns
 
-        def is_module(name: str) -> bool:
-            if isinstance(user_ns.get(name), types.ModuleType):
-                return True
-            return bool(virtual_modules) and name not in user_ns and name in virtual_modules
+        def load_verdict() -> set[str] | None:
+            source_hash = statement_source_hash(stmt_code)
+            verdict = self.mutation_verdicts.get(source_hash)
+            return verdict if verdict is not None else self._persisted_mutation_verdict(source_hash)
 
-        candidates = standalone_method_call_receivers(tree)
-        # captured-return draws are assignments, absent from the
-        # bare-``Expr`` candidate set; keep the guard from short-circuiting them.
-        assigned = assigned_method_call_receivers(tree)
-        # Mirror the runtime: an Axes/Figure handed to a call is drawn on, by
-        # a plain function (``forest(axes[0], df)``) too -- so it is decided
-        # before the no-method-call early return, exactly as there.
-        drawn_args = {
-            name
-            for name in top_level_call_argument_bases(tree)
-            if receiver_is_identity_coupled(self.shell.user_ns.get(name))
-        }
-        # Arguments of a bare call the runtime OBSERVED being changed
-        # (`im.add_qc(df)`, `sc.tl.leiden(hv)` -- see the runtime's
-        # `_classify_method_mutations`). Only its recorded verdict can say so:
-        # nothing static here knows what a library call does to its argument.
-        # Without this the runtime bumped `df` and the simulation did not, so
-        # the next cell rebuilt `df` from its constructor and the column the
-        # call added was gone (KeyError). An unknown verdict is NOT mutating:
-        # the statement has not run, and the runtime will observe it when it
-        # does -- treating every `print(df)` as a change would bump `df` for
-        # every reader.
-        arg_candidates = bare_call_arguments(tree, self.shell.user_ns) - drawn_args
-        # ...and one not live yet: after a restart nothing is, and the recorded
-        # verdict is all there is to go on. Filtering on the namespace dropped
-        # it, so `sc.pp.calculate_qc_metrics(adata, inplace=True)` was never
-        # replayed before its readers -- a KeyError, and with
-        # `heapq.heapify(xs)` a silently wrong `xs[0]` (round 30, r30s4).
-        absent_args = {n for n in bare_call_argument_names(tree) if n not in self.shell.user_ns} - drawn_args
-        if not candidates and not assigned and not drawn_args and not arg_candidates and not absent_args:
-            return set()
-        tier1 = standalone_method_mutation_receivers(tree)
-        inner = standalone_method_call_inner_methods(tree)
-        settings = module_setting_receivers(tree)
-        receivers: set[str] = set()
-        source_hash = statement_source_hash(stmt_code)
-        verdict = self.mutation_verdicts.get(source_hash)
-        if verdict is None:
-            verdict = self._persisted_mutation_verdict(source_hash)
-        if verdict:
-            receivers |= {name for name in arg_candidates | absent_args if name in verdict}
-        for base, method in candidates:
-            receiver = self.shell.user_ns.get(base)
-            if is_module(base):
-                # a module function call, not a method mutation -- unless it
-                # changes a setting the module keeps (mirrors the runtime)
-                if base in settings:
-                    receivers.add(base)
-                continue
-            if base in tier1:
-                receivers.add(base)
-                continue
-            # Mirror the runtime classifier (``_classify_method_mutations``) so the
-            # simulation reproduces its decision exactly (unified-key rule).
-            if method in RECEIVER_READONLY_WRITE_METHODS:
-                continue  # df.to_csv reads the frame, writes a file
-            if receiver_is_identity_coupled(receiver):
-                receivers.add(base)  # Axes/Figure draw method mutates it
-                continue
-            if chain_is_pure(method, inner.get((base, method), frozenset())) or is_pandas_plot_call(method, receiver):
-                continue
-            if verdict is not None:
-                if base in verdict:
-                    receivers.add(base)
-            else:
-                receivers.add(base)  # unknown -> conservative
-        # mirror the runtime — a captured-return draw
-        # (``counts, bins, _ = ax.hist(...)``) routes its receiver as a mutation
-        # too, gated SOLELY by the identity-coupled check so the simulated lineage
-        # bumps the same source-based receiver the runtime does (unified-key
-        # rule; a runtime-only bump would desync cross-cell restore). A
-        # non-coupled captured receiver (``m = df.mean()``) is never routed.
-        for base, _method in assigned:
-            if base in receivers:
-                continue
-            receiver = self.shell.user_ns.get(base)
-            if is_module(base):
-                continue
-            if receiver_is_identity_coupled(receiver) or fits_its_receiver(_method, receiver):
-                receivers.add(base)
-        return receivers | drawn_args
+        # Bare-call arguments: the live ones the runtime watches, and, after a
+        # restart, the ones not live yet, whose recorded verdict is all there
+        # is to go on (`heapq.heapify(xs)` must replay before `xs[0]`).
+        arguments = bare_call_arguments(tree, user_ns) | {n for n in bare_call_argument_names(tree) if n not in user_ns}
+        classes = classify_receivers(
+            tree, user_ns, load_verdict, arguments=arguments, virtual_modules=virtual_modules or ()
+        )
+        # The simulation cannot watch the statement run: an undecided
+        # receiver is assumed to change, an undecided argument not to.
+        return set(classes.mutated | classes.unknown_receivers)
 
     def reset_caches(self) -> None:
         """Clear simulation and AST caches."""
