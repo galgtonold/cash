@@ -1427,7 +1427,7 @@ class UpstreamChecker:
             chain = {idx for idx, _is_draw in rng_positions[:boundary] if all_stmts[idx] not in already}
             if not chain:
                 return statements
-            selected = self._with_input_definitions(chain, all_stmts, already)
+            selected = self._with_input_definitions(chain, all_stmts)
 
             prepend: list[str] = []
             for idx in sorted(selected):
@@ -1436,6 +1436,13 @@ class UpstreamChecker:
                     prepend.append(stmt)
             if not prepend:
                 return statements
+            # A definition the plan already scheduled moves up with the chain
+            # that reads it (see `_with_input_definitions`).
+            rest = list(statements)
+            for stmt in prepend:
+                if stmt in rest:
+                    rest.remove(stmt)
+            statements = rest
             if self.debug:
                 logger.debug(
                     "[UPSTREAM] Re-establishing RNG chain (%d stmts) before a re-executed draw",
@@ -1445,12 +1452,7 @@ class UpstreamChecker:
         except (AttributeError, IndexError, TypeError, ValueError):  # pragma: no cover - defensive
             return statements
 
-    def _with_input_definitions(
-        self,
-        chain: set[int],
-        all_stmts: list[str],
-        already: set[str],
-    ) -> set[int]:
+    def _with_input_definitions(self, chain: set[int], all_stmts: list[str]) -> set[int]:
         """Widen an RNG chain to include the definitions its statements read.
 
         The chain is chosen by whether a statement touches an RNG module, which
@@ -1464,16 +1466,15 @@ class UpstreamChecker:
         re-sorts, so source order is preserved and a definition always lands
         ahead of its reader.
 
-        Two names need no statement of their own:
+        A name already bound in the live namespace needs no statement of its
+        own: re-deriving it would re-run work the kernel already holds, which is
+        cheap for ``n = 500`` and not cheap for ``n = load_config()``.
 
-        - one already bound in the live namespace -- re-deriving it would re-run
-          work the kernel already holds, which is cheap for ``n = 500`` and not
-          cheap for ``n = load_config()``;
-        - one the plan ALREADY schedules. That statement runs after the
-          prepend rather than before it, so a chain statement reading it sees
-          the live value. Left as-is deliberately: it is the behaviour that
-          predates this widening, and moving a scheduled statement earlier
-          would reorder the plan for its other consumers.
+        A definition the plan already schedules is selected too, and the
+        caller moves it into the prepend: left where it was, it ran after the
+        chain, and after a restart ``np.random.seed(0)`` ran ahead of the
+        scheduled ``import numpy as np`` and failed. Moving it earlier keeps it
+        ahead of its other consumers, which all come later in the plan.
         """
         live = getattr(self.shell, "user_ns", None)
         if not isinstance(live, dict):
@@ -1505,8 +1506,6 @@ class UpstreamChecker:
                             definers.setdefault(out, []).append(j)
                 nearest = next((j for j in reversed(definers.get(name, [])) if j < idx), None)
                 if nearest is None or nearest in selected:
-                    continue
-                if all_stmts[nearest] in already:
                     continue
                 selected.add(nearest)
                 queue.append(nearest)

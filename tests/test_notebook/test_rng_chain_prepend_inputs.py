@@ -100,6 +100,25 @@ class TestPrependedStatementInputs:
         assert out.index("rows = 10") < out.index("n = rows * 50")
         assert out.index("n = rows * 50") < out.index("base = np.random.randn(n)")
 
+    def test_a_scheduled_definition_moves_ahead_of_the_chain(self):
+        """After a restart the plan holds ``import numpy as np`` and the draw;
+        the seed pulled in ahead of the draw reads ``np``, so the import must
+        run before it, not where the plan had it."""
+        notebook = [
+            "import numpy as np\nnp.random.seed(0)",
+            "x = float(np.random.rand()) + 1",
+            "print(x)",
+        ]
+        checker = _checker(live={})
+
+        out = checker._prepend_rng_chain_for_reexecuted_draws(
+            notebook,
+            ["import numpy as np", "x = float(np.random.rand()) + 1"],
+            2,
+        )
+
+        assert out == ["import numpy as np", "np.random.seed(0)", "x = float(np.random.rand()) + 1"]
+
     def test_no_draw_in_plan_is_still_a_no_op(self):
         """The guard rails stay put: nothing re-executed means nothing prepended."""
         checker = _checker(live={"np": object()})
