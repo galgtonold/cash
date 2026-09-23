@@ -15,8 +15,8 @@ from typing import Any
 from cash.exceptions import CacheBackendError
 
 from .. import _plain_data
-from .._sizing import pandas_nbytes
-from ..value_types import IMMUTABLE_PRIMS, PLAIN_SEQS
+from ..object_hashing import memory_footprint
+from ..value_types import IMMUTABLE_PRIMS
 from ._base import CacheBackend, MetadataDict, gdsf_value
 from .serialization import Serializer
 
@@ -266,7 +266,7 @@ class InMemoryBackend(CacheBackend):
         if dict_rows_size is not None:
             size = dict_rows_size
         elif plain is None:
-            size = self._get_object_size(value)
+            size = memory_footprint(value)
         else:
             size = plain[0]
 
@@ -378,67 +378,6 @@ class InMemoryBackend(CacheBackend):
             self._try_malloc_trim()
 
         return len(keys_to_delete)
-
-    def _get_object_size(self, obj: Any, seen: builtins.set[int] | None = None) -> int:
-        """Estimate object size in bytes (recursive)."""
-        if seen is None:
-            seen = set()
-
-        obj_id = id(obj)
-        if obj_id in seen:
-            return 0
-        seen.add(obj_id)
-
-        # Plain data -- lists and tuples over primitives -- is summed a level at
-        # a time: the per-element recursion below took 3.5 s to size two
-        # million parsed rows being promoted into this tier (round 19). At any
-        # depth, not only the top: every notebook entry holds the RNG state, a
-        # tuple of 625 ints one dict down (round 23: 1.7M calls in one cell).
-        if type(obj) in PLAIN_SEQS:
-            plain = _plain_data.size_of(obj)
-            if plain is not None:
-                return plain
-
-        # int() on every return, without exception. `mem.sum()` below returns a
-        # `numpy.int64`, and this value is written into entry metadata as
-        # `size` -- so a numpy scalar there makes the metadata file unreadable
-        # in any environment without numpy, forever. That is not hypothetical:
-        # it escaped from `%cash_on` as a ModuleNotFoundError. The annotation
-        # already said `-> int`; this makes it true.
-        try:
-            # A frame is sized from its column arrays: ``memory_usage`` spent
-            # ~0.23 ms building a result Series per store (``cash._sizing``).
-            frame_size = pandas_nbytes(obj)
-            if frame_size is not None:
-                return frame_size
-            # Prefer nbytes for numpy/pandas
-            if hasattr(obj, "nbytes"):
-                return int(obj.nbytes)
-            if hasattr(obj, "memory_usage"):
-                # pandas DataFrame/Series
-                # OPTIMIZATION: Use deep=False for speed (deep=True scans all object columns)
-                try:
-                    mem = obj.memory_usage(deep=False)
-                    if hasattr(mem, "sum"):
-                        return int(mem.sum())
-                    return int(mem)
-                except (TypeError, AttributeError):
-                    # Fallback to sys.getsizeof below when memory_usage is unavailable
-                    pass
-
-            size = sys.getsizeof(obj)
-
-            if isinstance(obj, dict):
-                size += sum(self._get_object_size(v, seen) for v in obj.values())
-                # Also keys
-                size += sum(self._get_object_size(k, seen) for k in obj)
-            elif isinstance(obj, (list, tuple, set)):
-                size += sum(self._get_object_size(i, seen) for i in obj)
-
-            return size
-        except (TypeError, RecursionError, ValueError):
-            logger.debug("Could not estimate size of %s object", type(obj).__name__, exc_info=True)
-            return 0
 
     def _check_and_evict(self) -> None:
         """Check memory usage and evict items if threshold is exceeded."""

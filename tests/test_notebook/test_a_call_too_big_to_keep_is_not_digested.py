@@ -14,9 +14,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cash._sizing import pickled_size_estimate
 from cash.notebook import call_unit as call_unit_mod
 from cash.notebook.call_refs import DIGEST_FIELD, ESTIMATED_FIELD, UNHASHED_PREFIX
+from cash.object_hashing import pickled_size_estimate
 
 
 def _spy(monkeypatch):
@@ -88,7 +88,7 @@ def test_anything_else_is_not_estimated():
 def test_estimating_does_not_pickle_a_column(monkeypatch):
     """pandas 2 hands out 2-D blocks; sampling one as a single item pickled
     the whole column -- the cost the estimate exists to avoid."""
-    import cash._sizing as sizing
+    import cash.object_hashing as sizing
 
     frame = pd.DataFrame(
         {

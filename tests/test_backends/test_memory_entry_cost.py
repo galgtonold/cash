@@ -20,6 +20,8 @@ import sys
 
 import pytest
 
+from cash import object_hashing
+from cash.backends import memory_backend
 from cash.backends.memory_backend import InMemoryBackend
 
 pytestmark = [pytest.mark.core]
@@ -63,10 +65,10 @@ def test_reading_metadata_counts_as_an_access_like_get():
 def test_an_rng_state_is_sized_without_a_call_per_int(monkeypatch):
     b = InMemoryBackend()
     calls = []
-    real = InMemoryBackend._get_object_size
-    monkeypatch.setattr(
-        InMemoryBackend, "_get_object_size", lambda self, obj, seen=None: calls.append(1) or real(self, obj, seen)
-    )
+    real = object_hashing.memory_footprint
+    counting = lambda obj, _seen=None: calls.append(1) or real(obj, _seen)  # noqa: E731
+    monkeypatch.setattr(object_hashing, "memory_footprint", counting)
+    monkeypatch.setattr(memory_backend, "memory_footprint", counting)
     b.set("k", _entry())
     assert len(calls) < 50, f"{len(calls)} sizing calls for one entry"
     assert b._store["k"][0]["size"] > 625 * 28, "the ints still count toward the size"

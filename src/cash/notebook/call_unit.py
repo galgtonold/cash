@@ -41,7 +41,6 @@ from types import ModuleType as _ModuleType
 from typing import Any
 
 from cash._clock import perf_counter as _perf_counter
-from cash._sizing import pandas_nbytes, pickled_size_estimate
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement, callee_source_global_mutations
 from cash.analysis.cacheability_decision import decide_cacheability, identity_coupled_reason
@@ -62,6 +61,8 @@ from cash.object_hashing import (
     compute_hash_full,
     estimate_object_size,
     is_identity_fallback_hash,
+    pandas_nbytes,
+    pickled_size_estimate,
 )
 from cash.tracking.file_dep_snapshot import file_dep_is_fresh, snapshot_dependencies
 from cash.tracking.file_tracker import FileAccessTracker, active_tracker
