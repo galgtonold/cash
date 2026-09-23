@@ -98,6 +98,13 @@ Because the generator has no name to track and draws from OS entropy (it never t
 
 **What to do:** for reproducibility, **seed the generator** (`np.random.default_rng(42)`) — a seeded generator's cached value is the correct frozen value, and its seed *is* tracked. For a value that must be fresh, mark the cell `# @cash:no-cache`. If you need cash's full position-aware tracking and flagging, use the **module-global** functions (`np.random.seed(42)` + `np.random.rand(...)`) rather than a per-object generator. Constructing and drawing in the same cell also keeps a `Run All` correct.
 
+### TensorFlow draws are flagged but not replayed
+
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/tracking/randomness/detect.py:SEED_FUNCTIONS @2fe6d536 -->
+`tf.random.*` draws are detected like any other: an unseeded one is warned about and gets its pill, and editing a `tf.random.set_seed(...)` that runs re-keys the draws below it. What cash cannot do for TensorFlow is put its stream back. `tf.random.uniform` and the other op-level functions keep their state inside the ops, and TensorFlow offers no way to read or set it, so cash does not capture it. A cache hit on a TensorFlow draw returns the stored value but leaves TensorFlow's stream where it was, and the next TensorFlow draw differs from what a clean top-to-bottom run would give.
+
+**What to do:** put `# @cash:no-cache` on a line of its own above a statement that draws from TensorFlow when later draws must match a clean run.
+
 ---
 
 ## Mutation that cash cannot see

@@ -28,7 +28,10 @@ logger = logging.getLogger(__name__)
 
 def capture_rng_state() -> dict:
     """
-    Capture the current state of all supported RNG modules.
+    Capture the current state of the global RNGs cash can restore.
+
+    Those are ``random``, ``numpy.random`` and ``torch`` (plus ``torch.cuda``);
+    TensorFlow has no readable state, see below.
 
     Returns:
         Dict mapping module name to its RNG state (picklable).
@@ -64,8 +67,11 @@ def capture_rng_state() -> dict:
         except (ImportError, RuntimeError) as e:
             logger.debug("[RANDOMNESS] Failed to capture torch random state: %s", e)
 
-    # TensorFlow - uses global seed, harder to capture/restore
-    # We'll skip TF for now as it doesn't have easy getstate/setstate
+    # TensorFlow is detected (``RANDOM_FUNCTIONS``, ``SEED_FUNCTIONS``) but not
+    # captured, by design: ``tf.random.uniform`` and the other op-level draws
+    # keep their state inside the ops, and TF has no API to read it back or set
+    # it. A hit on a TF draw therefore leaves TF's stream where it was. Stated
+    # in known-limitations ("TensorFlow draws are flagged but not replayed").
 
     return state
 
