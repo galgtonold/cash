@@ -13,9 +13,9 @@ import types
 
 import pytest
 
-from cash.notebook import file_dep_snapshot
-from cash.notebook.file_dep_snapshot import snapshot_file_deps, stats_from_listings
 from cash.notebook.statement.freshness import CacheFreshnessChecker
+from cash.tracking import file_dep_snapshot
+from cash.tracking.file_dep_snapshot import snapshot_file_deps, stats_from_listings
 
 N = 40
 windows_only = pytest.mark.skipif(os.name != "nt", reason="listings replace stats on Windows only")

@@ -2,7 +2,7 @@
 
 Editing a file-WRITING cell and then re-running only the READER cell serves the
 stale pre-edit file content. Root cause: file writes are untracked
-(src/cash/notebook/file_tracker.py, documented limitation), so the upstream
+(src/cash/tracking/file_tracker.py, documented limitation), so the upstream
 simulation has no writer->reader dependency edge, never re-executes the edited
 writer, and the reader (re-)reads / restores against the unchanged on-disk file.
 

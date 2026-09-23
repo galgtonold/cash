@@ -45,7 +45,7 @@ N = 80
 #: them back: a worker reuses its kernel for the next test, module state and
 #: all, and a second test's counter stacked on the first counted every call
 #: twice -- which read as the check running twice.
-_M = "__import__('cash.notebook.file_dep_snapshot', fromlist=['_'])"
+_M = "__import__('cash.tracking.file_dep_snapshot', fromlist=['_'])"
 _BUMP = (
     "m._test_n.setdefault(getattr(m, '_HASH_EPOCH', None), [0, 0]).__setitem__({i}, "
     "m._test_n[getattr(m, '_HASH_EPOCH', None)][{i}] + 1)"

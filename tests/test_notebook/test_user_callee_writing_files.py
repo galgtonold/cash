@@ -3,8 +3,8 @@
 import json
 import shutil
 
-from cash.notebook.cacheability import user_callee_writing_files
-from cash.notebook.purity import pure
+from cash.analysis.cacheability import user_callee_writing_files
+from cash.purity import pure
 
 
 def save_chart(fig, name):

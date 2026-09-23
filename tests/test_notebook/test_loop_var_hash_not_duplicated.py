@@ -27,7 +27,7 @@ import pytest
 pytest.importorskip("IPython")
 np = pytest.importorskip("numpy")
 
-import cash.notebook.object_hashing as object_hashing
+import cash.object_hashing as object_hashing
 from cash import Cash
 from cash.notebook.ipython.magics import CashMagics
 from tests.conftest import MockShell

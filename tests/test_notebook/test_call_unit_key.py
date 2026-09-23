@@ -174,7 +174,7 @@ def test_loop_vars_use_the_full_hash_not_the_sampling_one():
     iteration 2 would be served iteration 1's cached value -- first-run
     wrongness, no pre-existing cache required.
     """
-    from cash.notebook.object_hashing import compute_hash, compute_hash_full
+    from cash.object_hashing import compute_hash, compute_hash_full
 
     assert compute_hash(_LONG_A) == compute_hash(_LONG_B), (
         "test setup is broken -- these two tuples must be SAMPLED-equal"
@@ -227,7 +227,7 @@ def test_loop_vars_discriminate_via_precomputed_digest_when_available():
     supplying the right dict; `StatementProcessor`'s push/pop stack is what
     makes the PRODUCTION caller correct, not anything checked here).
     """
-    from cash.notebook.object_hashing import compute_hash_full
+    from cash.object_hashing import compute_hash_full
 
     ctx = _ctx({}, {"conn": object(), "fetch_next": len})
     site = _site(source="fetch_next(conn)", names=("fetch_next", "conn"))

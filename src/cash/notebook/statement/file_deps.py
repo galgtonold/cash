@@ -29,8 +29,8 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from ...source_norm import drop_docstrings, read_code_file, stat_has_settled
+from ...tracking.file_dep_snapshot import realpath_of_read_this_run
 from ...utils import normalize_path
-from ..file_dep_snapshot import realpath_of_read_this_run
 from ..server_discovery import get_notebook_path
 
 if TYPE_CHECKING:
@@ -189,7 +189,7 @@ def _module_identity(raw: bytes) -> bytes:
         rendered = ast.unparse(tree)
     except (UnicodeDecodeError, SyntaxError, ValueError, AttributeError, RecursionError):
         return raw
-    from ..annotations import ANNOTATION_PATTERN
+    from ...analysis.annotations import ANNOTATION_PATTERN
 
     parts = [rendered]
     parts.extend(line.strip() for line in text.splitlines() if ANNOTATION_PATTERN.search(line))

@@ -11,7 +11,7 @@ did not re-key it.
 
 import pytest
 
-from cash.notebook.analysis import CodeAnalyzer
+from cash.analysis.code_analyzer import CodeAnalyzer
 
 
 @pytest.mark.parametrize(

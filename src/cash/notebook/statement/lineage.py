@@ -30,6 +30,7 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from ...tracking.randomness import hidden_lineage_reads
 from ..cache_key import is_cash_instrumentation, is_module_like, statement_source_hash
 from ..lineage_formula import (
     callable_source_component,
@@ -37,7 +38,6 @@ from ..lineage_formula import (
     module_source_component,
     output_lineage,
 )
-from ..randomness import hidden_lineage_reads
 from .derivation_edges import (
     bump_derived_lineages,
     clear_edges_for,
@@ -46,8 +46,8 @@ from .derivation_edges import (
 from .file_deps import compute_file_hash_component
 
 if TYPE_CHECKING:
+    from ...tracking.function_tracker import FunctionTracker
     from .._protocols import ShellProtocol, TrackingState
-    from ..function_tracker import FunctionTracker
     from .file_deps import StatementFileDeps
 
 logger = logging.getLogger(__name__)
@@ -361,7 +361,7 @@ class StatementLineageBuilder:
         name gets what a fresh kernel's import gives it (round 29, r29s1/r29s3:
         keyed with the reload's own hash, what the session computed after an
         edit was never restored the next morning)."""
-        from ..analysis import CodeAnalyzer
+        from ...analysis.code_analyzer import CodeAnalyzer
 
         user_ns = self.shell.user_ns
         inputs, _outputs = CodeAnalyzer.analyze_code_block(code, user_ns=user_ns)

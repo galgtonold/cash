@@ -17,7 +17,7 @@ pd = pytest.importorskip("pandas")
 from cash import _sizing  # noqa: E402
 from cash._sizing import pandas_nbytes  # noqa: E402
 from cash.backends.memory_backend import InMemoryBackend  # noqa: E402
-from cash.notebook.object_hashing import estimate_object_size  # noqa: E402
+from cash.object_hashing import estimate_object_size  # noqa: E402
 
 pytestmark = [pytest.mark.core]
 

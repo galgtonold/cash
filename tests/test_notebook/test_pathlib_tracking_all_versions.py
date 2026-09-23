@@ -25,7 +25,7 @@ import sys
 
 import pytest
 
-from cash.notebook.file_tracker import FileAccessTracker
+from cash.tracking.file_tracker import FileAccessTracker
 
 
 @pytest.fixture

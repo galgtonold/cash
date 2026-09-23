@@ -17,8 +17,8 @@ from traitlets.config.configurable import Configurable
 
 from cash.backends import InMemoryBackend
 from cash.core import Cash
-from cash.notebook.function_tracker import FunctionTracker
 from cash.notebook.ipython.magics import CashMagics
+from cash.tracking.function_tracker import FunctionTracker
 
 # ============================================================================
 # Fixtures

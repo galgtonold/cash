@@ -2,7 +2,7 @@
 
 Under ``%cash_on`` the file tracker replaces ``open`` and the pandas readers
 with cash shims. A cached user function that reads a file therefore resolves
-its callee to ``cash.notebook.file_tracker``, and the analyzer used to walk
+its callee to ``cash.tracking.file_tracker``, and the analyzer used to walk
 straight into it and report the shim's own ``_tracker._track_path(...)`` as
 "likely side effects or scope mutations" -- blaming the user for cash's
 instrumentation.
@@ -24,11 +24,11 @@ from __future__ import annotations
 
 import warnings
 
-from cash.notebook.file_tracker import FileDependencyRegistry
 from cash.purity_analyzer import _is_user_code, get_analyzer
+from cash.tracking.file_tracker import FileDependencyRegistry
 
 # A REAL cash shim, built the way the file tracker builds it. Its __module__
-# is cash.notebook.file_tracker, so it is the exact callee a user's `open`
+# is cash.tracking.file_tracker, so it is the exact callee a user's `open`
 # resolves to once tracking is installed.
 _SHIM = FileDependencyRegistry._create_open_handler(open, lambda *a, **k: None)
 

@@ -19,7 +19,7 @@ result is ONE statement that parses, not a fragment that raises.
 
 import ast
 
-from cash.notebook.analysis import CodeAnalyzer
+from cash.analysis.code_analyzer import CodeAnalyzer
 
 # A literal backslash-n INSIDE the string (built with chr to avoid any
 # ambiguity between an escape and a real newline in the test source itself).

@@ -2,7 +2,7 @@
 # RNG State Capture Tests
 # =============================================================================
 
-from cash.notebook.randomness import capture_rng_state, get_drawing_rng_modules, restore_rng_state
+from cash.tracking.randomness import capture_rng_state, get_drawing_rng_modules, restore_rng_state
 
 
 class TestRNGStateUtilities:

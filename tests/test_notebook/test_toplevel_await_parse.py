@@ -10,7 +10,7 @@ which the nbclient unit harness lacks.
 
 import pytest
 
-from cash.notebook.analysis import CodeAnalyzer
+from cash.analysis.code_analyzer import CodeAnalyzer
 
 
 def test_parse_cell_tolerates_top_level_await():

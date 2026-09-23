@@ -247,7 +247,7 @@ def _is_storable(result) -> bool:
     decorator would cache is still cached.
     """
     try:
-        from .cacheability_decision import identity_coupled_reason
+        from ..analysis.cacheability_decision import identity_coupled_reason
 
         return identity_coupled_reason("<intercepted call>", result) is None
     except Exception:  # noqa: BLE001 - never let the predicate break the call

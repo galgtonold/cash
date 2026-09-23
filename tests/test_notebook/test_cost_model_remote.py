@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from cash.notebook import cost_model
+from cash import cost_model
 
 # Representative data families for the matrix.
 FAMILIES = ["ndarray_dense", "dataframe_numeric", "dict_shallow", "bytes"]

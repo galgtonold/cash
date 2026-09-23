@@ -1,4 +1,4 @@
-from cash.notebook.annotations import CacheAnnotation
+from cash.analysis.annotations import CacheAnnotation
 from cash.notebook.cache_status import CacheStatus
 
 """

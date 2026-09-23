@@ -6,7 +6,7 @@ import json
 import time
 from dataclasses import dataclass, field
 
-from .file_dep_snapshot import existing_file_deps
+from ..tracking.file_dep_snapshot import existing_file_deps
 
 # Cap the rendered dep list: a long one is unreadable, and the count carries the
 # rest. Applies to the human-readable view only, never the JSON output.

@@ -53,6 +53,8 @@ from typing import TYPE_CHECKING, Any
 
 from IPython.display import display, publish_display_data
 
+from ...analysis.annotations import get_statement_annotations
+from ...analysis.code_analyzer import CodeAnalyzer
 from ...diagnostics import warn_diagnostic
 from ...exceptions import (
     AmbiguousCellError,
@@ -62,14 +64,12 @@ from ...exceptions import (
 )
 from ...purity_analyzer import _audited_lines
 from ...remote_source import measured_validation as _measured_validation
+from ...tracking.file_dep_snapshot import begin_file_state_epoch, end_file_state_epoch
+from ...tracking.randomness import get_drawing_rng_modules, rng_lineage_fingerprint
 from .._protocols import ShellProtocol
-from ..analysis import CodeAnalyzer
-from ..annotations import get_statement_annotations
 from ..cache_status import CacheStatus
 from ..consumables import consumable_state, is_consumable_unrestorable
 from ..control_structures import contains_top_level_await, is_control_structure
-from ..file_dep_snapshot import begin_file_state_epoch, end_file_state_epoch
-from ..randomness import get_drawing_rng_modules, rng_lineage_fingerprint
 from ..statement import ProcessResult
 
 if TYPE_CHECKING:

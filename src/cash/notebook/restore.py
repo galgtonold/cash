@@ -22,11 +22,11 @@ import pickle
 import types
 from typing import TYPE_CHECKING, Any
 
+from ..object_hashing import compute_hash
+from ..tracking.file_dep_snapshot import file_dep_is_fresh
 from ..utils import resolve_file_dep_path
 from ._protocols import ShellProtocol
 from .cache_status import CacheStatus
-from .file_dep_snapshot import file_dep_is_fresh
-from .object_hashing import compute_hash
 from .statement import ProcessResult
 
 if TYPE_CHECKING:

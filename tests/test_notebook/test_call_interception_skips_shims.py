@@ -29,7 +29,7 @@ import pytest
 
 import cash
 from cash.notebook.call_interception import CallCache, CallSite
-from cash.notebook.file_tracker import FileAccessTracker
+from cash.tracking.file_tracker import FileAccessTracker
 
 
 @pytest.fixture

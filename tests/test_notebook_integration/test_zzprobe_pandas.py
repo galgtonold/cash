@@ -1,6 +1,6 @@
 """Adversarial probes: pandas/numpy deep semantics & content-hash sampling.
 
-Attack surface (src/cash/notebook/object_hashing.py): compute_hash SAMPLES large
+Attack surface (src/cash/object_hashing.py): compute_hash SAMPLES large
 objects -- DataFrame/Series = shape+dtypes+first-5-rows, ndarray = shape+dtype+
 first-100 elements, list/tuple>200 = len+first5+last5, dict>200 = len+first-10
 sorted keys (values never hashed).  Wherever the CONTENT hash (not statement

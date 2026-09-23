@@ -12,7 +12,7 @@ import json
 import time
 from unittest.mock import patch
 
-from cash.notebook.analysis import CodeAnalyzer
+from cash.analysis.code_analyzer import CodeAnalyzer
 from cash.notebook.upstream._types import SimulationCacheEntry
 
 # ===========================================================================

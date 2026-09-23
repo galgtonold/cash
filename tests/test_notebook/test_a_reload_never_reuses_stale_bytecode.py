@@ -19,7 +19,7 @@ import uuid
 
 import pytest
 
-from cash.notebook.function_tracker import FunctionTracker
+from cash.tracking.function_tracker import FunctionTracker
 
 
 @pytest.fixture

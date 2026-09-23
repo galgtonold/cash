@@ -8,8 +8,8 @@ with ``backend.get`` once PER FILE -- which deep-copies the cached frame. A
 
 import types
 
-from cash.notebook.file_dep_snapshot import snapshot_file_deps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
+from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
 
 class _CountingBackend:

@@ -523,7 +523,7 @@ class TestSourceAwareCacheInvalidation:
 
     def test_bytecode_fallback_when_source_unavailable(self):
         """CodeAnalyzer.get_source_hash should use bytecode when inspect.getsource fails."""
-        from cash.notebook.analysis import CodeAnalyzer
+        from cash.analysis.code_analyzer import CodeAnalyzer
 
         def my_func(x):
             return x + 1
@@ -533,7 +533,7 @@ class TestSourceAwareCacheInvalidation:
         assert h1 != ""
 
         # Simulate getsource failure (e.g., IPython context with %cash_on)
-        with patch("cash.notebook.analysis.inspect.getsource", side_effect=OSError):
+        with patch("cash.analysis.code_analyzer.inspect.getsource", side_effect=OSError):
             h2 = CodeAnalyzer.get_source_hash(my_func)
             assert h2 != "", "Should fall back to bytecode hash"
 
@@ -541,14 +541,14 @@ class TestSourceAwareCacheInvalidation:
         def my_func2(x):
             return x + 2
 
-        with patch("cash.notebook.analysis.inspect.getsource", side_effect=OSError):
+        with patch("cash.analysis.code_analyzer.inspect.getsource", side_effect=OSError):
             h3 = CodeAnalyzer.get_source_hash(my_func2)
             assert h3 != ""
             assert h3 != h2, "Different bytecodes should produce different hashes"
 
     def test_function_tracker_bytecode_fallback(self):
         """FunctionTracker.get_function_source_hash should use bytecode fallback."""
-        from cash.notebook.function_tracker import FunctionTracker
+        from cash.tracking.function_tracker import FunctionTracker
 
         ft = FunctionTracker()
 
@@ -561,7 +561,7 @@ class TestSourceAwareCacheInvalidation:
 
         # Clear cache and simulate getsource failure
         ft._source_cache.clear()
-        with patch("cash.notebook.function_tracker.inspect.getsource", side_effect=OSError):
+        with patch("cash.tracking.function_tracker.inspect.getsource", side_effect=OSError):
             h2 = ft.get_function_source_hash(my_func)
             assert h2 is not None, "Should fall back to bytecode hash"
 
@@ -569,7 +569,7 @@ class TestSourceAwareCacheInvalidation:
         """Bytecode fallback should follow __wrapped__ for functools.wraps wrappers."""
         import functools
 
-        from cash.notebook.analysis import CodeAnalyzer
+        from cash.analysis.code_analyzer import CodeAnalyzer
 
         def original(x):
             return x * 2
@@ -578,7 +578,7 @@ class TestSourceAwareCacheInvalidation:
         def wrapper(*args, **kwargs):
             return original(*args, **kwargs)
 
-        with patch("cash.notebook.analysis.inspect.getsource", side_effect=OSError):
+        with patch("cash.analysis.code_analyzer.inspect.getsource", side_effect=OSError):
             h = CodeAnalyzer.get_source_hash(wrapper)
             assert h != "", "Should use __wrapped__.__code__ as fallback"
 

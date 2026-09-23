@@ -267,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
             "Investigate before pasting constants."
         )
 
-    print("\n# COEFFS dict (paste into src/cash/notebook/cost_model.py):")
+    print("\n# COEFFS dict (paste into src/cash/cost_model.py):")
     print(render_python_constants(fits))
 
     return 0 if not bad else 2

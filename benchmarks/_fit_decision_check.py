@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from benchmarks.fit_cost_model import fit_all  # noqa: E402
-from cash.notebook.cost_model import _COEFFS as SHIPPED  # noqa: E402
+from cash.cost_model import _COEFFS as SHIPPED  # noqa: E402
 
 SAVINGS_PCT = 0.20  # config.min_cache_savings_pct
 EXEC_TIMES = [0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0]

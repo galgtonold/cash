@@ -8,7 +8,7 @@ import ast
 
 import pytest
 
-from cash.notebook.cacheability import module_setting_receivers
+from cash.analysis.cacheability import module_setting_receivers
 
 
 def _names(code):

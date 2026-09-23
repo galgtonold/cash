@@ -1,7 +1,7 @@
 import pytest
 
 from cash import Cash
-from cash.notebook.analysis import CodeAnalyzer
+from cash.analysis.code_analyzer import CodeAnalyzer
 
 from ..dummy_lib import lib_func
 

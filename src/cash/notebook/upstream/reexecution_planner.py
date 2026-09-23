@@ -11,21 +11,21 @@ import textwrap
 import types
 from typing import TYPE_CHECKING
 
-from ...diagnostics import warn_diagnostic
-from ...exceptions import CashWarning
-from ...utils import resolve_file_dep_path
-from .._trace import trace_event
-from ..analysis import CodeAnalyzer
-from ..cache_key import write_provenance_key
-from ..cache_status import CacheStatus
-from ..cacheability import (
+from ...analysis.cacheability import (
     consumed_input_names,
     statement_saves_current_pyplot_figure,
     statement_writes_files,
     statement_written_paths,
 )
+from ...analysis.code_analyzer import CodeAnalyzer
+from ...diagnostics import warn_diagnostic
+from ...exceptions import CashWarning
+from ...tracking.file_dep_snapshot import file_dep_is_fresh
+from ...utils import resolve_file_dep_path
+from .._trace import trace_event
+from ..cache_key import write_provenance_key
+from ..cache_status import CacheStatus
 from ..carrier_history import carrier_history_fingerprint
-from ..file_dep_snapshot import file_dep_is_fresh
 from .stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
 from .virtual_lineage import _key_lineages
 
@@ -103,7 +103,7 @@ def _literal_path_bindings(simulation_trace: list | None) -> dict[str, str]:
     ``OUT / 'chart.png'`` means when the kernel does not hold ``OUT`` yet.
     A name bound more than once, or by anything else, is left out.
     """
-    from ..cacheability import _resolve_literal_path
+    from ...analysis.cacheability import _resolve_literal_path
 
     bound: dict[str, str | None] = {}
     for entry in simulation_trace or ():
@@ -1318,7 +1318,7 @@ class ReexecutionPlanner:
         function it calls (``save_png(kind, path)``, whose ``savefig`` sits in
         the helper). A replay that re-ran a cell's inline writes but not its
         helper's left the report folder half old, half new (round 23)."""
-        from ..cacheability import (
+        from ...analysis.cacheability import (
             REPEATABILITY_ACCUMULATING,
             statement_calls_user_writer,
             statement_write_repeatability,
@@ -1570,7 +1570,7 @@ class ReexecutionPlanner:
         where everything but a provable append follows it, or ``PACK.mkdir()``
         stays behind and the next write finds no folder.
         """
-        from ..cacheability import (
+        from ...analysis.cacheability import (
             REPEATABILITY_ACCUMULATING,
             REPEATABILITY_REPLACING,
             statement_write_repeatability,
@@ -1649,7 +1649,7 @@ class ReexecutionPlanner:
             return []
         runtime_lineage = getattr(tracking, "variable_lineage", None) or {}
 
-        from ..cacheability import (
+        from ...analysis.cacheability import (
             REPEATABILITY_ACCUMULATING,
             statement_write_repeatability,
         )

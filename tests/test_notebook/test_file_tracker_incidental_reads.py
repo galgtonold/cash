@@ -22,8 +22,8 @@ import textwrap
 
 import pytest
 
-from cash.notebook import file_tracker
-from cash.notebook.file_tracker import FileAccessTracker
+from cash.tracking import file_tracker
+from cash.tracking.file_tracker import FileAccessTracker
 
 
 def _norm(paths):

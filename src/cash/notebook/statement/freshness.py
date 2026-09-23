@@ -17,7 +17,7 @@ Distinct from [[Cacheability decision]] (which is the *pre-execution*
 *post-execution* "is the entry we already have still good?" question.
 
 The file-snapshot helper (`snapshot_file_deps`) lives in
-``cash.notebook.file_dep_snapshot``, not here: it has cross-cluster callers
+``cash.tracking.file_dep_snapshot``, not here: it has cross-cluster callers
 (ADR-011).
 """
 
@@ -27,13 +27,13 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from ...utils import resolve_file_dep_path
-from ..file_dep_snapshot import (
+from ...tracking.file_dep_snapshot import (
     _LISTING_MIN_FILES,
     _full_hash_max_bytes,
     file_dep_is_fresh,
     stats_from_listings,
 )
+from ...utils import resolve_file_dep_path
 from ._metadata import StatementCacheMetadata
 
 if TYPE_CHECKING:

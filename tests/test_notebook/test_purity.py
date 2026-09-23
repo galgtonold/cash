@@ -8,7 +8,7 @@ Tests cover:
 - Edge cases: unmarked functions, non-callables, methods, lambdas
 """
 
-from cash.notebook.purity import KNOWN_PURE_BUILTINS, is_known_pure, is_pure, is_stateful, pure, stateful
+from cash.purity import KNOWN_PURE_BUILTINS, is_known_pure, is_pure, is_stateful, pure, stateful
 
 # ===========================================================================
 # Unit tests for decorators and checkers

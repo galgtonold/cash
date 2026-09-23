@@ -8,8 +8,8 @@ import pytest
 from traitlets.config import Configurable
 
 from cash import Cash
+from cash.analysis.annotations import CacheAnnotation
 from cash.backends import InMemoryBackend
-from cash.notebook.annotations import CacheAnnotation
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.magics import CashMagics
 

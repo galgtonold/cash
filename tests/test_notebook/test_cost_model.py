@@ -1,4 +1,4 @@
-from cash.notebook.cost_model import (
+from cash.cost_model import (
     _COEFFS,
     _TYPE_TO_FAMILY,
     estimated_restore_time,
@@ -80,7 +80,7 @@ def test_cost_model_is_called_from_statement_processor_decision(monkeypatch, tmp
     decision, it routes through cost_model.estimated_restore_time."""
     from unittest.mock import MagicMock
 
-    from cash.notebook import cost_model
+    from cash import cost_model
 
     calls: list[tuple] = []
     real_fn = cost_model.estimated_restore_time

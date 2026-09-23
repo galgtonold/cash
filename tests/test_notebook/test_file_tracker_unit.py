@@ -1,6 +1,6 @@
 """Unit tests for the FileAccessTracker and FileDependencyRegistry.
 
-Directly imports and tests ``cash.notebook.file_tracker`` to verify file
+Directly imports and tests ``cash.tracking.file_tracker`` to verify file
 dependency interception, registry handlers, and patch/unpatch lifecycle.
 """
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from cash.notebook.file_tracker import (
+from cash.tracking.file_tracker import (
     FileAccessTracker,
     FileDependencyRegistry,
 )

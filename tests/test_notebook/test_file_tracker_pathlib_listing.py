@@ -13,7 +13,7 @@ import pathlib
 
 import pytest
 
-from cash.notebook.file_tracker import FileAccessTracker
+from cash.tracking.file_tracker import FileAccessTracker
 
 LISTINGS = {
     "Path.glob": lambda d: sorted(pathlib.Path(d).glob("*.csv")),

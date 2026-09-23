@@ -1,4 +1,4 @@
-"""Unit tests for `cash.notebook.object_hashing.estimate_object_size`.
+"""Unit tests for `cash.object_hashing.estimate_object_size`.
 
 The estimator's dispatch table covers basic types, scipy sparse, dataclasses,
 namedtuples, and uses K=3-outer / K=1-inner sampling for ordered containers.
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import numpy as np
 import scipy.sparse as sp
 
-from cash.notebook.object_hashing import estimate_object_size
+from cash.object_hashing import estimate_object_size
 
 
 def test_csr_matrix_size_equals_data_plus_indices_plus_indptr():

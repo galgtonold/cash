@@ -4,7 +4,7 @@ Static analysis stops at library boundaries -- that is deliberate, since
 folding every installed package into the walk would be both slow and useless.
 The cost is that a side effect *inside* a library is reachable only by the
 method's NAME (``session.post``, ``cur.execute``; see
-``notebook.purity._WRITE_METHODS``), and a name cannot reach everything:
+``cash.purity._WRITE_METHODS``), and a name cannot reach everything:
 ``session.get(...)`` collides with ``dict.get``, and an arbitrary vendor
 function like ``client.emit_metric(...)`` has no effect-shaped name at all.
 

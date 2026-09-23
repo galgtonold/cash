@@ -21,12 +21,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from cash import Cash, InMemoryBackend
-from cash.notebook.file_dep_snapshot import (
+from cash.remote_source import _reset_remote_warnings
+from cash.tracking.file_dep_snapshot import (
     file_dep_is_fresh,
     snapshot_file_deps,
     snapshot_remote_deps,
 )
-from cash.remote_source import _reset_remote_warnings
 
 
 @pytest.fixture(autouse=True)

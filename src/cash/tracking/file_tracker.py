@@ -1582,7 +1582,7 @@ class FileAccessTracker:
             # This resolves symlinks and normalizes the path, making it
             # stable across os.chdir() calls. Resolved once per cell run
             # (``realpath_this_run``): a loop reads the same files again.
-            from cash.notebook.file_dep_snapshot import realpath_of_read_this_run
+            from cash.tracking.file_dep_snapshot import realpath_of_read_this_run
 
             resolved, read_lstat = realpath_of_read_this_run(raw_path)
             abs_path = normalize_path(resolved)
@@ -1686,7 +1686,7 @@ class FileAccessTracker:
 
     def _digest_now(self, abs_path: str, size: int) -> str | None:
         """The file's content hash as the body is about to read it."""
-        from cash.notebook.file_dep_snapshot import file_content_hash
+        from cash.tracking.file_dep_snapshot import file_content_hash
 
         t0 = _perf_counter()
         try:

@@ -52,7 +52,7 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from ..randomness import restore_object_rng_states, restore_rng_state
+from ...tracking.randomness import restore_object_rng_states, restore_rng_state
 
 if TYPE_CHECKING:
     from .._protocols import ShellProtocol, TrackingState

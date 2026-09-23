@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import pytest
 
+from cash.analysis.annotations import parse_annotation_line
 from cash.exceptions import CashCacheIneffectiveWarning
-from cash.notebook.annotations import parse_annotation_line
 
 
 @pytest.mark.parametrize(

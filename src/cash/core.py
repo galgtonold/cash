@@ -39,6 +39,14 @@ from .backends.factory import build_backend_from_config
 if TYPE_CHECKING:
     from .ui.explorer import CacheExplorer
 from ._clock import perf_counter as _perf_counter
+
+# The decorator path reuses the notebook path's randomness detector verbatim
+# so the two cannot diverge on what counts as an unseeded draw.
+# Imported from the submodule directly, like CodeAnalyzer above, to sidestep
+# ``notebook/__init__``'s lazy circular-import chain; ``randomness`` itself only
+# depends on ``..exceptions``, so there is no cycle.
+from .analysis.annotations import parse_annotation_line
+from .analysis.code_analyzer import CodeAnalyzer
 from .backends.serialization import get_serializer
 from .config import CashConfig, get_config
 from .data_source import DataSource, state_token_of
@@ -67,20 +75,6 @@ from .exceptions import (
     CashImpurityWarning,
 )
 from .graph import DependencyGraph
-from .notebook.analysis import CodeAnalyzer
-
-# The decorator path reuses the notebook path's randomness detector verbatim
-# so the two cannot diverge on what counts as an unseeded draw.
-# Imported from the submodule directly, like CodeAnalyzer above, to sidestep
-# ``notebook/__init__``'s lazy circular-import chain; ``randomness`` itself only
-# depends on ``..exceptions``, so there is no cycle.
-from .notebook.annotations import parse_annotation_line
-from .notebook.file_dep_snapshot import ACTIVE_CONFIG
-from .notebook.randomness import (
-    CashRandomnessWarning,
-    RandomnessDetector,
-    describe_random_call,
-)
 from .purity_analyzer import (
     PurityReport,
     bindings_changed,
@@ -94,6 +88,12 @@ from .source_norm import (
     loaded_class_identity,
     loaded_code_matches_disk,
     source_identity_digest,
+)
+from .tracking.file_dep_snapshot import ACTIVE_CONFIG
+from .tracking.randomness import (
+    CashRandomnessWarning,
+    RandomnessDetector,
+    describe_random_call,
 )
 from .utils import MAIN_MODULE_NAMES, resolve_main_module
 
@@ -3010,7 +3010,7 @@ class Cash:
         # nothing is patched or analysed.
         if not self.config.disable:
             try:
-                from cash.notebook.file_tracker import install_read_watch
+                from cash.tracking.file_tracker import install_read_watch
 
                 install_read_watch()
             except Exception:  # noqa: BLE001 - the first miss installs them anyway
@@ -3203,7 +3203,7 @@ class Cash:
         if not modules:
             return state_hash
         try:
-            from cash.notebook.randomness import seed_epoch_component
+            from cash.tracking.randomness import seed_epoch_component
 
             component = seed_epoch_component(modules)
         except ImportError:  # pragma: no cover - notebook extra absent
@@ -3262,7 +3262,7 @@ class Cash:
         if pre_state is None:
             return False
         try:
-            from cash.notebook.randomness import capture_rng_state, rng_modules_changed
+            from cash.tracking.randomness import capture_rng_state, rng_modules_changed
 
             changed = rng_modules_changed(pre_state, capture_rng_state())
         except (ImportError, TypeError, AttributeError):  # pragma: no cover
@@ -3284,7 +3284,7 @@ class Cash:
         # change, so its frozen value is correct from the first call; skipping the
         # write there would redraw and break the freeze-from-first-call contract.
         try:
-            from cash.notebook.randomness import seed_epochs
+            from cash.tracking.randomness import seed_epochs
 
             return bool(drew & set(seed_epochs()))
         except ImportError:  # pragma: no cover - notebook extra absent
@@ -3294,7 +3294,7 @@ class Cash:
     def _capture_rng_pre_state() -> dict | None:
         """Snapshot the global RNG streams, or None if unavailable."""
         try:
-            from cash.notebook.randomness import capture_rng_state
+            from cash.tracking.randomness import capture_rng_state
 
             return capture_rng_state()
         except (ImportError, TypeError, AttributeError):  # pragma: no cover
@@ -4071,7 +4071,7 @@ class Cash:
         The same freshness check a lookup makes, so the answer cannot
         contradict the behaviour it explains.
         """
-        from cash.notebook.file_dep_snapshot import (
+        from cash.tracking.file_dep_snapshot import (
             dep_path_for_this_process,
             file_dep_is_fresh,
         )
@@ -4127,7 +4127,7 @@ class Cash:
         path = self._stored_keys_path(func_name)
         if path is None:
             return empty
-        from cash.notebook.file_tracker import untracked
+        from cash.tracking.file_tracker import untracked
 
         with self._stored_doc_lock:
             try:
@@ -4181,7 +4181,7 @@ class Cash:
             while len(entries) > most:
                 entries.pop(next(iter(entries)))
         from cash.backends.file_backend import recreate_cache_dir
-        from cash.notebook.file_tracker import untracked
+        from cash.tracking.file_tracker import untracked
 
         keys_dir = os.path.dirname(path)
         recreate_cache_dir(os.path.dirname(keys_dir))
@@ -4471,7 +4471,7 @@ class Cash:
         price of the read being tracked at all, and it is small against the
         download the entry exists to avoid.
         """
-        from cash.notebook.file_dep_snapshot import (
+        from cash.tracking.file_dep_snapshot import (
             attach_code_relative,
             snapshot_dependencies,
         )
@@ -4504,7 +4504,7 @@ class Cash:
         if not snap:
             return
         try:
-            from cash.notebook.file_tracker import _active_tracker
+            from cash.tracking.file_tracker import _active_tracker
 
             tracker = _active_tracker.get()
         except Exception:  # noqa: BLE001 - tracking is best-effort
@@ -4520,7 +4520,7 @@ class Cash:
             else:
                 # The file THIS process would read -- another install's copy
                 # would give the enclosing entry the writer's path (CAS-108).
-                from cash.notebook.file_dep_snapshot import dep_path_for_this_process
+                from cash.tracking.file_dep_snapshot import dep_path_for_this_process
 
                 # The hit just checked this file against the recorded hash, so
                 # that hash is the file as it is: no second read to take it.
@@ -4532,13 +4532,13 @@ class Cash:
         still matches on disk.
 
         Auto-tracked deps are captured during the first compute via
-        `cash.notebook.file_tracker.FileAccessTracker` and stored as
+        `cash.tracking.file_tracker.FileAccessTracker` and stored as
         ``{path: {'mtime': float, 'size': int, 'hash': str}}``. If a recorded
         path is gone or its content changed, we invalidate the cache so the next
         compute re-reads the file. A path that disappears is also a change.
 
         Freshness is decided by the shared
-        :func:`cash.notebook.file_dep_snapshot.file_dep_is_fresh` - the same
+        :func:`cash.tracking.file_dep_snapshot.file_dep_is_fresh` - the same
         content-authoritative check the notebook path uses, so
         the two subsystems can't drift. ``(mtime, size)`` alone was ambiguous in
         both directions: a touch (identical content, bumped mtime)
@@ -4549,12 +4549,12 @@ class Cash:
         snap = metadata.auto_file_deps or {}
         if not snap:
             return True  # nothing to check
-        from cash.notebook.file_dep_snapshot import (
+        from cash.remote_source import measured_validation
+        from cash.tracking.file_dep_snapshot import (
             _full_hash_max_bytes,
             dep_path_for_this_process,
             file_dep_is_fresh,
         )
-        from cash.remote_source import measured_validation
 
         # The full-hash threshold, resolved ONCE for the pass. Reading it per
         # file costs a config merge each time, and a config merge walks the
@@ -4715,7 +4715,7 @@ class Cash:
         if not drew or pre_state is None:
             return {}
         try:
-            from cash.notebook.randomness import capture_rng_state
+            from cash.tracking.randomness import capture_rng_state
 
             return {"rng_pre": pre_state, "rng_post": capture_rng_state()}
         except Exception:  # noqa: BLE001 - never break a call over this
@@ -4730,7 +4730,7 @@ class Cash:
         if not post or not pre:
             return
         try:
-            from cash.notebook.randomness import (
+            from cash.tracking.randomness import (
                 capture_rng_state,
                 restore_rng_state,
                 rng_modules_changed,
@@ -4921,7 +4921,7 @@ class Cash:
         # Wrap the function call in FileAccessTracker so any auto-tracked
         # file reads (pandas/numpy/joblib/open/...) are recorded as implicit
         # cache dependencies - a later content change forces a recompute.
-        from cash.notebook.file_tracker import FileAccessTracker
+        from cash.tracking.file_tracker import FileAccessTracker
 
         func, func_name, args, kwargs = spec.func, spec.func_name, call.args, call.kwargs
         run = _BodyRun()
@@ -5611,7 +5611,7 @@ class Cash:
         unsafe: set[str] = set()
         write_methods: frozenset[str] = frozenset()
         if mutating_methods_only:
-            from cash.notebook.purity import _WRITE_METHODS
+            from cash.purity import _WRITE_METHODS
 
             write_methods = _WRITE_METHODS
         for node in ast.walk(tree):
@@ -6167,7 +6167,7 @@ class Cash:
         OWN code object hung off the enclosing ``co_consts``, so anything it
         references is invisible in the outer ``co_names`` / instruction stream.
         Walking the const tree is the same trick the
-        bytecode hash uses (``notebook/function_tracker.py``
+        bytecode hash uses (``tracking/function_tracker.py``
         ``_update_code_object_hash``) for exactly this reason.
 
         Comprehensions nest, so this recurses. Note that CPython 3.12+ inlines
@@ -7467,7 +7467,7 @@ class Cash:
                 if owner is None or isinstance(owner, (type, types.ModuleType)):
                     return None
                 method = getattr(value, "__name__", "")
-                from cash.notebook.purity import _WRITE_METHODS
+                from cash.purity import _WRITE_METHODS
 
                 if method in _WRITE_METHODS or method in _LOG_METHOD_NAMES:
                     # `record = RESULTS.append`, `log = logger.info`: what the
@@ -9441,7 +9441,7 @@ class Cash:
         against (round 20). Such a path goes into ``stale_memo_reads``, and the
         store is refused.
         """
-        from cash.notebook.file_tracker import credited_reads
+        from cash.tracking.file_tracker import credited_reads
 
         func = self.functions.get(func_name)
         if func is None or tracker is None:
@@ -9603,7 +9603,7 @@ class Cash:
         The decorator used to be completely silent here while the notebook path
         warned, so ``@cash.cache`` would freeze a non-deterministic result
         forever with nothing on screen to say so. The two paths now share ONE
-        detector — :class:`~cash.notebook.randomness.RandomnessDetector`, reused
+        detector — :class:`~cash.tracking.randomness.RandomnessDetector`, reused
         verbatim — so "what counts as unseeded" cannot drift between them.
 
         Runs at DECORATION time, once per function. The analysis is a pure
@@ -10267,7 +10267,7 @@ class Cash:
         # ``core`` -> ``cash.notebook`` is an established direction (see the
         # module-level CodeAnalyzer / parse_annotation_line imports), so no
         # shared module is needed for this.
-        from cash.notebook.cacheability_decision import identity_coupled_reason
+        from cash.analysis.cacheability_decision import identity_coupled_reason
 
         # ``func_name`` is already in the message prefix, so name the slot
         # rather than repeating the qualified path inside the reason.
@@ -10539,7 +10539,7 @@ class Cash:
         `next()` are summed, so a slow consumer cannot inflate the number the
         persistence decision reads.
         """
-        from cash.notebook.object_hashing import estimate_object_size
+        from cash.object_hashing import estimate_object_size
 
         buffer: list[Any] = []
         buffer_bytes = 0
@@ -11594,7 +11594,7 @@ class Cash:
             * Tracking is on the file's ``(mtime, size)``; downstream
               cache-key computation is automatic.
         """
-        from .notebook.file_tracker import FileDependencyRegistry
+        from .tracking.file_tracker import FileDependencyRegistry
 
         registry = FileDependencyRegistry()
         registry.register(module_name, func_name, handler_factory)

@@ -315,7 +315,7 @@ final_value = result * multiplier
         import sys
         from io import StringIO
 
-        from cash.notebook.annotations import ANNOTATION_PATTERN, parse_annotation_line
+        from cash.analysis.annotations import ANNOTATION_PATTERN, parse_annotation_line
 
         captured = StringIO()
         original_stdout = sys.stdout

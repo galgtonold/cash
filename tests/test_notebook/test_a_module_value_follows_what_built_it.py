@@ -16,7 +16,7 @@ Found while adding per-symbol keys (e371578), whose own closure walk
 from that same analysis, so the two cannot disagree about what reaches what.
 """
 
-from cash.notebook.function_tracker import FunctionTracker
+from cash.tracking.function_tracker import FunctionTracker
 
 SOURCE = """
 def build_table():

@@ -54,16 +54,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ._annotation_refs import annotation_referents
-from .exceptions import SOURCE_RETRIEVAL_ERRORS
-from .notebook.cacheability import (
+from .analysis.cacheability import (
     PANDAS_INPLACE_METHODS,
     _get_base_name,
     _get_call_module,
     _get_call_name,
     _is_open_write_mode,
 )
-from .notebook.function_tracker import is_local_module
-from .notebook.purity import (
+from .exceptions import SOURCE_RETRIEVAL_ERRORS
+from .purity import (
     _AMBIENT_ARG_VALUES,
     _AMBIENT_READ_CALLS,
     _AMBIENT_WHEN_ARG_CALLS,
@@ -88,6 +87,7 @@ from .source_norm import (
     normalize_source_for_hash,
     source_identity_digest,
 )
+from .tracking.function_tracker import is_local_module
 from .utils import MAIN_MODULE_NAMES, resolve_main_module
 
 logger = logging.getLogger(__name__)
@@ -1282,7 +1282,7 @@ def _is_user_code(callee: Any, root_module: str | None) -> bool:
     # Never analyse cash's own code on a user's behalf. Under ``%cash_on``
     # the file tracker replaces ``open`` and the pandas readers with cash
     # shims, so a user function that reads a file resolves its callee to
-    # ``cash.notebook.file_tracker``. In a NORMAL install that lands in
+    # ``cash.tracking.file_tracker``. In a NORMAL install that lands in
     # site-packages and the fallback below rejects it; in an EDITABLE
     # install it does not, so the analyzer walked the shim and reported
     # cash's own ``_tracker._track_path(...)`` as the user's side effect.

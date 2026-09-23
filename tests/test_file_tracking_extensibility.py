@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import MagicMock
 
 from cash.core import Cash
-from cash.notebook.file_tracker import FileAccessTracker, FileDependencyRegistry
+from cash.tracking.file_tracker import FileAccessTracker, FileDependencyRegistry
 
 
 class TestFileTrackingExtensibility(unittest.TestCase):

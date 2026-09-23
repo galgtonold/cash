@@ -1,4 +1,4 @@
-"""Performance tests for `cash.notebook.object_hashing.estimate_object_size`.
+"""Performance tests for `cash.object_hashing.estimate_object_size`.
 
 Originally tested `CashMagics._calculate_memory_size` (extracted to
 `object_hashing.calculate_memory_size` in step 1 of the magics deepening,
@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cash.notebook.object_hashing import estimate_object_size
+from cash.object_hashing import estimate_object_size
 
 
 def test_dataframe_uses_memory_usage():

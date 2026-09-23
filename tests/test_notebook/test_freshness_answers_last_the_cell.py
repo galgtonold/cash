@@ -9,8 +9,8 @@ statement executes (it may write the file) or the next cell begins.
 import types
 
 import cash.notebook.statement.freshness as freshness
-from cash.notebook.file_dep_snapshot import snapshot_file_deps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
+from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
 
 class _Backend:

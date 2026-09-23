@@ -685,8 +685,8 @@ def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
     """
     import inspect
 
-    from .file_tracker import _installed_roots, _nc
-    from .purity import is_pure
+    from ..purity import is_pure
+    from ..tracking.file_tracker import _installed_roots, _nc
 
     func = inspect.unwrap(func) if callable(func) else func
     if not isinstance(func, types.FunctionType) or is_pure(func) or _depth > 3:

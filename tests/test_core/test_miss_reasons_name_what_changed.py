@@ -125,7 +125,7 @@ def test_new_arguments_under_unchanged_code_stay_new_arguments(tmp_path):
 
 
 def _stored(path, cap):
-    from cash.notebook.file_dep_snapshot import file_content_hash
+    from cash.tracking.file_dep_snapshot import file_content_hash
 
     st = os.stat(path)
     rec = {
@@ -142,7 +142,7 @@ def _stored(path, cap):
 
 @pytest.mark.parametrize("recorded_cap, checked_cap", [(1000, 10**6), (10**6, 1000)])
 def test_a_changed_hashing_threshold_is_not_called_a_content_change(tmp_path, recorded_cap, checked_cap):
-    from cash.notebook.file_dep_snapshot import file_dep_is_fresh
+    from cash.tracking.file_dep_snapshot import file_dep_is_fresh
 
     data = tmp_path / "data.bin"
     data.write_bytes(b"x" * 2000)
@@ -151,7 +151,7 @@ def test_a_changed_hashing_threshold_is_not_called_a_content_change(tmp_path, re
 
 
 def test_a_real_edit_in_one_regime_is_still_a_content_change(tmp_path):
-    from cash.notebook.file_dep_snapshot import file_dep_is_fresh
+    from cash.tracking.file_dep_snapshot import file_dep_is_fresh
 
     data = tmp_path / "data.bin"
     data.write_bytes(b"x" * 2000)

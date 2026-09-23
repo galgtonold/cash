@@ -1,4 +1,4 @@
-"""Tests for `cash.notebook.object_hashing.compute_hash` — hash dispatch table.
+"""Tests for `cash.object_hashing.compute_hash` — hash dispatch table.
 
 Migrated from `test_magics_coverage.py` when the functions moved out of
 `CashMagics` into their own module. The companion size-estimator
@@ -7,7 +7,7 @@ Migrated from `test_magics_coverage.py` when the functions moved out of
 
 import hashlib
 
-from cash.notebook.object_hashing import compute_hash, identity_hash, is_identity_fallback_hash
+from cash.object_hashing import compute_hash, identity_hash, is_identity_fallback_hash
 
 # ============================================================================
 # compute_hash

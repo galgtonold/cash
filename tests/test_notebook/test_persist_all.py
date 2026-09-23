@@ -65,7 +65,7 @@ def test_explicit_no_cache_still_wins_over_persist_all():
     """A statement annotated @cash:no-cache must not be cached even in
     persist_all mode (skip_cache takes precedence)."""
     _magics, _shell, p = _make(persist_all=True)
-    from cash.notebook.annotations import CacheAnnotation
+    from cash.analysis.annotations import CacheAnnotation
 
     no_cache = CacheAnnotation(no_cache=True)
     p.process_statement("q = 8 + 9", annotation=no_cache)

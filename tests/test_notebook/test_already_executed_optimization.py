@@ -1,4 +1,4 @@
-from cash.notebook.annotations import CacheAnnotation
+from cash.analysis.annotations import CacheAnnotation
 from cash.notebook.cache_status import CacheStatus
 
 """
@@ -302,7 +302,7 @@ class TestStatefulFunctionSkip:
         """
         processor, shell, backend, magics = processor_fixture
 
-        from cash.notebook.purity import stateful
+        from cash.purity import stateful
 
         call_count = {"n": 0}
 
@@ -329,7 +329,7 @@ class TestStatefulFunctionSkip:
         """
         processor, shell, backend, magics = processor_fixture
 
-        from cash.notebook.purity import pure
+        from cash.purity import pure
 
         @pure
         def add(a, b):
@@ -484,7 +484,7 @@ class TestSizeAwareEdgeCases:
 
     def test_estimate_object_size_basic_types(self, processor_fixture):
         """estimate_object_size should handle basic Python types."""
-        from cash.notebook.object_hashing import estimate_object_size
+        from cash.object_hashing import estimate_object_size
 
         # Small objects
         assert estimate_object_size(42) < 10000
@@ -497,7 +497,7 @@ class TestSizeAwareEdgeCases:
 
     def test_estimate_object_size_none(self, processor_fixture):
         """estimate_object_size should handle None."""
-        from cash.notebook.object_hashing import estimate_object_size
+        from cash.object_hashing import estimate_object_size
 
         assert estimate_object_size(None) >= 0
 

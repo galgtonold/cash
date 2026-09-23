@@ -145,7 +145,7 @@ def bench_code_analysis():
     """Benchmark code analysis (input/output detection)."""
     print("\n=== Code Analysis ===")
 
-    from cash.notebook.analysis import CodeAnalyzer
+    from cash.analysis.code_analyzer import CodeAnalyzer
 
     # Simple
     benchmark(lambda: CodeAnalyzer.analyze_code_block("x = 42"), label="simple assignment")
@@ -177,7 +177,7 @@ def bench_purity_check():
     """Benchmark purity checking overhead."""
     print("\n=== Purity Check ===")
 
-    from cash.notebook.purity import is_known_pure, is_pure, is_stateful, pure, stateful
+    from cash.purity import is_known_pure, is_pure, is_stateful, pure, stateful
 
     @pure
     def my_pure_func(x):

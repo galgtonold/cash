@@ -1250,7 +1250,7 @@ def get_config(
     (a nested call's bookkeeping), and the files it reads are cash's, not the
     function's.
     """
-    from .notebook.file_tracker import untracked
+    from .tracking.file_tracker import untracked
 
     with untracked():
         return _resolve_config(

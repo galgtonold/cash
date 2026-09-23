@@ -1,4 +1,4 @@
-from cash.notebook.annotations import CacheAnnotation
+from cash.analysis.annotations import CacheAnnotation
 from cash.notebook.cache_status import CacheStatus
 
 """
@@ -23,8 +23,8 @@ from traitlets.config.configurable import Configurable
 
 from cash.backends import InMemoryBackend
 from cash.core import Cash
-from cash.notebook.function_tracker import FunctionTracker
 from cash.notebook.ipython.magics import CashMagics
+from cash.tracking.function_tracker import FunctionTracker
 
 # ============================================================================
 # Fixtures
@@ -704,7 +704,7 @@ class TestTransitiveDependencyTracking:
         ft.track_module("metrics")
 
         # No stdlib paths should appear in _dep_file_to_parents
-        from cash.notebook.function_tracker import _get_stdlib_site_prefixes
+        from cash.tracking.function_tracker import _get_stdlib_site_prefixes
 
         prefixes = _get_stdlib_site_prefixes()
         for dep_path in ft._dep_file_to_parents:

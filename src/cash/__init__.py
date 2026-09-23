@@ -40,9 +40,9 @@ from .exceptions import (
     ForwardReferenceError,
     UpstreamStateError,
 )
-from .notebook.purity import is_pure, is_stateful, pure, stateful
-from .notebook.randomness import CashRandomnessWarning
+from .purity import is_pure, is_stateful, pure, stateful
 from .remote_source import RemoteFileDataSource
+from .tracking.randomness import CashRandomnessWarning
 
 
 def opaque(cls: type) -> type:
@@ -132,7 +132,7 @@ def reset_session() -> None:
       installed on ``builtins.open``, ``pandas.read_csv``, and other
       tracked I/O entry points. Those are permanent for the process
       lifetime and tracker-agnostic — they no-op when no tracker is
-      active (see ``cash.notebook.file_tracker._active_tracker``).
+      active (see ``cash.tracking.file_tracker._active_tracker``).
     """
     global _global_cash
     _global_cash = None

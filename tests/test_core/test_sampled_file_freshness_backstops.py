@@ -38,8 +38,8 @@ import time
 import pytest
 
 from cash import Cash
-from cash.notebook import file_dep_snapshot
-from cash.notebook.file_dep_snapshot import (
+from cash.tracking import file_dep_snapshot
+from cash.tracking.file_dep_snapshot import (
     _HASH_FULL_MAX_BYTES_DEFAULT,
     snapshot_file_deps,
 )
@@ -146,7 +146,7 @@ def test_the_edit_is_caught_on_posix(sampled_regime, tmp_path):
     time.sleep(1.1)
     _edit_in_place_preserving_mtime(path)
 
-    from cash.notebook.file_dep_snapshot import file_dep_is_fresh
+    from cash.tracking.file_dep_snapshot import file_dep_is_fresh
 
     fresh, reason = file_dep_is_fresh(path, snap[path])
     assert not fresh

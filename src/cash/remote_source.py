@@ -423,7 +423,7 @@ class RemoteFileDataSource(DataSource):
         if self.max_age:
             return self.max_age
         try:
-            from .notebook.file_dep_snapshot import ACTIVE_CONFIG
+            from .tracking.file_dep_snapshot import ACTIVE_CONFIG
 
             config = ACTIVE_CONFIG.get()
             if config is None:

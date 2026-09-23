@@ -9,7 +9,7 @@ single statement, or -- from a cell's leading comment block, alongside
 
 import unittest
 
-from cash.notebook.annotations import CacheAnnotation, leading_cell_annotation, parse_annotation_line
+from cash.analysis.annotations import CacheAnnotation, leading_cell_annotation, parse_annotation_line
 
 
 class TestNoCacheCallsAnnotation(unittest.TestCase):

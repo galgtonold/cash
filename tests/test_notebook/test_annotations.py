@@ -5,7 +5,7 @@ Tests for cache annotation parsing and behavior.
 import ast
 import unittest
 
-from cash.notebook.annotations import (
+from cash.analysis.annotations import (
     CacheAnnotation,
     extract_annotations_for_statements,
     get_statement_annotations,

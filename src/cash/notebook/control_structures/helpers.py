@@ -18,7 +18,7 @@ import logging
 import sys
 from typing import Any
 
-from ..annotations import (
+from ...analysis.annotations import (
     CacheAnnotation,
     get_statement_annotations,
     parse_annotations_in_range,
@@ -305,7 +305,7 @@ def get_body_nodes(node: ast.AST) -> list[ast.AST]:
 
 def get_expression_iterable_lineage(shell, statement_processor, iter_node: ast.AST) -> str | None:
     """Compute lineage for a complex iterable expression by analyzing its inputs."""
-    from ..analysis import CodeAnalyzer
+    from ...analysis.code_analyzer import CodeAnalyzer
 
     iter_code = ast.unparse(iter_node)
     try:
@@ -352,7 +352,7 @@ def find_potentially_mutated_variables(body_nodes: list) -> set[str]:
     (subscript assignment, method calls like ``.append()``, augmented
     assigns, attribute assignments).
     """
-    from ..cacheability import analyze_statement, selfref_reassignment_targets
+    from ...analysis.cacheability import analyze_statement, selfref_reassignment_targets
     from .processor import is_control_structure
 
     mutated_vars: set = set()

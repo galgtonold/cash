@@ -21,11 +21,11 @@ from __future__ import annotations
 
 import pytest
 
-from cash.notebook.randomness import (
+from cash.notebook.statement.restore import StatementRestorer
+from cash.tracking.randomness import (
     get_drawing_rng_modules,
     get_seeding_rng_modules,
 )
-from cash.notebook.statement.restore import StatementRestorer
 
 
 class TestModuleDetection:

@@ -1,4 +1,4 @@
-from cash.notebook.analysis import CodeAnalyzer
+from cash.analysis.code_analyzer import CodeAnalyzer
 
 
 def test_function_def_scope():

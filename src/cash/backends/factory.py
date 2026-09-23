@@ -256,7 +256,7 @@ def _build_smart_persistence_policy(config: "CashConfig"):
     def policy(execution_time: float, size_bytes: int) -> bool:
         if execution_time < min_persist_compute_s:
             return False
-        from cash.notebook import cost_model
+        from cash import cost_model
 
         est_restore = cost_model.estimated_restore_time("", size_bytes, "disk")
         return execution_time - est_restore > min_savings * execution_time

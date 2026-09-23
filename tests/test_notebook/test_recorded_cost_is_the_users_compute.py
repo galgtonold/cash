@@ -18,8 +18,8 @@ from traitlets.config import Configurable
 
 from cash.backends import InMemoryBackend
 from cash.core import Cash
-from cash.notebook import file_tracker
 from cash.notebook.ipython.magics import CashMagics
+from cash.tracking import file_tracker
 
 
 class _Shell(Configurable):

@@ -16,8 +16,8 @@ up by (``_decide_symbol_action``'s ``input_var``).
 import types
 from types import SimpleNamespace
 
-from cash.notebook.function_tracker import FunctionTracker
 from cash.notebook.statement.lineage import StatementLineageBuilder
+from cash.tracking.function_tracker import FunctionTracker
 
 
 def _record(code, user_ns, tracked):

@@ -181,7 +181,7 @@ def test_capture_scoped_to_inputs_and_skips_non_rng_objects():
     import numpy as np
     import pandas as pd
 
-    from cash.notebook.randomness import capture_object_rng_states
+    from cash.tracking.randomness import capture_object_rng_states
 
     ns = {
         "df": pd.DataFrame({"a": [1, 2, 3]}),
@@ -226,7 +226,7 @@ def test_foreign_and_unpicklable_carriers_are_skipped():
 
     import numpy as np
 
-    from cash.notebook.randomness import (
+    from cash.tracking.randomness import (
         capture_object_rng_states,
         restore_object_rng_states,
     )
@@ -256,7 +256,7 @@ def test_payload_without_object_rng_field_restores_cleanly():
     """Entries written before object-RNG replay lack the field and must load unchanged."""
     import numpy as np
 
-    from cash.notebook.randomness import restore_object_rng_states
+    from cash.tracking.randomness import restore_object_rng_states
 
     rng = np.random.default_rng(42)
     before = rng.bit_generator.state
@@ -277,7 +277,7 @@ def test_restore_guards_on_presence_and_type_match():
     """A name that vanished or now holds a different kind is skipped."""
     import numpy as np
 
-    from cash.notebook.randomness import (
+    from cash.tracking.randomness import (
         capture_object_rng_states,
         restore_object_rng_states,
     )
@@ -304,7 +304,7 @@ def test_aliased_names_resolve_to_the_same_object():
     """`rng2 = rng` is the same object; setting state by name is idempotent."""
     import numpy as np
 
-    from cash.notebook.randomness import (
+    from cash.tracking.randomness import (
         capture_object_rng_states,
         restore_object_rng_states,
     )

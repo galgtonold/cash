@@ -384,7 +384,7 @@ class PendingWrites:
             # what to evict) happened under the OUTER cached call's tracker,
             # and the cache directory became that entry's dependency -- one
             # recompute per pool worker per run (round 19).
-            from cash.notebook.file_tracker import untracked
+            from cash.tracking.file_tracker import untracked
 
             try:
                 with untracked():

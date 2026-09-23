@@ -19,8 +19,8 @@ These tests validate that:
 import json
 from unittest.mock import patch
 
-from cash.notebook.analysis import CodeAnalyzer
-from cash.notebook.cacheability import analyze_statement
+from cash.analysis.cacheability import analyze_statement
+from cash.analysis.code_analyzer import CodeAnalyzer
 
 # ============================================================================
 # Group 1: Dict Mutation in Loops

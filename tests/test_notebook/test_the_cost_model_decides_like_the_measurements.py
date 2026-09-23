@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from cash.notebook import cost_model
+from cash import cost_model
 
 #: config.min_cache_savings_pct
 SAVINGS_PCT = 0.20

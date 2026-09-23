@@ -121,7 +121,7 @@ class _FakeFrame:
     "filename, internal",
     [
         (os.path.join(CASH_ROOT, "core.py"), True),
-        (os.path.join(CASH_ROOT, "notebook", "randomness.py"), True),
+        (os.path.join(CASH_ROOT, "tracking", "randomness.py"), True),
         # A notebook statement compiles under these. They are the USER's code,
         # and a substring test for "cash" would call them internal — silently
         # skipping past the frames we most want to blame.

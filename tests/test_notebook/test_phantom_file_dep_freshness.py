@@ -23,8 +23,8 @@ import types
 
 import pytest
 
-from cash.notebook.file_dep_snapshot import file_dep_is_fresh, snapshot_file_deps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
+from cash.tracking.file_dep_snapshot import file_dep_is_fresh, snapshot_file_deps
 
 PHANTOM = "C:/nonexistent-dir-phantom/numpy-1.0.dist-info/direct_url.json"
 

@@ -27,11 +27,11 @@ from unittest.mock import MagicMock
 import pytest
 from traitlets.config.configurable import Configurable
 
+from cash.analysis.annotations import CacheAnnotation
 from cash.backends import InMemoryBackend
 from cash.core import Cash
-from cash.notebook.annotations import CacheAnnotation
-from cash.notebook.function_tracker import FunctionTracker
 from cash.notebook.ipython.magics import CashMagics
+from cash.tracking.function_tracker import FunctionTracker
 
 # Force caching regardless of the 10 ms min-execution-time floor.
 _PERSIST = CacheAnnotation(persist=True)

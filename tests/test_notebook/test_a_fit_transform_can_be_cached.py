@@ -25,7 +25,7 @@ def _run(cash_magics, code):
     parses it: from the source, per statement."""
     import ast
 
-    from cash.notebook.annotations import get_statement_annotations
+    from cash.analysis.annotations import get_statement_annotations
 
     node = ast.parse(code).body[0]
     return cash_magics._statement_processor.process_statement(

@@ -19,8 +19,8 @@ import os
 
 import pytest
 
-from cash.notebook import file_dep_snapshot
-from cash.notebook.file_dep_snapshot import file_dep_is_fresh, snapshot_file_deps
+from cash.tracking import file_dep_snapshot
+from cash.tracking.file_dep_snapshot import file_dep_is_fresh, snapshot_file_deps
 
 
 @pytest.fixture(autouse=True)

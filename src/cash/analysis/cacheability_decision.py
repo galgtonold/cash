@@ -38,8 +38,8 @@ import types
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from cash.notebook.annotations import CacheAnnotation
-from cash.notebook.cacheability import StatementAnalysis, user_callee_writing_files
+from cash.analysis.annotations import CacheAnnotation
+from cash.analysis.cacheability import StatementAnalysis, user_callee_writing_files
 
 logger = logging.getLogger(__name__)
 

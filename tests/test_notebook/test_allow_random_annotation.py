@@ -31,7 +31,7 @@ from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.magics import CashMagics
-from cash.notebook.randomness import CashRandomnessWarning
+from cash.tracking.randomness import CashRandomnessWarning
 
 
 class _MockShell(Configurable):

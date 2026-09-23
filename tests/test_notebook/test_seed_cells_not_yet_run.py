@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 
-from cash.notebook.randomness import seed_cells_not_yet_run
+from cash.tracking.randomness import seed_cells_not_yet_run
 
 
 def _h(src: str) -> str:

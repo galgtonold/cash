@@ -11,9 +11,9 @@ import ast
 
 import pytest
 
-from cash.notebook.annotations import CacheAnnotation
-from cash.notebook.cacheability import analyze_statement
-from cash.notebook.cacheability_decision import decide_cacheability, identity_coupled_reason
+from cash.analysis.annotations import CacheAnnotation
+from cash.analysis.cacheability import analyze_statement
+from cash.analysis.cacheability_decision import decide_cacheability, identity_coupled_reason
 
 
 def _analysis(code: str):

@@ -17,7 +17,7 @@ MISS = "Executing (cache miss)"
 def test_stateful_marker_forces_reexecution(nb_runner):
     nb_runner.create_notebook(
         [
-            "from cash.notebook.purity import stateful\n"
+            "from cash.purity import stateful\n"
             "calls6 = []\n"
             "@stateful\n"
             "def next_id():\n"

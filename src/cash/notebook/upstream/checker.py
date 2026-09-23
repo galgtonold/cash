@@ -9,13 +9,8 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from ...diagnostics import log_diagnostic, warn_diagnostic
-from ...exceptions import AmbiguousCellError, CashUpstreamSyntaxWarning, ForwardReferenceError, UpstreamStateError
-from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
-from ..analysis import CodeAnalyzer
-from ..annotations import extract_annotations_for_statements, parse_annotation_line
-from ..cache_status import CacheStatus
-from ..cacheability import (
+from ...analysis.annotations import extract_annotations_for_statements, parse_annotation_line
+from ...analysis.cacheability import (
     _called_function_names,
     alias_mutation_sources,
     aliased_sources,
@@ -34,14 +29,19 @@ from ..cacheability import (
     stateful_self_functions,
     subscript_view_bindings,
 )
-from ..control_structures import is_control_structure
-from ..randomness import (
+from ...analysis.code_analyzer import CodeAnalyzer
+from ...diagnostics import log_diagnostic, warn_diagnostic
+from ...exceptions import AmbiguousCellError, CashUpstreamSyntaxWarning, ForwardReferenceError, UpstreamStateError
+from ...tracking.randomness import (
     get_drawing_rng_modules,
     get_seeding_rng_modules,
     restore_rng_state,
     rng_lineage_fingerprint,
     seed_cells_not_yet_run,
 )
+from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
+from ..cache_status import CacheStatus
+from ..control_structures import is_control_structure
 from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from ..staleness import StalenessTracker
 from .simulator import NotebookSimulator
@@ -2251,7 +2251,7 @@ class UpstreamChecker:
         statement's code, keyed as the simulator keys it; the directive is read
         from its cell as a direct run reads it. Only statements that carry one.
         """
-        from ..annotations import get_statement_annotations
+        from ...analysis.annotations import get_statement_annotations
 
         found: dict[str, Any] = {}
         for cell in notebook_cells or ():

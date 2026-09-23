@@ -27,7 +27,7 @@ np = pytest.importorskip("numpy")
 @pytest.fixture(autouse=True)
 def _isolated_epochs():
     """Point the shared seed ledger at a dict this test owns."""
-    from cash.notebook.randomness import publish_seed_epochs
+    from cash.tracking.randomness import publish_seed_epochs
 
     epochs: dict[str, str] = {}
     publish_seed_epochs(epochs)
@@ -125,7 +125,7 @@ def test_non_drawing_function_key_is_unchanged(_isolated_epochs, inst):
 
 def test_epoch_component_is_empty_without_a_seed():
     """The fold must be inert until something is actually seeded."""
-    from cash.notebook.randomness import publish_seed_epochs, seed_epoch_component
+    from cash.tracking.randomness import publish_seed_epochs, seed_epoch_component
 
     publish_seed_epochs({})
     try:

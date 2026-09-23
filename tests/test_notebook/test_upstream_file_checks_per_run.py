@@ -14,10 +14,10 @@ import os
 
 import pytest
 
-from cash.notebook import file_dep_snapshot
-from cash.notebook.file_dep_snapshot import snapshot_file_deps
 from cash.notebook.upstream import virtual_lineage
 from cash.notebook.upstream.virtual_lineage import VirtualLineage, forget_file_state_this_run
+from cash.tracking import file_dep_snapshot
+from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
 N = 30
 

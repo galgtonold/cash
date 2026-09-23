@@ -21,8 +21,8 @@ import types
 
 import pytest
 
-from cash.notebook import file_dep_snapshot
 from cash.notebook.statement.file_deps import StatementFileDeps
+from cash.tracking import file_dep_snapshot
 
 
 def _state():

@@ -6,7 +6,7 @@ OBJECT (``__defaults__`` / ``__kwdefaults__``), not in the code object, so the
 Editing ``n_estimators=300`` -> ``400`` returned the 300-tree model on an instant
 HIT.
 
-``notebook/function_tracker.py`` has the same shape: ``get_function_source_hash``
+``tracking/function_tracker.py`` has the same shape: ``get_function_source_hash``
 hashes ``inspect.getsource(func)`` (text) with an ``_update_code_object_hash``
 bytecode fallback -- neither carries ``__defaults__``. So the ``func_source_hash``
 channel that feeds a callable input into a consumer's cache key
@@ -15,7 +15,7 @@ channel that feeds a callable input into a consumer's cache key
 
 **Verdict: NOT vulnerable.** A ``def`` statement's output ``f`` is assigned a
 LINEAGE that folds in the free variables of its default expressions -- the analyzer
-(``notebook/analysis.py`` ``_handle_function``) descends into ``args.defaults`` in
+(``analysis/code_analyzer.py`` ``_handle_function``) descends into ``args.defaults`` in
 the enclosing scope, so ``THRESHOLD`` in ``def f(x, t=THRESHOLD)`` is an INPUT of the
 ``def`` statement. That input lineage flows into ``f``'s output lineage and thence
 into every consumer's cache key. The text/bytecode blind spot is real but

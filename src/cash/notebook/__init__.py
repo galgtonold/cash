@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 # Import only what doesn't cause circular dependencies
-from .analysis import CodeAnalyzer
+from ..analysis.code_analyzer import CodeAnalyzer
 from .cache_status import CacheStatus, ExecutionResult
 from .upstream import UpstreamChecker
 

@@ -20,10 +20,10 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from ...analysis.cacheability import analyze_statement, consumed_input_names
+from ...analysis.code_analyzer import CodeAnalyzer
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .._trace import is_tracing, trace_event
-from ..analysis import CodeAnalyzer
-from ..cacheability import analyze_statement, consumed_input_names
 from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
 from ._types import SimulationCacheEntry, apply_collected_mutations
 from .mismatch_classifier import MismatchClassifier
@@ -58,7 +58,7 @@ def _bind_literal_paths(stmt: str, bound: dict, namespace) -> None:
     ``TF = [Path('other.csv')]`` binds ``TF``; any other binding of a name
     drops it, so a later statement never reads a stale value from here.
     """
-    from ..cacheability import _resolve_literal_path, resolve_path_list
+    from ...analysis.cacheability import _resolve_literal_path, resolve_path_list
 
     try:
         tree = ast.parse(CodeAnalyzer.strip_magics(stmt))
@@ -177,7 +177,7 @@ class NotebookSimulator:
         import sys
         import types
 
-        from ..function_tracker import is_local_module
+        from ...tracking.function_tracker import is_local_module
 
         names: set[str] = set()
         for value in list(user_ns.values()):
@@ -919,7 +919,7 @@ class NotebookSimulator:
         path is in none of these paths is an unrelated / terminal side-effect and
         must not be re-fired for THIS cell.
         """
-        from ..cacheability import statement_read_paths
+        from ...analysis.cacheability import statement_read_paths
 
         paths: set[str] = set()
         fully_known = True

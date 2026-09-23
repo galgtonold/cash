@@ -25,8 +25,8 @@ from pathlib import Path
 import pytest
 
 import cash
+from cash.analysis.code_analyzer import CodeAnalyzer
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
-from cash.notebook.analysis import CodeAnalyzer
 
 # Prose that fails to tokenize on EVERY supported Python.
 #

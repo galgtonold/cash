@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 
-from cash.notebook.file_tracker import FileAccessTracker
+from cash.tracking.file_tracker import FileAccessTracker
 
 
 def _tracked(action):

@@ -17,7 +17,7 @@ import types
 
 import pytest
 
-from cash.notebook.function_tracker import FunctionTracker, is_local_module
+from cash.tracking.function_tracker import FunctionTracker, is_local_module
 
 # ============================================================================
 # Fixtures

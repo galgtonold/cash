@@ -135,7 +135,7 @@ def _register_writer(cache_dir: str, writes: PendingWrites) -> str:
     # needs telling. Imported here rather than at module scope: the backends
     # must stay importable without the notebook layer.
     try:
-        from cash.notebook.file_tracker import register_cache_dir
+        from cash.tracking.file_tracker import register_cache_dir
 
         register_cache_dir(cache_dir)
     except Exception:  # noqa: BLE001 - tracking is best-effort, storage is not
@@ -195,7 +195,7 @@ def _untracked() -> Any:
     listing of the cache directory from a user's listing of a directory that
     `cache_dir` may also be, so the scan says so where it happens.
     """
-    from cash.notebook.file_tracker import untracked
+    from cash.tracking.file_tracker import untracked
 
     return untracked()
 

@@ -31,8 +31,8 @@ from typing import TYPE_CHECKING, Any
 from ..source_norm import read_code_file
 
 if TYPE_CHECKING:
+    from ..tracking.function_tracker import FunctionTracker
     from ._protocols import ShellProtocol
-    from .function_tracker import FunctionTracker
     from .statement import StatementProcessor
 
 logger = logging.getLogger(__name__)

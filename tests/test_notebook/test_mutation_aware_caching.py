@@ -1,4 +1,4 @@
-from cash.notebook.annotations import CacheAnnotation
+from cash.analysis.annotations import CacheAnnotation
 from cash.notebook.cache_status import CacheStatus
 
 """
@@ -14,9 +14,9 @@ from unittest.mock import MagicMock
 import pytest
 from traitlets.config.configurable import Configurable
 
+from cash.analysis.cacheability import analyze_statement
 from cash.backends import InMemoryBackend
 from cash.core import Cash
-from cash.notebook.cacheability import analyze_statement
 from cash.notebook.ipython.magics import CashMagics
 
 # Force caching regardless of the 10 ms min-execution-time floor, so tests

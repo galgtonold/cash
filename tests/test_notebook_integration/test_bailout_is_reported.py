@@ -25,7 +25,7 @@ pytestmark = pytest.mark.timeout(180)
 SETUP = "import cash\n%cash_on\nimport warnings\nwarnings.simplefilter('always')"
 
 BREAK_THE_PIPELINE = (
-    "from cash.notebook.analysis import CodeAnalyzer\n"
+    "from cash.analysis.code_analyzer import CodeAnalyzer\n"
     "CodeAnalyzer._parse_cell = staticmethod(\n"
     "    lambda *a, **k: (_ for _ in ()).throw(ValueError('probe: forced internal failure')))\n"
     "print('pipeline broken')\n"

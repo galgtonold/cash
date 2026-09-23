@@ -578,7 +578,7 @@ def test_every_cited_test_name_exists() -> None:
 # covers every knob" -- once went stale when a new directive shipped.
 
 _DIRECTIVE_RE = re.compile(r"directive == [\"']([a-z][a-z-]+)[\"']")
-_ANNOTATIONS_SRC = Path(__file__).resolve().parents[2] / "src" / "cash" / "notebook" / "annotations.py"
+_ANNOTATIONS_SRC = Path(__file__).resolve().parents[2] / "src" / "cash" / "analysis" / "annotations.py"
 # Pages that claim to cover the directive set, and so must cover all of it.
 _DIRECTIVE_PAGES = (
     "annotations.md",

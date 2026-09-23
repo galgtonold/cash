@@ -15,7 +15,7 @@ deliberate route and are unaffected.
 import ast
 import types
 
-from cash.notebook.analysis import CodeAnalyzer
+from cash.analysis.code_analyzer import CodeAnalyzer
 
 
 def _ns():

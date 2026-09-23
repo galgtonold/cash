@@ -35,7 +35,7 @@ import warnings
 import pytest
 
 from cash import Cash
-from cash.notebook import file_dep_snapshot
+from cash.tracking import file_dep_snapshot
 
 
 @pytest.fixture

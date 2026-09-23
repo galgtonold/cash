@@ -43,7 +43,7 @@ from ..cache_status import CacheStatus
 from . import helpers as _helpers
 
 if TYPE_CHECKING:
-    from ..annotations import CacheAnnotation
+    from ...analysis.annotations import CacheAnnotation
     from ..statement import ProcessResult
 
 __all__ = [
@@ -308,7 +308,7 @@ def build_iteration_context(
         # hash here is exactly the collision this exists to prevent.
         digest = digests.get(name)
         if digest is None:
-            from cash.notebook.object_hashing import compute_hash_full
+            from cash.object_hashing import compute_hash_full
 
             digest = compute_hash_full(value)
         try:
@@ -336,7 +336,7 @@ def compute_context_hash(context: dict[str, Any]) -> str:
         if not _is_primitive(value):
             digest = context.get(_DIGEST_PREFIX + key)
             if digest is None:
-                from cash.notebook.object_hashing import compute_hash_full
+                from cash.object_hashing import compute_hash_full
 
                 digest = compute_hash_full(value)
             value = digest
@@ -434,7 +434,7 @@ class ControlStructureProcessor:
         lineage = state.variable_lineage
         code = ast.unparse(node)
         try:
-            from ..analysis import CodeAnalyzer
+            from ...analysis.code_analyzer import CodeAnalyzer
 
             reads, writes = CodeAnalyzer.analyze_code_block(code)
         except (SyntaxError, ValueError, TypeError):
@@ -580,13 +580,13 @@ class ControlStructureProcessor:
             return None
         if rng_before != _global_rng_fingerprint():
             return None
-        from ..analysis import CodeAnalyzer
-        from ..cache_key import called_function_globals
-        from ..cacheability import (
+        from ...analysis.cacheability import (
             called_function_global_mutations,
             statement_calls_user_writer,
             statement_writes_files,
         )
+        from ...analysis.code_analyzer import CodeAnalyzer
+        from ..cache_key import called_function_globals
 
         user_ns = self.shell.user_ns
         if statement_writes_files(code) or statement_calls_user_writer(code, user_ns):

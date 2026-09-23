@@ -81,7 +81,7 @@ def test_a_source_file_read_through_linecache_is_not_a_dependency(tmp_path):
     inspect.getsource does -- must not make that module a data dependency."""
     import linecache
 
-    from cash.notebook.file_tracker import FileAccessTracker
+    from cash.tracking.file_tracker import FileAccessTracker
 
     module = tmp_path / "some_module.py"
     module.write_text("VALUE = 1\n", encoding="utf-8")
@@ -111,7 +111,7 @@ def test_a_pseudo_filename_is_not_a_dependency(tmp_path):
     """
     import linecache
 
-    from cash.notebook.file_tracker import FileAccessTracker
+    from cash.tracking.file_tracker import FileAccessTracker
 
     data = tmp_path / "rows.txt"
     data.write_text("one\n", encoding="utf-8")

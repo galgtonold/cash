@@ -24,12 +24,12 @@ import random
 from unittest.mock import MagicMock
 
 from cash.notebook._protocols import TrackingState
-from cash.notebook.randomness import (
+from cash.notebook.upstream import UpstreamChecker
+from cash.tracking.randomness import (
     capture_rng_state,
     rng_lineage_fingerprint,
     rng_virtual_var,
 )
-from cash.notebook.upstream import UpstreamChecker
 
 CELLS = ["import random", "rv = random.random()"]
 DRAW = CELLS[1]

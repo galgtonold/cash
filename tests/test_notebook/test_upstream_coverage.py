@@ -23,9 +23,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from cash.notebook._protocols import TrackingState
-from cash.notebook.file_dep_snapshot import snapshot_file_deps
 from cash.notebook.upstream import UpstreamChecker
 from cash.notebook.upstream.virtual_lineage import VirtualLineage
+from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
 # ---------------------------------------------------------------------------
 # Helpers

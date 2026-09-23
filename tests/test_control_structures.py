@@ -226,7 +226,7 @@ class TestUserObjectLoopValue:
         assert ctx["p"] is p
 
     def test_the_callers_digest_is_used(self, monkeypatch):
-        import cash.notebook.object_hashing as object_hashing
+        import cash.object_hashing as object_hashing
 
         def _fail(value):
             raise AssertionError("recomputed a digest the caller already had")

@@ -138,7 +138,7 @@ def test_editing_the_body_of_a_cached_function_in_a_registry_invalidates_its_use
 def test_a_referenced_cached_function_is_an_edge_but_an_attribute_of_an_instance_is_not_read():
     """The reference resolver goes through modules and classes only: analysis
     must not run a property to find out what a name holds."""
-    from cash.notebook.analysis import CodeAnalyzer
+    from cash.analysis.code_analyzer import CodeAnalyzer
 
     class Loud:
         @property

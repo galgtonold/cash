@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from traitlets.config.configurable import Configurable
 
+from cash.analysis.annotations import CacheAnnotation
 from cash.backends import InMemoryBackend
 from cash.core import Cash
-from cash.notebook.annotations import CacheAnnotation
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.magics import CashMagics
 

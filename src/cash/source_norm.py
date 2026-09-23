@@ -54,7 +54,7 @@ __all__ = [
     "unparse_without_docstrings",
 ]
 
-# Populated on first use from ``cash.notebook.annotations``. Imported
+# Populated on first use from ``cash.analysis.annotations``. Imported
 # lazily because this module sits below the notebook package in the
 # import graph, and hashing only runs long after imports have settled.
 _ANNOTATION_PATTERN: re.Pattern[str] | None = None
@@ -69,7 +69,7 @@ _SEP = "\x01"
 def _annotation_pattern() -> re.Pattern[str]:
     global _ANNOTATION_PATTERN
     if _ANNOTATION_PATTERN is None:
-        from .notebook.annotations import ANNOTATION_PATTERN
+        from .analysis.annotations import ANNOTATION_PATTERN
 
         _ANNOTATION_PATTERN = ANNOTATION_PATTERN
     return _ANNOTATION_PATTERN

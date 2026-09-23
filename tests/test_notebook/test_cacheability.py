@@ -11,7 +11,7 @@ import ast
 
 import pytest
 
-from cash.notebook.cacheability import (
+from cash.analysis.cacheability import (
     KNOWN_PURE_METHODS,
     StatementAnalysis,
     alias_mutation_sources,
@@ -483,7 +483,7 @@ class TestSideEffects:
     def test_pathlib_mkdir(self):
         # `OUT.mkdir(exist_ok=True)` restored from the cache left an
         # emptied output folder missing; it must run like any other write.
-        from cash.notebook.cacheability import statement_write_repeatability, statement_writes_files
+        from cash.analysis.cacheability import statement_write_repeatability, statement_writes_files
 
         a = _analyze("OUT.mkdir(exist_ok=True)")
         assert any(e.kind == "file_write" for e in a.side_effects)
@@ -497,7 +497,7 @@ class TestSideEffects:
 
     def test_statement_writes_files_helper(self):
         # The sim/planner seam for scheduling stale writers.
-        from cash.notebook.cacheability import statement_writes_files
+        from cash.analysis.cacheability import statement_writes_files
 
         assert statement_writes_files("df.to_csv('out.csv', index=False)")
         assert statement_writes_files("with open('f.txt', 'w') as f:\n    f.write('x')")
@@ -547,7 +547,7 @@ class TestSideEffects:
         # `statement_writes_files` answers "does this write?"; the
         # planner also needs "is repeating it safe?", because re-firing a
         # mode='a' append DUPLICATES the payload on disk.
-        from cash.notebook.cacheability import statement_write_repeatability as verdict
+        from cash.analysis.cacheability import statement_write_repeatability as verdict
 
         # ACCUMULATING -- re-firing duplicates data.
         assert verdict("open(p, 'a').write(x)") == "accumulating"
@@ -577,14 +577,14 @@ class TestSideEffects:
         handle still makes the statement a writer, so collapsing those two
         would silently classify a possible append as safe to repeat.
         """
-        from cash.notebook.cacheability import statement_write_repeatability as verdict
+        from cash.analysis.cacheability import statement_write_repeatability as verdict
 
         assert verdict("open(p, m).write(x)") == "unknown"
         assert verdict("open(p, mode=m).write(x)") == "unknown"
 
     def test_to_hdf_is_not_treated_as_truncating(self):
         """pandas defaults `to_hdf` to mode='a', unlike its `to_*` siblings."""
-        from cash.notebook.cacheability import statement_write_repeatability as verdict
+        from cash.analysis.cacheability import statement_write_repeatability as verdict
 
         assert verdict("df.to_hdf('store.h5', key='k')") != "replacing"
 
@@ -597,7 +597,7 @@ class TestSideEffects:
         refused to re-fire it, the edited payload never reached the file and the
         reader served stale data -- breaking two stale-writer scheduling tests.
         """
-        from cash.notebook.cacheability import statement_write_repeatability as verdict
+        from cash.analysis.cacheability import statement_write_repeatability as verdict
 
         assert verdict("import pickle\nwith open(p, 'wb') as f:\n    pickle.dump(o, f)") == "replacing"
         assert verdict("import json\nwith open(p, 'w') as f:\n    json.dump(o, f)") == "replacing"
@@ -705,7 +705,7 @@ class TestStatementWrittenPaths:
     """
 
     def _paths(self, code, namespace=None):
-        from cash.notebook.cacheability import statement_written_paths
+        from cash.analysis.cacheability import statement_written_paths
 
         return statement_written_paths(code, None, namespace)
 
@@ -2078,7 +2078,7 @@ def test_a_file_write_is_reported_once(code):
     """``Side effect: to_csv() (file_write), Side effect:
     to_csv() (file_write)`` -- a write on a call's result matched both the
     name lookup and the write-method check."""
-    from cash.notebook.cacheability import analyze_statement
+    from cash.analysis.cacheability import analyze_statement
 
     reasons = analyze_statement(code, ast.parse(code)).skip_reasons(set())
     assert sum(r.count("to_csv()") for r in reasons) == 1, reasons

@@ -73,7 +73,7 @@ def module_read_lineage(
     names = {real, var_name}
     if not (mod_file and os.path.isfile(mod_file) and names & _tracked(function_tracker)):
         return None
-    from .module_symbols import static_attribute_reads
+    from ..tracking.module_symbols import static_attribute_reads
 
     attrs = static_attribute_reads(code, var_name)
     if not attrs:
@@ -121,7 +121,7 @@ def _closure_with_deps(
     (:func:`module_read_lineage`) and a name brought in by ``from ... import``
     (:func:`_from_module_hash`) -- so they bound a closure the same way.
     """
-    from .module_symbols import closure_digest
+    from ..tracking.module_symbols import closure_digest
 
     digest = closure_digest(mod_file, attrs)
     if digest is None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 
-from cash.notebook.file_tracker import FileAccessTracker
+from cash.tracking.file_tracker import FileAccessTracker
 
 
 def test_two_threads_isolated(tmp_path):
@@ -103,7 +103,7 @@ def test_nested_with_blocks(tmp_path):
 def test_reentry_same_instance_via_stack(tmp_path):
     """The same FileAccessTracker instance can be re-entered (nested with).
     The token stack restores the previous ContextVar state on the inner exit."""
-    from cash.notebook.file_tracker import _active_tracker
+    from cash.tracking.file_tracker import _active_tracker
 
     p_a = tmp_path / "a.txt"
     p_a.write_text("a")

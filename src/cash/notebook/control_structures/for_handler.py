@@ -24,8 +24,8 @@ import logging
 import time as _time
 from typing import TYPE_CHECKING, Any
 
+from ...tracking.file_tracker import FileAccessTracker
 from ..cache_status import CacheStatus
-from ..file_tracker import FileAccessTracker
 from . import helpers as _helpers
 
 if TYPE_CHECKING:
@@ -355,7 +355,7 @@ class ForLoopHandler:
                 # leaked loop variable) so the chosen single-unit path is
                 # actually cacheable. ``None`` for every other single-unit
                 # loop, which keeps their behaviour unchanged.
-                from ..cacheability import cacheable_accumulator_loop
+                from ...analysis.cacheability import cacheable_accumulator_loop
 
                 force_outputs = None
                 acc_loop = cacheable_accumulator_loop(node, prev_node)
@@ -531,7 +531,7 @@ class ForLoopHandler:
                 # discriminator: a sampled hash keyed two iterations over
                 # arrays that agreed in the sample onto ONE entry - wrong
                 # result on the first run. Hash full content here.
-                from cash.notebook.object_hashing import compute_hash_full
+                from cash.object_hashing import compute_hash_full
 
                 full = compute_hash_full(val)
                 # `variable_lineage[name]` and `loop_var_digests[name]`
@@ -975,7 +975,7 @@ class ForLoopHandler:
         recurses through :meth:`process` (and is itself unsplittable, being a
         half); the tail takes the ordinary single-unit path.
         """
-        from ..cacheability import accumulator_loop_body_shape
+        from ...analysis.cacheability import accumulator_loop_body_shape
         from ..loop_split import split_nodes
         from .processor import ControlStructureResult
 

@@ -13,14 +13,14 @@ import warnings
 
 import pytest
 
-from cash.exceptions import CashCacheIneffectiveWarning
-from cash.notebook import annotations
-from cash.notebook.annotations import (
+from cash.analysis import annotations
+from cash.analysis.annotations import (
     KNOWN_DIRECTIVES,
     get_statement_annotations,
     parse_annotation_line,
     parse_annotations_in_range,
 )
+from cash.exceptions import CashCacheIneffectiveWarning
 
 
 @pytest.fixture(autouse=True)

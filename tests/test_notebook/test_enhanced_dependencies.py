@@ -1,6 +1,6 @@
 import unittest
 
-from cash.notebook.analysis import CodeAnalyzer
+from cash.analysis.code_analyzer import CodeAnalyzer
 
 
 class TestEnhancedDependencyDetection(unittest.TestCase):

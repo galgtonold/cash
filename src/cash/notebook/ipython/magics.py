@@ -19,6 +19,7 @@ from IPython.core.magic import Magics, cell_magic, line_magic, magics_class
 from IPython.display import HTML, display, publish_display_data
 
 from ...core import Cash
+from ...object_hashing import compute_hash
 from ...utils import safe_text
 from .. import badge_renderer as _badge
 from .. import compute_baselines
@@ -27,7 +28,6 @@ from ..audit import AuditLogger
 from ..cache_status import CacheStatus
 from ..control_structures import ControlStructureProcessor
 from ..module_invalidator import ModuleInvalidator
-from ..object_hashing import compute_hash
 from ..provenance import ProvenanceTracker
 from ..restore import Restorer
 from ..statement import ProcessResult, StatementProcessor

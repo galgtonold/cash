@@ -191,7 +191,7 @@ class TestCodeAnalyzerPerformance:
     """Test the analyze_code_block function performance."""
 
     def test_analyze_simple(self):
-        from cash.notebook.analysis import CodeAnalyzer
+        from cash.analysis.code_analyzer import CodeAnalyzer
 
         code = "y = x * 2 + z"
 
@@ -202,7 +202,7 @@ class TestCodeAnalyzerPerformance:
         assert median < 5.0, f"Simple analysis too slow: {median:.3f}ms (target <5ms)"
 
     def test_analyze_complex(self):
-        from cash.notebook.analysis import CodeAnalyzer
+        from cash.analysis.code_analyzer import CodeAnalyzer
 
         code = """
 result = (
@@ -220,7 +220,7 @@ result = (
         assert median < 5.0, f"Complex analysis too slow: {median:.3f}ms (target <5ms)"
 
     def test_analyze_with_function_def(self):
-        from cash.notebook.analysis import CodeAnalyzer
+        from cash.analysis.code_analyzer import CodeAnalyzer
 
         code = """
 def process_data(df, threshold=0.5):
@@ -237,7 +237,7 @@ def process_data(df, threshold=0.5):
         assert median < 5.0, f"Function def analysis too slow: {median:.3f}ms (target <5ms)"
 
     def test_strip_magics(self):
-        from cash.notebook.analysis import CodeAnalyzer
+        from cash.analysis.code_analyzer import CodeAnalyzer
 
         code = """%cash_on
 %load_ext cash
@@ -421,7 +421,7 @@ class TestStatementProcessorOverhead:
         For a 100-cell notebook, total overhead = this * 100.
         Target: <2ms per cell → <200ms for 100 cells.
         """
-        from cash.notebook.analysis import CodeAnalyzer
+        from cash.analysis.code_analyzer import CodeAnalyzer
 
         cell_code = """
 df = pd.read_csv('data.csv')
@@ -453,7 +453,7 @@ result = df.groupby('category').mean()
 
         Target: <500ms for 100 cells total simulation.
         """
-        from cash.notebook.analysis import CodeAnalyzer
+        from cash.analysis.code_analyzer import CodeAnalyzer
 
         # Generate 100 cells with varying complexity
         cells = []

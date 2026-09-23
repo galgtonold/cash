@@ -31,9 +31,6 @@ from cash.notebook.cache_key import (
     write_provenance_key,
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
-from cash.notebook.file_dep_snapshot import snapshot_dependencies, snapshot_file_deps
-from cash.notebook.object_hashing import estimate_object_size, mutation_fingerprint
-from cash.notebook.purity import is_known_pure, is_stateful
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
@@ -44,6 +41,9 @@ from cash.notebook.statement.miss_guard import (
     resolve_cache_dir,
 )
 from cash.notebook.statement.restore import StatementRestorer
+from cash.object_hashing import estimate_object_size, mutation_fingerprint
+from cash.purity import is_known_pure, is_stateful
+from cash.tracking.file_dep_snapshot import snapshot_dependencies, snapshot_file_deps
 
 __all__ = [
     "StatementCacheMetadata",
@@ -482,10 +482,8 @@ def capture_output(stdout: bool = True, stderr: bool = True, display: bool = Tru
     return _CAPTURE_OUTPUT(stdout=stdout, stderr=stderr, display=display)
 
 
-from ...analytics import AnalyticsManager
-from ..analysis import CodeAnalyzer
-from ..annotations import CacheAnnotation
-from ..cacheability import (
+from ...analysis.annotations import CacheAnnotation
+from ...analysis.cacheability import (
     RECEIVER_READONLY_WRITE_METHODS,
     StatementAnalysis,
     analyze_statement,
@@ -503,16 +501,15 @@ from ..cacheability import (
     standalone_method_mutation_receivers,
     top_level_call_argument_bases,
 )
-from ..cacheability_decision import (
+from ...analysis.cacheability_decision import (
     decide_cacheability,
     identity_coupled_reason,
     receiver_is_identity_coupled,
 )
-from ..call_interception import HELPER_NAME, CallCache, wrap_eligible_calls
-from ..call_unit import call_site_is_cacheable
-from ..compiled_source import is_cash_filename, register_cell_source
-from ..function_tracker import FunctionTracker
-from ..randomness import (
+from ...analysis.code_analyzer import CodeAnalyzer
+from ...analytics import AnalyticsManager
+from ...tracking.function_tracker import FunctionTracker
+from ...tracking.randomness import (
     RandomnessDetector,
     capture_object_rng_states,
     capture_rng_state,
@@ -532,6 +529,9 @@ from ..randomness import (
     warn_stale_randomness,
     warn_unseeded_estimator_fit,
 )
+from ..call_interception import HELPER_NAME, CallCache, wrap_eligible_calls
+from ..call_unit import call_site_is_cacheable
+from ..compiled_source import is_cash_filename, register_cell_source
 from ..write_observer import observe_writes
 
 
@@ -1906,7 +1906,7 @@ class StatementProcessor:
                 return
             self._warned_entropy_reseed.add(digest)
             from cash.diagnostics import warn_diagnostic
-            from cash.notebook.randomness import CashRandomnessWarning
+            from cash.tracking.randomness import CashRandomnessWarning
 
             warn_diagnostic(
                 CashRandomnessWarning,
@@ -2560,7 +2560,7 @@ class StatementProcessor:
         numbers to store, stopped being saved and the next restart ran every
         CV again. Estimated with the cost model the size-aware skip uses.
         """
-        from cash.notebook import cost_model
+        from cash import cost_model
 
         if execution_time <= 0:
             return False
@@ -2904,7 +2904,7 @@ class StatementProcessor:
 
     def _cash_time_marks(self) -> tuple[float, Any, float, float]:
         """Cash's own clocks, read around a statement (see :meth:`_statement_cost`)."""
-        from cash.notebook.file_tracker import tracking_seconds
+        from cash.tracking.file_tracker import tracking_seconds
 
         unit = getattr(getattr(self, "_call_cache", None), "_call_unit", None)
         return (tracking_seconds(), unit, getattr(unit, "overhead_s", 0.0), getattr(unit, "hits_saved_s", 0.0))
@@ -2923,7 +2923,7 @@ class StatementProcessor:
         `%cash_stats`, which reported 210 s of overhead for a run a pairing
         measured 370 s slower (round 30, r30s4).
         """
-        from cash.notebook.file_tracker import tracking_seconds
+        from cash.tracking.file_tracker import tracking_seconds
 
         tracking0, unit0, overhead0, saved0 = marks
         tracking = max(0.0, tracking_seconds() - tracking0)
@@ -3380,7 +3380,7 @@ class StatementProcessor:
         callees read too: an edited helper is a new payload.
         """
         try:
-            from cash.notebook.cacheability import statement_written_paths
+            from cash.analysis.cacheability import statement_written_paths
 
             from ..cache_key import called_function_globals
 
@@ -4098,7 +4098,7 @@ class StatementProcessor:
         wrote = bool(getattr(self, "_last_written_paths", None)) or not getattr(result, "success", False)
         if not wrote:
             try:
-                from ..cacheability import statement_calls_user_writer, statement_writes_files
+                from ...analysis.cacheability import statement_calls_user_writer, statement_writes_files
 
                 wrote = (
                     statement_writes_files(code) or statement_calls_user_writer(code, self.shell.user_ns) is not None
@@ -4464,7 +4464,7 @@ class StatementProcessor:
         backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
         if not key or backend is None:
             return {}
-        from .. import file_dep_snapshot
+        from ...tracking import file_dep_snapshot
 
         epoch = file_dep_snapshot._HASH_EPOCH
         memo = self.__dict__.get("_producer_snapshot_memo")
@@ -4505,7 +4505,7 @@ class StatementProcessor:
 
         * **Disk / remote (FileBackend, Redis, S3, TieredBackend)** – needs
           pickle + I/O.  Restore cost is predicted by the fitted cost model
-          in ``cash.notebook.cost_model`` (per-family ``a + b·size_bytes``).
+          in ``cash.cost_model`` (per-family ``a + b·size_bytes``).
           Overhead = 2 × serialise time (store + restore).
 
         Caching is skipped when the expected time savings would be less than
@@ -4618,7 +4618,7 @@ class StatementProcessor:
         ``prediction`` is a dict with keys ``size_bytes``, ``restore_seconds``,
         ``type_name``, ``family``; or ``None`` if size estimation raises.
         """
-        from cash.notebook import cost_model
+        from cash import cost_model
 
         try:
             obj_size = estimate_object_size(var_value)
@@ -5358,4 +5358,4 @@ class StatementProcessor:
         return False
 
 
-from ..file_tracker import FileAccessTracker
+from ...tracking.file_tracker import FileAccessTracker

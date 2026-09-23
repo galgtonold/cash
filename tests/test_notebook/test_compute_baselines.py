@@ -95,6 +95,6 @@ def test_clear_drops_the_file_too(tmp_path):
 def test_cash_does_not_track_its_own_store_as_a_dependency(tmp_path):
     """The file lives in the cache dir; reading it must never become a user
     variable's file dependency (the rule ``_CASH_FILE_NAMES`` exists for)."""
-    from cash.notebook import file_tracker
+    from cash.tracking import file_tracker
 
     assert file_tracker._is_cash_storage_filename(compute_baselines._STORE_FILENAME)

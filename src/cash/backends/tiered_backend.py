@@ -221,7 +221,7 @@ class TieredBackend(CacheBackend):
         # Lazy import: only notebook-cached values carry the cost-model family,
         # and by then cash.notebook is already loaded. Keeps this module (and a
         # bare install / the decorator path) free of the notebook import.
-        from cash.notebook import cost_model
+        from cash import cost_model
 
         est_restore = cost_model.estimated_restore_time(type_name, size_bytes, backend_kind)
         return execution_time - est_restore > self._min_persist_savings_pct * execution_time

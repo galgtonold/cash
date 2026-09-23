@@ -32,7 +32,7 @@ import ast
 import hashlib
 from typing import Mapping, Sequence
 
-from .cacheability import _READ_TEXT_MARKERS
+from ..analysis.cacheability import _READ_TEXT_MARKERS
 from .upstream.stateful_carriers import carrier_kind_from_producer
 
 __all__ = ["FIGURE_KINDS", "carrier_history_fingerprint"]

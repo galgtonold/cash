@@ -17,14 +17,14 @@ import textwrap
 
 import pytest
 
-from cash.notebook.object_hashing import compute_hash
+from cash.object_hashing import compute_hash
 
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 
 PROBE = textwrap.dedent("""
     import numpy as np, pandas as pd
-    from cash.notebook.object_hashing import compute_hash
+    from cash.object_hashing import compute_hash
     rs = np.random.RandomState(0)
     frame = pd.DataFrame({"id": np.arange(1000), "region": rs.choice(["NA", "OCE", "EU"], 1000),
                           "amount": rs.rand(1000)})

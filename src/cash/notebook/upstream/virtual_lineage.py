@@ -23,23 +23,7 @@ import types
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from ...source_norm import source_identity_digest
-from ...utils import resolve_file_dep_path
-from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
-from ..analysis import CodeAnalyzer
-from ..cache_key import (
-    CacheKeyContext,
-    VirtualCallable,
-    called_function_dependencies,
-    compute_cache_key,
-    is_cash_instrumentation,
-    is_module_like,
-    statement_source_hash,
-    virtual_callable_key,
-    virtual_namespace,
-)
-from ..cache_status import CacheStatus
-from ..cacheability import (
+from ...analysis.cacheability import (
     RECEIVER_READONLY_WRITE_METHODS,
     assigned_method_call_receivers,
     bare_call_argument_names,
@@ -56,20 +40,36 @@ from ..cacheability import (
     standalone_method_mutation_receivers,
     top_level_call_argument_bases,
 )
-from ..cacheability_decision import receiver_is_identity_coupled
+from ...analysis.cacheability_decision import receiver_is_identity_coupled
+from ...analysis.code_analyzer import CodeAnalyzer
+from ...source_norm import source_identity_digest
+from ...tracking.file_dep_snapshot import _LISTING_MIN_FILES, file_dep_is_fresh, stats_from_listings
+from ...tracking.randomness import (
+    hidden_lineage_reads,
+    hidden_lineage_writes,
+    hidden_write_lineage,
+    observed_rng_reads,
+)
+from ...utils import resolve_file_dep_path
+from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
+from ..cache_key import (
+    CacheKeyContext,
+    VirtualCallable,
+    called_function_dependencies,
+    compute_cache_key,
+    is_cash_instrumentation,
+    is_module_like,
+    statement_source_hash,
+    virtual_callable_key,
+    virtual_namespace,
+)
+from ..cache_status import CacheStatus
 from ..control_structures import extract_target_names, get_control_structure_type, is_control_structure
-from ..file_dep_snapshot import _LISTING_MIN_FILES, file_dep_is_fresh, stats_from_listings
 from ..lineage_formula import (
     callable_source_component,
     module_read_lineage,
     module_source_component,
     output_lineage,
-)
-from ..randomness import (
-    hidden_lineage_reads,
-    hidden_lineage_writes,
-    hidden_write_lineage,
-    observed_rng_reads,
 )
 from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
@@ -180,7 +180,7 @@ _FILE_STATE_THIS_RUN: dict = {}
 
 def _file_state_this_run() -> dict | None:
     """This cell run's per-file memo, or None outside a run."""
-    from .. import file_dep_snapshot as _fds
+    from ...tracking import file_dep_snapshot as _fds
 
     epoch = _fds._HASH_EPOCH
     if epoch is None:
@@ -1510,7 +1510,7 @@ class VirtualLineage:
             # usually gives it an output, but that record dies with the
             # kernel, so after a restart the call vanished from the trace and
             # a figure was rebuilt without it (round 21, replay corpus).
-            from ..cacheability import statement_writes_files
+            from ...analysis.cacheability import statement_writes_files
 
             if statement_writes_files(stmt_code) or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
                 simulation_trace.append(TraceEntry(stmt_code, outputs, inputs, input_hashes, {}, files_stale))
@@ -2053,7 +2053,7 @@ class VirtualLineage:
     def _may_write_files(node: ast.AST, stmt_code: str) -> bool:
         """A write in the text, or a call to something that might be a
         user function that writes (the planner decides which)."""
-        from ..cacheability import statement_writes_files
+        from ...analysis.cacheability import statement_writes_files
 
         if statement_writes_files(stmt_code):
             return True
@@ -2085,7 +2085,7 @@ class VirtualLineage:
         their files (upstream ran before the write), so re-checking can only
         repeat the answer.
         """
-        from .. import file_dep_snapshot as _fds
+        from ...tracking import file_dep_snapshot as _fds
 
         epoch = _fds._HASH_EPOCH
         memo = _FRESH_ENTRY_VERDICTS
@@ -3549,7 +3549,7 @@ class VirtualLineage:
 
         Excludes loop target variables and built-ins.
         """
-        from ..cacheability import analyze_statement, selfref_reassignment_targets
+        from ...analysis.cacheability import analyze_statement, selfref_reassignment_targets
 
         mutated_vars: set[str] = set()
 

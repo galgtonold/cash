@@ -111,7 +111,7 @@ class TestCheckCache:
         processor, _, backend = processor_fixture
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2\n")
-        from cash.notebook.file_dep_snapshot import snapshot_file_deps
+        from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
         snapshot = snapshot_file_deps({str(test_file)})
         test_file.write_text("a,b\n1,2\n3,4\n")  # changed since the snapshot
@@ -133,7 +133,7 @@ class TestCheckCache:
         processor, _, backend = processor_fixture
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2\n")
-        from cash.notebook.file_dep_snapshot import snapshot_file_deps
+        from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
         cache_key = "test_file_dep_ok"
         metadata = {
@@ -187,7 +187,7 @@ class TestCheckCache:
 # _is_lineage_exempt
 # ============================================================================
 
-from cash.notebook.cacheability_decision import _is_lineage_exempt
+from cash.analysis.cacheability_decision import _is_lineage_exempt
 
 
 class TestIsLineageExempt:
@@ -307,7 +307,7 @@ class TestForbiddenFunctionScan:
         processor, shell, _ = processor_fixture
         # Patch the scan to raise
         with patch(
-            "cash.notebook.analysis.CodeAnalyzer.scan_for_forbidden_functions", side_effect=TypeError("scan error")
+            "cash.analysis.code_analyzer.CodeAnalyzer.scan_for_forbidden_functions", side_effect=TypeError("scan error")
         ):
             processor.process_statement("x = 42")
         assert shell.user_ns.get("x") == 42
@@ -395,7 +395,7 @@ class TestPurityChecks:
     def test_stateful_function_skips_cache(self, processor_fixture):
         """@stateful functions should skip cache."""
         processor, shell, _ = processor_fixture
-        from cash.notebook.purity import stateful
+        from cash.purity import stateful
 
         @stateful
         def get_data():
@@ -411,7 +411,7 @@ class TestPurityChecks:
     def test_pure_function_is_cacheable(self, processor_fixture):
         """@pure functions should be cacheable."""
         processor, shell, _ = processor_fixture
-        from cash.notebook.purity import pure
+        from cash.purity import pure
 
         @pure
         def add(a, b):

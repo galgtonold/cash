@@ -13,7 +13,7 @@ Tests cover:
 import warnings
 from types import SimpleNamespace
 
-from cash.notebook.randomness import (
+from cash.tracking.randomness import (
     CashRandomnessWarning,
     RandomnessDetector,
     RandomnessVisitor,
@@ -446,7 +446,7 @@ class TestRNGStateCapture:
         """Test capturing stdlib random state."""
         import random
 
-        from cash.notebook.randomness import capture_rng_state, restore_rng_state
+        from cash.tracking.randomness import capture_rng_state, restore_rng_state
 
         random.seed(42)
         state = capture_rng_state()
@@ -461,7 +461,7 @@ class TestRNGStateCapture:
         """Test capturing numpy random state."""
         import numpy as np
 
-        from cash.notebook.randomness import capture_rng_state, restore_rng_state
+        from cash.tracking.randomness import capture_rng_state, restore_rng_state
 
         np.random.seed(42)
         state = capture_rng_state()
@@ -473,13 +473,13 @@ class TestRNGStateCapture:
 
     def test_restore_empty_state(self):
         """Test restore with empty state does nothing."""
-        from cash.notebook.randomness import restore_rng_state
+        from cash.tracking.randomness import restore_rng_state
 
         restore_rng_state({})  # Should not crash
 
     def test_get_drawing_rng_modules(self):
         """Test identifying which RNG modules code draws from."""
-        from cash.notebook.randomness import get_drawing_rng_modules
+        from cash.tracking.randomness import get_drawing_rng_modules
 
         code = """
 import random
@@ -493,21 +493,21 @@ y = np.random.rand(10)
 
     def test_get_drawing_rng_modules_syntax_error(self):
         """Test get_drawing_rng_modules with invalid code."""
-        from cash.notebook.randomness import get_drawing_rng_modules
+        from cash.tracking.randomness import get_drawing_rng_modules
 
         modules = get_drawing_rng_modules("not valid python !@#$")
         assert modules == set()
 
     def test_get_drawing_rng_modules_no_random(self):
         """Test get_drawing_rng_modules with code that has no random calls."""
-        from cash.notebook.randomness import get_drawing_rng_modules
+        from cash.tracking.randomness import get_drawing_rng_modules
 
         modules = get_drawing_rng_modules("x = 1 + 2")
         assert modules == set()
 
     def test_get_seeding_rng_modules(self):
         """A seed call reports its module as seeded, not drawn."""
-        from cash.notebook.randomness import get_drawing_rng_modules, get_seeding_rng_modules
+        from cash.tracking.randomness import get_drawing_rng_modules, get_seeding_rng_modules
 
         code = """
 import random

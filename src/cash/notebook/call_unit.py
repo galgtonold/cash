@@ -41,11 +41,11 @@ from types import ModuleType as _ModuleType
 from typing import Any
 
 from cash._clock import perf_counter as _perf_counter
+from cash.analysis.annotations import CacheAnnotation
+from cash.analysis.cacheability import analyze_statement, callee_source_global_mutations
+from cash.analysis.cacheability_decision import decide_cacheability
 from cash.notebook._trace import trace_event
-from cash.notebook.annotations import CacheAnnotation
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
-from cash.notebook.cacheability import analyze_statement, callee_source_global_mutations
-from cash.notebook.cacheability_decision import decide_cacheability
 from cash.notebook.call_interception import CallSite, _names_read
 from cash.notebook.call_refs import (
     DIGEST_FIELD,
@@ -54,14 +54,14 @@ from cash.notebook.call_refs import (
     UNHASHED_PREFIX,
     digest_and_size,
 )
-from cash.notebook.file_tracker import FileAccessTracker
-from cash.notebook.object_hashing import (
+from cash.object_hashing import (
     compute_hash,
     compute_hash_full,
     estimate_object_size,
     is_identity_fallback_hash,
 )
-from cash.notebook.randomness import capture_rng_state, rng_modules_changed
+from cash.tracking.file_tracker import FileAccessTracker
+from cash.tracking.randomness import capture_rng_state, rng_modules_changed
 
 logger = logging.getLogger(__name__)
 
@@ -780,7 +780,7 @@ def _plain_or_code(value, seen: set[int], budget: list[int]) -> bool:
     if isinstance(value, _types.FunctionType):
         if getattr(value, "_is_file_tracker_patch", False) or getattr(value, "_cash_cached", False):
             return True  # cash's own: keyed or tracked by cash itself
-        from cash.notebook.file_tracker import _is_user_file
+        from cash.tracking.file_tracker import _is_user_file
 
         filename = getattr(value.__code__, "co_filename", "") or ""
         # A cell's code has a `<cash-...>` / `<ipython-...>` name: the user's.
@@ -1448,7 +1448,7 @@ class CallUnit:
         if not snap:
             return
         try:
-            from cash.notebook.file_tracker import _active_tracker
+            from cash.tracking.file_tracker import _active_tracker
 
             tracker = _active_tracker.get()
         except Exception:  # noqa: BLE001 - tracking is best-effort
@@ -1857,7 +1857,7 @@ class CallUnit:
         comes back from after a restart, the case a cache is for.
         """
         try:
-            from .cost_model import estimated_restore_time
+            from ..cost_model import estimated_restore_time
 
             size = estimate_object_size(result)
             predicted = estimated_restore_time(type(result).__name__, size, "disk")
@@ -1936,7 +1936,7 @@ class CallUnit:
                 if result is arg:
                     return False
         try:
-            from .cacheability_decision import identity_coupled_reason
+            from ..analysis.cacheability_decision import identity_coupled_reason
 
             return identity_coupled_reason("<intercepted call>", result) is None
         except Exception:  # noqa: BLE001 - never let the predicate break the call
@@ -2032,7 +2032,7 @@ class CallUnit:
 
         Same snapshot shape (``{path: {'mtime', 'size'[, 'hash']}}`` for a
         local file, ``{'remote': True, ...}`` for a remote read -- see
-        :mod:`cash.notebook.file_dep_snapshot`) and the same freshness
+        :mod:`cash.tracking.file_dep_snapshot`) and the same freshness
         helper, so the two subsystems cannot drift on what "fresh" means.
         Absent/empty ``auto_file_deps`` (a call that read no files) is
         vacuously fresh, same as the decorator's version.
@@ -2041,7 +2041,7 @@ class CallUnit:
         if not snap:
             return True
         try:
-            from cash.notebook.file_dep_snapshot import file_dep_is_fresh
+            from cash.tracking.file_dep_snapshot import file_dep_is_fresh
         except Exception:  # noqa: BLE001 - never let a broken import fail-open a hit
             return False
         for path, recorded in snap.items():
@@ -2104,7 +2104,7 @@ class CallUnit:
             metadata["force_persist"] = True
         if file_deps or remote_deps:
             try:
-                from cash.notebook.file_dep_snapshot import snapshot_dependencies
+                from cash.tracking.file_dep_snapshot import snapshot_dependencies
 
                 snap = snapshot_dependencies(file_deps, remote_deps)
             except Exception:  # noqa: BLE001 - never let dep snapshotting break the store

@@ -60,7 +60,7 @@ def test_metrics_carries_inputs_on_second_run(magics_fixture):
     branch fires (RESTORED or COMPUTED again), the inputs are still carried
     on the metrics dict.
     """
-    from cash.notebook.annotations import CacheAnnotation
+    from cash.analysis.annotations import CacheAnnotation
 
     magics, shell, _ = magics_fixture
     shell.user_ns["a"] = 1

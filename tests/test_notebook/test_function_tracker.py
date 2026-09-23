@@ -1,6 +1,6 @@
 """Tests for FunctionTracker - function source tracking for cache invalidation."""
 
-from cash.notebook.function_tracker import FunctionTracker
+from cash.tracking.function_tracker import FunctionTracker
 
 
 class TestFunctionSourceHash:

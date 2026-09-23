@@ -1,7 +1,7 @@
 import math
 
 from cash import Cash
-from cash.notebook.analysis import CodeAnalyzer
+from cash.analysis.code_analyzer import CodeAnalyzer
 
 
 # Dummy functions for testing

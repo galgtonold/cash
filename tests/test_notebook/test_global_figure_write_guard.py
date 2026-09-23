@@ -164,7 +164,7 @@ class TestHealthyShapeUntouched:
 
 class TestDetectionHelper:
     def test_distinguishes_module_from_receiver_via_namespace(self, fig_ax):
-        from cash.notebook.cacheability import statement_saves_current_pyplot_figure as f
+        from cash.analysis.cacheability import statement_saves_current_pyplot_figure as f
 
         fig, ax = fig_ax
         import matplotlib.pyplot as plt

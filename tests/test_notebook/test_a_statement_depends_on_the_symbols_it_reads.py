@@ -14,7 +14,7 @@ import textwrap
 
 import pytest
 
-from cash.notebook.module_symbols import closure_digest_of_source, static_attribute_reads
+from cash.tracking.module_symbols import closure_digest_of_source, static_attribute_reads
 
 
 def _d(source, *names):

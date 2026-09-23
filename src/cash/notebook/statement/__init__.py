@@ -19,7 +19,7 @@ Everything else (`CacheFreshnessChecker`, `StatementFileDeps`,
 See ADR-011 for the package-extraction rationale.
 
 The file-snapshot helper (`snapshot_file_deps`) lives in
-:mod:`cash.notebook.file_dep_snapshot`, not here: it has cross-subsystem
+:mod:`cash.tracking.file_dep_snapshot`, not here: it has cross-subsystem
 callers (the decorator path in ``src/cash/core.py``, ``Restorer``, and
 ``upstream/virtual_lineage.py``).
 """

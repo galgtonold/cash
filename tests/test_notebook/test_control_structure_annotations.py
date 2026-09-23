@@ -93,7 +93,7 @@ class TestInheritanceAndMerging:
     def test_inherited_directive_survives_an_unannotated_statement(self):
         cell = "for t in range(3):\n    a = draw()\n"
         node = _for_node(cell)
-        from cash.notebook.annotations import CacheAnnotation
+        from cash.analysis.annotations import CacheAnnotation
 
         inherited = CacheAnnotation(no_cache=True)
         ann = _helpers.resolve_statement_annotation(cell, node.body[0], inherited)

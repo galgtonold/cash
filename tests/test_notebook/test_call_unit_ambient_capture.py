@@ -38,7 +38,7 @@ import time
 
 import cash
 from cash.notebook.call_interception import CallCache, CallSite
-from cash.notebook.file_tracker import FileAccessTracker, _active_tracker
+from cash.tracking.file_tracker import FileAccessTracker, _active_tracker
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 # ---------------------------------------------------------------------------

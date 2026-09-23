@@ -18,20 +18,20 @@ class TestSizeAwareCaching:
 
     def test_estimate_object_size_int(self):
         """Integer size estimation."""
-        from cash.notebook.object_hashing import estimate_object_size
+        from cash.object_hashing import estimate_object_size
 
         assert estimate_object_size(42) > 0
 
     def test_estimate_object_size_str(self):
         """String size estimation."""
-        from cash.notebook.object_hashing import estimate_object_size
+        from cash.object_hashing import estimate_object_size
 
         size = estimate_object_size("hello" * 1000)
         assert size > 5000  # At least 5KB for a 5000-char string
 
     def test_estimate_object_size_list(self):
         """List size estimation."""
-        from cash.notebook.object_hashing import estimate_object_size
+        from cash.object_hashing import estimate_object_size
 
         size = estimate_object_size(list(range(10000)))
         assert size > 0
