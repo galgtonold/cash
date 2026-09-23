@@ -303,8 +303,8 @@ class CashAdminMagicsMixin:
         tracked = len(self._tracking_state.variable_lineage)
         print(f"  Tracked variables:   {tracked}")
         print()
-        # Points at the CLI, not at "%cash_admin": that magic has never
-        # existed. Sending a user who is looking at a multi-hundred-MB .cash
+        # Points at the CLI, not at an admin magic: there has never been
+        # one. Sending a user who is looking at a multi-hundred-MB .cash
         # to a UsageError is worse than saying nothing, and inspecting the
         # backend is exactly what they came here to do.
         # `cash inspect` named too: it is the view that answers "is my cache

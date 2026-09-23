@@ -28,8 +28,6 @@ _METHOD = re.compile(r"\bCash(?:\(\))?\.([A-Za-z_]\w*)")
 #: none of them is an exception to keep.
 _KNOWN_STALE = {
     ("src/cash/core.py", "Cash.notebook"),
-    ("src/cash/notebook/ipython/__init__.py", "%cash_clear"),
-    ("src/cash/notebook/ipython/admin.py", "%cash_admin"),
 }
 
 #: A magic named in prose as an example of a *different* name.
