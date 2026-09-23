@@ -23,7 +23,7 @@ import sys
 from datetime import datetime
 from typing import Any
 
-__all__ = ["JsonFormatter", "application_handlers", "disable", "enable", "enable_console", "setup_logging"]
+__all__ = ["JsonFormatter", "application_handlers", "disable", "enable", "enable_console", "follow", "setup_logging"]
 
 #: Handlers cash added to the ``cash`` logger; everything else is the application's.
 _OWN_HANDLERS: list[logging.Handler] = []
@@ -161,6 +161,30 @@ def disable() -> None:
     if _LEVEL_SET is not None and cash_logger.level == _LEVEL_SET:
         cash_logger.setLevel(logging.NOTSET)
     _LEVEL_SET = None
+
+
+def follow(level: int | None) -> None:
+    """Make the ``cash`` logger match settings that just changed.
+
+    *level* is what they ask for now, or ``None`` when ``debug`` and
+    ``verbose`` are both off. Unlike `enable`, it also raises the level and
+    takes back cash's stderr handler, so ``cash.configure(debug=False)``
+    stops the output ``debug=True`` started. A level someone else set, and
+    the application's handlers, stay as they are.
+    """
+    global _LEVEL_SET
+    cash_logger = logging.getLogger("cash")
+    ours = _LEVEL_SET is not None and cash_logger.level == _LEVEL_SET
+    if level is None:
+        if ours:
+            cash_logger.setLevel(logging.NOTSET)
+            _LEVEL_SET = None
+        _remove_own(cash_logger)
+        return
+    if ours:
+        cash_logger.setLevel(level)
+        _LEVEL_SET = level
+    enable(level)
 
 
 def setup_logging(level: int = logging.INFO, json_output: bool = False, log_file: str | None = None) -> None:

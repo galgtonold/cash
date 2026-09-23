@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import weakref
 from typing import TYPE_CHECKING, Any
 
 from ..exceptions import DependencyNotFoundError
@@ -32,7 +33,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["apply_persistence_settings", "build_backend_from_config", "build_tiered", "tier_specs"]
+__all__ = [
+    "apply_persistence_settings",
+    "build_backend_from_config",
+    "build_tiered",
+    "built_from_config",
+    "tier_specs",
+]
 
 #: The tiers ``backend = "tiered"`` stands for.
 DEFAULT_STACK = ("memory", "file")
@@ -42,10 +49,23 @@ DEFAULT_STACK = ("memory", "file")
 TierSpec = tuple[str, tuple[tuple[str, Any], ...]]
 
 
+#: Every backend `build_backend_from_config` made. Only these may be rebuilt
+#: when the config changes: one the caller passed in (``Cash(backend=...)``)
+#: is theirs, and the config does not describe it.
+_FROM_CONFIG: weakref.WeakSet[CacheBackend] = weakref.WeakSet()
+
+
 def build_backend_from_config(config: CashConfig) -> CacheBackend:
     """The backend *config* describes. See the module docstring."""
     tiers = [_build(kind, dict(settings)) for kind, settings in tier_specs(config)]
-    return build_tiered(tiers, config) if config.tiers or len(tiers) > 1 else tiers[0]
+    backend = build_tiered(tiers, config) if config.tiers or len(tiers) > 1 else tiers[0]
+    _FROM_CONFIG.add(backend)
+    return backend
+
+
+def built_from_config(backend: CacheBackend) -> bool:
+    """Did `build_backend_from_config` build *backend*?"""
+    return backend in _FROM_CONFIG
 
 
 def build_tiered(backends: list[CacheBackend], config: CashConfig) -> TieredBackend:

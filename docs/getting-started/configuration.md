@@ -412,8 +412,18 @@ detail of a tier in use. Then the old backend drains its pending writes via
 detail of a backend not in use (`redis_host` on the RAM + disk stack) is
 stored for later and rebuilds nothing. `min_cache_savings_pct` is handed to
 the running backend's persistence policy in place. Every other setting —
-`debug`, `verbose`, `persist_all`, ... — is read by the next operation.
+`debug`, `verbose`, `persist_all`, ... — is read by the next operation;
+`debug=False` also stops the log output `debug=True` started.
 `Cash.reconfigure(**settings)` does the same for an instance of your own.
+
+<!-- claim: cash/reconfigure.py:apply_overrides @3b83cdfd, cash/config.py:validated_overrides @db2d884f -->
+**Values mean what they mean in `Cash(...)`**: each one is checked, and a
+`tiers` list of tables built, exactly as the constructor does it, before
+anything is changed, so a bad value raises `ValueError` and leaves the old
+settings in place. A `cache_dir` of `~/...` is expanded, and a relative one
+is relative to the current directory. An instance given its backend as an
+object (`Cash(backend=...)`) keeps it: a change to the tier settings raises
+`ValueError` rather than replacing your backend with one built from config.
 
 ## Notebook-only knobs
 

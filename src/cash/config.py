@@ -1100,6 +1100,22 @@ def _build_tiers(entries: list[Any]) -> list[TierConfig]:
     return tiers
 
 
+def validated_overrides(overrides: dict[str, Any]) -> dict[str, Any]:
+    """*overrides* as ``Cash(**overrides)`` would apply them, for ``cash.configure``.
+
+    The constructor's path, so the two cannot disagree: every value checked
+    (``ValueError`` on a bad one, as code gave it), ``tiers`` built into
+    `TierConfig`s, and ``cache_dir`` with ``~`` expanded and otherwise
+    relative to the cwd, like any path given in code.
+    """
+    checked = _validated_layer(overrides, "cash.configure(...)", strict=True)
+    if "tiers" in checked:
+        checked["tiers"] = _build_tiers(checked["tiers"] or [])
+    if "cache_dir" in checked:
+        checked["cache_dir"] = _anchor_cache_dir(checked["cache_dir"], _CALLER_RELATIVE)
+    return checked
+
+
 def _build_config(merged: dict[str, Any], source: str) -> CashConfig:
     """Materialise the merged dict into a typed CashConfig instance."""
     cfg = CashConfig()

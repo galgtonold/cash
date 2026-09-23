@@ -1,20 +1,24 @@
 """Changing a running `Cash` instance's settings (``cash.configure``).
 
-Every setting is applied to the instance's config in place. The backend is
-rebuilt only when the tiers the config describes changed (`tier_specs`), so a
-setting no tier uses -- ``redis_host`` on a RAM + disk stack -- is stored for
-later and rebuilds nothing, and the RAM tier survives every change that does
-not concern it.
+Every setting is checked the way ``Cash(**overrides)`` checks it
+(`validated_overrides`) before any is applied, then applied to the instance's
+config in place. The backend is rebuilt only when the tiers the config
+describes changed (`tier_specs`), so a setting no tier uses -- ``redis_host``
+on a RAM + disk stack -- is stored for later and rebuilds nothing, and the RAM
+tier survives every change that does not concern it. A backend the caller
+passed in as an object is never rebuilt.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import fields
 from typing import TYPE_CHECKING, Any
 
-from .backends.factory import apply_persistence_settings, build_backend_from_config, tier_specs
-from .config import CashConfig, validate_value
+from . import _log
+from .backends.factory import apply_persistence_settings, build_backend_from_config, built_from_config, tier_specs
+from .config import CashConfig, validated_overrides
 
 if TYPE_CHECKING:
     from .core import Cash
@@ -28,23 +32,35 @@ def apply_overrides(cash: Cash, overrides: dict[str, Any]) -> None:
     """Validate *overrides*, apply them to ``cash.config``, and rebuild the
     backend if the tiers it describes changed.
 
-    Raises ``ValueError`` before changing anything if a key is not a setting
-    or a value is not valid for it.
+    Raises ``ValueError`` before changing anything if a key is not a setting,
+    a value is not valid for it, or it would change the tiers of a backend
+    the caller supplied.
     """
     valid = {f.name for f in fields(CashConfig) if not f.name.startswith("_")}
     unknown = set(overrides) - valid
     if unknown:
         raise ValueError(f"{sorted(unknown)!r} is not a configurable field. Valid keys: {sorted(valid)!r}")
-    checked = {key: (val if key == "tiers" else validate_value(key, val)) for key, val in overrides.items()}
+    checked = validated_overrides(overrides)
 
     before = tier_specs(cash.config)
+    tiers_change = tier_specs(dataclasses.replace(cash.config, **checked)) != before
+    running = cash.backend_if_built
+    if tiers_change and running is not None and not built_from_config(running):
+        raise ValueError(
+            f"cash.configure({', '.join(sorted(checked))}=...) changes the storage tiers, but this "
+            f"Cash was given its backend ({type(running).__name__}) as an object, and cash does not "
+            f"rebuild a backend it did not build. Configure that backend, or pass a new one."
+        )
+
     for key, val in checked.items():
         setattr(cash.config, key, val)
+    if "debug" in checked or "verbose" in checked:
+        debug, verbose = cash.config.debug, cash.config.verbose
+        _log.follow(logging.DEBUG if debug else logging.INFO if verbose else None)
 
-    running = cash.backend_if_built
     if running is None:
         return  # built from the config on first use
-    if tier_specs(cash.config) == before:
+    if not tiers_change:
         if "min_cache_savings_pct" in checked:
             apply_persistence_settings(running, cash.config)
         return

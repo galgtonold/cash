@@ -603,8 +603,6 @@ class Cash(
         """Change settings at runtime, rebuilding the backend only when the
         tiers it is built from changed. See ``cash.configure``."""
         apply_overrides(self, overrides)
-        if overrides.get("debug") or overrides.get("verbose"):
-            _log.enable(logging.DEBUG if self.debug else logging.INFO)
 
     def __repr__(self) -> str:
         backend_name = type(self._backend).__name__ if self._backend is not None else "<deferred>"
