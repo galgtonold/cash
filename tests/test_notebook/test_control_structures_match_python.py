@@ -59,6 +59,22 @@ CASES = {
         "        log.append('inner finally')\nexcept ZeroDivisionError:\n    log.append('outer')\nfinally:\n"
         "    log.append('outer finally')\n",
     ],
+    # for / while
+    "for-else runs after a loop that finished": [
+        "tot = 0\nfor i in range(3):\n    tot = tot + i\nelse:\n    fe = 'ran'\nafter = 1\n",
+    ],
+    "for-else is skipped after a break": [
+        "for i in range(3):\n    if i == 1:\n        break\nelse:\n    fe = 'ran'\n",
+    ],
+    "for-else is skipped when the body raises": [
+        "for i in range(3):\n    if i == 1:\n        raise ValueError(i)\nelse:\n    fe = 'ran'\n",
+    ],
+    "for-else over an empty iterable": [
+        "for i in []:\n    x = i\nelse:\n    fe = 'ran'\n",
+    ],
+    "a for-else nested in a loop": [
+        "log = []\nfor i in range(3):\n    for j in range(i):\n        log.append(j)\n    else:\n        log.append('e')\n",
+    ],
 }
 
 
