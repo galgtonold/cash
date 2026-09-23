@@ -59,6 +59,20 @@ CASES = {
         "        log.append('inner finally')\nexcept ZeroDivisionError:\n    log.append('outer')\nfinally:\n"
         "    log.append('outer finally')\n",
     ],
+    # if
+    "an if condition's error keeps its type for an enclosing handler": [
+        "d = {}\ntry:\n    if d['k']:\n        x = 1\nexcept KeyError:\n    caught = True\n",
+    ],
+    "an if condition's error keeps its type at the top level": [
+        "d = {}\nif d['k']:\n    x = 1\n",
+    ],
+    "an error from a condition's truth value keeps its type": [
+        "class Unsure:\n    def __bool__(self):\n        raise KeyError('bool')\n",
+        "try:\n    if Unsure():\n        x = 1\nexcept KeyError:\n    caught = True\n",
+    ],
+    "an elif condition's error keeps its type": [
+        "d = {}\nif False:\n    x = 1\nelif d['k']:\n    x = 2\n",
+    ],
     # for / while
     "for-else runs after a loop that finished": [
         "tot = 0\nfor i in range(3):\n    tot = tot + i\nelse:\n    fe = 'ran'\nafter = 1\n",
@@ -79,6 +93,8 @@ CASES = {
 
 
 def _comparable(value):
+    if isinstance(value, type):
+        return f"class {value.__name__}"
     if isinstance(value, (types.FunctionType, types.GeneratorType)):
         return type(value).__name__
     return value

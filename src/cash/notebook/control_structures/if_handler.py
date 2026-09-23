@@ -65,7 +65,8 @@ class IfHandler:
            so the badge can group them.
         3. Only the executed branch is shown in the badge.
 
-        Falls back to ``execute_as_single_unit`` if condition evaluation fails.
+        An error raised by a condition is the result's ``error``, unchanged,
+        as it is for a statement in the branch.
         """
 
         all_metrics: list[ProcessResult] = []
@@ -193,18 +194,20 @@ class IfHandler:
         Evaluates each condition in the user namespace. Returns the first branch
         whose condition is truthy, or the else branch if no condition matches.
 
-        Raises RuntimeError if no branch is taken (shouldn't happen with else).
+        A condition that raises (evaluating it or taking its truth value)
+        raises that error, marked with the condition's cell line.
         """
         current = node
         branch_idx = 0
         while True:
             test_code = ast.unparse(current.test)
             try:
-                condition_result = eval(test_code, self.shell.user_ns, self.shell.user_ns)
-            except Exception as e:
-                raise RuntimeError(f"Failed to evaluate if condition: {test_code}") from e
+                taken = bool(eval(test_code, self.shell.user_ns, self.shell.user_ns))
+            except Exception as e:  # noqa: BLE001 - the user's error, only marked with its line
+                _helpers.at_line(e, current, overwrite=True)
+                raise
 
-            if condition_result:
+            if taken:
                 keyword = "elif" if branch_idx > 0 else "if"
                 label = f"{keyword} {test_code}"
                 return current.body, label

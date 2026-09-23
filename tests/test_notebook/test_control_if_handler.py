@@ -143,8 +143,10 @@ def test_if_metrics_tagged_with_branch_label(handler, mock_shell):
 
 
 def test_condition_evaluation_failure_returns_failure(handler, mock_shell):
-    """Undefined name in condition → process() reports success=False."""
-    node = _parse_if("if undefined_name:\n    x = 1")
+    """Undefined name in condition → process() reports success=False with the
+    NameError itself, marked with the condition's line."""
+    node = ast.parse("x = 0\nif False:\n    x = 1\nelif undefined_name:\n    x = 2").body[1]
     result = handler.process(node, None, True)
     assert result.success is False
-    assert result.error is not None
+    assert type(result.error) is NameError
+    assert result.error._cash_error_lineno == 4
