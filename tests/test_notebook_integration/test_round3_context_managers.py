@@ -20,11 +20,11 @@ class TestContextManagerBasics:
                         self.elapsed = None
                     def __enter__(self):
                         import time
-                        self._start = time.monotonic()
+                        self._start = time.perf_counter()
                         return self
                     def __exit__(self, *args):
                         import time
-                        self.elapsed = time.monotonic() - self._start
+                        self.elapsed = time.perf_counter() - self._start
                         return False
 
                 with Timer('test') as t:
