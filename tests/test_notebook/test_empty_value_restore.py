@@ -1,6 +1,6 @@
 """A legitimately-empty cached value must be restorable.
 
-``_restore_vars_from_cache`` refused to restore ANY empty sized value whenever
+A restore refused to restore ANY empty sized value whenever
 the namespace happened to hold a non-empty one. The intent was sound — an empty
 cache entry should not clobber live data — but the rule was unconditional, so a
 filter that correctly matches nothing could never be served from cache and
@@ -24,34 +24,44 @@ from unittest.mock import MagicMock
 import pytest
 
 from cash.notebook.upstream import UpstreamChecker
+from cash.notebook.upstream.virtual_lineage import lineage_confirmed_vars
+
+METADATA = {"output_lineages": {"rows": "h1"}, "execution_time": 1.0}
 
 
-def _make_lineage(shell_ns: dict):
+def _make_simulator(shell_ns: dict, metadata=None, variables=None):
     cash_instance = MagicMock()
+    cash_instance.backend.get.return_value = (metadata or METADATA, {"variables": variables or {}})
     shell = MagicMock()
     shell.user_ns = shell_ns
     checker = UpstreamChecker(shell, cash_instance, debug=False)
     checker.variable_lineage = {}
-    return checker.simulator.virtual_lineage, shell, cash_instance
+    return checker.simulator, shell
+
+
+def _restore(shell_ns, cached, confirmed, metadata=None):
+    """Restore ``rows = ...`` whose entry holds *cached*; its lineage is
+    confirmed when the simulation expects the lineage the entry has."""
+    simulator, shell = _make_simulator(shell_ns, metadata, cached)
+    expected = {name: "h1" for name in cached} if confirmed else None
+    restored = simulator.restore_statement("rows = f()", set(cached), {"f"}, {}, expected_lineages=expected)
+    return restored, shell
 
 
 class TestLineageConfirmedVars:
     """The set that decides whether the empty-guard applies."""
 
     def test_confirmed_when_hash_matches(self):
-        vl, _, _ = _make_lineage({})
-        confirmed = vl._lineage_confirmed_vars({"output_lineages": {"rows": "h1"}}, {}, {"rows": "h1"})
+        confirmed = lineage_confirmed_vars({"output_lineages": {"rows": "h1"}}, {}, {"rows": "h1"})
         assert confirmed == frozenset({"rows"})
 
     def test_not_confirmed_when_hash_differs(self):
-        vl, _, _ = _make_lineage({})
-        confirmed = vl._lineage_confirmed_vars({"output_lineages": {"rows": "h1"}}, {}, {"rows": "DIFFERENT"})
+        confirmed = lineage_confirmed_vars({"output_lineages": {"rows": "h1"}}, {}, {"rows": "DIFFERENT"})
         assert confirmed == frozenset()
 
     def test_not_confirmed_when_file_deps_present(self):
         """File-dep restores skip the strict lineage check, so nothing is proven."""
-        vl, _, _ = _make_lineage({})
-        confirmed = vl._lineage_confirmed_vars({"output_lineages": {"rows": "h1"}}, {"data.csv": 123.0}, {"rows": "h1"})
+        confirmed = lineage_confirmed_vars({"output_lineages": {"rows": "h1"}}, {"data.csv": 123.0}, {"rows": "h1"})
         assert confirmed == frozenset()
 
     @pytest.mark.parametrize(
@@ -63,29 +73,22 @@ class TestLineageConfirmedVars:
         ],
     )
     def test_not_confirmed_without_both_sides(self, metadata, expected):
-        vl, _, _ = _make_lineage({})
-        assert vl._lineage_confirmed_vars(metadata, {}, expected) == frozenset()
+        assert lineage_confirmed_vars(metadata, {}, expected) == frozenset()
 
 
 class TestEmptyRestoreRespectsConfirmation:
-    """The guard itself, driven directly."""
-
-    METADATA = {"output_lineages": {"rows": "h1"}}
+    """The guard itself, through a restore."""
 
     def test_confirmed_empty_value_is_restored(self):
         """A correctly-empty result reaches the namespace."""
-        vl, shell, _ = _make_lineage({"rows": [1, 2, 3]})
-
-        restored = vl._restore_vars_from_cache({"rows": []}, self.METADATA, frozenset({"rows"}))
+        restored, shell = _restore({"rows": [1, 2, 3]}, {"rows": []}, confirmed=True)
 
         assert "rows" in restored
         assert shell.user_ns["rows"] == []
 
     def test_unconfirmed_empty_value_is_blocked(self):
         """The original safety property, unchanged."""
-        vl, shell, _ = _make_lineage({"rows": [1, 2, 3]})
-
-        restored = vl._restore_vars_from_cache({"rows": []}, self.METADATA)
+        restored, shell = _restore({"rows": [1, 2, 3]}, {"rows": []}, confirmed=False)
 
         assert "rows" not in restored
         assert shell.user_ns["rows"] == [1, 2, 3], "live data must not be clobbered"
@@ -93,50 +96,39 @@ class TestEmptyRestoreRespectsConfirmation:
     def test_confirmation_only_affects_the_empty_case(self):
         """A non-empty cached value restores either way — confirmation is not
         a general gate on restoring, only on the empty-over-non-empty case."""
-        for confirmed in (frozenset(), frozenset({"rows"})):
-            vl, shell, _ = _make_lineage({"rows": [1, 2, 3]})
-            restored = vl._restore_vars_from_cache({"rows": [9, 9]}, self.METADATA, confirmed)
+        for confirmed in (False, True):
+            restored, shell = _restore({"rows": [1, 2, 3]}, {"rows": [9, 9]}, confirmed=confirmed)
             assert "rows" in restored
             assert shell.user_ns["rows"] == [9, 9]
 
     def test_empty_over_empty_restores_without_confirmation(self):
         """The guard needs a NON-empty incumbent; empty-over-empty is harmless."""
-        vl, shell, _ = _make_lineage({"rows": []})
-
-        restored = vl._restore_vars_from_cache({"rows": []}, self.METADATA)
+        restored, _ = _restore({"rows": []}, {"rows": []}, confirmed=False)
 
         assert "rows" in restored
 
     def test_var_absent_from_namespace_restores(self):
         """Nothing to protect when the name is not bound yet."""
-        vl, shell, _ = _make_lineage({})
-
-        restored = vl._restore_vars_from_cache({"rows": []}, self.METADATA)
+        restored, shell = _restore({}, {"rows": []}, confirmed=False)
 
         assert "rows" in restored
         assert shell.user_ns["rows"] == []
 
     def test_unsized_values_are_unaffected(self):
         """Scalars have no len(); the guard must not choke on them."""
-        vl, shell, _ = _make_lineage({"x": 42})
-
-        restored = vl._restore_vars_from_cache({"x": 0}, {"output_lineages": {"x": "h1"}})
+        restored, shell = _restore({"x": 42}, {"x": 0}, confirmed=False, metadata={"output_lineages": {"x": "h1"}})
 
         assert "x" in restored
         assert shell.user_ns["x"] == 0
 
 
 class TestEndToEndThroughVirtualRestore:
-    """Through the real entry point, so the plumbing is covered too."""
+    """With the statement a real filter, as the backward scan restores it."""
 
     def test_confirmed_lineage_restores_empty_result(self):
-        vl, shell, cash_instance = _make_lineage({"rows": list(range(1000))})
-        cash_instance.backend.get.return_value = (
-            {"output_lineages": {"rows": "h1"}, "execution_time": 1.0},
-            {"variables": {"rows": []}},
-        )
+        simulator, shell = _make_simulator({"rows": list(range(1000))}, variables={"rows": []})
 
-        restored, _, _ = vl.try_virtual_restore(
+        restored = simulator.restore_statement(
             "rows = [r for r in data if r.matches(q)]",
             {"rows"},
             {"data", "q"},
@@ -148,13 +140,9 @@ class TestEndToEndThroughVirtualRestore:
         assert shell.user_ns["rows"] == []
 
     def test_mismatched_lineage_does_not_restore(self):
-        vl, shell, cash_instance = _make_lineage({"rows": list(range(1000))})
-        cash_instance.backend.get.return_value = (
-            {"output_lineages": {"rows": "h1"}, "execution_time": 1.0},
-            {"variables": {"rows": []}},
-        )
+        simulator, shell = _make_simulator({"rows": list(range(1000))}, variables={"rows": []})
 
-        restored, _, _ = vl.try_virtual_restore(
+        restored = simulator.restore_statement(
             "rows = [r for r in data if r.matches(q)]",
             {"rows"},
             {"data", "q"},

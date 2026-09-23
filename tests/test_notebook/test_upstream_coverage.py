@@ -1,22 +1,19 @@
 """Comprehensive unit tests for upstream.py to improve coverage from 62% to 70%+.
 
 Tests cover:
-- _handle_lineage_mismatch
+- MismatchClassifier.classify on a lineage mismatch
 - lineage_formula.input_lineage (as the simulator calls it)
-- _resolve_virtual_input_lineages
+- the input lineages a simulated statement is keyed on
 - lineage_formula.module_source_component (the simulator's module component)
 - _resolve_fallback_cache_idx / _reset_advanced_lineages
 - _handle_downstream_advancement_fallback
 - _stat_file_deps
-- _check_file_deps_for_restore
-- _check_lineage_consistency
-- _get_metadata_only
+- restore_statement's file and lineage checks
 - reset_caches
 - set_tracking_state
 """
 
 import os
-import time
 import types
 from unittest.mock import MagicMock
 
@@ -24,8 +21,8 @@ import pytest
 
 from cash.notebook._protocols import TrackingState
 from cash.notebook.upstream import UpstreamChecker
-from cash.notebook.upstream._types import TraceEntry
-from cash.notebook.upstream.virtual_lineage import VirtualLineage
+from cash.notebook.upstream._types import CellCheck, SimulationResult, TraceEntry
+from cash.notebook.upstream.virtual_lineage import VirtualLineage, lineage_conflict
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
 # ---------------------------------------------------------------------------
@@ -52,75 +49,39 @@ def _make_checker(**kwargs):
 
 
 # ===========================================================================
-# _handle_lineage_mismatch
+# MismatchClassifier.classify: a lineage mismatch
 # ===========================================================================
 
 
-class TestHandleLineageMismatch:
-    """Test lineage mismatch handling (the notebook-based pass 2 version)."""
+class TestLineageMismatch:
+    """A required input whose live lineage differs from the simulated one."""
 
-    def _call_mismatch(
-        self,
-        checker,
-        var_name="x",
-        actual="actual",
-        virtual="virtual",
-        broken_vars=None,
-        simulation_trace=None,
-        notebook_cells=None,
-    ):
-        """Helper to call _handle_lineage_mismatch with all required args."""
-        if broken_vars is None:
-            broken_vars = set()
-        if simulation_trace is None:
-            simulation_trace = []
-        if notebook_cells is None:
-            notebook_cells = []
-        checker.simulator.classifier._handle_lineage_mismatch(
-            var_name=var_name,
-            actual_lineage=actual,
-            final_virtual_hash=virtual,
-            vars_derived_from_loops=set(),
-            upstream_has_modifications=False,
-            loop_derived_trust_overridden=False,
-            loop_target_vars=set(),
-            virtual_lineage={},
-            virtual_modules=set(),
-            vars_with_stale_files=set(),
-            simulation_trace=simulation_trace,
-            required_inputs=None,
-            current_cell_outputs=None,
-            notebook_cells=notebook_cells,
-            broken_vars=broken_vars,
-        )
-        return broken_vars
+    def _classify(self, checker, actual="actual", virtual="virtual", trace=None):
+        checker.variable_lineage["x"] = actual
+        sim = SimulationResult(virtual_lineage={"x": virtual}, trace=trace or [])
+        check = CellCheck(current_cell_idx=1, notebook_cells=["x = 1", "y = x"], required_inputs={"x"})
+        return checker.simulator.classifier.classify(sim, check).broken_vars
 
     def test_mismatch_adds_to_broken_vars(self):
         """When lineage doesn't match, var should be added to broken_vars."""
-        checker = _make_checker()
-        broken = self._call_mismatch(checker, var_name="x", actual="aaa", virtual="bbb")
-        assert "x" in broken
+        checker = _make_checker(user_ns={"x": 1})
+        assert "x" in self._classify(checker, actual="aaa", virtual="bbb")
 
     def test_matching_lineage_not_broken(self):
         """When actual matches virtual, var should not be broken."""
-        checker = _make_checker()
-        broken = self._call_mismatch(checker, var_name="x", actual="same", virtual="same")
-        # If lineages match, _handle_mismatch_prereqs should return True
-        # and var should NOT be added to broken_vars
-        # (depends on prereqs logic, but at minimum should not crash)
-        assert isinstance(broken, set)
+        checker = _make_checker(user_ns={"x": 1})
+        assert "x" not in self._classify(checker, actual="same", virtual="same")
 
     def test_debug_mode_no_crash(self):
         """Debug mode should produce debug output without crashing."""
-        checker = _make_checker(debug=True)
-        broken = self._call_mismatch(checker, actual="expected123", virtual="actual456")
-        assert isinstance(broken, set)
+        checker = _make_checker(user_ns={"x": 1}, debug=True)
+        assert "x" in self._classify(checker, actual="expected123", virtual="actual456")
 
     def test_with_simulation_trace(self):
-        """Should search simulation trace for the variable's last statement."""
-        checker = _make_checker()
+        """The trace's last producer of the variable is looked up."""
+        checker = _make_checker(user_ns={"x": 1})
         trace = [TraceEntry("x = 1", {"x"}, set(), {}, {}, False)]
-        self._call_mismatch(checker, var_name="x", simulation_trace=trace)
+        assert "x" in self._classify(checker, trace=trace)
 
 
 # ===========================================================================
@@ -131,12 +92,11 @@ class TestHandleLineageMismatch:
 def _resolve(checker, name, virtual):
     from cash.notebook.lineage_formula import input_lineage
 
-    vl = checker.simulator.virtual_lineage
     return input_lineage(
         name,
-        vl.shell.user_ns,
-        (virtual, vl.variable_lineage),
-        compute_hash=vl.compute_hash_fn,
+        checker.shell.user_ns,
+        (virtual, checker.variable_lineage),
+        compute_hash=checker.compute_hash_fn,
         function_tracker=None,
         code=None,
     )
@@ -196,44 +156,47 @@ class TestResolveInputLineage:
 
 
 # ===========================================================================
-# _resolve_virtual_input_lineages
+# The input lineages a simulated statement is keyed on
 # ===========================================================================
 
 
-class TestResolveVirtualInputLineages:
-    """Test virtual input lineage resolution for all inputs of a statement."""
+class TestSimulatedInputLineages:
+    """What a simulated statement's output lineage is built from."""
 
-    def test_basic_resolution(self):
+    @staticmethod
+    def _lineage_of_x(checker, code, virtual=None):
+        return checker.simulator.simulate_cell(code, virtual or {}).virtual_lineage["x"]
+
+    def test_every_input_counts(self):
         checker = _make_checker()
         checker.variable_lineage["a"] = "hash_a"
         checker.variable_lineage["b"] = "hash_b"
-        result = checker.simulator.virtual_lineage._resolve_virtual_input_lineages("x = a + b", {"a", "b"}, {}, set())
-        assert len(result) == 2
-        assert "hash_a" in result
-        assert "hash_b" in result
+        before = self._lineage_of_x(checker, "x = a + b")
+        checker.variable_lineage["b"] = "hash_b2"
+        assert self._lineage_of_x(checker, "x = a + b") != before
 
     def test_skips_get_ipython(self):
-        """Should skip get_ipython and __builtins__."""
-        checker = _make_checker()
+        """``get_ipython`` contributes nothing, whatever it is bound to."""
+        checker = _make_checker(user_ns={"get_ipython": object()})
         checker.variable_lineage["a"] = "hash_a"
-        result = checker.simulator.virtual_lineage._resolve_virtual_input_lineages(
-            "x = a", {"a", "get_ipython", "__builtins__"}, {}, set()
-        )
-        assert len(result) == 1
+        before = self._lineage_of_x(checker, "x = a if get_ipython else a")
+        checker.shell.user_ns["get_ipython"] = object()
+        assert self._lineage_of_x(checker, "x = a if get_ipython else a") == before
 
     def test_virtual_lineage_priority(self):
-        """Virtual lineage should be used over runtime lineage."""
+        """The simulation's own lineage wins over the recorded one."""
         checker = _make_checker()
+        via_virtual = self._lineage_of_x(checker, "x = a", {"a": "virtual_hash"})
         checker.variable_lineage["a"] = "runtime_hash"
-        result = checker.simulator.virtual_lineage._resolve_virtual_input_lineages(
-            "x = a", {"a"}, {"a": "virtual_hash"}, set()
-        )
-        assert result == ["virtual_hash"]
+        assert self._lineage_of_x(checker, "x = a", {"a": "virtual_hash"}) == via_virtual
+        assert self._lineage_of_x(checker, "x = a") != via_virtual
 
     def test_empty_inputs(self):
+        """A statement reading nothing does not depend on what is recorded."""
         checker = _make_checker()
-        result = checker.simulator.virtual_lineage._resolve_virtual_input_lineages("x = 1", set(), {}, set())
-        assert result == []
+        before = self._lineage_of_x(checker, "x = 1")
+        checker.variable_lineage["a"] = "hash_a"
+        assert self._lineage_of_x(checker, "x = 1") == before
 
 
 # ===========================================================================
@@ -270,113 +233,88 @@ class TestStatFileDeps:
 
 
 # ===========================================================================
-# _check_file_deps_for_restore
+# restore_statement: when a cache entry may be restored
 # ===========================================================================
 
 
-class TestCheckFileDepsForRestore:
-    """Test file dependency validation for virtual restore."""
+def _restoring_checker(metadata, variables=None):
+    backend = MagicMock()
+    backend.get.return_value = ({"execution_time": 1.0, **metadata}, {"variables": variables or {"x": 1}})
+    return _make_checker(cash_instance=MagicMock(backend=backend))
+
+
+def _restore(checker, expected_lineages=None):
+    return checker.simulator.restore_statement("x = f()", {"x"}, {"f"}, {}, expected_lineages=expected_lineages)
+
+
+class TestRestoreChecksFileDeps:
+    """An entry whose files changed is not restored."""
 
     def test_all_fresh(self, tmp_path):
         f = tmp_path / "data.csv"
         f.write_text("content")
-        checker = _make_checker()
-        result = checker.simulator.virtual_lineage._check_file_deps_for_restore(
-            snapshot_file_deps({str(f)}), time.time()
-        )
-        assert result is None  # None means all fresh
+        checker = _restoring_checker({"file_dependencies": snapshot_file_deps({str(f)})})
+        assert _restore(checker) == {"x"}
 
     def test_stale_file(self, tmp_path):
         f = tmp_path / "data.csv"
         f.write_text("content")
         snapshot = snapshot_file_deps({str(f)})
         f.write_text("changed content")
-        checker = _make_checker()
-        result = checker.simulator.virtual_lineage._check_file_deps_for_restore(snapshot, time.time())
-        assert result is not None  # Tuple means failure
-        assert isinstance(result, tuple)
+        checker = _restoring_checker({"file_dependencies": snapshot})
+        assert _restore(checker) == set()
 
     def test_missing_file(self, tmp_path):
-        checker = _make_checker()
-        result = checker.simulator.virtual_lineage._check_file_deps_for_restore(
-            {str(tmp_path / "gone.csv"): {"mtime": 1.0}}, time.time()
-        )
-        assert result is not None
+        checker = _restoring_checker({"file_dependencies": {str(tmp_path / "gone.csv"): {"mtime": 1.0}}})
+        assert _restore(checker) == set()
 
     def test_empty_deps(self):
-        checker = _make_checker()
-        result = checker.simulator.virtual_lineage._check_file_deps_for_restore({}, time.time())
-        assert result is None
+        checker = _restoring_checker({"file_dependencies": {}})
+        assert _restore(checker) == {"x"}
 
 
-# ===========================================================================
-# _check_lineage_consistency
-# ===========================================================================
-
-
-class TestCheckLineageConsistency:
-    """Test output lineage consistency validation."""
+class TestLineageConflict:
+    """An entry built for other lineages than the simulation expects is not restored."""
 
     def test_consistent_lineage(self):
-        checker = _make_checker()
-        metadata = {"output_lineages": {"x": "hash_x"}}
-        result = checker.simulator.virtual_lineage._check_lineage_consistency(
-            metadata, {}, {"x": "hash_x"}, time.time()
-        )
-        assert result is None  # None means consistent
+        checker = _restoring_checker({"output_lineages": {"x": "hash_x"}})
+        assert _restore(checker, {"x": "hash_x"}) == {"x"}
 
     def test_inconsistent_lineage(self):
-        checker = _make_checker()
-        metadata = {"output_lineages": {"x": "cached_hash"}}
-        result = checker.simulator.virtual_lineage._check_lineage_consistency(
-            metadata, {}, {"x": "expected_hash"}, time.time()
-        )
-        assert result is not None
+        checker = _restoring_checker({"output_lineages": {"x": "cached_hash"}})
+        assert _restore(checker, {"x": "expected_hash"}) == set()
 
-    def test_skipped_with_file_deps(self):
-        """When file deps exist, lineage check is skipped."""
-        checker = _make_checker()
-        metadata = {"output_lineages": {"x": "cached_hash"}}
-        result = checker.simulator.virtual_lineage._check_lineage_consistency(
-            metadata, {"file.csv": 1.0}, {"x": "expected_hash"}, time.time()
-        )
-        assert result is None  # Skipped — file deps present
+    def test_skipped_with_file_deps(self, tmp_path):
+        """With file deps the lineages are not compared: the files decide."""
+        f = tmp_path / "data.csv"
+        f.write_text("content")
+        metadata = {"output_lineages": {"x": "cached_hash"}, "file_dependencies": snapshot_file_deps({str(f)})}
+        assert lineage_conflict(metadata, metadata["file_dependencies"], {"x": "expected_hash"}) is None
+        assert _restore(_restoring_checker(metadata), {"x": "expected_hash"}) == {"x"}
 
     def test_no_expected_lineages(self):
-        checker = _make_checker()
-        metadata = {"output_lineages": {"x": "hash"}}
-        result = checker.simulator.virtual_lineage._check_lineage_consistency(metadata, {}, None, time.time())
-        assert result is None  # No expected lineages → pass
+        checker = _restoring_checker({"output_lineages": {"x": "hash"}})
+        assert _restore(checker, None) == {"x"}
 
     def test_no_output_lineages_in_metadata(self):
-        checker = _make_checker()
-        metadata = {}  # No output_lineages key
-        result = checker.simulator.virtual_lineage._check_lineage_consistency(metadata, {}, {"x": "hash"}, time.time())
-        assert result is None
+        assert lineage_conflict({}, {}, {"x": "hash"}) is None
+        assert _restore(_restoring_checker({}), {"x": "hash"}) == {"x"}
 
 
-# ===========================================================================
-# _get_metadata_only
-# ===========================================================================
-
-
-class TestGetMetadataOnly:
-    """Test metadata-only backend access."""
+class TestBackendLess:
+    """Without a cache backend nothing is probed and nothing restored."""
 
     def test_no_cash_instance(self):
         checker = _make_checker()
-        result = checker.simulator.virtual_lineage._get_metadata_only("some_key")
-        assert result is None
+        assert _restore(checker) == set()
+        assert "x" in checker.simulator.simulate_cell("x = 1").virtual_lineage
 
-    def test_with_get_metadata_method(self):
-        mock_backend = MagicMock()
-        mock_backend.get_metadata.return_value = {"key": "value"}
-        mock_cash = MagicMock()
-        mock_cash.backend = mock_backend
-        checker = _make_checker(cash_instance=mock_cash)
-        result = checker.simulator.virtual_lineage._get_metadata_only("test_key")
-        assert result == {"key": "value"}
-        mock_backend.get_metadata.assert_called_once_with("test_key")
+    def test_simulation_probes_metadata_only(self):
+        backend = MagicMock()
+        backend.get_metadata.return_value = None
+        checker = _make_checker(cash_instance=MagicMock(backend=backend))
+        checker.simulator.simulate_cell("x = 1")
+        assert any(str(c.args[0]).startswith("stmt:") for c in backend.get_metadata.call_args_list)
 
 
 # ===========================================================================

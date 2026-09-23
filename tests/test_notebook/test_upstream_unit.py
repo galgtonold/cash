@@ -4,6 +4,7 @@ Verifies that UpstreamChecker and its new helper methods are importable
 and have the expected interface, improving test coverage visibility.
 """
 
+import os
 from unittest.mock import MagicMock
 
 import pytest
@@ -91,18 +92,24 @@ class TestUpstreamCheckerSetTrackingState:
         assert any(isinstance(n, ast.Assign) for n in nodes)
 
 
-class TestUpdateTrackingAfterRestoreFileDeps:
-    """Test that _update_tracking_after_restore propagates file dependencies."""
+class TestRestoreRecordsFileDeps:
+    """A restored statement's file dependencies reach ``executed_file_deps``."""
 
-    def _make_checker(self, tmp_path):
+    def _restore(self, metadata, variables):
         from cash.notebook._protocols import TrackingState
 
         mock_shell = MagicMock()
         mock_shell.user_ns = {}
+        backend = MagicMock()
+        backend.get.return_value = (metadata, {"variables": variables})
         # Pass a fresh TrackingState through the constructor so checker and
         # simulator share the same (empty) dicts. Rebinding fields after
         # construction would diverge the two views.
-        return UpstreamChecker(mock_shell, tracking_state=TrackingState())
+        checker = UpstreamChecker(mock_shell, cash_instance=MagicMock(backend=backend), tracking_state=TrackingState())
+        restored = checker.simulator.restore_statement(
+            metadata["code"], set(variables), {"data_path"}, {"data_path": "lin1"}
+        )
+        return checker, restored
 
     def test_file_deps_propagated_from_metadata(self, tmp_path):
         """File deps in cache metadata should be propagated to executed_file_deps."""
@@ -110,76 +117,67 @@ class TestUpdateTrackingAfterRestoreFileDeps:
         csv_file.write_text("a,b\n1,2")
         csv_path = str(csv_file)
 
-        checker = self._make_checker(tmp_path)
-        metadata = {
-            "output_lineages": {"df": "abc123"},
-            "code": 'df = pd.read_csv("data.csv")',
-            "source_hash": "hash1",
-            "file_dependencies": {csv_path: {"mtime": csv_file.stat().st_mtime}},
-        }
-        checker.simulator.virtual_lineage._update_tracking_after_restore({"df"}, metadata, {"data_path": "lin1"})
-        checker.simulator._apply_phase_mutations()
-
-        assert "df" in checker.executed_file_deps
-        assert csv_path in checker.executed_file_deps["df"]
-
-    def test_file_deps_empty_when_no_file_deps_in_metadata(self, tmp_path):
-        """No file deps should be propagated when metadata lacks file_dependencies."""
-        checker = self._make_checker(tmp_path)
-        metadata = {
-            "output_lineages": {"x": "abc123"},
-            "code": "x = 42",
-            "source_hash": "hash1",
-        }
-        checker.simulator.virtual_lineage._update_tracking_after_restore({"x"}, metadata, {})
-        checker.simulator._apply_phase_mutations()
-
-        assert "x" not in checker.executed_file_deps
-
-    def test_file_deps_resolved_via_fallback(self, tmp_path):
-        """File deps with stale paths should resolve via resolve_file_dep_path."""
-        csv_file = tmp_path / "data.csv"
-        csv_file.write_text("a,b\n1,2")
-
-        import os
-
-        old_cwd = os.getcwd()
-        os.chdir(str(tmp_path))
-        try:
-            # Metadata has a non-existent absolute path; fallback resolves by basename in CWD
-            stale_path = "/nonexistent/old/path/data.csv"
-            checker = self._make_checker(tmp_path)
-            metadata = {
+        checker, restored = self._restore(
+            {
                 "output_lineages": {"df": "abc123"},
                 "code": 'df = pd.read_csv("data.csv")',
                 "source_hash": "hash1",
-                "file_dependencies": {stale_path: {"mtime": 0.0}},
-            }
-            checker.simulator.virtual_lineage._update_tracking_after_restore({"df"}, metadata, {})
-            checker.simulator._apply_phase_mutations()
+                "file_dependencies": snapshot_file_deps({csv_path}),
+            },
+            {"df": "frame"},
+        )
 
-            assert "df" in checker.executed_file_deps
-            # The resolved path should be the actual file, not the stale path
-            resolved = next(iter(checker.executed_file_deps["df"]))
-            assert os.path.exists(resolved)
-            assert resolved != stale_path
-        finally:
-            os.chdir(old_cwd)
+        assert restored == {"df"}
+        assert csv_path in checker.executed_file_deps["df"]
+        assert checker.executed_input_lineages["df"] == {"data_path": "lin1"}
 
-    def test_file_deps_not_set_when_path_unresolvable(self, tmp_path):
-        """Completely unresolvable paths should not pollute executed_file_deps."""
-        checker = self._make_checker(tmp_path)
-        metadata = {
-            "output_lineages": {"df": "abc123"},
-            "code": 'df = pd.read_csv("missing.csv")',
-            "source_hash": "hash1",
-            "file_dependencies": {"/no/such/file/ever_unique_xyz.csv": {"mtime": 0.0}},
-        }
-        checker.simulator.virtual_lineage._update_tracking_after_restore({"df"}, metadata, {})
-        checker.simulator._apply_phase_mutations()
+    def test_file_deps_empty_when_no_file_deps_in_metadata(self, tmp_path):
+        """No file deps should be propagated when metadata lacks file_dependencies."""
+        checker, restored = self._restore(
+            {"output_lineages": {"x": "abc123"}, "code": "x = 42", "source_hash": "hash1"},
+            {"x": 42},
+        )
 
-        # No resolved path → nothing added
-        assert "df" not in checker.executed_file_deps or len(checker.executed_file_deps["df"]) == 0
+        assert restored == {"x"}
+        assert "x" not in checker.executed_file_deps
+
+    def test_file_deps_resolved_via_fallback(self, tmp_path, monkeypatch):
+        """A dependency recorded under a path that moved resolves by name in the CWD."""
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_text("a,b\n1,2")
+        monkeypatch.chdir(tmp_path)
+        stale_path = "/nonexistent/old/path/data.csv"
+        recorded = snapshot_file_deps({str(csv_file)})[str(csv_file)]
+
+        checker, restored = self._restore(
+            {
+                "output_lineages": {"df": "abc123"},
+                "code": 'df = pd.read_csv("data.csv")',
+                "source_hash": "hash1",
+                "file_dependencies": {stale_path: recorded},
+            },
+            {"df": "frame"},
+        )
+
+        assert restored == {"df"}
+        resolved = next(iter(checker.executed_file_deps["df"]))
+        assert os.path.exists(resolved)
+        assert resolved != stale_path
+
+    def test_nothing_restored_when_path_unresolvable(self, tmp_path):
+        """An entry whose file is gone restores nothing and records no file."""
+        checker, restored = self._restore(
+            {
+                "output_lineages": {"df": "abc123"},
+                "code": 'df = pd.read_csv("missing.csv")',
+                "source_hash": "hash1",
+                "file_dependencies": {"/no/such/file/ever_unique_xyz.csv": {"mtime": 0.0}},
+            },
+            {"df": "frame"},
+        )
+
+        assert restored == set()
+        assert not checker.executed_file_deps.get("df")
 
     def test_file_deps_propagated_to_multiple_restored_vars(self, tmp_path):
         """When multiple vars are restored, all get the file deps."""
@@ -187,16 +185,17 @@ class TestUpdateTrackingAfterRestoreFileDeps:
         csv_file.write_text("a,b\n1,2")
         csv_path = str(csv_file)
 
-        checker = self._make_checker(tmp_path)
-        metadata = {
-            "output_lineages": {"df": "abc1", "df2": "abc2"},
-            "code": "df, df2 = load()",
-            "source_hash": "hash1",
-            "file_dependencies": {csv_path: {"mtime": csv_file.stat().st_mtime}},
-        }
-        checker.simulator.virtual_lineage._update_tracking_after_restore({"df", "df2"}, metadata, {})
-        checker.simulator._apply_phase_mutations()
+        checker, restored = self._restore(
+            {
+                "output_lineages": {"df": "abc1", "df2": "abc2"},
+                "code": "df, df2 = load()",
+                "source_hash": "hash1",
+                "file_dependencies": snapshot_file_deps({csv_path}),
+            },
+            {"df": "a", "df2": "b"},
+        )
 
+        assert restored == {"df", "df2"}
         assert csv_path in checker.executed_file_deps["df"]
         assert csv_path in checker.executed_file_deps["df2"]
 

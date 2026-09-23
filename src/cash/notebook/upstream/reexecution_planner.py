@@ -35,6 +35,7 @@ from ..cache_key import called_function_globals, write_provenance_key
 from ..cache_status import CacheStatus
 from ..carrier_history import carrier_history_fingerprint
 from ..stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
+from ._types import ClassificationResult, ReexecutionPlan, SimulationResult
 from .mismatch_classifier import import_only
 from .virtual_lineage import key_lineages
 
@@ -232,12 +233,9 @@ def _imported_roots(code: str) -> set[str]:
 class ReexecutionPlanner:
     """Phase 3 of NotebookSimulator: build the re-execution plan.
 
-    Holds references to VirtualLineage and MismatchClassifier so the
-    planner can call into helper methods that still live on those
-    phases (e.g. check_loop_derived_trust_override, backward_scan_pass,
-    collect_skipped_statement_metrics, filter_accumulator_reinits,
-    reapply_unsaved_extensions). Pure-phase invariants land in a later
-    refactor.
+    :meth:`plan` turns a :class:`SimulationResult` and a
+    :class:`ClassificationResult` into a :class:`ReexecutionPlan`, starting
+    from the classifier's backward scan.
     """
 
     def __init__(
@@ -267,56 +265,34 @@ class ReexecutionPlanner:
             return restored
         return [info for info in restored if info.get("code") not in scheduled]
 
-    def build_reexecution_plan(
+    def plan(
         self,
-        simulation_trace: list,
-        broken_vars: set[str],
-        vars_tainted_by_upstream_mismatch: set[str],
-        simulation_trace_codes: set[str],
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-        vars_derived_from_loops: set[str],
-        vars_mutated_by_loops: set[str],
-        upstream_has_modifications: bool,
-        stmt_lookup_times: dict[str, float],
+        sim: SimulationResult,
+        result: ClassificationResult,
         notebook_cells: list[str],
-        consumable_broken_vars: set[str] | None = None,
         relevant_read_paths: set[str] | None = None,
         relevant_read_paths_known: bool = True,
-    ) -> tuple[list[str], list[dict], float]:
-        """Build the list of statements to re-execute and restored info.
-
-        Returns (statements_to_reexecute, restored_statements_info, total_restore_time).
-        """
+    ) -> ReexecutionPlan:
+        """Pass 3: the statements to re-run, and those restored instead, so the
+        names *result* found broken hold what a from-the-top run gives."""
+        simulation_trace = sim.trace
+        broken_vars = result.broken_vars
+        virtual_lineage = sim.virtual_lineage
+        virtual_modules = sim.virtual_modules
         if self.debug:
             logger.debug("[UPSTREAM_DEBUG] Simulation trace contents:")
             for i, entry in enumerate(simulation_trace):
                 logger.debug("[UPSTREAM_DEBUG]   [%s] outputs=%s: %s...", i, entry.outputs, entry.stmt_code[:60])
 
         self.stale_exports = []
-        loop_derived_trust_overridden = self.virtual_lineage.check_loop_derived_trust_override(
-            upstream_has_modifications,
-            vars_mutated_by_loops,
-            simulation_trace_codes,
-        )
-
         stmts_to_run_indices, restored_statements_info, total_restore_time = self.classifier.backward_scan_pass(
-            simulation_trace,
-            broken_vars,
-            vars_tainted_by_upstream_mismatch,
-            virtual_lineage,
-            virtual_modules,
-            vars_derived_from_loops,
-            loop_derived_trust_overridden,
-            upstream_has_modifications,
-            simulation_trace_codes,
-            stmt_lookup_times,
+            sim, result
         )
 
         stmts_to_run_indices = self._schedule_consumable_producer_touches(
             stmts_to_run_indices,
             simulation_trace,
-            consumable_broken_vars or set(),
+            result.consumable_broken_vars,
         )
 
         stmts_to_run_indices = self._complete_shadowed_var_producers(
@@ -401,7 +377,7 @@ class ReexecutionPlanner:
             stmts_to_run_indices,
             restored_statements_info,
             virtual_modules,
-            stmt_lookup_times,
+            sim.stmt_lookup_times,
         )
         restored_statements_info.extend(skipped_metrics)
         restored_statements_info = self._note_stale_exports(
@@ -410,7 +386,7 @@ class ReexecutionPlanner:
 
         stmts_to_run_indices = self._schedule_loop_var_contexts(stmts_to_run_indices, simulation_trace)
         stmts_to_run_indices = self.virtual_lineage.filter_accumulator_reinits(
-            stmts_to_run_indices, simulation_trace, vars_mutated_by_loops
+            stmts_to_run_indices, simulation_trace, sim.vars_mutated_by_loops
         )
         stmts_to_run_indices = self._dedup_sorted_indices(stmts_to_run_indices)
         restored_statements_info = self._drop_scheduled_from_restored(
@@ -445,7 +421,7 @@ class ReexecutionPlanner:
             statements_to_reexecute,
         )
 
-        return statements_to_reexecute, restored_statements_info, total_restore_time
+        return ReexecutionPlan(statements_to_reexecute, restored_statements_info, total_restore_time)
 
     def _note_stale_exports(
         self, simulation_trace: list, stmts_to_run_indices: list[int], restored_statements_info: list[dict]

@@ -36,6 +36,7 @@ from ..server_discovery import (
     warn_notebook_not_found_once,
 )
 from ..staleness import StalenessTracker
+from ._types import ClassificationResult, SimulationResult
 from .simulator import NotebookSimulator
 
 if TYPE_CHECKING:
@@ -301,7 +302,6 @@ class UpstreamChecker:
                 logger.debug("[UPSTREAM_DEBUG]   cell_id: %s", cell_id)
 
         self.current_cell_id = cell_id
-        self.simulator.set_current_cell_id(cell_id)
 
         # Resolve the notebook path ONCE for the whole cell check and
         # thread it through the analysis helpers + Phase 2, instead of each site
@@ -313,11 +313,6 @@ class UpstreamChecker:
         # once per cell check.
         self._notebook_path_for_staleness = notebook_path
 
-        # The classifier re-simulates this cell to tell its own earlier run
-        # apart from an upstream edit (MismatchClassifier._current_cell_reproduces).
-        classifier = getattr(self.simulator, "classifier", None)
-        if classifier is not None:
-            classifier.current_cell_code = cell_code
         # What the cell writes, by the channel an isolated re-run resets it
         # through. A global it changes without naming it joins its inputs, so
         # the reset below restores that global's producer too.
@@ -942,11 +937,14 @@ class UpstreamChecker:
                 logger.debug("[UPSTREAM_DEBUG] Will simulate %s upstream cells", current_cell_idx)
 
             records_before = self._lineage_records()
+            # The cell's own source goes along: the classifier re-simulates it to
+            # tell its own earlier run apart from an upstream edit.
             statements_to_reexecute, restored_info, total_restore_time = self.simulator.simulate_upstream(
                 current_cell_idx,
                 notebook_cells,
                 required_inputs,
                 effects,
+                cell_code=cell_code,
             )
 
             if self.debug:
@@ -1107,27 +1105,12 @@ class UpstreamChecker:
             vl = self.simulator.virtual_lineage
             planner = self.simulator.planner
             classifier = self.simulator.classifier
-            virtual_lineage = dict(self.variable_lineage)
-            virtual_modules: set[str] = set()
-            trace: list = []
-            lookup_times: dict[str, float] = {}
+            sim = SimulationResult(virtual_lineage=dict(self.variable_lineage))
+            trace = sim.trace
             counts = dict(occurrence_counts)
             for node in nodes:
                 before = len(trace)
-                vl.simulate_one_node(
-                    0,
-                    node,
-                    counts,
-                    virtual_lineage,
-                    virtual_modules,
-                    trace,
-                    set(),
-                    set(),
-                    lookup_times,
-                    set(),
-                    {},
-                    raw_cell=raw_cell,
-                )
+                vl.simulate_one_node(sim, 0, node, counts, {}, raw_cell=raw_cell)
                 if len(trace) != before + 1:
                     return None
             if any(entry.files_stale for entry in trace):
@@ -1146,16 +1129,12 @@ class UpstreamChecker:
             run: list[int] = []
             if broken:
                 run, restored, _ = classifier.backward_scan_pass(
-                    trace,
-                    broken,
-                    set(),
-                    virtual_lineage,
-                    virtual_modules,
-                    set(),
-                    False,
-                    False,
-                    {entry.stmt_code for entry in trace},
-                    lookup_times,
+                    sim,
+                    ClassificationResult(
+                        broken_vars=broken,
+                        tainted_vars=set(),
+                        trace_codes={entry.stmt_code for entry in trace},
+                    ),
                 )
                 while True:
                     size = len(run)

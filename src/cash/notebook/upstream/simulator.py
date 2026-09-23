@@ -41,7 +41,7 @@ from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .._trace import is_tracing, trace_event
 from ..cache_key import read_provenance_key
 from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
-from ._types import SimulationCache, apply_collected_mutations
+from ._types import CellCheck, ReexecutionPlan, SimulationCache, SimulationResult, apply_collected_mutations
 from .mismatch_classifier import MismatchClassifier
 from .reexecution_planner import ReexecutionPlanner
 from .virtual_lineage import VirtualLineage, loop_derived_vars
@@ -100,11 +100,12 @@ logger = logging.getLogger(__name__)
 class NotebookSimulator:
     """Replays upstream cells via AST simulation and cache probing.
 
-    Constructed and owned by :class:`UpstreamChecker`. Shares mutable state
-    references (lineage dicts, ``executed_*`` trackers) so writes are visible
-    to both. The Phase-1 forward simulation / cache-probing methods live on
-    :class:`VirtualLineage`; ``NotebookSimulator`` delegates to it and exposes
-    property/method forwarders so existing call sites keep their shape.
+    Owned by :class:`UpstreamChecker`, with which it shares the
+    ``TrackingState``. :meth:`simulate_upstream` runs the three phases --
+    :class:`VirtualLineage`, :class:`MismatchClassifier`,
+    :class:`ReexecutionPlanner` -- and applies what they buffered.
+    :meth:`simulate_cell` and :meth:`restore_statement` do one cell or one
+    statement the same way.
     """
 
     def __init__(
@@ -123,6 +124,8 @@ class NotebookSimulator:
 
         # Shared state refs (same dicts as UpstreamChecker / StatementProcessor).
         self.set_tracking_state(tracking_state)
+        #: Set by ``reset_caches`` (``%cash_on``): adopt untracked names once.
+        self._adopt_untracked_pending = False
         #: The previous simulation's per-cell snapshots, where the next one starts.
         self.cache = SimulationCache()
 
@@ -246,7 +249,7 @@ class NotebookSimulator:
         which is how the first draft of this was caught). Such a name keeps the
         old behaviour -- refused once, then repaired under tracking.
         """
-        if not getattr(self, "_adopt_untracked_pending", False):
+        if not self._adopt_untracked_pending:
             return
         self._adopt_untracked_pending = False
         user_ns = getattr(self.shell, "user_ns", None)
@@ -290,10 +293,41 @@ class NotebookSimulator:
         apply_collected_mutations(self.virtual_lineage.restores, self.tracking_state)
         apply_collected_mutations(self.classifier.restores, self.tracking_state)
 
-    # --- Narrow public API for UpstreamChecker (avoid private reach-ins) ---
+    # --- One statement or cell at a time, as a check does it ---
 
-    def set_current_cell_id(self, cell_id: str | None) -> None:
-        self.virtual_lineage.current_cell_id = cell_id
+    def simulate_cell(
+        self,
+        cell_code: str,
+        virtual_lineage: dict[str, str] | None = None,
+        virtual_modules: set[str] | None = None,
+    ) -> SimulationResult:
+        """Simulate *cell_code* on its own, from *virtual_lineage*.
+
+        Probes the cache and records what it learns for the live session (an
+        imported module's lineage) exactly as a check does for a cell above.
+        """
+        sim = SimulationResult(virtual_lineage=dict(virtual_lineage or {}), virtual_modules=set(virtual_modules or ()))
+        self.virtual_lineage.simulate_one_cell(sim, -1, cell_code)
+        self._apply_phase_mutations()
+        return sim
+
+    def restore_statement(
+        self,
+        stmt_code: str,
+        outputs: set[str],
+        inputs: set[str],
+        input_hashes: dict[str, str],
+        virtual_modules: set[str] | None = None,
+        expected_lineages: dict[str, str] | None = None,
+    ) -> set[str]:
+        """Restore *stmt_code*'s outputs from the cache entry its simulated
+        inputs key; the names restored (none when the entry is missing, stale
+        or for other lineages)."""
+        restored, _restore_time, _saved_time = self.virtual_lineage.try_virtual_restore(
+            stmt_code, outputs, inputs, input_hashes, virtual_modules, expected_lineages
+        )
+        self._apply_phase_mutations()
+        return restored
 
     def record_replayed_file_deps(self, rerecorded: set[str]) -> None:
         self.virtual_lineage.record_replayed_file_deps(rerecorded)
@@ -989,20 +1023,18 @@ class NotebookSimulator:
         notebook_cells: list[str],
         required_inputs: set[str] | None = None,
         effects: CellEffects | None = None,
-    ) -> tuple[list[str], list[dict], float]:
-        """Simulate notebook execution statement-by-statement.
+        cell_code: str | None = None,
+    ) -> ReexecutionPlan:
+        """What must re-run, and what can be restored, before cell
+        *current_cell_idx* runs on the state memory holds.
 
         *effects* is what the current cell writes (see
         :func:`~cash.analysis.mutation_effects.cell_effects`); None when it is
         not known, which is not the same as a cell that writes nothing.
-
-        Returns:
-            Tuple of ``(statements_to_reexecute, restored_info, total_restore_time)``:
-            list of statement codes that need re-execution, list of dicts
-            with info about restored statements, and total disk-cache lookup
-            time (seconds) accumulated during simulation.
+        *cell_code* is the source being run, when it may differ from the saved
+        cell.
         """
-        current_cell_outputs = set(effects.outputs) if effects is not None else None
+        check = CellCheck(current_cell_idx, notebook_cells, required_inputs, effects, cell_code)
         effects = effects or CellEffects()
         trace_event(
             "simulate_enter",
@@ -1013,38 +1045,10 @@ class NotebookSimulator:
             selfref=set(effects.selfref),
             method_receivers=set(effects.method_receivers),
         )
-        if getattr(self, "_adopt_untracked_pending", False):
+        if self._adopt_untracked_pending:
             self._track_modules_bound_before_cash_on()
 
-        # Pass 1: Simulate ALL statements to build final virtual state
-        stmt_lookup_times = {}  # stmt_code -> cache_lookup_time (disk I/O during simulation)
-        loop_target_vars = set()  # Track loop iteration variables (e.g., 'item' in 'for item in data')
-
-        (
-            first_changed_cell,
-            had_prior_cache,
-            cache_had_hash_mismatch,
-            simulation_trace,
-            virtual_lineage,
-            virtual_modules,
-            new_cache_entries,
-            vars_mutated_by_loops,
-            vars_with_stale_files,
-        ) = self.virtual_lineage.find_incremental_start(current_cell_idx, notebook_cells)
-
-        self.virtual_lineage.simulate_cells_pass1(
-            first_changed_cell,
-            current_cell_idx,
-            notebook_cells,
-            simulation_trace,
-            virtual_lineage,
-            virtual_modules,
-            new_cache_entries,
-            vars_mutated_by_loops,
-            vars_with_stale_files,
-            stmt_lookup_times,
-            loop_target_vars,
-        )
+        sim = self.virtual_lineage.simulate(current_cell_idx, notebook_cells)
 
         # Hand the simulation's view of every name to the runtime about to
         # execute this cell. A control structure records the lineages of what
@@ -1052,84 +1056,20 @@ class NotebookSimulator:
         # none to record -- see TrackingState.simulated_lineage. Taken here,
         # after pass 1 and before the cell runs, so it describes the state the
         # cell is about to start from.
-        self.tracking_state.simulated_lineage = dict(virtual_lineage)
-        self._adopt_untracked_names(virtual_lineage, simulation_trace)
+        self.tracking_state.simulated_lineage = dict(sim.virtual_lineage)
+        self._adopt_untracked_names(sim.virtual_lineage, sim.trace)
 
-        # Detect whether any upstream cell was actually modified since last simulation.
-        # This is True only when we had a prior simulation cache AND a cached cell's hash
-        # changed (actual code modification).  NOT true when cells are simply not cached
-        # yet (e.g., first time cell 3 runs, cache only has cell 1 — cell 2 is new to the
-        # cache but wasn't modified).
-        upstream_has_modifications = had_prior_cache and cache_had_hash_mismatch
+        self._settle_loop_trust(sim)
 
-        if self.debug:
-            logger.debug(
-                "[UPSTREAM_DEBUG] upstream_has_modifications=%s "
-                "(had_prior_cache=%s, cache_had_hash_mismatch=%s, first_changed_cell=%s)",
-                upstream_has_modifications,
-                had_prior_cache,
-                cache_had_hash_mismatch,
-                first_changed_cell,
-            )
-
-        # A reassignment accumulator that ALSO derives from an external input via
-        # a non-loop producing statement (``result = np.zeros(N)``) must not join
-        # the loop-trust set: editing that input and re-running the edited cell
-        # first makes upstream_has_modifications False and every current-state
-        # input lineage consistent, so the trust would serve a stale value. Drop
-        # such accumulators so they follow the baseline lineage-mismatch path
-        # (which re-executes correctly); a constant-init accumulator keeps the
-        # new trust so one-shot iterables are not re-drained.
-        externally_tainted = self.virtual_lineage.loop_accumulators_with_external_init(
-            vars_mutated_by_loops, simulation_trace, loop_target_vars
-        )
-        if externally_tainted:
-            vars_mutated_by_loops = vars_mutated_by_loops - externally_tainted
-            if self.debug:
-                logger.debug(
-                    "[UPSTREAM_DEBUG] Dropped externally-dependent loop accumulators from loop-trust set: %s",
-                    externally_tainted,
-                )
-
-        vars_derived_from_loops = loop_derived_vars(vars_mutated_by_loops, simulation_trace)
-
-        # A loop whose data changed underneath it (a new file, not a code
-        # edit) loses the trust, and so does everything built from it.
-        changed_loops = self.virtual_lineage.loops_reading_changed_data(
-            vars_mutated_by_loops,
-            simulation_trace,
-            loop_target_vars,
-            vars_derived_from_loops,
-        )
-        if changed_loops:
-            untrusted = loop_derived_vars(changed_loops, simulation_trace)
-            vars_mutated_by_loops = vars_mutated_by_loops - untrusted
-            vars_derived_from_loops = vars_derived_from_loops - untrusted
-            trace_event("loop_trust_dropped", vars=untrusted)
-
-        if self.debug and loop_target_vars:
-            logger.debug("[UPSTREAM_DEBUG] Loop target variables (iteration vars): %s", loop_target_vars)
-
-        broken_vars, simulation_trace_codes, vars_tainted = self.classifier.run_pass2_identify_broken_vars(
-            simulation_trace,
-            virtual_lineage,
-            virtual_modules,
-            vars_mutated_by_loops,
-            vars_with_stale_files,
-            vars_derived_from_loops,
-            loop_target_vars,
-            upstream_has_modifications,
-            required_inputs,
-            current_cell_outputs,
-            notebook_cells,
-            current_cell_idx,
-        )
-        trace_event("broken_after_pass2", broken=broken_vars, tainted=vars_tainted)
+        result = self.classifier.classify(sim, check)
+        broken_vars = result.broken_vars
+        trace_event("broken_after_pass2", broken=broken_vars, tainted=result.tainted_vars)
         if is_tracing():
             # Every variable the two engines disagree on, relevant or not. In a
             # plain top-to-bottom run there must be none: each one is a spurious
             # "changed" waiting for a cell that reads it (round 21).
             recorded = self.variable_lineage
+            virtual_lineage = sim.virtual_lineage
             trace_event(
                 "lineage_disagreement",
                 cell_idx=current_cell_idx,
@@ -1146,14 +1086,14 @@ class NotebookSimulator:
             broken_vars,
             notebook_cells=notebook_cells,
             current_cell_idx=current_cell_idx,
-            virtual_lineage=virtual_lineage,
+            virtual_lineage=sim.virtual_lineage,
         )
         trace_event("broken_after_guard", broken=broken_vars)
 
         # Read-only consumable inputs (drained queue / exhausted generator) are
         # invisible to the guard above, which only examines self-WRITTEN vars.
         # Same ``broken_vars`` set, so the planner handles both identically.
-        consumable_broken_vars = self._mark_consumed_unrestorable_inputs_broken(
+        result.consumable_broken_vars = self._mark_consumed_unrestorable_inputs_broken(
             required_inputs,
             broken_vars,
             notebook_cells=notebook_cells,
@@ -1179,7 +1119,7 @@ class NotebookSimulator:
         # an unrelated / terminal side-effect that must never be re-fired here.
         relevant_read_paths, relevant_read_paths_known = self._compute_relevant_read_paths(
             required_inputs,
-            simulation_trace,
+            sim.trace,
             notebook_cells,
             current_cell_idx,
         )
@@ -1190,55 +1130,80 @@ class NotebookSimulator:
         # the planner can schedule the writer.
         has_stale_file_writers = bool(
             self.planner.find_stale_file_writer_indices(
-                simulation_trace,
-                virtual_lineage=virtual_lineage,
+                sim.trace,
+                virtual_lineage=sim.virtual_lineage,
                 relevant_read_paths=relevant_read_paths,
                 relevant_read_paths_known=relevant_read_paths_known,
             )
         )
 
-        if not broken_vars and not has_stale_file_writers:
-            self._apply_phase_mutations()
-            return [], [], 0.0
-
-        # Optimization: probe the current cell's statements to see if cache
-        # hits would restore broken variables, making upstream re-execution
-        # unnecessary.  For example, if df is broken but the current cell's
-        # first df-consuming statement is a disk cache hit that restores df,
-        # we don't need to re-execute upstream cells that produce df.
         if broken_vars:
+            # A current-cell statement that is a cache hit restores what it
+            # reads as well as what it writes: a broken ``df`` that the cell's
+            # first ``df[...] = f(df)`` restores needs nothing upstream.
             self.virtual_lineage.eliminate_broken_vars_via_current_cell_probe(
                 broken_vars,
                 notebook_cells,
                 current_cell_idx,
-                virtual_lineage,
-                virtual_modules,
+                sim.virtual_lineage,
+                sim.virtual_modules,
             )
+            if not broken_vars:
+                logger.debug("[UPSTREAM] All broken vars resolved by current cell cache hits — skipping upstream")
 
         if not broken_vars and not has_stale_file_writers:
-            if self.debug:
-                logger.debug("[UPSTREAM] All broken vars resolved by current cell cache hits — skipping upstream")
             self._apply_phase_mutations()
-            return [], [], 0.0
+            return ReexecutionPlan([], [], 0.0)
 
-        result = self.planner.build_reexecution_plan(
-            simulation_trace,
-            broken_vars,
-            vars_tainted,
-            simulation_trace_codes,
-            virtual_lineage,
-            virtual_modules,
-            vars_derived_from_loops,
-            vars_mutated_by_loops,
-            upstream_has_modifications,
-            stmt_lookup_times,
+        plan = self.planner.plan(
+            sim,
+            result,
             notebook_cells,
-            consumable_broken_vars=consumable_broken_vars,
             relevant_read_paths=relevant_read_paths,
             relevant_read_paths_known=relevant_read_paths_known,
         )
         self._apply_phase_mutations()
-        return result
+        return plan
+
+    def _settle_loop_trust(self, sim: SimulationResult) -> None:
+        """Decide which loop outputs memory is trusted for (``vars_mutated_by_loops``
+        and ``vars_derived_from_loops`` of *sim*)."""
+        # A reassignment accumulator that ALSO derives from an external input via
+        # a non-loop producing statement (``result = np.zeros(N)``) must not join
+        # the loop-trust set: editing that input and re-running the edited cell
+        # first makes upstream_has_modifications False and every current-state
+        # input lineage consistent, so the trust would serve a stale value. Drop
+        # such accumulators so they follow the baseline lineage-mismatch path
+        # (which re-executes correctly); a constant-init accumulator keeps the
+        # new trust so one-shot iterables are not re-drained.
+        externally_tainted = self.virtual_lineage.loop_accumulators_with_external_init(
+            sim.vars_mutated_by_loops, sim.trace, sim.loop_target_vars
+        )
+        if externally_tainted:
+            sim.vars_mutated_by_loops = sim.vars_mutated_by_loops - externally_tainted
+            logger.debug(
+                "[UPSTREAM_DEBUG] Dropped externally-dependent loop accumulators from loop-trust set: %s",
+                externally_tainted,
+            )
+
+        sim.vars_derived_from_loops = loop_derived_vars(sim.vars_mutated_by_loops, sim.trace)
+
+        # A loop whose data changed underneath it (a new file, not a code
+        # edit) loses the trust, and so does everything built from it.
+        changed_loops = self.virtual_lineage.loops_reading_changed_data(
+            sim.vars_mutated_by_loops,
+            sim.trace,
+            sim.loop_target_vars,
+            sim.vars_derived_from_loops,
+        )
+        if changed_loops:
+            untrusted = loop_derived_vars(changed_loops, sim.trace)
+            sim.vars_mutated_by_loops = sim.vars_mutated_by_loops - untrusted
+            sim.vars_derived_from_loops = sim.vars_derived_from_loops - untrusted
+            trace_event("loop_trust_dropped", vars=untrusted)
+
+        if sim.loop_target_vars:
+            logger.debug("[UPSTREAM_DEBUG] Loop target variables (iteration vars): %s", sim.loop_target_vars)
 
 
 #: Builtins a ``%cash_on``-cell binding may call and still count as reading

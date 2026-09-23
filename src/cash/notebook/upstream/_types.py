@@ -1,18 +1,19 @@
-"""Value objects passed between NotebookSimulator phases.
+"""Value objects passed between the upstream simulator's phases.
 
-VirtualLineage emits SimulationResult.
-MismatchClassifier consumes SimulationResult, emits ClassificationResult.
-ReexecutionPlanner consumes both, emits ReexecutionPlan.
-NotebookSimulator (orchestrator) applies RestoreOp to TrackingState.
-
-These objects are the *interface* of each phase. Adding cross-phase data
-means adding a field here, not threading a parameter through call chains.
+A check is a :class:`CellCheck`. :class:`VirtualLineage` simulates the cells
+above it into a :class:`SimulationResult`; :class:`MismatchClassifier` reads
+that and returns a :class:`ClassificationResult`; :class:`ReexecutionPlanner`
+reads both and returns the :class:`ReexecutionPlan`. Data one phase hands the
+next is a field here, not another parameter.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
+
+if TYPE_CHECKING:
+    from ...analysis.mutation_effects import CellEffects
 
 
 class SimulationCacheEntry(NamedTuple):
@@ -31,7 +32,7 @@ class SimulationCacheEntry(NamedTuple):
     virtual_modules: set[str]
     """Snapshot of known module names after simulating this cell."""
 
-    trace_segment: list[Any]
+    trace_segment: list[TraceEntry]
     """Simulation trace entries produced by this cell."""
 
     vars_mutated_by_loops: set[str]
@@ -101,11 +102,7 @@ class TraceEntry:
 
 
 class IncrementalStartResult(NamedTuple):
-    """Result of VirtualLineage.find_incremental_start.
-
-    Replaces a raw 9-element tuple with named fields so call sites are
-    self-documenting.
-    """
+    """Where the forward simulation starts: the first cell it must redo."""
 
     first_changed_cell: int
     """Index of the first upstream cell that needs re-simulation."""
@@ -116,36 +113,11 @@ class IncrementalStartResult(NamedTuple):
     cache_had_hash_mismatch: bool
     """Whether any cached cell hash differed from the current notebook."""
 
-    simulation_trace: list[Any]
-    """Restored simulation trace entries from cached cells."""
-
-    virtual_lineage: dict[str, str]
-    """Restored variable lineage mapping from the cache boundary."""
-
-    virtual_modules: set[str]
-    """Restored set of known module names from the cache boundary."""
-
-    new_cache_entries: list[Any]
+    new_cache_entries: list[SimulationCacheEntry]
     """Cache entries carried forward from unchanged cells."""
 
-    vars_mutated_by_loops: set[str]
-    """Variables whose lineage was affected by loop mutations."""
-
-    vars_with_stale_files: set[str]
-    """Variables depending on files whose mtime has changed."""
-
-
-@dataclass
-class RestoreOp:
-    """A mutation NotebookSimulator applies to TrackingState after planning.
-
-    Concentrating restores into explicit ops keeps the three phases pure.
-    """
-
-    var_name: str
-    lineage_hash: str
-    cache_key: str | None = None
-    restored_code: str | None = None
+    simulation: SimulationResult
+    """The simulation state at the end of the cells taken from the cache."""
 
 
 @dataclass
@@ -261,46 +233,94 @@ def apply_collected_mutations(collector: "RestoreCollector", state: Any) -> None
 
 
 @dataclass
-class SimulationResult:
-    """Output of VirtualLineage.simulate (introduced in Task 2 of the simulator split).
+class CellCheck:
+    """One upstream check: the cell about to run and the notebook above it."""
 
-    VirtualLineage gathers all data the downstream phases need from the
-    forward pass and packs it here. Notably, ``loop_var_input_lineages``
-    is computed by the planner between Pass 1 and Pass 2 in current code
-    and is surfaced here for Task 3's MismatchClassifier to consume.
+    current_cell_idx: int
+    """Where the cell sits in *notebook_cells*."""
+
+    notebook_cells: list[str]
+    """Every cell's source, as saved."""
+
+    required_inputs: set[str] | None = None
+    """Names the cell reads that it does not bind first."""
+
+    effects: CellEffects | None = None
+    """What the cell writes; None when not known, which is not the same as
+    a cell that writes nothing."""
+
+    cell_code: str | None = None
+    """The source actually being run, which may differ from the saved cell."""
+
+    @property
+    def current_cell_outputs(self) -> set[str] | None:
+        return set(self.effects.outputs) if self.effects is not None else None
+
+
+@dataclass
+class SimulationResult:
+    """The forward simulation's state after the cells it simulated.
+
+    Pass 1 fills it cell by cell; the classifier and the planner read it.
     """
 
-    virtual_lineage: dict[str, str]
-    virtual_modules: set[str]
-    simulation_trace: list[TraceEntry]
-    new_cache_entries: list[Any]
-    vars_mutated_by_loops: set[str]
-    vars_with_stale_files: set[str]
-    vars_derived_from_loops: set[str]
-    loop_target_vars: set[str]
-    loop_var_input_lineages: dict[str, dict[str, str]]
-    loop_derived_trust_overridden: bool
-    upstream_has_modifications: bool
-    first_changed_cell: int
-    stmt_lookup_times: dict[str, float]
-    restores_during_simulation: list[RestoreOp] = field(default_factory=list)
+    virtual_lineage: dict[str, str] = field(default_factory=dict)
+    """The lineage each name would have after a from-the-top run."""
+
+    virtual_modules: set[str] = field(default_factory=set)
+    """Names the simulation saw bound to a module."""
+
+    trace: list[TraceEntry] = field(default_factory=list)
+    """Every simulated statement that binds or writes something, in order."""
+
+    vars_mutated_by_loops: set[str] = field(default_factory=set)
+    """Names a control structure's body changes in place."""
+
+    vars_with_stale_files: set[str] = field(default_factory=set)
+    """Names built from a file that changed since it was read."""
+
+    loop_target_vars: set[str] = field(default_factory=set)
+    """Loop iteration variables (``item`` in ``for item in data``)."""
+
+    stmt_lookup_times: dict[str, float] = field(default_factory=dict)
+    """Seconds each statement's cache lookup took, by statement."""
+
+    upstream_has_modifications: bool = False
+    """A cell above was edited since the previous simulation (not merely
+    new to it, and not merely reading a changed file)."""
+
+    vars_derived_from_loops: set[str] = field(default_factory=set)
+    """Names built, directly or not, from a trusted loop's output."""
 
 
 @dataclass
 class ClassificationResult:
-    """Output of MismatchClassifier.classify."""
+    """Which names the in-memory state cannot be trusted for."""
 
     broken_vars: set[str]
+    """Names whose live value is not what a from-the-top run would give."""
+
     tainted_vars: set[str]
-    directly_mismatched: set[str]
-    simulation_trace_codes: set[str]
-    additional_restores: list[RestoreOp] = field(default_factory=list)
+    """Names whose lineage matches but whose producer was edited unsaved."""
+
+    trace_codes: set[str]
+    """Every statement of the trace, and of its control bodies, as text."""
+
+    loop_derived_trust_overridden: bool = False
+    """An unsaved edit to a loop's code withdraws the trust loop output gets."""
+
+    consumable_broken_vars: set[str] = field(default_factory=set)
+    """Broken names that are drained iterators or queues."""
 
 
-@dataclass
-class ReexecutionPlan:
-    """Output of ReexecutionPlanner.plan."""
+class ReexecutionPlan(NamedTuple):
+    """What the upstream repair runs and what it restored."""
 
-    stmts_to_run: list[str]
+    statements: list[str]
+    """Statements to re-execute, in notebook order."""
+
     restored_info: list[dict[str, Any]]
-    total_restore_time: float
+    """One metric per statement restored from the cache or skipped."""
+
+    restore_time: float
+    """Seconds spent restoring."""

@@ -77,10 +77,7 @@ def notebook(tmp_path):
 
     def simulate(code):
         """The lineages the simulation gives *code*'s outputs, from scratch."""
-        vl = magics._upstream_checker.simulator.virtual_lineage
-        virtual: dict[str, str] = {}
-        vl._update_virtual_lineage(code, virtual, set())
-        return virtual
+        return magics._upstream_checker.simulator.simulate_cell(code).virtual_lineage
 
     # The notebook's own directory: the runtime keys files relative to it.
     with patch("cash.notebook.statement.file_deps.get_notebook_path", return_value=str(nb_path)):

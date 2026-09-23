@@ -38,7 +38,7 @@ def _upstream_dead(mod, record) -> None:
     cell can no longer cause a downstream statement to re-run.
     """
 
-    def dead(self, simulation_trace, broken_vars, *a, **kw):
+    def dead(self, *a, **kw):
         record()
         return [], [], 0.0
 

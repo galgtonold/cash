@@ -132,11 +132,10 @@ class TestAMovedFileIsCheckedEitherWay:
         usually no recorded one: that gap IS the condition under test, so the
         helper makes it explicit rather than leaving it to coincidence.
         """
-        import ast
         import hashlib
 
         from cash.notebook._protocols import TrackingState
-        from cash.notebook.upstream.virtual_lineage import VirtualLineage
+        from cash.notebook.upstream import NotebookSimulator
 
         shell = MockShell()
         shell.user_ns["DATA"] = str(tmp_path / "rows.txt")
@@ -148,19 +147,8 @@ class TestAMovedFileIsCheckedEitherWay:
             frozenset(files),
             stored_component,
         )
-        vl = VirtualLineage(shell, Cash(backend=InMemoryBackend(), register_magic=False), state)
-        stale: set[str] = set()
-        vl._simulate_one_control_unit(
-            ast.parse(code).body[0],
-            {"DATA": "a-simulated-lineage"},
-            set(),
-            [],
-            {},
-            set(),
-            set(),
-            vars_with_stale_files=stale,
-        )
-        return stale
+        simulator = NotebookSimulator(shell, Cash(backend=InMemoryBackend(), register_magic=False), state)
+        return simulator.simulate_cell(code, {"DATA": "a-simulated-lineage"}).vars_with_stale_files
 
     def test_a_moved_file_is_stale_although_the_input_lineages_disagree(self, tmp_path):
         """The reported cell 0: ``DATA`` has no runtime lineage, so they never agree."""
@@ -203,12 +191,11 @@ class TestAMovedFileIsCheckedEitherWay:
         ``elif``. It has to keep doing exactly what it did -- that adoption is
         what stops a loop re-running after a restart.
         """
-        import ast
         import hashlib
 
         from cash.notebook._protocols import TrackingState
         from cash.notebook.statement.file_deps import compute_file_hash_component
-        from cash.notebook.upstream.virtual_lineage import VirtualLineage
+        from cash.notebook.upstream import NotebookSimulator
 
         data = tmp_path / "rows.txt"
         data.write_text("aa\nbbb\n", encoding="utf-8")
@@ -223,18 +210,8 @@ class TestAMovedFileIsCheckedEitherWay:
             frozenset([str(data)]),
             compute_file_hash_component({str(data)}),
         )
-        vl = VirtualLineage(shell, Cash(backend=InMemoryBackend(), register_magic=False), state)
-        virtual = {"DATA": "a-simulated-lineage"}
-        stale: set[str] = set()
-        vl._simulate_one_control_unit(
-            ast.parse(code).body[0],
-            virtual,
-            set(),
-            [],
-            {},
-            set(),
-            set(),
-            vars_with_stale_files=stale,
-        )
+        simulator = NotebookSimulator(shell, Cash(backend=InMemoryBackend(), register_magic=False), state)
+        sim = simulator.simulate_cell(code, {"DATA": "a-simulated-lineage"})
+        virtual, stale = sim.virtual_lineage, sim.vars_with_stale_files
         assert virtual.get("OUT") == "produced-lineage", virtual
         assert "OUT" not in stale, sorted(stale)

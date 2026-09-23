@@ -1,9 +1,9 @@
 """Phase 1 of the notebook simulator: forward simulation + cache probing.
 
-Extracted from ``NotebookSimulator``. Owns the simulator-internal caches
-(:class:`SimulationCache`) and shares ``tracking_state`` dict references
-with :class:`NotebookSimulator` and :class:`MismatchClassifier`. Pure-phase
-invariants land in a later refactor.
+:meth:`VirtualLineage.simulate` replays the cells above the checked one into a
+:class:`SimulationResult`, starting from the first cell changed since the
+previous simulation (:class:`SimulationCache`). It also restores a statement
+from the cache for the later phases (``try_virtual_restore``).
 """
 
 from __future__ import annotations
@@ -79,6 +79,7 @@ from ._types import (
     RestoreCollector,
     SimulationCache,
     SimulationCacheEntry,
+    SimulationResult,
     TraceEntry,
     apply_collected_mutations,
 )
@@ -227,13 +228,44 @@ def loop_derived_vars(vars_mutated_by_loops: set[str], simulation_trace: list[Tr
     return vars_derived
 
 
+def lineage_conflict(
+    metadata: dict[str, Any], file_deps: dict[str, Any], expected_lineages: dict[str, str] | None
+) -> str | None:
+    """An output whose cached lineage is not the one the simulation expects,
+    or None.
+
+    Not compared for an entry with file dependencies: its lineages fold the
+    files' state, which the freshness check has already judged.
+    """
+    if file_deps or not expected_lineages or "output_lineages" not in metadata:
+        return None
+    cached = metadata["output_lineages"]
+    for var, expected in expected_lineages.items():
+        if cached.get(var) and cached[var] != expected:
+            return var
+    return None
+
+
+def lineage_confirmed_vars(
+    metadata: dict[str, Any], file_deps: dict[str, Any], expected_lineages: dict[str, str] | None
+) -> frozenset[str]:
+    """Outputs whose cached lineage was positively matched against the expected one.
+
+    Only these may have an EMPTY cached value restored over a non-empty live
+    one: a confirmed lineage makes the empty value the correct result (a
+    filter that legitimately matched nothing), not a corrupt entry. Where
+    :func:`lineage_conflict` compares nothing, nothing is confirmed.
+    """
+    if file_deps or not expected_lineages or "output_lineages" not in metadata:
+        return frozenset()
+    cached = metadata["output_lineages"]
+    return frozenset(var for var, expected in expected_lineages.items() if cached.get(var) and cached[var] == expected)
+
+
 class VirtualLineage:
     """Phase 1 of NotebookSimulator: forward simulation + cache probing.
 
-    Owns the simulator-internal caches. Shares ``tracking_state`` dict
-    references with :class:`NotebookSimulator` and
-    :class:`MismatchClassifier`; pure-phase invariants land in a later
-    refactor.
+    Writes to ``TrackingState`` are buffered in ``restores``.
     """
 
     def __init__(
@@ -253,7 +285,6 @@ class VirtualLineage:
         #: The runtime's tracker, so the simulation hashes called functions
         #: and modules exactly as the statement processor does.
         self.function_tracker = function_tracker
-        self.current_cell_id: str | None = None
 
         # Shared state refs (same dicts as NotebookSimulator / UpstreamChecker).
         self.set_tracking_state(tracking_state)
@@ -522,32 +553,24 @@ class VirtualLineage:
                 return True
         return False
 
-    def _restore_cached_state(
-        self,
-        first_changed_cell: int,
-    ) -> tuple[dict[str, str], set[str], list, set[str], set[str]]:
-        """Restore virtual state from cached entries up to *first_changed_cell*.
-
-        Returns ``(virtual_lineage, virtual_modules, simulation_trace,
-        vars_mutated_by_loops, vars_with_stale_files)``.
-        """
+    def _restore_cached_state(self, first_changed_cell: int) -> SimulationResult:
+        """The simulation state after the cached cells before *first_changed_cell*."""
         cached_entry = self.cache.entries[first_changed_cell - 1]
-        virtual_lineage = dict(cached_entry.virtual_lineage)
-        virtual_modules = set(cached_entry.virtual_modules)
-        simulation_trace: list = []
-        vars_mutated_by_loops: set[str] = set()
-        vars_with_stale_files: set[str] = set()
+        sim = SimulationResult(
+            virtual_lineage=dict(cached_entry.virtual_lineage),
+            virtual_modules=set(cached_entry.virtual_modules),
+        )
         for ci in range(first_changed_cell):
-            simulation_trace.extend(self.cache.entries[ci].trace_segment)
-            vars_mutated_by_loops.update(self.cache.entries[ci].vars_mutated_by_loops)
-            vars_with_stale_files.update(self.cache.entries[ci].vars_with_stale_files)
+            sim.trace.extend(self.cache.entries[ci].trace_segment)
+            sim.vars_mutated_by_loops.update(self.cache.entries[ci].vars_mutated_by_loops)
+            sim.vars_with_stale_files.update(self.cache.entries[ci].vars_with_stale_files)
         if self.debug:
             logger.debug(
                 "[UPSTREAM_DEBUG] Incremental simulation: reusing cache for cells 0-%d, simulating from cell %d",
                 first_changed_cell - 1,
                 first_changed_cell,
             )
-        return virtual_lineage, virtual_modules, simulation_trace, vars_mutated_by_loops, vars_with_stale_files
+        return sim
 
     def find_incremental_start(
         self,
@@ -560,12 +583,7 @@ class VirtualLineage:
         file dependency mtimes. Returns the index to start re-simulation from,
         along with restored cached state (virtual lineage, modules, trace, etc.).
         """
-        simulation_trace: list = []
-        virtual_lineage: dict[str, str] = {}
-        virtual_modules: set[str] = set()
-        vars_mutated_by_loops: set[str] = set()
-        vars_with_stale_files: set[str] = set()
-
+        sim = SimulationResult()
         first_changed_cell = 0
         had_prior_cache = bool(self.cache.entries)
         cache_had_hash_mismatch = False
@@ -619,9 +637,7 @@ class VirtualLineage:
         # Without this, stale file deps would cause ALL cached state to be lost,
         # even for cells before the stale cell.
         if first_changed_cell > 0 and self.cache.entries and first_changed_cell <= len(self.cache.entries):
-            (virtual_lineage, virtual_modules, simulation_trace, vars_mutated_by_loops, vars_with_stale_files) = (
-                self._restore_cached_state(first_changed_cell)
-            )
+            sim = self._restore_cached_state(first_changed_cell)
         # The cells kept from the cache include the import, so a reloaded
         # module's name still carries its PRE-edit lineage there. A loop that
         # read it recorded its outcome against that lineage and found it
@@ -631,7 +647,7 @@ class VirtualLineage:
         for name in reloaded:
             live = self.variable_lineage.get(name)
             if live and isinstance(self.shell.user_ns.get(name), types.ModuleType):
-                virtual_lineage[name] = live
+                sim.virtual_lineage[name] = live
 
         new_cache_entries = list(self.cache.entries[:first_changed_cell]) if self.cache.entries else []
 
@@ -639,13 +655,30 @@ class VirtualLineage:
             first_changed_cell=first_changed_cell,
             had_prior_cache=had_prior_cache,
             cache_had_hash_mismatch=cache_had_hash_mismatch,
-            simulation_trace=simulation_trace,
-            virtual_lineage=virtual_lineage,
-            virtual_modules=virtual_modules,
             new_cache_entries=new_cache_entries,
-            vars_mutated_by_loops=vars_mutated_by_loops,
-            vars_with_stale_files=vars_with_stale_files,
+            simulation=sim,
         )
+
+    def simulate(self, current_cell_idx: int, notebook_cells: list[str]) -> SimulationResult:
+        """Pass 1: simulate every cell above *current_cell_idx*, starting from
+        the first one changed since the previous simulation."""
+        start = self.find_incremental_start(current_cell_idx, notebook_cells)
+        sim = start.simulation
+        self.simulate_cells_pass1(
+            sim, start.first_changed_cell, current_cell_idx, notebook_cells, start.new_cache_entries
+        )
+        # True only for an EDIT to a cell the previous simulation saw: a cell
+        # merely new to the cache (first run of cell 3 after cell 1) is not one.
+        sim.upstream_has_modifications = start.had_prior_cache and start.cache_had_hash_mismatch
+        logger.debug(
+            "[UPSTREAM_DEBUG] upstream_has_modifications=%s "
+            "(had_prior_cache=%s, cache_had_hash_mismatch=%s, first_changed_cell=%s)",
+            sim.upstream_has_modifications,
+            start.had_prior_cache,
+            start.cache_had_hash_mismatch,
+            start.first_changed_cell,
+        )
+        return sim
 
     def _collect_notebook_statements(self, notebook_cells: list[str]) -> set[str]:
         """Collect all normalized statement codes from notebook cells.
@@ -1204,23 +1237,17 @@ class VirtualLineage:
 
     def simulate_one_node(
         self,
+        sim: SimulationResult,
         i: int,
         node: ast.AST,
-        cell_stmt_occurrence_counts: dict,
-        virtual_lineage: dict,
-        virtual_modules: set,
-        simulation_trace: list,
-        vars_mutated_by_loops: set,
-        vars_with_stale_files: set,
-        stmt_lookup_times: dict,
-        loop_target_vars: set,
-        cell_file_deps: dict,
+        cell_stmt_occurrence_counts: dict[str, int],
+        cell_file_deps: dict[str, float],
         raw_cell: str | None = None,
     ) -> None:
-        """Simulate a single AST statement node, updating all mutable state in-place.
+        """Simulate one top-level statement of cell *i* into *sim*.
 
-        Returns without doing anything for control structures (they are handled
-        by ``_simulate_control_structure`` directly).
+        A control structure is simulated as one unit
+        (``_simulate_control_structure``).
 
         *raw_cell* is the text *node* was parsed from. The runtime keys an
         expression followed by ``;`` WITH the ``;`` (IPython's display
@@ -1230,16 +1257,7 @@ class VirtualLineage:
         """
         try:
             if is_control_structure(node):
-                self._simulate_control_structure(
-                    node,
-                    virtual_lineage,
-                    virtual_modules,
-                    simulation_trace,
-                    stmt_lookup_times,
-                    vars_mutated_by_loops,
-                    loop_target_vars=loop_target_vars,
-                    vars_with_stale_files=vars_with_stale_files,
-                )
+                self._simulate_control_structure(node, sim)
                 return
 
             stmt_code = ast.unparse(node)
@@ -1257,6 +1275,8 @@ class VirtualLineage:
         cell_stmt_occurrence_counts[stmt_code] = occ + 1
         occurrence_index = occ  # 0-based
 
+        virtual_lineage = sim.virtual_lineage
+        virtual_modules = sim.virtual_modules
         inputs, _ = CodeAnalyzer.analyze_code_block(stmt_code)
         input_hashes: dict[str, str] = {}
         for inp in inputs:
@@ -1281,15 +1301,13 @@ class VirtualLineage:
         if stmt_file_deps:
             cell_file_deps.update(stmt_file_deps)
 
-        self._update_stale_file_deps(inputs, outputs, files_stale, vars_with_stale_files)
+        self._update_stale_file_deps(inputs, outputs, files_stale, sim.vars_with_stale_files)
 
         if outputs:
             produced_lineages = {out: virtual_lineage[out] for out in outputs if out in virtual_lineage}
-            simulation_trace.append(
-                TraceEntry(stmt_code, outputs, inputs, input_hashes, produced_lineages, files_stale)
-            )
+            sim.trace.append(TraceEntry(stmt_code, outputs, inputs, input_hashes, produced_lineages, files_stale))
             if lookup_time > 0:
-                stmt_lookup_times[stmt_code] = lookup_time
+                sim.stmt_lookup_times[stmt_code] = lookup_time
         else:
             # No-output statements normally stay out of the trace, but a bare
             # file-writing expression (``df.to_csv(p)``) IS upstream state a
@@ -1304,28 +1322,23 @@ class VirtualLineage:
             # kernel, so after a restart the call vanished from the trace and
             # a figure was rebuilt without it (round 21, replay corpus).
             if statement_writes_files(stmt_code) or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
-                simulation_trace.append(TraceEntry(stmt_code, outputs, inputs, input_hashes, {}, files_stale))
+                sim.trace.append(TraceEntry(stmt_code, outputs, inputs, input_hashes, {}, files_stale))
 
     def simulate_one_cell(
         self,
+        sim: SimulationResult,
         i: int,
         cell_code: str,
-        simulation_trace: list,
-        virtual_lineage: dict,
-        virtual_modules: set,
-        new_cache_entries: list,
-        vars_mutated_by_loops: set,
-        vars_with_stale_files: set,
-        stmt_lookup_times: dict,
-        loop_target_vars: set,
+        new_cache_entries: list[SimulationCacheEntry] | None = None,
     ) -> None:
-        """Simulate a single cell and append a cache entry to *new_cache_entries*.
-
-        Mutates *simulation_trace*, *virtual_lineage*, *virtual_modules*,
-        *new_cache_entries*, *vars_mutated_by_loops*, *vars_with_stale_files*,
-        and *stmt_lookup_times* in-place.
-        """
+        """Simulate cell *i* into *sim*, and append its snapshot to
+        *new_cache_entries* when given."""
+        if new_cache_entries is None:
+            new_cache_entries = []
         cell_hash = hashlib.sha256(cell_code.encode("utf-8")).hexdigest()
+        simulation_trace = sim.trace
+        virtual_lineage = sim.virtual_lineage
+        virtual_modules = sim.virtual_modules
         trace_start = len(simulation_trace)
         cell_file_deps: dict = {}
 
@@ -1374,18 +1387,7 @@ class VirtualLineage:
                 if isinstance(node, ast.Raise):
                     break
                 self.simulate_one_node(
-                    i,
-                    node,
-                    cell_stmt_occurrence_counts,
-                    virtual_lineage,
-                    virtual_modules,
-                    simulation_trace,
-                    vars_mutated_by_loops,
-                    vars_with_stale_files,
-                    stmt_lookup_times,
-                    loop_target_vars,
-                    cell_file_deps,
-                    raw_cell=clean_cell_code,
+                    sim, i, node, cell_stmt_occurrence_counts, cell_file_deps, raw_cell=clean_cell_code
                 )
 
         except SyntaxError:
@@ -1425,8 +1427,8 @@ class VirtualLineage:
                 virtual_lineage=dict(virtual_lineage),
                 virtual_modules=set(virtual_modules),
                 trace_segment=cell_trace_segment,
-                vars_mutated_by_loops=set(vars_mutated_by_loops),
-                vars_with_stale_files=set(vars_with_stale_files),
+                vars_mutated_by_loops=set(sim.vars_mutated_by_loops),
+                vars_with_stale_files=set(sim.vars_with_stale_files),
                 cell_file_deps=dict(cell_file_deps),
                 cell_environment=self._cell_environment(cell_code),
             )
@@ -1440,17 +1442,11 @@ class VirtualLineage:
 
     def simulate_cells_pass1(
         self,
+        sim: SimulationResult,
         first_changed_cell: int,
         current_cell_idx: int,
         notebook_cells: list[str],
-        simulation_trace: list,
-        virtual_lineage: dict,
-        virtual_modules: set,
-        new_cache_entries: list,
-        vars_mutated_by_loops: set,
-        vars_with_stale_files: set,
-        stmt_lookup_times: dict,
-        loop_target_vars: set,
+        new_cache_entries: list[SimulationCacheEntry],
     ) -> None:
         """Run pass-1 simulation for cells *first_changed_cell*..*current_cell_idx* and update caches."""
         # Source of every top-level function across all cells, so
@@ -1459,18 +1455,7 @@ class VirtualLineage:
         self._sim_func_sources = self._build_function_sources(notebook_cells)
         for i in range(first_changed_cell, current_cell_idx):
             cell_code = notebook_cells[i].replace("\r\n", "\n")
-            self.simulate_one_cell(
-                i,
-                cell_code,
-                simulation_trace,
-                virtual_lineage,
-                virtual_modules,
-                new_cache_entries,
-                vars_mutated_by_loops,
-                vars_with_stale_files,
-                stmt_lookup_times,
-                loop_target_vars,
-            )
+            self.simulate_one_cell(sim, i, cell_code, new_cache_entries)
 
         # Update simulation cache for future incremental simulation.
         # NOTE: We only store entries for cells 0..(current_cell_idx-1).
@@ -1555,18 +1540,7 @@ class VirtualLineage:
                     )
         return extra_outputs
 
-    def _simulate_control_structure(
-        self,
-        node: ast.AST,
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-        simulation_trace: list[tuple],
-        stmt_lookup_times: dict[str, float],
-        vars_mutated_by_loops: set[str] = None,
-        parent_context: dict[str, Any] | None = None,
-        loop_target_vars: set[str] = None,
-        vars_with_stale_files: set[str] | None = None,
-    ) -> None:
+    def _simulate_control_structure(self, node: ast.AST, sim: SimulationResult) -> None:
         """
         Simulate execution of a control structure as a single unit.
 
@@ -1600,11 +1574,6 @@ class VirtualLineage:
         outcome the runtime recorded for it -- see
         ``TrackingState.control_outcomes`` in ``_simulate_one_control_unit``.
         """
-        if vars_mutated_by_loops is None:
-            vars_mutated_by_loops = set()
-        if loop_target_vars is None:
-            loop_target_vars = set()
-
         # A loop with a recorded split verdict is modelled as TWO statements.
         #
         # This is the mechanism, not a parity nicety: the re-execution planner
@@ -1623,28 +1592,10 @@ class VirtualLineage:
                 if self.debug:
                     logger.debug("[UPSTREAM_DEBUG] loop split at k=%d -> simulating head and tail separately", split_k)
                 for half in halves:
-                    self._simulate_one_control_unit(
-                        half,
-                        virtual_lineage,
-                        virtual_modules,
-                        simulation_trace,
-                        stmt_lookup_times,
-                        vars_mutated_by_loops,
-                        loop_target_vars,
-                        vars_with_stale_files,
-                    )
+                    self._simulate_one_control_unit(half, sim)
                 return
 
-        self._simulate_one_control_unit(
-            node,
-            virtual_lineage,
-            virtual_modules,
-            simulation_trace,
-            stmt_lookup_times,
-            vars_mutated_by_loops,
-            loop_target_vars,
-            vars_with_stale_files,
-        )
+        self._simulate_one_control_unit(node, sim)
 
     def _loop_split_k(self, node: ast.AST) -> int | None:
         """Persisted split point for *node*, or ``None`` if it is not split.
@@ -1669,17 +1620,7 @@ class VirtualLineage:
             logger.debug("[UPSTREAM_DEBUG] loop split lookup failed", exc_info=True)
             return None
 
-    def _simulate_one_control_unit(
-        self,
-        node: ast.AST,
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-        simulation_trace: list[tuple],
-        stmt_lookup_times: dict[str, float],
-        vars_mutated_by_loops: set[str],
-        loop_target_vars: set[str],
-        vars_with_stale_files: set[str] | None = None,
-    ) -> None:
+    def _simulate_one_control_unit(self, node: ast.AST, sim: SimulationResult) -> None:
         """Simulate ONE control structure as a single statement.
 
         Split out of :meth:`_simulate_control_structure` so a split loop can
@@ -1687,6 +1628,7 @@ class VirtualLineage:
         produced, exactly as two source-level statements would.
         """
         stmt_code = ast.unparse(node)
+        virtual_lineage = sim.virtual_lineage
 
         inputs, _ = CodeAnalyzer.analyze_code_block(stmt_code)
         input_hashes = {}
@@ -1696,9 +1638,11 @@ class VirtualLineage:
             elif inp in self.variable_lineage:
                 input_hashes[inp] = self.variable_lineage[inp]
 
-        outputs, lookup_time, files_stale, _ = self._update_virtual_lineage(stmt_code, virtual_lineage, virtual_modules)
+        outputs, lookup_time, files_stale, _ = self._update_virtual_lineage(
+            stmt_code, virtual_lineage, sim.virtual_modules
+        )
 
-        mutated_vars = self._collect_loop_mutation_info(node, loop_target_vars, vars_mutated_by_loops)
+        mutated_vars = self._collect_loop_mutation_info(node, sim.loop_target_vars, sim.vars_mutated_by_loops)
 
         # CRITICAL FIX: Update virtual lineage for variables mutated inside loops.
         # CodeAnalyzer doesn't detect loop-mutated vars (like `groups` in
@@ -1750,8 +1694,7 @@ class VirtualLineage:
                 # restore, so running it on a mismatch is the safe direction of
                 # the one it was already taking on a match.
                 files_stale = True
-                if vars_with_stale_files is not None:
-                    vars_with_stale_files.update(all_outputs | set(recorded[1]))
+                sim.vars_with_stale_files.update(all_outputs | set(recorded[1]))
             elif recorded[0] == input_hashes:
                 # The runtime ran this very structure with these very inputs
                 # and the files it read are where it left them: what it left
@@ -1767,17 +1710,15 @@ class VirtualLineage:
 
         if all_outputs:
             produced_lineages = {out: virtual_lineage[out] for out in all_outputs if out in virtual_lineage}
-            simulation_trace.append(
-                TraceEntry(stmt_code, all_outputs, inputs, input_hashes, produced_lineages, files_stale)
-            )
+            sim.trace.append(TraceEntry(stmt_code, all_outputs, inputs, input_hashes, produced_lineages, files_stale))
             if lookup_time > 0:
-                stmt_lookup_times[stmt_code] = lookup_time
+                sim.stmt_lookup_times[stmt_code] = lookup_time
         elif self._may_write_files(node, stmt_code):
             # ``if PACK.exists(): shutil.rmtree(PACK)`` binds nothing, so it had
             # no trace entry, and a replay after a restart re-ran the cell's
             # ``PACK.mkdir()`` without it (round 23, r23s2: FileExistsError).
             # The same rule simple statements follow in simulate_one_node.
-            simulation_trace.append(TraceEntry(stmt_code, set(), inputs, input_hashes, {}, files_stale))
+            sim.trace.append(TraceEntry(stmt_code, set(), inputs, input_hashes, {}, files_stale))
 
     def _persisted_mutation_verdict(self, source_hash: str) -> set[str] | None:
         """The runtime's verdict on a bare method call, from an earlier kernel.
@@ -2629,71 +2570,6 @@ class VirtualLineage:
             logger.error("[UPSTREAM] Error simulating statement '%s...': %s", stmt_code[:20], e)
             raise
 
-    def _check_file_deps_for_restore(
-        self, file_deps: dict[str, Any], start_time: float
-    ) -> tuple[set, float, float] | None:
-        """Validate file deps for a virtual restore.  Returns failure tuple or None.
-
-        Each entry is ``{'mtime': ..., 'size': ...}`` — see
-        :meth:`_validate_file_freshness`.
-        """
-        # Content is authoritative when the size matches.
-        fresh, stale = snapshot_is_fresh(file_deps)
-        if not fresh:
-            if self.debug:
-                print(f"[UPSTREAM] Restore failed: stale file dependency ({stale})")
-            return set(), time_module.time() - start_time, 0.0
-        return None  # All deps fresh
-
-    def _check_lineage_consistency(
-        self,
-        metadata: dict,
-        file_deps: dict[str, float],
-        expected_lineages: dict[str, str] | None,
-        start_time: float,
-    ) -> tuple[set, float, float] | None:
-        """Check output lineage consistency.  Returns failure tuple or None."""
-        if not file_deps and expected_lineages and "output_lineages" in metadata:
-            for var, expected_hash in expected_lineages.items():
-                cached_hash = metadata["output_lineages"].get(var)
-                if cached_hash and cached_hash != expected_hash:
-                    if self.debug:
-                        logger.debug(
-                            "[UPSTREAM] Restore failed: Lineage mismatch for %s. Exp: %s, Cached: %s",
-                            var,
-                            expected_hash[:8],
-                            cached_hash[:8],
-                        )
-                    return set(), time_module.time() - start_time, 0.0
-        return None
-
-    def _lineage_confirmed_vars(
-        self,
-        metadata: dict,
-        file_deps: dict[str, float],
-        expected_lineages: dict[str, str] | None,
-    ) -> frozenset[str]:
-        """Vars whose cached lineage was positively matched against the expected one.
-
-        Only these may have an EMPTY cached value restored over a non-empty
-        in-memory one. A confirmed lineage means the empty value is
-        the correct current result — a filter that legitimately matched nothing
-        — rather than a corrupt or truncated entry.
-
-        The guard condition mirrors ``_check_lineage_consistency`` exactly: when
-        that check does not run (file deps present, or no expected lineages),
-        nothing is confirmed, so the conservative empty-guard below stays in
-        force. Absence of evidence is not treated as evidence.
-        """
-        if file_deps or not expected_lineages or "output_lineages" not in metadata:
-            return frozenset()
-        cached = metadata["output_lineages"]
-        return frozenset(
-            var
-            for var, expected_hash in expected_lineages.items()
-            if cached.get(var) and cached.get(var) == expected_hash
-        )
-
     def _restore_vars_from_cache(
         self,
         variables_to_restore: dict,
@@ -2990,17 +2866,15 @@ class VirtualLineage:
             if metadata and cached_data is not None:
                 # 3. Check file dependencies (Critical!)
                 file_deps = metadata.get("file_dependencies", {})
-                fail = self._check_file_deps_for_restore(file_deps, start_time)
-                if fail is not None:
-                    return fail
+                fresh, stale = snapshot_is_fresh(file_deps)
+                if not fresh:
+                    logger.debug("[UPSTREAM] Restore failed: stale file dependency (%s)", stale)
+                    return set(), time_module.time() - start_time, 0.0
 
-                # 3.5 Check Lineage Consistency (Fix for Stale Cache Loops)
-                # CRITICAL: We skip this strict check if file dependencies are present.
-                # File hashing (mtime based) uses a strict threshold (0.01s) for detecting changes.
-                # If we enforce strict lineage string equality here, we reject valid cache entries where mtime changed slightly.
-                fail = self._check_lineage_consistency(metadata, file_deps, expected_lineages, start_time)
-                if fail is not None:
-                    return fail
+                conflict = lineage_conflict(metadata, file_deps, expected_lineages)
+                if conflict is not None:
+                    logger.debug("[UPSTREAM] Restore failed: lineage mismatch for %s", conflict)
+                    return set(), time_module.time() - start_time, 0.0
 
                 # 4. Success! Restore into shell.
                 # Cache stores variables under 'variables' key (see _store_in_cache)
@@ -3008,7 +2882,7 @@ class VirtualLineage:
                 restored_vars = self._restore_vars_from_cache(
                     variables_to_restore,
                     metadata,
-                    self._lineage_confirmed_vars(metadata, file_deps, expected_lineages),
+                    lineage_confirmed_vars(metadata, file_deps, expected_lineages),
                 )
                 self._update_tracking_after_restore(restored_vars, metadata, input_hashes)
                 return restored_vars, time_module.time() - start_time, saved_time

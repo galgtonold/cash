@@ -1,9 +1,9 @@
-"""Phase 2 of the notebook simulator: classify broken / tainted variables.
+"""Phase 2 of the notebook simulator: which names memory cannot be trusted for.
 
-Extracted from ``NotebookSimulator``. Holds references to a
-:class:`VirtualLineage` instance (for cache-probing and helper methods like
-``check_loop_derived_trust_override``) and to the shared ``TrackingState``
-dicts. Pure-phase invariants land in a later refactor.
+:meth:`MismatchClassifier.classify` compares a :class:`SimulationResult` with
+the live lineages and returns a :class:`ClassificationResult`;
+:meth:`MismatchClassifier.backward_scan_pass` then walks the trace back from
+the broken names, restoring what the cache holds and scheduling the rest.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import ast
 import functools
 import logging
 import types
+from dataclasses import dataclass, field
 
 from cash.control_markers import strip_markers
 
@@ -23,7 +24,13 @@ from .._protocols import TrackingState
 from .._trace import trace_event
 from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
-from ._types import RestoreCollector, apply_collected_mutations
+from ._types import (
+    CellCheck,
+    ClassificationResult,
+    RestoreCollector,
+    SimulationResult,
+    apply_collected_mutations,
+)
 from .virtual_lineage import VirtualLineage, normalize_stmt
 
 __all__ = ["MismatchClassifier"]
@@ -49,13 +56,25 @@ def import_only(stmt_code: str) -> bool:
     return bool(body) and all(isinstance(node, ast.Import | ast.ImportFrom) for node in body)
 
 
+@dataclass
+class _BackwardScan:
+    """Progress of one backward scan over the trace."""
+
+    needed: set[str]
+    """Names still to be produced by a statement above."""
+
+    resolved: set[str] = field(default_factory=set)
+    """Names already produced by a scheduled or restored statement."""
+
+    run: list[int] = field(default_factory=list)
+    """Trace indices scheduled to re-run, in the order found."""
+
+
 class MismatchClassifier:
     """Phase 2 of NotebookSimulator: classify broken / tainted variables.
 
-    Holds references to a :class:`VirtualLineage` instance (for cache-probing
-    and helper methods like ``check_loop_derived_trust_override``) and to the
-    shared ``TrackingState`` dicts. Pure-phase invariants land in a later
-    refactor.
+    Restores through, and asks trace questions of, the :class:`VirtualLineage`
+    it is given. Writes to ``TrackingState`` are buffered in ``restores``.
     """
 
     def __init__(
@@ -193,38 +212,26 @@ class MismatchClassifier:
         self,
         var_name: str,
         data_inputs: set[str],
-        vars_derived_from_loops: set[str],
-        loop_target_vars: set[str],
-        virtual_lineage: dict[str, str],
+        sim: SimulationResult,
     ) -> set[str]:
         """Return data inputs whose virtual and actual lineages differ."""
         mismatched: set[str] = set()
         for inp in data_inputs:
             if inp == var_name:
                 continue  # skip self-referential input (e.g., df['x'] = f(df))
-            if inp in vars_derived_from_loops:
+            if inp in sim.vars_derived_from_loops:
                 continue  # loop-derived, expected mismatch
-            if inp in loop_target_vars:
+            if inp in sim.loop_target_vars:
                 continue  # loop iteration target, expected mismatch
             if (
-                inp in virtual_lineage
+                inp in sim.virtual_lineage
                 and inp in self.variable_lineage
-                and virtual_lineage[inp] != self.variable_lineage[inp]
+                and sim.virtual_lineage[inp] != self.variable_lineage[inp]
             ):
                 mismatched.add(inp)
         return mismatched
 
-    def _check_code_matches_loop_trust(
-        self,
-        var_name: str,
-        last_stmt_for_var: str,
-        vars_derived_from_loops: set[str],
-        loop_target_vars: set[str],
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-        upstream_has_modifications: bool,
-        loop_derived_trust_overridden: bool,
-    ) -> bool:
+    def _check_code_matches_loop_trust(self, var_name: str, last_stmt_for_var: str, sim: SimulationResult) -> bool:
         """Return True if var_name should be trusted in-memory when code matches trace.
 
         Called only when upstream_has_modifications is False and loop-derived
@@ -233,14 +240,8 @@ class MismatchClassifier:
         """
         try:
             stmt_inputs, _ = CodeAnalyzer.analyze_code_block(last_stmt_for_var)
-            data_inputs = self._collect_non_module_inputs(stmt_inputs, virtual_modules)
-            mismatched_inputs = self._find_mismatched_data_inputs(
-                var_name,
-                data_inputs,
-                vars_derived_from_loops,
-                loop_target_vars,
-                virtual_lineage,
-            )
+            data_inputs = self._collect_non_module_inputs(stmt_inputs, sim.virtual_modules)
+            mismatched_inputs = self._find_mismatched_data_inputs(var_name, data_inputs, sim)
             if not mismatched_inputs:
                 if self.debug:
                     logger.debug(
@@ -248,7 +249,7 @@ class MismatchClassifier:
                         "loop-derived inputs %s. "
                         "Trusting in-memory value (upstream unchanged).",
                         var_name,
-                        data_inputs & vars_derived_from_loops,
+                        data_inputs & sim.vars_derived_from_loops,
                     )
                 return True
         except (KeyError, ValueError, TypeError):
@@ -259,8 +260,7 @@ class MismatchClassifier:
         self,
         var_name: str,
         actual_lineage: str,
-        virtual_lineage: dict[str, str],
-        upstream_has_modifications: bool,
+        sim: SimulationResult,
         notebook_cells: list[str],
     ) -> bool:
         """Return True if the in-memory value is a valid downstream extension."""
@@ -268,10 +268,10 @@ class MismatchClassifier:
             return False
         mem_code = self.executed_cell_codes[var_name]
         if not self.virtual_lineage.is_valid_extension(
-            mem_code, actual_lineage, virtual_lineage, required_dependency=var_name
+            mem_code, actual_lineage, sim.virtual_lineage, required_dependency=var_name
         ):
             return False
-        if upstream_has_modifications:
+        if sim.upstream_has_modifications:
             code_still_in_notebook = self.virtual_lineage.code_exists_in_notebook(mem_code, notebook_cells)
             if code_still_in_notebook:
                 if self.debug:
@@ -291,14 +291,9 @@ class MismatchClassifier:
         self,
         var_name: str,
         last_stmt_for_var: str | None,
-        vars_derived_from_loops: set[str],
-        loop_target_vars: set[str],
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-        upstream_has_modifications: bool,
-        loop_derived_trust_overridden: bool,
-        required_inputs: set[str] | None,
-        broken_vars: set[str],
+        sim: SimulationResult,
+        check: CellCheck,
+        result: ClassificationResult,
     ) -> bool:
         """Handle the code-matches-but-lineage-differs case.
 
@@ -317,23 +312,15 @@ class MismatchClassifier:
             return False
 
         # Code matches simulation but lineage differs.
+        required_inputs = check.required_inputs
         if (
             required_inputs
             and var_name in required_inputs
-            and vars_derived_from_loops
-            and not upstream_has_modifications
-            and not loop_derived_trust_overridden
+            and sim.vars_derived_from_loops
+            and not sim.upstream_has_modifications
+            and not result.loop_derived_trust_overridden
         ):
-            if self._check_code_matches_loop_trust(
-                var_name,
-                last_stmt_for_var_real,
-                vars_derived_from_loops,
-                loop_target_vars,
-                virtual_lineage,
-                virtual_modules,
-                upstream_has_modifications,
-                loop_derived_trust_overridden,
-            ):
+            if self._check_code_matches_loop_trust(var_name, last_stmt_for_var_real, sim):
                 return True
             if self.debug:
                 logger.debug(
@@ -343,7 +330,7 @@ class MismatchClassifier:
             logger.debug(
                 "[UPSTREAM] Variable '%s' is a required input with lineage mismatch. Must re-execute.", var_name
             )
-            broken_vars.add(var_name)
+            result.broken_vars.add(var_name)
             return True
         # For non-required variables, trust the memory
         if self.debug:
@@ -357,24 +344,15 @@ class MismatchClassifier:
     def _classify_one_broken_var(
         self,
         var_name: str,
-        vars_derived_from_loops: set[str],
-        upstream_has_modifications: bool,
-        loop_derived_trust_overridden: bool,
+        sim: SimulationResult,
+        check: CellCheck,
+        result: ClassificationResult,
         loop_var_input_lineages: dict[str, dict[str, str]],
-        loop_target_vars: set[str],
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-        vars_with_stale_files: set[str],
-        vars_mutated_by_loops: set[str],
-        vars_tainted_by_upstream_mismatch: set[str],
-        simulation_trace: list,
-        required_inputs: set[str] | None,
-        current_cell_outputs: set[str] | None,
-        notebook_cells: list[str],
-        broken_vars: set[str],
-        simulation_trace_codes: set[str] | None = None,
     ) -> None:
-        """Classify a single variable and add to *broken_vars* if needed."""
+        """Classify a single variable and add it to ``result.broken_vars`` if needed."""
+        vars_derived_from_loops = sim.vars_derived_from_loops
+        vars_mutated_by_loops = sim.vars_mutated_by_loops
+        simulation_trace_codes = result.trace_codes
         # Skip loop-derived vars when upstream is unchanged AND producing code
         # is on disk (not overridden by unsaved edit). FAST MODE can't track
         # per-iteration lineage, so we trust in-memory state.
@@ -382,9 +360,9 @@ class MismatchClassifier:
         # trusting memory then serves the value read from the old file.
         if (
             var_name in vars_derived_from_loops
-            and not upstream_has_modifications
-            and not loop_derived_trust_overridden
-            and var_name not in vars_with_stale_files
+            and not sim.upstream_has_modifications
+            and not result.loop_derived_trust_overridden
+            and var_name not in sim.vars_with_stale_files
         ):
             # Don't trust if the variable was overwritten by a downstream cell.
             # Check that executed_cell_codes for this var matches an upstream statement.
@@ -415,7 +393,7 @@ class MismatchClassifier:
                     var_name,
                     input_lineages_for_var,
                     vars_derived_from_loops,
-                    loop_target_vars,
+                    sim.loop_target_vars,
                 )
                 if not inputs_changed:
                     if self.debug:
@@ -443,6 +421,7 @@ class MismatchClassifier:
                     )
 
         actual_lineage = self.variable_lineage[var_name]
+        virtual_lineage = sim.virtual_lineage
         if var_name not in virtual_lineage:
             if self.debug:
                 logger.debug(
@@ -453,32 +432,16 @@ class MismatchClassifier:
 
         final_virtual_hash = virtual_lineage[var_name]
         if actual_lineage == final_virtual_hash:
-            if var_name in vars_tainted_by_upstream_mismatch:
+            if var_name in result.tainted_vars:
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM_DEBUG] Lineage matches for '%s' but tainted by upstream mismatch. Marking broken.",
                         var_name,
                     )
-                broken_vars.add(var_name)
+                result.broken_vars.add(var_name)
             return
 
-        self._handle_lineage_mismatch(
-            var_name,
-            actual_lineage,
-            final_virtual_hash,
-            vars_derived_from_loops,
-            upstream_has_modifications,
-            loop_derived_trust_overridden,
-            loop_target_vars,
-            virtual_lineage,
-            virtual_modules,
-            vars_with_stale_files,
-            simulation_trace,
-            required_inputs,
-            current_cell_outputs,
-            notebook_cells,
-            broken_vars,
-        )
+        self._handle_lineage_mismatch(var_name, actual_lineage, final_virtual_hash, sim, check, result)
 
     def _is_saved_figure(self, var_name: str) -> bool:
         """Whether *var_name* holds a live figure whose last change was a bare
@@ -504,20 +467,18 @@ class MismatchClassifier:
         var_name: str,
         actual_lineage: str,
         final_virtual_hash: str,
-        virtual_lineage: dict[str, str],
-        vars_with_stale_files: set[str],
-        upstream_has_modifications: bool,
-        required_inputs: set[str] | None,
-        current_cell_outputs: set[str] | None,
-        notebook_cells: list[str],
+        sim: SimulationResult,
+        check: CellCheck,
         broken_vars: set[str],
-        virtual_modules: set[str] | None = None,
     ) -> bool:
         """Check early-exit conditions for a lineage mismatch.
 
         Returns True if the caller should stop processing this variable
         (it was already handled — marked broken, kept, or lineage reset).
         """
+        required_inputs = check.required_inputs
+        current_cell_outputs = check.current_cell_outputs
+        upstream_has_modifications = sim.upstream_has_modifications
         # a bare ``est.fit(X, y)`` receiver has a SELF-REFERENTIAL
         # key. cash adds it to the statement's OUTPUTS (so the fit bumps its
         # lineage) while it is also an INPUT (its pre-fit lineage pins the key).
@@ -588,16 +549,10 @@ class MismatchClassifier:
             broken_vars.add(var_name)
             return True
 
-        if self._check_var_extension_valid(
-            var_name,
-            actual_lineage,
-            virtual_lineage,
-            upstream_has_modifications,
-            notebook_cells,
-        ):
+        if self._check_var_extension_valid(var_name, actual_lineage, sim, check.notebook_cells):
             return True
 
-        if var_name in vars_with_stale_files:
+        if var_name in sim.vars_with_stale_files:
             if self.debug:
                 logger.debug(
                     "[UPSTREAM_DEBUG]   -> Variable '%s' has stale file dependencies. Forcing re-execution.", var_name
@@ -651,7 +606,7 @@ class MismatchClassifier:
             # kept that value, and ``docs['n_chars'] = ...`` printed the rows an
             # edited filter had removed (round 23, r23s4, silent).
             if upstream_has_modifications and not self._current_cell_reproduces(
-                var_name, actual_lineage, virtual_lineage, virtual_modules or set()
+                var_name, actual_lineage, sim, check.cell_code
             ):
                 if self.debug:
                     logger.debug(
@@ -678,40 +633,26 @@ class MismatchClassifier:
 
         return False
 
-    #: Source of the cell being checked; set by ``UpstreamChecker``.
-    current_cell_code: str | None = None
-
     def _current_cell_reproduces(
         self,
         var_name: str,
         actual_lineage: str,
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
+        sim: SimulationResult,
+        code: str | None,
     ) -> bool:
-        """True when running the current cell on the simulated cell-entry state
-        gives *var_name* its live lineage -- the gap is the cell's own earlier
-        run and nothing upstream. Simulated on copies; nothing is kept."""
-        code = self.current_cell_code
+        """True when running the current cell (*code*) on the simulated
+        cell-entry state gives *var_name* its live lineage -- the gap is the
+        cell's own earlier run and nothing upstream. Simulated on copies;
+        nothing is kept."""
         if not code:
             return True
-        lineage = dict(virtual_lineage)
+        scratch = SimulationResult(virtual_lineage=dict(sim.virtual_lineage), virtual_modules=set(sim.virtual_modules))
         try:
-            self.virtual_lineage.simulate_one_cell(
-                -1,
-                code,
-                [],
-                lineage,
-                set(virtual_modules),
-                [],
-                set(),
-                set(),
-                {},
-                set(),
-            )
+            self.virtual_lineage.simulate_one_cell(scratch, -1, code)
         except Exception:  # noqa: BLE001 - cannot tell: treat as not reproduced
             logger.debug("[UPSTREAM] could not re-simulate the current cell for '%s'", var_name)
             return False
-        return lineage.get(var_name) == actual_lineage
+        return scratch.virtual_lineage.get(var_name) == actual_lineage
 
     def _is_singleunit_loop_nolineage_selfmod(self, var_name: str) -> bool:
         """True if *var_name* is a no-lineage var self-modified by a single-unit loop.
@@ -799,18 +740,9 @@ class MismatchClassifier:
         var_name: str,
         actual_lineage: str,
         final_virtual_hash: str,
-        vars_derived_from_loops: set[str],
-        upstream_has_modifications: bool,
-        loop_derived_trust_overridden: bool,
-        loop_target_vars: set[str],
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-        vars_with_stale_files: set[str],
-        simulation_trace: list,
-        required_inputs: set[str] | None,
-        current_cell_outputs: set[str] | None,
-        notebook_cells: list[str],
-        broken_vars: set[str],
+        sim: SimulationResult,
+        check: CellCheck,
+        result: ClassificationResult,
     ) -> None:
         """Handle a confirmed lineage mismatch for *var_name*."""
         if self.debug:
@@ -821,42 +753,19 @@ class MismatchClassifier:
                 actual_lineage[:8],
             )
 
-        if self._handle_mismatch_prereqs(
-            var_name,
-            actual_lineage,
-            final_virtual_hash,
-            virtual_lineage,
-            vars_with_stale_files,
-            upstream_has_modifications,
-            required_inputs,
-            current_cell_outputs,
-            notebook_cells,
-            broken_vars,
-            virtual_modules=virtual_modules,
-        ):
+        if self._handle_mismatch_prereqs(var_name, actual_lineage, final_virtual_hash, sim, check, result.broken_vars):
             return
 
         last_stmt_for_var = None
-        for entry in reversed(simulation_trace):
+        for entry in reversed(sim.trace):
             if var_name in entry.outputs:
                 last_stmt_for_var = entry.stmt_code
                 break
 
-        if self._handle_mismatch_code_matches(
-            var_name,
-            last_stmt_for_var,
-            vars_derived_from_loops,
-            loop_target_vars,
-            virtual_lineage,
-            virtual_modules,
-            upstream_has_modifications,
-            loop_derived_trust_overridden,
-            required_inputs,
-            broken_vars,
-        ):
+        if self._handle_mismatch_code_matches(var_name, last_stmt_for_var, sim, check, result):
             return
 
-        if required_inputs and var_name in required_inputs:
+        if check.required_inputs and var_name in check.required_inputs:
             if self.debug:
                 logger.debug(
                     "[UPSTREAM_DEBUG]   -> Required input mismatch and INVALID extension. Forcing strict restoration"
@@ -865,189 +774,90 @@ class MismatchClassifier:
         logger.debug(
             "[UPSTREAM] Variable '%s' is broken. Exp: %s, Act: %s", var_name, final_virtual_hash[:8], actual_lineage[:8]
         )
-        broken_vars.add(var_name)
+        result.broken_vars.add(var_name)
 
-    def _classify_broken_vars(
-        self,
-        vars_to_check: set[str],
-        vars_derived_from_loops: set[str],
-        upstream_has_modifications: bool,
-        loop_derived_trust_overridden: bool,
-        loop_var_input_lineages: dict[str, dict[str, str]],
-        loop_target_vars: set[str],
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-        vars_with_stale_files: set[str],
-        vars_mutated_by_loops: set[str],
-        vars_tainted_by_upstream_mismatch: set[str],
-        simulation_trace: list,
-        required_inputs: set[str] | None,
-        current_cell_outputs: set[str] | None,
-        notebook_cells: list[str],
-        broken_vars: set[str],
-        simulation_trace_codes: set[str] | None = None,
-    ) -> None:
-        """Classify each variable in *vars_to_check* and populate *broken_vars*.
+    def classify(self, sim: SimulationResult, check: CellCheck) -> ClassificationResult:
+        """Pass 2: the names *check*'s cell reads that memory cannot be trusted for."""
+        virtual_lineage = sim.virtual_lineage
+        if self.debug:
+            logger.debug("[UPSTREAM_DEBUG] Simulation complete. Virtual lineage keys: %s", list(virtual_lineage.keys()))
+            logger.debug("[UPSTREAM_DEBUG] Actual variable_lineage keys: %s", list(self.variable_lineage.keys()))
+            logger.debug("[UPSTREAM_DEBUG] Simulation trace has %s statements", len(sim.trace))
+            if sim.vars_mutated_by_loops:
+                logger.debug("[UPSTREAM_DEBUG] Variables mutated by loops (trusted): %s", sim.vars_mutated_by_loops)
 
-        Also checks required inputs that are missing from memory entirely.
-        """
-        for var_name in vars_to_check:
-            self._classify_one_broken_var(
-                var_name,
-                vars_derived_from_loops,
-                upstream_has_modifications,
-                loop_derived_trust_overridden,
-                loop_var_input_lineages,
-                loop_target_vars,
+        required_inputs = check.required_inputs
+        vars_to_check = {name for name in required_inputs or () if name in self.variable_lineage}
+
+        trace_codes = self.virtual_lineage.build_simulation_trace_codes(sim.trace)
+        tainted: set[str] = set()
+        if not sim.upstream_has_modifications:
+            tainted = self.virtual_lineage.compute_tainted_vars_from_unsaved_edits(
                 virtual_lineage,
-                virtual_modules,
-                vars_with_stale_files,
-                vars_mutated_by_loops,
-                vars_tainted_by_upstream_mismatch,
-                simulation_trace,
-                required_inputs,
-                current_cell_outputs,
-                notebook_cells,
-                broken_vars,
-                simulation_trace_codes=simulation_trace_codes,
+                sim.trace,
+                trace_codes,
+                check.current_cell_idx,
+                check.notebook_cells,
             )
+        result = ClassificationResult(
+            broken_vars=set(),
+            tainted_vars=tainted,
+            trace_codes=trace_codes,
+            loop_derived_trust_overridden=self.virtual_lineage.check_loop_derived_trust_override(
+                sim.upstream_has_modifications,
+                sim.vars_mutated_by_loops,
+                trace_codes,
+            ),
+        )
+        loop_var_input_lineages = self.virtual_lineage.build_loop_var_input_lineages(
+            sim.trace,
+            sim.vars_derived_from_loops,
+            virtual_lineage,
+            sim.virtual_modules,
+        )
+
+        for var_name in vars_to_check:
+            self._classify_one_broken_var(var_name, sim, check, result, loop_var_input_lineages)
             # Drain between iterations: a lineage reset buffered for this var
             # must be visible when classifying the remaining vars.
             apply_collected_mutations(self.restores, self.tracking_state)
 
         # Only required inputs matter here; temporary intermediates can stay missing.
-        self._check_missing_required_inputs(
-            required_inputs,
-            virtual_lineage,
-            virtual_modules,
-            broken_vars,
-        )
-        self._repair_upstream_rerun_bindings(required_inputs, simulation_trace, broken_vars)
-
-    def run_pass2_identify_broken_vars(
-        self,
-        simulation_trace: list,
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-        vars_mutated_by_loops: set[str],
-        vars_with_stale_files: set[str],
-        vars_derived_from_loops: set[str],
-        loop_target_vars: set[str],
-        upstream_has_modifications: bool,
-        required_inputs: set[str] | None,
-        current_cell_outputs: set[str] | None,
-        notebook_cells: list[str],
-        current_cell_idx: int,
-    ) -> tuple[set[str], set[str], set[str]]:
-        """Pass 2: identify broken variables.
-
-        Returns (broken_vars, simulation_trace_codes, vars_tainted_by_upstream_mismatch).
-        """
-        if self.debug:
-            logger.debug("[UPSTREAM_DEBUG] Simulation complete. Virtual lineage keys: %s", list(virtual_lineage.keys()))
-            logger.debug("[UPSTREAM_DEBUG] Actual variable_lineage keys: %s", list(self.variable_lineage.keys()))
-            logger.debug("[UPSTREAM_DEBUG] Simulation trace has %s statements", len(simulation_trace))
-            if vars_mutated_by_loops:
-                logger.debug("[UPSTREAM_DEBUG] Variables mutated by loops (trusted): %s", vars_mutated_by_loops)
-
-        vars_to_check: set[str] = set()
-        if required_inputs:
-            for var_name in required_inputs:
-                if var_name in self.variable_lineage:
-                    vars_to_check.add(var_name)
-
-        simulation_trace_codes = self.virtual_lineage.build_simulation_trace_codes(simulation_trace)
-
-        vars_tainted_by_upstream_mismatch: set[str] = set()
-        if not upstream_has_modifications:
-            vars_tainted_by_upstream_mismatch = self.virtual_lineage.compute_tainted_vars_from_unsaved_edits(
-                virtual_lineage,
-                simulation_trace,
-                simulation_trace_codes,
-                current_cell_idx,
-                notebook_cells,
-            )
-
-        loop_derived_trust_overridden = self.virtual_lineage.check_loop_derived_trust_override(
-            upstream_has_modifications,
-            vars_mutated_by_loops,
-            simulation_trace_codes,
-        )
-
-        loop_var_input_lineages = self.virtual_lineage.build_loop_var_input_lineages(
-            simulation_trace,
-            vars_derived_from_loops,
-            virtual_lineage,
-            virtual_modules,
-        )
-
-        broken_vars: set[str] = set()
-        self._classify_broken_vars(
-            vars_to_check,
-            vars_derived_from_loops,
-            upstream_has_modifications,
-            loop_derived_trust_overridden,
-            loop_var_input_lineages,
-            loop_target_vars,
-            virtual_lineage,
-            virtual_modules,
-            vars_with_stale_files,
-            vars_mutated_by_loops,
-            vars_tainted_by_upstream_mismatch,
-            simulation_trace,
-            required_inputs,
-            current_cell_outputs,
-            notebook_cells,
-            broken_vars,
-            simulation_trace_codes=simulation_trace_codes,
-        )
+        self._check_missing_required_inputs(required_inputs, virtual_lineage, sim.virtual_modules, result.broken_vars)
+        self._repair_upstream_rerun_bindings(required_inputs, sim.trace, result.broken_vars)
 
         if self.debug:
-            logger.debug("[UPSTREAM_DEBUG] Broken vars: %s", broken_vars)
-            if not broken_vars:
+            logger.debug("[UPSTREAM_DEBUG] Broken vars: %s", result.broken_vars)
+            if not result.broken_vars:
                 logger.debug("[UPSTREAM_DEBUG] No broken vars, nothing to re-execute")
+        return result
 
-        return broken_vars, simulation_trace_codes, vars_tainted_by_upstream_mismatch
-
-    def _check_tainted_input_valid(
-        self,
-        inp: str,
-        virtual_lineage: dict[str, str],
-        upstream_has_modifications: bool,
-        simulation_trace_codes: set[str],
-    ) -> bool:
+    def _check_tainted_input_valid(self, inp: str, sim: SimulationResult, result: ClassificationResult) -> bool:
         """Return True if *inp* is an unsaved-edit input that should be trusted.
 
         This is called when inp has a lineage mismatch to decide if we can
         trust the in-memory value (produced by unsaved code) rather than
         cascading into the old disk code.
         """
+        virtual_lineage = sim.virtual_lineage
         if inp not in virtual_lineage or inp not in self.variable_lineage:
             return False
         if self.variable_lineage[inp] == virtual_lineage[inp]:
             return False
-        if upstream_has_modifications:
+        if sim.upstream_has_modifications:
             return False
         inp_producing_code = self.executed_cell_codes.get(inp)
         if inp_producing_code is None:
             return False
         normalized_inp_code = strip_markers(inp_producing_code).strip()
-        return normalized_inp_code not in simulation_trace_codes and self._ran_the_notebook_version(
-            inp, simulation_trace_codes
-        )
+        return normalized_inp_code not in result.trace_codes and self._ran_the_notebook_version(inp, result.trace_codes)
 
-    def _all_tainted_inputs_valid(
-        self,
-        stmt_code: str,
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-        upstream_has_modifications: bool,
-        simulation_trace_codes: set[str],
-    ) -> bool:
+    def _all_tainted_inputs_valid(self, stmt_code: str, sim: SimulationResult, result: ClassificationResult) -> bool:
         """Return True if all inputs for a tainted statement are available and fresh."""
+        virtual_lineage = sim.virtual_lineage
         stmt_inputs_check, _ = CodeAnalyzer.analyze_code_block(stmt_code)
         for inp in stmt_inputs_check:
-            if inp in virtual_modules:
+            if inp in sim.virtual_modules:
                 if inp in self.shell.user_ns:
                     continue
                 return False
@@ -1058,9 +868,7 @@ class MismatchClassifier:
                 continue
             if inp not in self.shell.user_ns:
                 return False
-            if self._check_tainted_input_valid(
-                inp, virtual_lineage, upstream_has_modifications, simulation_trace_codes
-            ):
+            if self._check_tainted_input_valid(inp, sim, result):
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM] Input '%s' has different lineage but produced "
@@ -1089,32 +897,24 @@ class MismatchClassifier:
         stmt_code: str,
         outputs: set[str],
         needed_outputs_pre: set[str],
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-        upstream_has_modifications: bool,
-        simulation_trace_codes: set[str],
-        needed_vars: set[str],
-        resolved_vars: set[str],
-        stmts_to_run_indices: list[int],
-    ) -> tuple[set[str], float, float, bool]:
-        """Handle the force-reexecute branch for a tainted statement.
+        sim: SimulationResult,
+        result: ClassificationResult,
+        scan: _BackwardScan,
+    ) -> bool:
+        """Schedule a tainted statement whose inputs are all in memory.
 
-        Returns (restored_vars, restore_time, saved_time, handled) where
-        *handled* is True when the statement was fully resolved (inputs valid),
-        False when it needs cascading.
+        True when it was scheduled; False when its inputs need cascading.
         """
-        if self._all_tainted_inputs_valid(
-            stmt_code, virtual_lineage, virtual_modules, upstream_has_modifications, simulation_trace_codes
-        ):
-            stmts_to_run_indices.append(i)
-            needed_vars.difference_update(outputs)
-            resolved_vars.update(outputs - needed_outputs_pre)
+        if self._all_tainted_inputs_valid(stmt_code, sim, result):
+            scan.run.append(i)
+            scan.needed.difference_update(outputs)
+            scan.resolved.update(outputs - needed_outputs_pre)
             if self.debug:
                 logger.debug("[UPSTREAM] Tainted stmt scheduled (inputs in memory): %s...", stmt_code[:60])
-            return set(), 0.0, 0.0, True
+            return True
         if self.debug:
             logger.debug("[UPSTREAM] Tainted stmt, inputs missing, cascading: %s...", stmt_code[:60])
-        return set(), 0.0, 0.0, False
+        return False
 
     def _ran_the_notebook_version(self, inp: str, simulation_trace_codes: set[str]) -> bool:
         """Whether the kernel has run, for *inp*, a statement the notebook holds now.
@@ -1133,14 +933,9 @@ class MismatchClassifier:
             return False
         return any(statement_source_hash(code) in history for code in simulation_trace_codes)
 
-    def _check_inp_lineage_skip(
-        self,
-        inp: str,
-        virtual_lineage: dict[str, str],
-        upstream_has_modifications: bool,
-        simulation_trace_codes: set[str],
-    ) -> bool:
+    def _check_inp_lineage_skip(self, inp: str, sim: SimulationResult, result: ClassificationResult) -> bool:
         """Return True if *inp* should be skipped based on lineage/unsaved-edit checks."""
+        virtual_lineage = sim.virtual_lineage
         if inp not in self.variable_lineage or inp not in virtual_lineage:
             return False
         if self.variable_lineage[inp] == virtual_lineage[inp]:
@@ -1152,13 +947,13 @@ class MismatchClassifier:
                 return True
             return False
         # Lineage mismatch — check for unsaved edit
-        if upstream_has_modifications or inp not in self.shell.user_ns:
+        if sim.upstream_has_modifications or inp not in self.shell.user_ns:
             return False
         inp_prod_code = self.executed_cell_codes.get(inp)
         if inp_prod_code is None:
             return False
         norm_code = strip_markers(inp_prod_code).strip()
-        if norm_code not in simulation_trace_codes and self._ran_the_notebook_version(inp, simulation_trace_codes):
+        if norm_code not in result.trace_codes and self._ran_the_notebook_version(inp, result.trace_codes):
             if self.debug:
                 logger.debug(
                     "[UPSTREAM] Input '%s' lineage mismatch but produced by unsaved edit. Trusting in-memory.", inp
@@ -1169,12 +964,8 @@ class MismatchClassifier:
     def _should_add_input_to_needed(
         self,
         inp: str,
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-        vars_derived_from_loops: set[str],
-        loop_derived_trust_overridden: bool,
-        upstream_has_modifications: bool,
-        simulation_trace_codes: set[str],
+        sim: SimulationResult,
+        result: ClassificationResult,
         needed_vars: set[str],
     ) -> bool:
         """Return True if *inp* should be added to *needed_vars* during cascade.
@@ -1182,7 +973,7 @@ class MismatchClassifier:
         Handles module, builtin, lineage-matching, unsaved-edit, and loop-derived
         special cases.  Side-effect: may add *inp* to *needed_vars* for modules.
         """
-        if inp in virtual_modules:
+        if inp in sim.virtual_modules:
             if inp not in self.shell.user_ns:
                 needed_vars.add(inp)
                 if self.debug:
@@ -1196,10 +987,14 @@ class MismatchClassifier:
         # that is always available.
         if inp in BUILTIN_NAMES and inp not in self.variable_lineage:
             return False
-        if self._check_inp_lineage_skip(inp, virtual_lineage, upstream_has_modifications, simulation_trace_codes):
+        if self._check_inp_lineage_skip(inp, sim, result):
             return False
-        if inp in vars_derived_from_loops and not upstream_has_modifications and not loop_derived_trust_overridden:
-            if inp in self.shell.user_ns and not self._built_on_an_older_input(inp, vars_derived_from_loops, set()):
+        if (
+            inp in sim.vars_derived_from_loops
+            and not sim.upstream_has_modifications
+            and not result.loop_derived_trust_overridden
+        ):
+            if inp in self.shell.user_ns and not self._built_on_an_older_input(inp, sim.vars_derived_from_loops, set()):
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM] Input '%s' is loop-derived and code matches disk. Trusting in-memory.", inp
@@ -1216,43 +1011,30 @@ class MismatchClassifier:
         outputs: set[str],
         needed_outputs: set[str],
         restored_vars: set[str],
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-        vars_derived_from_loops: set[str],
-        loop_derived_trust_overridden: bool,
-        upstream_has_modifications: bool,
-        simulation_trace_codes: set[str],
-        needed_vars: set[str],
-        resolved_vars: set[str],
-        stmts_to_run_indices: list[int],
+        sim: SimulationResult,
+        result: ClassificationResult,
+        scan: _BackwardScan,
     ) -> None:
         """Schedule *stmt* for re-execution and cascade its unresolved inputs."""
-        stmts_to_run_indices.append(i)
+        scan.run.append(i)
         stmt_inputs, _ = CodeAnalyzer.analyze_code_block(stmt_code)
         # A callee's globals are inputs too, once the statement runs; the ones
         # missing from the kernel must be rebuilt first (absent_callee_globals).
-        callee_names = self.virtual_lineage.absent_callee_globals(set(stmt_inputs), virtual_lineage, virtual_modules)
+        callee_names = self.virtual_lineage.absent_callee_globals(
+            set(stmt_inputs), sim.virtual_lineage, sim.virtual_modules
+        )
         for inp in [*stmt_inputs, *sorted(callee_names - set(stmt_inputs))]:
-            if inp in resolved_vars or inp in needed_vars:
+            if inp in scan.resolved or inp in scan.needed:
                 continue
-            if self._should_add_input_to_needed(
-                inp,
-                virtual_lineage,
-                virtual_modules,
-                vars_derived_from_loops,
-                loop_derived_trust_overridden,
-                upstream_has_modifications,
-                simulation_trace_codes,
-                needed_vars,
-            ):
-                needed_vars.add(inp)
+            if self._should_add_input_to_needed(inp, sim, result, scan.needed):
+                scan.needed.add(inp)
 
         outputs_only = outputs - set(stmt_inputs)
         if outputs_only:
-            removed = outputs_only & needed_vars
+            removed = outputs_only & scan.needed
             if removed:
-                needed_vars -= removed
-                resolved_vars.update(removed)
+                scan.needed -= removed
+                scan.resolved.update(removed)
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM] Scheduled stmt [%s] will produce %s. Removing from needed_vars.", i, removed
@@ -1266,90 +1048,52 @@ class MismatchClassifier:
             )
 
     def backward_scan_pass(
-        self,
-        simulation_trace: list,
-        broken_vars: set[str],
-        vars_tainted_by_upstream_mismatch: set[str],
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-        vars_derived_from_loops: set[str],
-        loop_derived_trust_overridden: bool,
-        upstream_has_modifications: bool,
-        simulation_trace_codes: set[str],
-        stmt_lookup_times: dict[str, float],
+        self, sim: SimulationResult, result: ClassificationResult
     ) -> tuple[list[int], list[dict], float]:
         """Scan the simulation trace backwards to build the re-execution schedule.
 
         Returns (stmts_to_run_indices, restored_statements_info, total_restore_time).
         """
-        resolved_vars: set[str] = set()
-        needed_vars: set[str] = set(broken_vars)
-        stmts_to_run_indices: list[int] = []
+        trace = sim.trace
+        scan = _BackwardScan(needed=set(result.broken_vars))
         restored_statements_info: list[dict] = []
 
-        stmt_positions: dict[str, int] = {}
-        for i, entry in enumerate(simulation_trace):
-            stmt_positions[entry.stmt_code] = i
+        stmt_positions = {entry.stmt_code: i for i, entry in enumerate(trace)}
         total_restore_time = 0.0
 
-        for i in range(len(simulation_trace) - 1, -1, -1):
-            entry = simulation_trace[i]
+        for i in range(len(trace) - 1, -1, -1):
+            entry = trace[i]
             stmt_code, outputs = entry.stmt_code, entry.outputs
 
-            is_needed = any(out in needed_vars for out in outputs)
-            if not is_needed:
+            if not any(out in scan.needed for out in outputs):
                 continue
 
-            needed_outputs_pre = outputs.intersection(needed_vars)
-            force_reexecute = bool(needed_outputs_pre & vars_tainted_by_upstream_mismatch)
-
-            if force_reexecute:
-                _, restore_time, saved_time, handled = self._resolve_tainted_stmt(
-                    i,
-                    stmt_code,
-                    outputs,
-                    needed_outputs_pre,
-                    virtual_lineage,
-                    virtual_modules,
-                    upstream_has_modifications,
-                    simulation_trace_codes,
-                    needed_vars,
-                    resolved_vars,
-                    stmts_to_run_indices,
-                )
-                if handled:
+            needed_outputs_pre = outputs.intersection(scan.needed)
+            restored_vars: set[str] = set()
+            restore_time = 0.0
+            saved_time = 0.0
+            if needed_outputs_pre & result.tainted_vars:
+                if self._resolve_tainted_stmt(i, stmt_code, outputs, needed_outputs_pre, sim, result, scan):
                     continue
-                restored_vars: set[str] = set()
-                restore_time = 0.0
-                saved_time = 0.0
-            elif import_only(stmt_code):
-                # Re-run, never restored: see `import_only`.
-                restored_vars = set()
-                restore_time = 0.0
-                saved_time = 0.0
-            else:
+            elif not import_only(stmt_code):  # an import is re-run, never restored: see `import_only`
                 restored_vars, restore_time, saved_time = self.virtual_lineage.try_virtual_restore(
                     stmt_code,
                     outputs,
                     entry.inputs,
                     entry.input_hashes,
-                    virtual_modules,
+                    sim.virtual_modules,
                     expected_lineages=entry.produced_lineages,
                 )
                 # Drain so subsequent iterations of this reverse-trace loop see
                 # the lineage / file-dep writes buffered by the restore — next
                 # statements may depend on the just-restored variable's lineage.
-                apply_collected_mutations(
-                    self.virtual_lineage.restores,
-                    self.tracking_state,
-                )
+                apply_collected_mutations(self.virtual_lineage.restores, self.tracking_state)
             total_restore_time += restore_time
 
-            needed_outputs = outputs.intersection(needed_vars)
+            needed_outputs = outputs.intersection(scan.needed)
             if needed_outputs and needed_outputs.issubset(restored_vars):
                 if self.debug:
                     logger.debug("[UPSTREAM] Virtual Restore SUCCESS for: %s", stmt_code[:40])
-                lookup_time_for_stmt = stmt_lookup_times.get(stmt_code, 0.0)
                 restored_statements_info.append(
                     {
                         "code": stmt_code,
@@ -1358,31 +1102,18 @@ class MismatchClassifier:
                         "is_upstream": True,
                         "source": "DISK",
                         "saved_time": saved_time,
-                        "total_time": restore_time + lookup_time_for_stmt,
+                        "total_time": restore_time + sim.stmt_lookup_times.get(stmt_code, 0.0),
                         "position": stmt_positions.get(stmt_code, 999999),
                     }
                 )
-                needed_vars.difference_update(restored_vars)
-                resolved_vars.update(restored_vars)
+                scan.needed.difference_update(restored_vars)
+                scan.resolved.update(restored_vars)
             else:
                 self._cascade_failed_restore_inputs(
-                    i,
-                    stmt_code,
-                    outputs,
-                    needed_outputs,
-                    restored_vars,
-                    virtual_lineage,
-                    virtual_modules,
-                    vars_derived_from_loops,
-                    loop_derived_trust_overridden,
-                    upstream_has_modifications,
-                    simulation_trace_codes,
-                    needed_vars,
-                    resolved_vars,
-                    stmts_to_run_indices,
+                    i, stmt_code, outputs, needed_outputs, restored_vars, sim, result, scan
                 )
 
-        return stmts_to_run_indices, restored_statements_info, total_restore_time
+        return scan.run, restored_statements_info, total_restore_time
 
     def _needs_lineage_repair(self, var_name: str, utility_vars: set[str]) -> bool:
         """True when *var_name* is in memory but was bound before cash was listening.

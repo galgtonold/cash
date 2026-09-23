@@ -386,7 +386,7 @@ class TestTransitiveLoopMutation:
         assert mock_shell.user_ns["total"] == 5
 
     def test_safety_guard_blocks_empty_restore(self):
-        """try_virtual_restore should refuse to overwrite non-empty with empty cached value."""
+        """A restore should refuse to overwrite non-empty with empty cached value."""
         from unittest.mock import MagicMock
 
         from cash.notebook.upstream import UpstreamChecker
@@ -405,7 +405,7 @@ class TestTransitiveLoopMutation:
         checker = UpstreamChecker(shell, cash_instance, debug=True)
         checker.variable_lineage = {}
 
-        restored, _, _ = checker.simulator.virtual_lineage.try_virtual_restore(
+        restored = checker.simulator.restore_statement(
             "my_list = compute_data()",
             {"my_list"},
             {"compute_data"},
@@ -418,7 +418,7 @@ class TestTransitiveLoopMutation:
         )
 
     def test_safety_guard_allows_valid_restore(self):
-        """try_virtual_restore should allow restoring a non-empty cached value."""
+        """A restore should allow restoring a non-empty cached value."""
         from unittest.mock import MagicMock
 
         from cash.notebook.upstream import UpstreamChecker
@@ -435,7 +435,7 @@ class TestTransitiveLoopMutation:
         checker = UpstreamChecker(shell, cash_instance, debug=False)
         checker.variable_lineage = {}
 
-        restored, _, _ = checker.simulator.virtual_lineage.try_virtual_restore(
+        restored = checker.simulator.restore_statement(
             "x = compute()",
             {"x"},
             {"compute"},

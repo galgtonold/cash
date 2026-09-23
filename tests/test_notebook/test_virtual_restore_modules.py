@@ -4,7 +4,7 @@ Tests for unified cache key computation and module lineage propagation.
 Verifies that:
 1. compute_cache_key produces identical keys regardless of call site
 2. Module lineages are propagated to variable_lineage during simulation
-3. _update_virtual_lineage and try_virtual_restore use the unified function
+3. Simulating and restoring a statement use the unified function
 4. Keys match between simulation and runtime after kernel restart
 
 This was the root cause of disk-cached entries not being restored after
@@ -169,7 +169,7 @@ class TestComputeCacheKey(unittest.TestCase):
         """The same inputs must produce the same key regardless of call pattern.
 
         This is THE critical invariant: runtime (via _analyze_and_hash) and
-        simulation (via _update_virtual_lineage) must produce identical keys.
+        simulation (via NotebookSimulator.simulate_cell) must produce identical keys.
         """
         import numpy as np
 
@@ -202,7 +202,7 @@ class TestComputeCacheKey(unittest.TestCase):
 
 
 class TestModuleLineagePropagation(unittest.TestCase):
-    """Verify that _update_virtual_lineage propagates module lineages."""
+    """Verify that simulating an import propagates module lineages."""
 
     def setUp(self):
         self.shell = MagicMock()
@@ -221,12 +221,8 @@ class TestModuleLineagePropagation(unittest.TestCase):
 
     def test_import_propagates_lineage(self):
         """Simulating an import statement should set variable_lineage for the module."""
-        virtual_lineage = {}
-        virtual_modules = set()
-
-        self.checker.simulator.virtual_lineage._update_virtual_lineage(
-            "import pandas as pd", virtual_lineage, virtual_modules
-        )
+        sim = self.checker.simulator.simulate_cell("import pandas as pd")
+        virtual_lineage, virtual_modules = sim.virtual_lineage, sim.virtual_modules
 
         # pd should now be in both virtual_lineage AND variable_lineage
         self.assertIn("pd", virtual_lineage)
@@ -236,12 +232,8 @@ class TestModuleLineagePropagation(unittest.TestCase):
 
     def test_from_import_propagates_lineage(self):
         """'from ... import' statements should propagate lineage."""
-        virtual_lineage = {}
-        virtual_modules = set()
-
-        self.checker.simulator.virtual_lineage._update_virtual_lineage(
-            "from numpy import array", virtual_lineage, virtual_modules
-        )
+        sim = self.checker.simulator.simulate_cell("from numpy import array")
+        virtual_lineage, virtual_modules = sim.virtual_lineage, sim.virtual_modules
 
         self.assertIn("array", virtual_lineage)
         self.assertIn("array", virtual_modules)
@@ -250,10 +242,7 @@ class TestModuleLineagePropagation(unittest.TestCase):
 
     def test_non_import_does_not_propagate(self):
         """Non-import statements should not propagate to variable_lineage."""
-        virtual_lineage = {"x": "abc123"}
-        virtual_modules = set()
-
-        self.checker.simulator.virtual_lineage._update_virtual_lineage("y = x + 1", virtual_lineage, virtual_modules)
+        virtual_lineage = self.checker.simulator.simulate_cell("y = x + 1", {"x": "abc123"}).virtual_lineage
 
         # y should be in virtual_lineage but NOT in variable_lineage
         self.assertIn("y", virtual_lineage)
@@ -264,12 +253,7 @@ class TestModuleLineagePropagation(unittest.TestCase):
         existing_lineage = "existing_lineage_hash"
         self.checker.variable_lineage["pd"] = existing_lineage
 
-        virtual_lineage = {}
-        virtual_modules = set()
-
-        self.checker.simulator.virtual_lineage._update_virtual_lineage(
-            "import pandas as pd", virtual_lineage, virtual_modules
-        )
+        self.checker.simulator.simulate_cell("import pandas as pd")
 
         # Should NOT be overwritten
         self.assertEqual(self.checker.variable_lineage["pd"], existing_lineage)
@@ -321,11 +305,8 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         np_lineage_from_import = None  # Will be set by import simulation
 
         # Step 1: Simulate import (sets variable_lineage['np'])
-        virtual_lineage = {}
-        virtual_modules = set()
-        self.checker.simulator.virtual_lineage._update_virtual_lineage(
-            "import numpy as np", virtual_lineage, virtual_modules
-        )
+        sim = self.checker.simulator.simulate_cell("import numpy as np")
+        virtual_lineage, virtual_modules = sim.virtual_lineage, sim.virtual_modules
         np_lineage_from_import = self.checker.variable_lineage["np"]
 
         # Step 2: Set up df lineage
@@ -337,7 +318,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         self.cash_instance.backend.get_metadata.return_value = {"output_lineages": {}}
 
         # Step 4: Simulate downstream statement
-        self.checker.simulator.virtual_lineage._update_virtual_lineage(code, virtual_lineage, virtual_modules)
+        self.checker.simulator.simulate_cell(code, virtual_lineage, virtual_modules)
         sim_key = self._get_cache_key_from_calls()
 
         # Step 5: Compute what runtime (_analyze_and_hash) would produce
@@ -357,7 +338,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         )
 
     def test_try_virtual_restore_key_matches(self):
-        """try_virtual_restore key must match _analyze_and_hash key."""
+        """The restore key must match the runtime key."""
         code = "result = np.mean(df)"
         df_lineage = hashlib.sha256(b"df_data").hexdigest()
         np_lineage = hashlib.sha256(b"np_module").hexdigest()
@@ -376,9 +357,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
             {"variables": {"result": 42}},
         )
 
-        restored, _, _ = self.checker.simulator.virtual_lineage.try_virtual_restore(
-            code, outputs, inputs, input_hashes, virtual_modules
-        )
+        self.checker.simulator.restore_statement(code, outputs, inputs, input_hashes, virtual_modules)
 
         # Get the key used for lookup
         calls = self.cash_instance.backend.get.call_args_list
@@ -422,7 +401,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         self.cash_instance.backend.get_metadata.reset_mock()
         self.cash_instance.backend.get_metadata.return_value = {"output_lineages": {}}
 
-        self.checker.simulator.virtual_lineage._update_virtual_lineage(code, virtual_lineage, virtual_modules)
+        self.checker.simulator.simulate_cell(code, virtual_lineage, virtual_modules)
 
         sim_key = self._get_cache_key_from_calls()
 
@@ -442,11 +421,8 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         self.shell.user_ns = {}
 
         # Step 1: Simulate import to propagate lineage
-        virtual_lineage = {}
-        virtual_modules = set()
-        self.checker.simulator.virtual_lineage._update_virtual_lineage(
-            "import numpy as np", virtual_lineage, virtual_modules
-        )
+        sim = self.checker.simulator.simulate_cell("import numpy as np")
+        virtual_lineage, virtual_modules = sim.virtual_lineage, sim.virtual_modules
         np_lineage = self.checker.variable_lineage["np"]
 
         # Step 2: Set up df lineage
@@ -459,7 +435,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
 
         # Step 4: Simulate downstream statement
         code = "result = np.mean(df)"
-        self.checker.simulator.virtual_lineage._update_virtual_lineage(code, virtual_lineage, virtual_modules)
+        self.checker.simulator.simulate_cell(code, virtual_lineage, virtual_modules)
         sim_key = self._get_cache_key_from_calls()
 
         # Step 5: Compute runtime key
