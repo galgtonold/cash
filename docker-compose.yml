@@ -4,11 +4,11 @@ services:
     ports:
       - "8888:8888"
     volumes:
-      - ./notebooks:/app/notebooks
+      - ./examples:/app/examples
       - cash-cache:/app/.cash
     environment:
       - CASH_BACKEND=file
-      - CASH_DEBUG=0
+      - CASH_CACHE_DIR=/app/.cash
 
   redis:
     image: redis:7-alpine
@@ -22,10 +22,12 @@ services:
     ports:
       - "8889:8888"
     volumes:
-      - ./notebooks:/app/notebooks
+      - ./examples:/app/examples
     environment:
       - CASH_BACKEND=redis
-      - CASH_REDIS_URL=redis://redis:6379
+      # cash reads the Redis address from separate fields, not from a URL.
+      - CASH_REDIS_HOST=redis
+      - CASH_REDIS_PORT=6379
     depends_on:
       - redis
 
