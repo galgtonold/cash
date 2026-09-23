@@ -73,30 +73,36 @@ def test_an_unregistered_code_raises_rather_than_warning():
     assert caught == [], "nothing should have been emitted for a bad code"
 
 
-def test_the_explicit_variant_keeps_the_caller_s_location():
+@pytest.mark.parametrize("old_name", [False, True])
+def test_an_explicit_location_keeps_both_the_location_and_the_code(old_name):
     """These sites blame the user's cell on purpose; losing that is a
-    regression even though the text would still be correct."""
+    regression even though the text would still be correct. The old
+    ``warn_diagnostic_explicit`` spelling used to drop ``.code``."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        warn_diagnostic_explicit(
-            CashCacheIneffectiveWarning,
-            "CACHE-THRASH",
-            "the cache is full.",
-            "raise it.",
-            filename="<cash>",
-            lineno=42,
-            registry=None,
-        )
+        if old_name:
+            warn_diagnostic_explicit(
+                CashCacheIneffectiveWarning,
+                "CACHE-THRASH",
+                "the cache is full.",
+                "raise it.",
+                filename="<cash>",
+                lineno=42,
+                registry=None,
+            )
+        else:
+            warn_diagnostic(
+                CashCacheIneffectiveWarning,
+                "CACHE-THRASH",
+                "the cache is full.",
+                "raise it.",
+                location=("<cash>", 42),
+            )
     assert len(caught) == 1
     assert caught[0].filename == "<cash>"
     assert caught[0].lineno == 42
     assert str(caught[0].message).startswith("[CACHE-THRASH] ")
-    # The asymmetry itself, which docs/warnings.md now warns readers about:
-    # ``warn_explicit`` takes a message STRING, so there is no object for
-    # ``.code`` to ride on. ``diagnostics.py`` says this is "pinned by test";
-    # until this line it was not -- the assertions above pin the location and
-    # the rendered prefix, both of which would survive an attribute appearing.
-    assert getattr(caught[0].message, "code", None) is None
+    assert caught[0].message.code == "CACHE-THRASH"
 
 
 # ---------------------------------------------------------------------------

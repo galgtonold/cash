@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import warnings
 
 _DOCS_BASE = "https://cash-lib.readthedocs.io/en/stable/warnings/"
 
@@ -242,9 +243,6 @@ def doc_url(code: str) -> str:
     return f"{_DOCS_BASE}#{code.lower()}"
 
 
-import warnings
-
-
 def format_diagnostic(code: str, what: str, fix: str) -> str:
     """Render the three-part message body.
 
@@ -319,36 +317,13 @@ def warn_diagnostic_explicit(
     *,
     filename: str,
     lineno: int,
-    registry: dict | None = None,
+    registry: None = None,
 ) -> None:
-    """Emit a coded diagnostic blamed on an explicit *filename* and *lineno*.
+    """``warn_diagnostic(..., location=(filename, lineno))`` under its old name.
 
-    For sites that must point at the user's own cell rather than the frame that
-    happened to call them -- ``warnings.warn``'s ``stacklevel`` cannot express
-    "that line over there".
-
-    This function hands ``warn_explicit`` a message STRING, so ``.code`` does
-    not ride along on the warning object here (``warn_diagnostic(...,
-    location=...)`` passes an instance instead, and keeps it). Callers that need the code programmatically from these
-    sites should read it from the rendered text, which always starts
-    ``[CODE] ``. ``docs/warnings.md`` tells readers the same thing, and names
-    the three codes it reaches: ``RANDOM-REPLAYED`` and ``NOTEBOOK-CELL-SYNTAX``
-    (every site is explicit) and ``RANDOM-UNSEEDED`` (explicit on the two
-    notebook paths, attached on the decorator one).
-
-    ``tests/test_diagnostics.py::test_the_explicit_variant_keeps_the_caller_s_location``
-    pins the asymmetry -- including, since the final review, an explicit
-    ``.code is None`` assertion. It previously pinned only the blamed location
-    and the ``[CODE] `` prefix, both of which would have survived the attribute
-    quietly appearing, so the claim "pinned by test" was itself unpinned.
+    Kept only for the notebook call sites that still use it.
     """
-    warnings.warn_explicit(
-        format_diagnostic(code, what, fix),  # raises on an unknown code
-        category,
-        filename=filename,
-        lineno=lineno,
-        registry=registry,
-    )
+    warn_diagnostic(category, code, what, fix, location=(filename, lineno))
 
 
 def warn_diagnostic_message(

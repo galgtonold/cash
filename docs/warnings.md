@@ -20,47 +20,12 @@ Handlers can branch on the code rather than the wording, which is free to change
     if any(getattr(w.message, "code", None) == "CACHE-THRASH" for w in caught):
         ...
 
-<!-- claim: cash/diagnostics.py:warn_diagnostic_explicit @69c6c3a8, cash/diagnostics.py:warn_diagnostic @ba5feec8 -->
-**That recipe does not reach every warning.** `.code` is an attribute set on a
-warning *object*, and the three notebook-side diagnostics are raised through
-`warn_diagnostic_explicit`, which hands `warnings.warn_explicit` a message
-*string* rather than an object — so there is nothing for the attribute to ride on.
-[`RANDOM-REPLAYED`](#random-replayed) and
-[`NOTEBOOK-CELL-SYNTAX`](#notebook-cell-syntax) never carry it, and
-[`RANDOM-UNSEEDED`](#random-unseeded) carries it when the decorator raises it
-and not when a notebook statement does. Every other code always carries it.
-
-The rendered text always starts `[CODE] `, whichever way the warning was
-raised, so read the attribute when it is there and fall back to the text when
-it is not:
-
-```python
-import warnings
-import cash
-
-def code_of(w):
-    """The diagnostic code of a caught warning, however it was raised."""
-    attached = getattr(w.message, "code", None)
-    if attached is not None:
-        return attached
-    text = str(w.message)
-    return text[1:text.index("]")] if text.startswith("[") and "]" in text else None
-
-with warnings.catch_warnings(record=True) as caught:
-    warnings.simplefilter("always")
-    # the shape almost every Cash warning arrives in: an object, with .code set
-    instance = cash.CashCacheIneffectiveWarning("[CACHE-THRASH] the cache is full.")
-    instance.code = "CACHE-THRASH"
-    warnings.warn(instance)
-    # the shape warn_explicit produces: a bare string, no attribute to read
-    warnings.warn_explicit(
-        "[RANDOM-REPLAYED] the value you are seeing is a replay.",
-        cash.CashRandomnessWarning, filename="<cash>", lineno=1, registry=None,
-    )
-
-assert [getattr(w.message, "code", None) for w in caught] == ["CACHE-THRASH", None]
-assert [code_of(w) for w in caught] == ["CACHE-THRASH", "RANDOM-REPLAYED"]
-```
+<!-- claim: cash/diagnostics.py:warn_diagnostic @ba5feec8 -->
+Every code is on `.code`, including the notebook warnings that point at a
+line of a cell rather than at a frame ([`RANDOM-REPLAYED`](#random-replayed),
+[`RANDOM-UNSEEDED`](#random-unseeded),
+[`NOTEBOOK-CELL-SYNTAX`](#notebook-cell-syntax)). The rendered text also
+always starts `[CODE] `.
 
 If a warning scrolled past, most of what the decorator raises about a function
 is also kept in a rolling log on the function itself — `f.cache_info()`
@@ -1005,6 +970,8 @@ a new entry:
 
 ```python
 from datetime import date
+
+import cash
 
 @cash.cache
 def report(rows, as_of):        # as_of is an argument, so it is in the key
