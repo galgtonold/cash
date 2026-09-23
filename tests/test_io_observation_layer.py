@@ -175,7 +175,8 @@ def test_cash_reading_a_file_for_itself_is_nobodys_dependency(tmp_path, reader):
     """The audit event reports ``io.FileIO`` too, which these reads once used
     because it was not patched: a module cash read to key the code that runs
     became a raw-bytes input, and a comment added to it re-ran the work."""
-    from cash import core, source_norm
+    from cash import source_norm
+    from cash.decorator import script_pickling
     from cash.tracking import file_dep_snapshot
 
     module = tmp_path / "helpers.py"
@@ -183,7 +184,7 @@ def test_cash_reading_a_file_for_itself_is_nobodys_dependency(tmp_path, reader):
     read = {
         "read_code_file": source_norm.read_code_file,
         "file_content_hash": file_dep_snapshot.file_content_hash,
-        "has_main_guard": core._has_main_guard,
+        "has_main_guard": script_pickling._has_main_guard,
     }[reader]
     tracker = FileAccessTracker()
     with tracker:

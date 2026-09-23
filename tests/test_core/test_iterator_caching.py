@@ -1,7 +1,7 @@
 """@cash.cache on functions that return iterators/generators.
 
 The decorator streams the iterator into one or more chunk entries,
-then returns a fresh wrapper (_ChunkedCachedIterator on cache hit)
+then returns a fresh wrapper (ChunkedCachedIterator on cache hit)
 that preserves the iterator protocol. Each call yields a fresh,
 independent iterator over the cached values.
 """
@@ -279,7 +279,7 @@ def test_cache_if_predicate_sees_materialized_list_for_iterator_function(tmp_pat
 
 
 class _FakeBackend:
-    """Minimal in-memory backend for unit-testing _ChunkedCachedIterator
+    """Minimal in-memory backend for unit-testing ChunkedCachedIterator
     in isolation. Tracks .get() calls so we can verify lazy chunk reads.
     """
 
@@ -297,7 +297,7 @@ class _FakeBackend:
 
 def test_chunked_iterator_lazy_chunk_reads():
     """The iterator must only fetch a chunk when iteration enters it."""
-    from cash.core import _ChunkedCachedIterator
+    from cash.decorator.iterators import ChunkedCachedIterator
 
     backend = _FakeBackend(
         {
@@ -312,7 +312,7 @@ def test_chunked_iterator_lazy_chunk_reads():
             self.backend = backend
 
     cash = _FakeCash(backend)
-    it = _ChunkedCachedIterator(cash, "K", n_chunks=3)
+    it = ChunkedCachedIterator(cash, "K", n_chunks=3)
 
     # No reads until iteration starts.
     assert backend.get_calls == []
@@ -332,8 +332,8 @@ def test_chunked_iterator_lazy_chunk_reads():
 
 
 def test_chunked_iterator_iter_is_self():
-    """_ChunkedCachedIterator must satisfy iter(x) is x (iterator protocol)."""
-    from cash.core import _ChunkedCachedIterator
+    """ChunkedCachedIterator must satisfy iter(x) is x (iterator protocol)."""
+    from cash.decorator.iterators import ChunkedCachedIterator
 
     class _EmptyCash:
         class backend:
@@ -341,13 +341,13 @@ def test_chunked_iterator_iter_is_self():
             def get(key):
                 return (None, None)
 
-    it = _ChunkedCachedIterator(_EmptyCash(), "K", n_chunks=0)
+    it = ChunkedCachedIterator(_EmptyCash(), "K", n_chunks=0)
     assert iter(it) is it
 
 
 def test_chunked_iterator_close_stops_iteration():
     """After close(), next() raises StopIteration."""
-    from cash.core import _ChunkedCachedIterator
+    from cash.decorator.iterators import ChunkedCachedIterator
 
     backend = _FakeBackend({"K:chunk_0": [1, 2, 3]})
 
@@ -355,7 +355,7 @@ def test_chunked_iterator_close_stops_iteration():
         def __init__(self, backend):
             self.backend = backend
 
-    it = _ChunkedCachedIterator(_FakeCash(backend), "K", n_chunks=1)
+    it = ChunkedCachedIterator(_FakeCash(backend), "K", n_chunks=1)
     assert next(it) == 1
     it.close()
     with pytest.raises(StopIteration):
@@ -364,7 +364,7 @@ def test_chunked_iterator_close_stops_iteration():
 
 def test_chunked_iterator_send_throw_raise():
     """send and throw raise AttributeError with a clear message."""
-    from cash.core import _ChunkedCachedIterator
+    from cash.decorator.iterators import ChunkedCachedIterator
 
     class _EmptyCash:
         class backend:
@@ -372,7 +372,7 @@ def test_chunked_iterator_send_throw_raise():
             def get(key):
                 return (None, None)
 
-    it = _ChunkedCachedIterator(_EmptyCash(), "K", n_chunks=0)
+    it = ChunkedCachedIterator(_EmptyCash(), "K", n_chunks=0)
     with pytest.raises(AttributeError, match="send"):
         it.send(None)
     with pytest.raises(AttributeError, match="throw"):
@@ -388,7 +388,7 @@ def test_chunked_iterator_missing_chunk_finishes_from_the_function():
     stress-testing the decorator). With nothing to recompute from,
     the loss raises; it is never passed off as the whole answer.
     """
-    from cash.core import _ChunkedCachedIterator
+    from cash.decorator.iterators import ChunkedCachedIterator
     from cash.exceptions import CacheBackendError
 
     backend = _FakeBackend(
@@ -403,10 +403,10 @@ def test_chunked_iterator_missing_chunk_finishes_from_the_function():
         def __init__(self, backend):
             self.backend = backend
 
-    it = _ChunkedCachedIterator(_FakeCash(backend), "K", n_chunks=3, recompute=lambda: iter([1, 2, 3, 4, 5, 6]))
+    it = ChunkedCachedIterator(_FakeCash(backend), "K", n_chunks=3, recompute=lambda: iter([1, 2, 3, 4, 5, 6]))
     assert list(it) == [1, 2, 3, 4, 5, 6]
 
-    blind = _ChunkedCachedIterator(_FakeCash(backend), "K", n_chunks=3)
+    blind = ChunkedCachedIterator(_FakeCash(backend), "K", n_chunks=3)
     with pytest.raises(CacheBackendError, match="after 2 items"):
         list(blind)
 
@@ -601,9 +601,9 @@ async def test_async_chunked_storage_multi_chunk(tmp_path):
 
 
 async def test_async_chunked_storage_hit_via_chunked_iterator(tmp_path):
-    """Hit path on an async function returns a _ChunkedCachedIterator
+    """Hit path on an async function returns a ChunkedCachedIterator
     when the cached entry is chunked."""
-    from cash.core import _ChunkedCachedIterator
+    from cash.decorator.iterators import ChunkedCachedIterator
 
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
 
@@ -615,10 +615,10 @@ async def test_async_chunked_storage_hit_via_chunked_iterator(tmp_path):
     # First call populates.
     list(await make_iter())
 
-    # Second call: must return a _ChunkedCachedIterator (multi-chunk).
+    # Second call: must return a ChunkedCachedIterator (multi-chunk).
     result = await make_iter()
-    assert isinstance(result, _ChunkedCachedIterator), (
-        f"expected _ChunkedCachedIterator on hit, got {type(result).__name__}"
+    assert isinstance(result, ChunkedCachedIterator), (
+        f"expected ChunkedCachedIterator on hit, got {type(result).__name__}"
     )
     assert list(result) == list(range(20))
 
@@ -823,9 +823,9 @@ def test_chunked_storage_works_under_use_locking(tmp_path):
     the decorated function — the wrapper's first backend.get returns a
     fresh manifest, AND the locked re-read does too (TieredBackend RAM
     tier is consistent). The locked path's return value must still be
-    a _ChunkedCachedIterator, not a dict.
+    a ChunkedCachedIterator, not a dict.
     """
-    from cash.core import _ChunkedCachedIterator
+    from cash.decorator.iterators import ChunkedCachedIterator
 
     c = Cash(cache_dir=str(tmp_path), register_magic=False, use_locking=True)
     n = {"calls": 0}
@@ -844,7 +844,7 @@ def test_chunked_storage_works_under_use_locking(tmp_path):
     # not a dict.
     result = gen()
     assert not isinstance(result, dict), f"got raw manifest dict instead of iterator wrapper: {type(result).__name__}"
-    assert isinstance(result, _ChunkedCachedIterator), f"expected iterator wrapper, got {type(result).__name__}"
+    assert isinstance(result, ChunkedCachedIterator), f"expected iterator wrapper, got {type(result).__name__}"
     assert list(result) == list(range(25))
     assert n["calls"] == 1  # still a hit
 
@@ -860,11 +860,11 @@ def test_use_locking_dispatches_chunked_on_locked_hit(tmp_path):
     We patch the wrapper's first backend.get to return (None, None) so
     the locked path is forced. The actual backend still has the entry,
     so the locked re-read finds it. Without the fix, the user sees the
-    manifest dict; with the fix, they see a _ChunkedCachedIterator.
+    manifest dict; with the fix, they see a ChunkedCachedIterator.
     """
     from unittest.mock import patch
 
-    from cash.core import _ChunkedCachedIterator
+    from cash.decorator.iterators import ChunkedCachedIterator
 
     c = Cash(cache_dir=str(tmp_path), register_magic=False, use_locking=True)
     n = {"calls": 0}
@@ -891,7 +891,7 @@ def test_use_locking_dispatches_chunked_on_locked_hit(tmp_path):
         call_count["n"] += 1
         # First call (from wrapper's unlocked hit check) returns miss.
         # Subsequent calls (from _compute_with_lock's locked re-read,
-        # and from _ChunkedCachedIterator's chunk reads) go to the
+        # and from ChunkedCachedIterator's chunk reads) go to the
         # real backend.
         if call_count["n"] == 1:
             return (None, None)
@@ -901,8 +901,8 @@ def test_use_locking_dispatches_chunked_on_locked_hit(tmp_path):
         result = gen()
 
     assert not isinstance(result, dict), f"locked path returned raw manifest dict: {type(result).__name__}"
-    assert isinstance(result, _ChunkedCachedIterator), (
-        f"expected _ChunkedCachedIterator from locked path, got {type(result).__name__}"
+    assert isinstance(result, ChunkedCachedIterator), (
+        f"expected ChunkedCachedIterator from locked path, got {type(result).__name__}"
     )
     # Iterating should yield the 25 cached items. Mock has been undone
     # at this point, so chunk reads go through the real backend.

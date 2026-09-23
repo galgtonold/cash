@@ -18,7 +18,7 @@ import textwrap
 
 import pytest
 
-import cash
+import cash.decorator.explain
 from cash import Cash, FileBackend
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
@@ -92,7 +92,7 @@ def test_verbose_can_be_configured_and_lines_carry_the_entry_id(tmp_path, caplog
     lines = [r.getMessage() for r in caplog.records if r.name == "cash.calls"]
     assert any(line.startswith("MISS") for line in lines), lines
     key = f.explain(1).cache_key
-    assert any(cash.core.entry_id_of(key) in line for line in lines)
+    assert any(cash.decorator.explain.entry_id_of(key) in line for line in lines)
 
 
 def test_a_call_that_raises_is_logged_and_counted(tmp_path, caplog):
@@ -145,7 +145,7 @@ def test_a_file_read_by_two_spellings_is_listed_once(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "data.csv").write_text("a\n1\n", encoding="utf-8")
     rec = {"size": 4, "hash": "abc"}
-    listed = cash.core._describe_file_deps({"data.csv": rec, str(tmp_path / "data.csv"): rec})
+    listed = cash.decorator.explain.describe_file_deps({"data.csv": rec, str(tmp_path / "data.csv"): rec})
     assert len(listed) == 1
 
 

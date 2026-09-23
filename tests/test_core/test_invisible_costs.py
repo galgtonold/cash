@@ -20,7 +20,7 @@ import warnings
 import pytest
 
 from cash import Cash
-from cash.core import _ARG_COST
+from cash.decorator.arg_hashing import ARG_COST
 from cash.effectiveness import EffectivenessLedger
 
 pytestmark = [pytest.mark.core]
@@ -137,7 +137,7 @@ def test_the_payload_cost_of_a_list_argument_is_charged_to_it(tmp_path):
     lookup that returned at once and blamed 0ms."""
     c = Cash(cache_dir=str(tmp_path / "cache"))
     c._hash_arg_payload((_rows(100_000), 3), {})
-    label, seconds, type_name, _producer, _old = _ARG_COST.last
+    label, seconds, type_name, _producer, _old = ARG_COST.last
     assert (label, type_name) == ("#0", "list")
     assert seconds > 0.005
 

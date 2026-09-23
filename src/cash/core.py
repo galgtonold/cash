@@ -11,14 +11,11 @@ import ast
 import atexit
 import concurrent.futures
 import contextlib
-import contextvars
 import dataclasses
 import dis
 import functools
 import hashlib
-import importlib.util
 import inspect
-import io
 import json
 import logging
 import os
@@ -31,8 +28,7 @@ import types
 import weakref
 from collections import Counter, OrderedDict, deque
 from collections.abc import Callable, Iterator, Sized
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, NamedTuple, ParamSpec, TypeVar, overload
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 from . import _log, _plain_data
 from ._annotation_refs import annotation_referents
@@ -49,6 +45,91 @@ from .backends.file_backend import recreate_cache_dir
 from .backends.serialization import get_serializer
 from .config import CashConfig, get_config
 from .data_source import DataSource, state_token_of
+from .decorator.arg_hashing import (
+    ARG_COST,
+    CODE_ARG_FIX,
+    CODE_VALUE_TYPES,
+    LINEAGE_SRC_DECORATOR,
+    LINEAGE_SRC_FROZEN,
+    LINEAGE_SRC_STATEMENT,
+    NO_SUSPECT,
+    PLAIN_CENSUS,
+    is_cow_pandas,
+    plain_census,
+    plain_key_part,
+    unhashable_arg_fix,
+)
+from .decorator.call_state import (
+    CACHE_MISS,
+    CALL_ENTRY,
+    CAPTURE_WATCH,
+    NESTED_CASH_SECONDS,
+    NO_WATCH,
+    PROCESS_STARTED,
+    THREADS_IN_CALLS,
+    BodyRun,
+    BuiltKey,
+    Call,
+    CallSpec,
+    KeyBuildFailed,
+    UnhashableArgs,
+    UnhashableDefault,
+    enter_cached_call,
+    exit_cached_call,
+    run_to_completion,
+)
+from .decorator.code_identity import (
+    CODE_KEYED_STATS,
+    PYDANTIC_COMPILED,
+    SOURCE_HASH_MEMO,
+    SOURCE_HASH_MEMO_MAX,
+    stat_code_file,
+    warn_source_changed_since_load,
+)
+from .decorator.explain import (
+    EXPLAIN_DISABLED,
+    EXPLAIN_FILE_CHANGED,
+    EXPLAIN_HIT,
+    EXPLAIN_KEY_UNCOMPUTABLE,
+    EXPLAIN_NO_ENTRY,
+    EXPLAIN_TTL_EXPIRED,
+    MISS_ARGS,
+    MISS_CODE,
+    MISS_DYNAMIC,
+    MISS_FILE,
+    MISS_FIRST,
+    MISS_GONE,
+    MISS_INCOMPLETE,
+    MISS_KEY_FAILED,
+    MISS_MOCKED,
+    MISS_NOT_STORED,
+    MISS_RAISED,
+    MISS_TTL,
+    MISS_UNHASHABLE,
+    STALE_REASON_TEXT,
+    STORE_OUTCOMES_MAX,
+    WHAT_CHANGED,
+    CacheExplanation,
+    describe_file_deps,
+    describe_state_change,
+    entry_id_of,
+    is_sampled_dep,
+    same_file_key,
+)
+from .decorator.frozen import FROZEN_AUDIT_EVERY, FROZEN_AUDIT_FIRST
+from .decorator.globals_fold import LOG_METHOD_NAMES, UNHASHABLE_GLOBAL_FIX, held_partials, reduced_state
+from .decorator.iterators import ChunkedCachedIterator, StreamingCachedIterator, is_one_shot_iterator
+from .decorator.purity_checks import (
+    format_issues_summary,
+    is_mutable,
+    make_opaque_issue,
+    shares_memory,
+    static_effect_kinds,
+)
+from .decorator.reporting import calls_logger
+from .decorator.rng import read_seed, seed_parameters
+from .decorator.script_pickling import expose_script_function
+from .decorator.store import STORE_FAILED_FIX, UNTAGGABLE_TYPES
 from .dependency_state import (
     EXPLAINING as _EXPLAINING,
 )
@@ -64,7 +145,7 @@ from .diagnostics import (
     warn_diagnostic,
     warn_diagnostic_message,
 )
-from .effect_observer import EffectObserver, line_waived, observed_label
+from .effect_observer import EffectObserver, line_waived
 from .effectiveness import EffectivenessLedger
 from .effects import environment_component
 from .exceptions import (
@@ -82,12 +163,10 @@ from .lineage_tag import own_tag
 from .object_hashing import builtin_hash, builtin_hash_family, estimate_object_size, stable_key_repr
 from .purity_analyzer import (
     ISSUE_AMBIENT_READ,
-    ISSUE_IMPURE_CALL,
     ISSUE_MUTABLE_GLOBAL,
     ISSUE_NETWORK_READ,
     ISSUE_UNTRACKABLE_DEP,
     REPORTED_METHODS,
-    PurityIssue,
     PurityReport,
     bindings_changed,
     callable_layers,
@@ -144,7 +223,6 @@ from .value_types import (
     IMMUTABLE_PRIMS,
     IMMUTABLE_VALUE_TYPES,
     PLAIN_SEQS,
-    writable_types,
 )
 
 if TYPE_CHECKING:
@@ -152,66 +230,6 @@ if TYPE_CHECKING:
 
 # Configure Logging
 logger = logging.getLogger(__name__)
-
-# Two fix lines are shared by more than one emit site, because more than one
-# site tells the same story: a global whose value cannot be hashed is one
-# problem reached through two channels (a function's own globals and a
-# helper's), and a refused write is one problem whether the value went whole or
-# as a chunked manifest. Sharing the text is what keeps the two halves of each
-# pair from drifting into two different pieces of advice for one doc section.
-_UNHASHABLE_GLOBAL_FIX = (
-    "register a hasher for its type with cash.register_hasher, or read the "
-    "part the result actually depends on -- a URL, a connection string -- "
-    "instead of the live object."
-)
-
-
-def _reduced_state(value: Any) -> Any:
-    """What ``__reduce_ex__`` says *value* was built with, or None.
-
-    For a C callable with no ``__dict__`` -- ``operator.itemgetter("n")``
-    reduces to ``(itemgetter, ("n",))`` -- that is the only place its data
-    lives. None when the reduction is just a global name (``np.add``, ``len``:
-    nothing carried) or the object refuses to be reduced.
-    """
-    try:
-        reduced = value.__reduce_ex__(4)
-    except Exception:  # noqa: BLE001 - not reducible: nothing to fold
-        return None
-    if isinstance(reduced, str) or not isinstance(reduced, tuple) or len(reduced) < 2:
-        return None
-    return reduced[:3]
-
-
-def _held_partials(value: Any) -> list[tuple[tuple, dict]]:
-    """The arguments of the ``functools.partial`` objects a wrapper instance
-    holds as attributes (``np.vectorize.pyfunc``), for a wrapper that is not
-    itself a partial."""
-    if isinstance(value, functools.partial):
-        return []
-    state = getattr(value, "__dict__", None)
-    if not isinstance(state, dict):
-        return []
-    return [(p.args, dict(p.keywords)) for p in state.values() if isinstance(p, functools.partial)]
-
-
-_LOG_METHOD_NAMES = frozenset(
-    {
-        "debug",
-        "info",
-        "warning",
-        "warn",
-        "error",
-        "exception",
-        "critical",
-        "log",
-    }
-)
-_STORE_FAILED_FIX = (
-    "read the exception: a full disk, a cache_dir you cannot write to, or a "
-    "value that cannot be pickled -- return the data, not the handle that "
-    "produced it."
-)
 
 
 def get_ipython():
@@ -239,361 +257,11 @@ def get_ipython():
         return None
 
 
-# Sentinel object used by wrapper helpers to signal a cache miss without
-# conflicting with any legitimate cached value (including None).
-_CACHE_MISS = object()
-
-
 P = ParamSpec("P")
 T = TypeVar("T")
 
 
-class _KeyBuildFailed(Exception):
-    """Building a key met something it cannot key, and says what to tell the user.
-
-    Raised from inside a key build; `_resolve_cache_key` warns once with
-    *code*, *message* and *fix*, and runs the call uncached -- never keys it
-    without the part that failed, which would serve a stale result silently.
-    """
-
-    def __init__(self, code: str, message: str, fix: str) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.fix = fix
-
-
-class _UnhashableDefault(Exception):
-    """A parameter default could not be hashed; `_fold_defaults` has warned."""
-
-
-class _UnhashableArgs(Exception):
-    """The call's arguments could not be hashed."""
-
-
-class _BuiltKey(NamedTuple):
-    """What `Cash._build_key` built: the key, two of its segments, and the
-    canonicalised arguments explain() reads frozen producers off."""
-
-    cache_key: str
-    state_hash: str
-    args_hash: str
-    normalized_args: tuple[tuple, dict]
-
-
-class _CallSpec(NamedTuple):
-    """What a cached function was decorated with: fixed for all its calls."""
-
-    func: Callable
-    func_name: str
-    dynamic_depends_on: Any
-    ttl_decl: int | None
-    cache_if: Callable[[Any], bool] | None
-    chunk_max_items: int
-    chunk_max_bytes: int
-
-
-class _Call:
-    """One call's state, from the lookup (`Cash._lookup`) to the store
-    (`Cash._finish_miss`), shared by the sync and async wrappers."""
-
-    __slots__ = (
-        "args",
-        "kwargs",
-        "call_start",
-        "ttl",
-        "recompute",
-        "capture_watch",
-        "cache_key",
-        "state_hash",
-        "args_hash",
-        "metadata",
-        "cash_overhead",
-        "outcome",
-    )
-
-    def __init__(self, args: tuple, kwargs: dict) -> None:
-        self.args = args
-        self.kwargs = kwargs
-        self.metadata: CacheMetadata | None = None
-        self.cash_overhead = 0.0
-        self.outcome: Any = _CACHE_MISS
-
-
-class _BodyRun:
-    """What `Cash._body_scope` observed while the body ran, and what it returned."""
-
-    __slots__ = ("tracker", "observer", "rng_pre", "res", "body_seconds", "saves_seconds", "rng_new")
-
-
-def _run_to_completion(make_coroutine: Callable[[], Any]) -> Any:
-    """Run a coroutine to completion from synchronous code, and return its result.
-
-    On a thread of its own with a fresh event loop, because the caller may be
-    inside a running loop already (a cached iterator being read in async code),
-    where ``asyncio.run`` refuses. Used to recompute an async function's
-    iterator when a stored chunk has gone.
-    """
-    # Local: asyncio adds ~76ms to `import cash`, and only async callers need it.
-    import asyncio
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(lambda: asyncio.run(make_coroutine())).result()
-
-
-def _is_mutable(value) -> bool:
-    """Whether a caller can write through *value*, so a copy would differ.
-
-    Only what can actually be written into: a container, an array or a frame,
-    or an object whose attributes can be rebound (it has a ``__dict__``). A
-    `date`, a `Path`, a `Decimal`, a string or a number cannot be changed
-    through the name at all, so handing back a copy of one is the same value --
-    warning about those made `return sum(rows), as_of` a finding.
-    """
-    if isinstance(value, writable_types()):
-        return True
-    return getattr(type(value), "__dictoffset__", 0) != 0 and hasattr(value, "__dict__")
-
-
-def _shares_memory(result, value) -> bool:
-    """Whether *result* and *value* may sit on the same buffer, cheaply.
-
-    ``may_share_memory`` is a bounds check, not the exact analysis, so it costs
-    nothing and errs toward saying yes -- which for a warning is the right
-    direction.
-    """
-    try:
-        import numpy as _np
-    except ImportError:
-        return False
-    if not isinstance(result, _np.ndarray) or not isinstance(value, _np.ndarray):
-        return False
-    return bool(_np.may_share_memory(result, value))
-
-
-#: A census taken while one cache key is built, shared by the code fold and the
-#: argument hash so a big argument is looked at once (`_plain_census`). None
-#: outside a key build: after the body has run, an argument may have changed.
-_PLAIN_CENSUS = threading.local()
-
-
-def _plain_census(value: Any) -> tuple[str, Any] | None:
-    """What kind of plain data *value* is, memoized for the key build in progress.
-
-    ``("plain", value)`` for lists and tuples of primitives (`_plain_data.is_plain`),
-    ``("dict_rows", (keys, rows))`` for a list of dicts sharing their keys
-    (`_plain_data.dict_rows`), None for anything else.
-    """
-    memo = getattr(_PLAIN_CENSUS, "memo", None)
-    if memo is not None:
-        hit = memo.get(id(value))
-        if hit is not None and hit[0] is value:
-            return hit[1]
-    found: tuple[str, Any] | None = None
-    if _plain_data.is_plain(value):
-        found = ("plain", value)
-    else:
-        rows = _plain_data.dict_rows(value)
-        if rows is not None:
-            found = ("dict_rows", rows)
-    if memo is not None:
-        memo[id(value)] = (value, found)
-    return found
-
-
-def _plain_key_part(value: Any) -> Any:
-    """*value*, or -- for plain data -- a marker holding the digest of its content.
-
-    Each plain argument is keyed by its content on its own, pickled without the
-    memo (`_plain_data.pickle_unshared`). It used to take the fast path only
-    when EVERY argument did: one small dict beside two million rows sent the
-    whole call down the general path, 8x the cost (round 20).
-    """
-    if type(value) not in PLAIN_SEQS:
-        return value
-    census = _plain_census(value)
-    if census is None:
-        return value
-    kind, data = census
-    return (f"__cash_{kind}__", hashlib.sha256(_plain_data.pickle_unshared(data)).hexdigest())
-
-
 __all__ = ["Cash", "CacheExplanation"]
-
-
-# Reason codes returned by `Cash._explain_call` / ``f.explain(...)``.
-# Kept as module-level constants so external code can match against them
-# without string-typo risk: ``if e.reason == EXPLAIN_HIT: ...``.
-EXPLAIN_HIT = "hit"
-EXPLAIN_KEY_UNCOMPUTABLE = "key_uncomputable"
-EXPLAIN_NO_ENTRY = "no_entry"
-EXPLAIN_TTL_EXPIRED = "ttl_expired"
-EXPLAIN_FILE_CHANGED = "file_changed"
-EXPLAIN_DISABLED = "disabled"
-
-
-@dataclass(frozen=True)
-class CacheExplanation:
-    """Why a specific call would hit or miss the cache *right now*.
-
-    Returned by ``f.explain(*args, **kwargs)`` on any ``@cash.cache``-wrapped
-    function. Inspecting an explanation does NOT mutate stats, call the
-    underlying function, or write to the backend - it only reads what the
-    cache already knows.
-
-    Attributes:
-        would_hit: True if the next call with these args would return a
-            cached value (without recomputing).
-        reason: Short stable string identifying the outcome. One of:
-            ``"hit"``, ``"key_uncomputable"``, ``"no_entry"``,
-            ``"ttl_expired"``, ``"file_changed"``, ``"disabled"``.
-        func_name: Module-qualified name of the cached function.
-        cache_key: The cache key computed for these args, or ``None``
-            when key generation failed (``reason == "key_uncomputable"``).
-        details: Reason-specific extras. Common keys:
-
-            * ``hit``: ``cached_at`` (unix ts), ``execution_time_saved`` (s),
-              ``cache_age_seconds``.
-            * ``key_uncomputable``: ``arg_type`` (qualname or ``"<unknown>"``),
-              ``error`` (exception type+message), ``hint``.
-            * ``no_entry``: ``hint``, and ``why`` -- what this process
-              knows about the key: never stored and why, stored and since
-              evicted, or which part of the key moved since the last call
-              (``new arguments``, ``code or state changed``, ...).
-            * ``ttl_expired``: ``ttl_seconds``, ``age_seconds``, ``cached_at``
-              when the decorator's ttl ran out; ``why`` when the entry
-              expired under the ttl it was written with.
-            * ``file_changed``: ``changed_files`` (dict of path -> reason),
-              ``file_deps``.
-            * ``file_deps`` (on ``hit`` and ``file_changed``): every file the
-              entry recorded, with the fingerprint it was checked against.
-
-    ``entry_id`` is the id ``cash inspect --function`` lists and
-    ``cash clear --entry`` accepts. ``cache_dir`` is the directory the answer
-    was read from (None for a cache with no directory): a nested
-    ``pyproject.toml`` can point one project's functions at another cache,
-    and an answer that does not say which one it read cannot show that.
-    """
-
-    would_hit: bool
-    reason: str
-    func_name: str
-    cache_key: str | None = None
-    details: dict[str, Any] = field(default_factory=dict)
-    cache_dir: str | None = None
-
-    @property
-    def entry_id(self) -> str | None:
-        """The id `cash inspect` lists and `cash clear --entry` takes."""
-        return entry_id_of(self.cache_key) if self.cache_key else None
-
-    def __str__(self) -> str:
-        verdict = "HIT" if self.would_hit else "MISS"
-        lines = [f"[{verdict}] {self.func_name} - {self.reason}"]
-        if self.cache_dir:
-            lines.append(f"  cache_dir: {self.cache_dir}")
-        if self.cache_key:
-            lines.append(f"  cache_key: {self.cache_key}")
-            lines.append(f"  entry_id: {self.entry_id}")
-        for k, v in self.details.items():
-            if isinstance(v, dict):
-                lines.append(f"  {k}:")
-                for kk, vv in v.items():
-                    lines.append(f"    {kk}: {vv}")
-            else:
-                lines.append(f"  {k}: {v}")
-        return "\n".join(lines)
-
-    def __repr__(self) -> str:
-        return self.__str__()
-
-
-#: script path -> "does its top level have an `if __name__ == '__main__':`?"
-_MAIN_GUARD: dict[str, bool] = {}
-
-
-def _has_main_guard(path: str) -> bool:
-    """Is the script's own work behind ``if __name__ == "__main__":``?
-
-    Only then is importing it in a worker harmless: its top level defines
-    things, and the work it does when run stays in the process that ran it.
-    """
-    known = _MAIN_GUARD.get(path)
-    if known is not None:
-        return known
-    found = False
-    try:
-        # Untracked: cash reading the script is nobody's input, and a cached
-        # call this runs inside would have recorded it as one.
-        with untracked(), io.FileIO(path, "rb") as fh:
-            tree = ast.parse(fh.read())
-        for node in tree.body:
-            test = getattr(node, "test", None) if isinstance(node, ast.If) else None
-            if isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq):
-                sides = [test.left, *test.comparators]
-                names = {s.id for s in sides if isinstance(s, ast.Name)}
-                values = {s.value for s in sides if isinstance(s, ast.Constant)}
-                if names == {"__name__"} and values == {"__main__"}:
-                    found = True
-                    break
-    except (OSError, SyntaxError, ValueError):
-        found = False
-    _MAIN_GUARD[path] = found
-    return found
-
-
-def _expose_script_function(func: Callable, wrapper: Callable) -> None:
-    """Let a cached function from the running script be pickled BY NAME.
-
-    A function defined in the script you run belongs to ``__main__``, and
-    joblib's process workers (cloudpickle) send such a function BY VALUE:
-    its code and closure. A cached function's closure holds the ``Cash``
-    instance, locks and all, so ``Parallel(n_jobs=2)(delayed(work)(i) ...)``
-    failed with "Could not pickle the task to send it to the workers" -- and
-    even a copy that pickled would arrive without what the decorator
-    registered, keyed differently from the parent's entries.
-
-    So the script's module is ALSO registered under the name an import would
-    give it (``model`` for model.py -- the name the cache key already uses),
-    and the wrapper names that module. Pickling then records ``model.work``;
-    a worker imports ``model`` and decorates ``work`` itself, exactly as a
-    ``multiprocessing`` spawn worker re-imports the script. Keys agree, so the
-    workers and the parent share entries.
-
-    Only for a script whose work sits behind ``if __name__ == "__main__":``,
-    because a worker that imports the script runs its top level. Without the
-    guard nothing changes here, and pickling fails with a message that says
-    so (``Cash.__reduce__``). Also skipped when the name is a DIFFERENT module
-    already, or would import a different file: registering it would shadow
-    that module.
-    """
-    g = getattr(func, "__globals__", None)
-    if not isinstance(g, dict) or g.get("__name__") not in MAIN_MODULE_NAMES:
-        return
-    path = g.get("__file__")
-    if not isinstance(path, str) or not path:
-        return
-    name = resolve_main_module(func)
-    if name in MAIN_MODULE_NAMES or not name.isidentifier():
-        return
-    module = sys.modules.get(g["__name__"])
-    if module is None or getattr(module, "__dict__", None) is not g:
-        return
-    try:
-        present = sys.modules.get(name)
-        if present is None:
-            if not _has_main_guard(path):
-                return
-            spec = importlib.util.find_spec(name)
-            origin = getattr(spec, "origin", None)
-            if not origin or not os.path.exists(origin) or not os.path.samefile(origin, path):
-                return
-            sys.modules[name] = module
-        elif present is not module:
-            return
-        wrapper.__module__ = name
-    except (ImportError, ValueError, OSError):
-        logger.debug("could not expose %s for pickling by name", name, exc_info=True)
 
 
 def _backend_cache_dir(backend: CacheBackend | None) -> str | None:
@@ -602,724 +270,10 @@ def _backend_cache_dir(backend: CacheBackend | None) -> str | None:
     return os.path.abspath(directory) if directory else None
 
 
-class _StreamingCachedIterator:
-    """Passes the producer's items through as they arrive, caching at the end.
-
-    Returned on a MISS. `@cash.cache` should not change how a function
-    behaves, and for a generator it used to: cash drained the whole thing
-    before returning anything, so a streamed response arrived all at once
-    after the full latency. Measured on a token stream -- 494ms to first item
-    uncached, 2444ms cached, the entire completion in one go.
-
-    Same surface as the replay iterator, deliberately: `send` and `throw`
-    raise, because a cached generator cannot support them on the hit either.
-    """
-
-    __slots__ = ("_gen",)
-
-    def __init__(self, gen):
-        self._gen = gen
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        return next(self._gen)
-
-    def close(self):
-        """Abandon the stream. Nothing is cached -- see `_stream_and_store`."""
-        self._gen.close()
-
-    def send(self, value):
-        raise AttributeError(
-            "cached generator: .send() is not supported. If you need send() semantics, the function cannot be cached."
-        )
-
-    def throw(self, *args, **kwargs):
-        raise AttributeError(
-            "cached generator: .throw() is not supported. If you need throw() semantics, the function cannot be cached."
-        )
-
-
-class _ChunkedCachedIterator:
-    """Lazy iterator that reads cached chunks from the backend on demand.
-
-    Used by `Cash.cache` for iterator-returning functions whose
-    output spans multiple backend keys. Each chunk is fetched only
-    when the user iterates into it; chunks the user never reaches are
-    never read. The retrieval is RAM-bounded by chunk size.
-
-    The class satisfies the iterator protocol (``iter(x) is x``,
-    ``__next__``, ``close``); generator-specific methods (``send``,
-    ``throw``) raise ``AttributeError`` - the cached iterator is a
-    replay of stored values, not a coroutine.
-
-    Args:
-        cash: The owning `Cash` instance (used for backend access).
-        cache_key: The canonical key under which the manifest is stored.
-            Chunk keys are derived as ``f"{cache_key}:chunk_{i}"``.
-        n_chunks: Total chunk count, taken from the manifest at construction.
-
-    A chunk can go while the caller is still reading: another process clears
-    or rewrites the entry, or the RAM tier evicts it. ``_chunks_are_intact``
-    is checked at lookup, which is before that -- so a lost chunk used to end
-    the iteration, and the caller got a silent PREFIX (100 of 1000 items,
-    found attacking the decorator before round 26). The rest is recomputed
-    from *recompute* instead, skipping what was already yielded; with no way
-    to recompute, the loss is raised. A truncated answer is worse than a slow
-    one.
-    """
-
-    __slots__ = (
-        "_cash",
-        "_cache_key",
-        "_n_chunks",
-        "_chunk_index",
-        "_current_chunk_iter",
-        "_closed",
-        "_recompute",
-        "_yielded",
-    )
-
-    def __init__(self, cash: Any, cache_key: str, n_chunks: int, recompute: Callable[[], Any] | None = None):
-        self._cash = cash
-        self._cache_key = cache_key
-        self._n_chunks = n_chunks
-        self._chunk_index = 0
-        self._current_chunk_iter = None
-        self._closed = False
-        self._recompute = recompute
-        self._yielded = 0
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        if self._closed:
-            raise StopIteration
-        while True:
-            if self._current_chunk_iter is not None:
-                try:
-                    item = next(self._current_chunk_iter)
-                except StopIteration:
-                    self._current_chunk_iter = None
-                    # Fall through to load the next chunk.
-                else:
-                    self._yielded += 1
-                    return item
-            if self._chunk_index >= self._n_chunks:
-                raise StopIteration
-            chunk_key = f"{self._cache_key}:chunk_{self._chunk_index}"
-            _, chunk = self._cash.backend.get(chunk_key)
-            self._chunk_index += 1
-            if chunk is None:
-                # The chunk went while the caller was reading (see the class
-                # docstring). Finish the run from the function itself.
-                if self._recompute is None:
-                    raise CacheBackendError(
-                        f"a chunk of the cached result for {self._cache_key} is gone "
-                        f"after {self._yielded} items; the rest cannot be read"
-                    )
-                fresh = iter(self._recompute())
-                for _ in range(self._yielded):
-                    next(fresh, None)
-                self._current_chunk_iter = fresh
-                self._n_chunks = 0  # everything else comes from `fresh`
-                continue
-            self._current_chunk_iter = iter(chunk)
-
-    def close(self):
-        """Stop iteration. Subsequent ``next()`` raises ``StopIteration``."""
-        self._closed = True
-        self._current_chunk_iter = None
-
-    def send(self, value):
-        raise AttributeError(
-            "cached generator: .send() is not supported on chunked "
-            "iterators. The cached iterator replays values from the "
-            "backend. If you need send() semantics, the function "
-            "cannot be cached."
-        )
-
-    def throw(self, *args, **kwargs):
-        raise AttributeError(
-            "cached generator: .throw() is not supported on chunked "
-            "iterators. If you need throw() semantics, the function "
-            "cannot be cached."
-        )
-
-
-def _make_opaque_issue(func_name: str, opaque_list: str) -> Any:
-    """Build a synthetic `PurityIssue` for opaque callees
-    encountered in ``strict`` mode. Defined at module scope so the
-    ``_surface_purity`` import stays local."""
-
-    return PurityIssue(
-        kind=ISSUE_IMPURE_CALL,
-        description=f"opaque callees (strict): {opaque_list}",
-        where=func_name,
-        line=0,
-    )
-
-
-def _format_issues_summary(func_name: str, issues: list[Any]) -> str:
-    """Pretty-print a list of `PurityIssue` records, grouped
-    by their ``where`` field. Used by both the warning body and the
-    strict-mode exception body so users get the same diagnostic.
-    """
-    by_where: dict[str, list[Any]] = {}
-    for i in issues:
-        by_where.setdefault(i.where, []).append(i)
-    lines = []
-    for where in sorted(by_where):
-        # The defining file, so a finding in a helper names the helper's
-        # module -- the warning's own header names the CALL site's file.
-        filename = next((getattr(i, "filename", "") for i in by_where[where] if getattr(i, "filename", "")), "")
-        lines.append(f"  in {where} ({filename}):" if filename else f"  in {where}:")
-        for issue in by_where[where]:
-            line_part = f"line {issue.line}: " if issue.line else ""
-            lines.append(f"    {line_part}[{issue.kind}] {issue.description}")
-    return "\n".join(lines)
-
-
-def _static_effect_kinds(report: Any) -> set[str]:
-    """The observed-effect kinds (``EffectObserver``) a static report names.
-
-    So an effect the static warning already listed is not repeated by
-    IMPURE-OBSERVED-EFFECTS, while one of another kind still is. Errs toward
-    NOT covering: a finding with no effect kind covers nothing.
-    """
-    kinds: set[str] = set()
-    for issue in getattr(report, "issues", ()) or ():
-        if "changes the argument" in getattr(issue, "description", ""):
-            kinds.add("argument mutation")
-        if getattr(issue, "kind", None) not in (ISSUE_IMPURE_CALL, ISSUE_NETWORK_READ):
-            continue
-        label = observed_label(getattr(issue, "effect_kind", None))
-        if label is not None:
-            kinds.add(label)
-    return kinds
-
-
-def _is_one_shot_iterator(value: Any) -> bool:
-    """Return True if *value* is its own iterator (a one-shot consumable).
-
-    Matches Python generators, ``map``/``filter``/``zip`` results, and
-    custom iterators that return ``self`` from ``__iter__``. Returns
-    False for collections (``list``/``dict``/``set``/``tuple``/``str``/
-    ``range``) which are iterable but return fresh iterators on
-    ``iter()`` - those are safely cacheable as-is.
-    """
-    try:
-        if isinstance(value, io.IOBase):
-            # A file object is its own iterator, so this path claimed it: the
-            # caller got a replay iterator with no `read`, `write`, `name` or
-            # `fileno`, and the handle was drained to build the chunks (found
-            # attacking the decorator before round 26). A handle is not a
-            # stream of values to replay -- it is a handle.
-            return False
-        return iter(value) is value
-    except TypeError:
-        return False
-
-
-# id(code object) -> (the object itself, its source digest). Keyed by IDENTITY,
-# and the object is retained so the id cannot be recycled under us -- the same
-# guard `function_tracker._source_cache` uses.
-#
-# NOT keyed on the code object directly, which was the first attempt: CodeType
-# implements __eq__/__hash__ BY VALUE, and co_filename is not part of that
-# equality, so two helpers with the same body in different modules share one
-# dict slot. That made `test_real_helper_change_still_recomputes` fail
-# reproducibly under xdist while passing alone -- a stale digest served across
-# tests through a module-level memo.
-#
-# A redefinition (reloaded module, re-run cell) compiles a NEW code object, so
-# identity keying still cannot serve a digest for code that is no longer
-# running. Editing a .py file WITHOUT reloading leaves the old code object
-# live, and the old digest is then the correct answer.
-#
-# Load-bearing, not a micro-optimisation. `_hash_callable_source` is the live
-# per-call identity of every transitive helper, and it calls
-# `inspect.getsource`, which re-reads and RE-TOKENISES the source block on
-# every call. Measured on a 2-helper function: 8700 tokenizer calls per 300
-# cache hits, and 37ms of a 65ms key computation.
-#
-# Module-level rather than per-instance: the digest depends only on the code
-# object, so two Cash instances cannot legitimately disagree about it.
-_SOURCE_HASH_MEMO: dict = {}
-_SOURCE_HASH_MEMO_MAX = 4096
-#: ``id(code) -> (code, path, size, mtime_ns, text digest)``: the stat of the
-#: file whose text a function's key was read from, taken just before reading
-#: it, and that text's digest. The store compares both with the file now
-#: (`Cash._code_moved_since_keyed`).
-_CODE_KEYED_STATS: dict[int, tuple[Any, str, int, int, str]] = {}
-
-#: Seeding calls, by the last segment of their dotted name. ``seed`` alone is
-#: too common a method name, so it only counts under a ``random`` prefix.
-_SEEDING_CALLS = frozenset(
-    {
-        "default_rng",
-        "RandomState",
-        "Random",
-        "manual_seed",
-        "SeedSequence",
-        "PCG64",
-        "PCG64DXSM",
-        "MT19937",
-        "Philox",
-        "SFC64",
-    }
-)
-
-
-def _seed_access_path(node: ast.AST) -> tuple[str, tuple[tuple[str, Any], ...]] | None:
-    """``settings.sim.seed`` -> ``("settings", (("attr", "sim"), ("attr", "seed")))``;
-    ``opts["seed"]`` -> ``("opts", (("item", "seed"),))``; None for anything
-    else (a call, a computed key, an expression)."""
-    path: list[tuple[str, Any]] = []
-    while True:
-        if isinstance(node, ast.Attribute):
-            path.append(("attr", node.attr))
-            node = node.value
-        elif isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
-            path.append(("item", node.slice.value))
-            node = node.value
-        else:
-            break
-    if not isinstance(node, ast.Name):
-        return None
-    return node.id, tuple(reversed(path))
-
-
-def _seed_parameters(src: str) -> dict[str, tuple[str, str, bool, tuple]]:
-    """``{seed expression: (call, root name, root is a parameter, path)}``.
-
-    For seeding calls whose seed is a parameter, or an attribute or
-    constant-key item reached from a parameter or a module global:
-    ``default_rng(seed)``, ``default_rng(settings.seed)``,
-    ``default_rng(opts["seed"])``, ``default_rng(CONFIG.seed)``. A root the
-    function assigns itself is a local, which cannot be read before the call,
-    and is skipped.
-    """
-    try:
-        tree = ast.parse(src)
-    except SyntaxError:
-        return {}
-    fn = next((n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))), None)
-    if fn is None:
-        return {}
-    a = fn.args
-    params = {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
-    assigned = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
-    found: dict[str, tuple[str, str, bool, tuple]] = {}
-    for node in ast.walk(fn):
-        if not isinstance(node, ast.Call):
-            continue
-        dotted = ast.unparse(node.func)
-        last = dotted.rsplit(".", 1)[-1]
-        if not (last in _SEEDING_CALLS or (last == "seed" and "random" in dotted)):
-            continue
-        seed_arg = (
-            node.args[0] if node.args else next((k.value for k in node.keywords if k.arg in ("seed", "x", "a")), None)
-        )
-        if seed_arg is None:
-            continue
-        access = _seed_access_path(seed_arg)
-        if access is None:
-            continue
-        root, path = access
-        is_param = root in params
-        if not is_param and root in assigned:
-            continue
-        expr = ast.unparse(seed_arg)
-        found.setdefault(expr, (f"{dotted}({expr})", root, is_param, path))
-    return found
-
-
-_SEED_UNREADABLE = object()
-
-
-def _read_seed(value: Any, path: tuple) -> Any:
-    """Follow *path* from *value* WITHOUT running user code, or `_SEED_UNREADABLE`.
-
-    Attributes through ``inspect.getattr_static``: a plain instance or class
-    attribute is read, a property or other descriptor is not evaluated. Items
-    only from a plain mapping. This runs on every call, so it may not call
-    anything the user wrote.
-    """
-    for kind, key in path:
-        if kind == "attr":
-            try:
-                value = inspect.getattr_static(value, key)
-            except AttributeError:
-                return _SEED_UNREADABLE
-            if hasattr(type(value), "__get__") and not isinstance(
-                value, (types.FunctionType, types.BuiltinFunctionType)
-            ):
-                return _SEED_UNREADABLE  # a property or descriptor
-        elif isinstance(value, (dict, types.MappingProxyType)):
-            value = value.get(key, _SEED_UNREADABLE)
-            if value is _SEED_UNREADABLE:
-                return value
-        else:
-            return _SEED_UNREADABLE
-    return value
-
-
-#: Source files already reported as edited-since-load, one notice per file.
-_SOURCE_CHANGED_WARNED: set[str] = set()
-
-#: One line per decorated call -- hit or miss, and why -- when `debug=True` /
-#: `CASH_DEBUG=1` or `verbose=True` asks for it.
-_calls_logger = logging.getLogger("cash.calls")
-
-#: Result types seen to refuse an attribute (dict, list, ndarray, ...): not
-#: tried again (`Cash._attach_lineage`).
-_UNTAGGABLE_TYPES: set[type] = set()
-
-
-# Why a call missed. The KIND is what the summary counts; the detail goes to
-# the per-call debug line and to explain().
-MISS_FIRST = "no entry yet"
-MISS_ARGS = "new arguments"
-MISS_CODE = "code or state changed"
-MISS_DYNAMIC = "dynamic dependency changed"
-MISS_FILE = "file changed"
-MISS_TTL = "ttl expired"
-MISS_NOT_STORED = "not stored last time"
-MISS_GONE = "entry gone"
-MISS_INCOMPLETE = "entry incomplete"
-MISS_UNHASHABLE = "unhashable argument"
-MISS_KEY_FAILED = "key could not be built"
-MISS_MOCKED = "a helper is a mock"
-MISS_RAISED = "raised"
-
-#: Separates a "code or state changed" detail from WHAT changed, which the
-#: summary tallies on its own line.
-_WHAT_CHANGED = " -- "
-
-#: What each link of the state chain folds (`_build_key`), for a
-#: change that no named part of the ledger accounts for.
-_STATE_STAGES = (
-    "its code",
-    "a variable it captures",
-    "a parameter default",
-    "the instance it is bound to",
-    "a global it reads",
-    "the random-seed epoch",
-    "the environment it reads",
-    "the class of an argument",
-    "a function or class passed as an argument",
-)
-
-#: When this process started: keys the stored-key record holds from before it
-#: were written by earlier runs.
-_PROCESS_STARTED = time.time()
-
-#: The stats wrapper's slot for the call it is running: `_log_decorator_call`
-#: puts the call's entry there, and the stats wrapper counts it once the call
-#: returns or raises. Per context (thread or asyncio task), and set afresh by
-#: every cached call, so a nested call fills its own slot and never the
-#: caller's.
-_CALL_ENTRY: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("_cash_call_entry", default=None)
-
 #: How many call events `Cash._decorator_call_log` holds. The notebook drains it
 #: after every statement; nothing drains it in a script or a service, so it
 #: keeps only the most recent calls rather than one entry per call forever.
 _CALL_LOG_MAX = 10_000
-
-#: The capture watch of the key being built: {name: (pre-call hash, scope,
-#: owner_globals, owner)} for every provisional capture folded into it. Both
-#: `_fold_closure` and `_fold_read_globals` add to it; `_resolve_cache_key`
-#: sets a fresh one per key and hands it back with the key, so two threads, or
-#: a cached call nested in another's key build, never share one.
-#:
-#: `owner_globals` is the mapping the pre-call hash was taken FROM, and it is
-#: not always the decorated function's own. `_fold_read_globals` also runs on
-#: behalf of module-bounded HELPERS, so a global read by a helper in another
-#: module lands here under a bare name that does not exist in
-#: `func.__globals__` at all. Re-reading it there found None, hashed that, and
-#: reported every such global as mutated by the call -- a provider registry
-#: read by a client helper warned on every first call. Carrying the owning
-#: mapping is what makes the after-hash look at the same variable the
-#: before-hash did. Unset (None) outside a real call's key build, so
-#: `explain()` records nothing.
-_CAPTURE_WATCH: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("_cash_capture_watch", default=None)
-
-#: `_store_refusal` was not handed a capture watch (the streaming path).
-_NO_WATCH = object()
-
-#: `file_dep_is_fresh` reason codes, as the miss reason and explain() say them.
-_STALE_REASON_TEXT = {
-    "unreadable": "file missing",
-    "missing": "file missing",
-    "unrecorded": "no usable snapshot of it was recorded",
-    "size": "size changed",
-    "content": "content changed",
-    "mtime": "mtime changed",
-    "mtime-sampled": "mtime changed (sampled file)",
-    "ctime-sampled": "the file was written (sampled file)",
-    "hash-mode": (
-        "fingerprinted under a different file_hash_full_max_bytes, so "
-        "it could not be compared -- the file itself may be unchanged"
-    ),
-    "appeared": "a file the call looked for and did not find now exists",
-    "remote-changed": "remote object changed",
-    "remote-unresolved": "remote object could not be checked",
-}
-
-#: How many keys' store outcomes to remember. It explains the recent past;
-#: a long-running service does not need the whole history to do that.
-_STORE_OUTCOMES_MAX = 4096
-
-
-def _same_file_key(path: str) -> str:
-    """One spelling per file: the tracker can record a file under the relative
-    path the code opened it by AND its absolute path, which listed it twice --
-    "and 1 more" was the same file (round 18)."""
-    try:
-        return os.path.normcase(os.path.realpath(path))
-    except (OSError, ValueError, TypeError):
-        return path
-
-
-def _describe_file_deps(deps: dict[str, Any] | None) -> dict[str, str]:
-    """``{path: fingerprint}`` for the files an entry recorded, readably."""
-    out: dict[str, str] = {}
-    seen: set[str] = set()
-    for path, rec in (deps or {}).items():
-        same = _same_file_key(path)
-        if same in seen:
-            continue
-        seen.add(same)
-        if not isinstance(rec, dict):
-            out[path] = str(rec)
-            continue
-        if rec.get("absent"):
-            out[path] = "absent when read"
-            continue
-        parts = ["remote"] if rec.get("remote") else []
-        if rec.get("size") is not None:
-            parts.append(f"{rec['size']} bytes")
-        if rec.get("hash") and _is_sampled_dep(rec):
-            # Printed like a full hash, it read as proof of content that it is
-            # not (round 20).
-            parts.append(
-                f"sampled hash {str(rec['hash'])[:12]} (head, middle and "
-                f"tail only; the rest is trusted to its timestamps)"
-            )
-        elif rec.get("hash"):
-            parts.append(f"hash {str(rec['hash'])[:12]}")
-        out[path] = ", ".join(parts) or "recorded"
-    return out
-
-
-def _is_sampled_dep(rec: Any) -> bool:
-    """Was this file fingerprinted by sampling (larger than
-    ``file_hash_full_max_bytes``)? Only such snapshots record a ctime."""
-    return isinstance(rec, dict) and ("ctime_ns" in rec or "ctime" in rec)
-
-
-def _describe_state_change(old: dict[str, str], new: dict[str, str]) -> str | None:
-    """What differs between two flattened state ledgers, in words, or None.
-
-    Named parts first -- its source, each helper and cached function it calls,
-    each global it reads. When none of them moved, the first link of the state
-    chain that did says which fold changed (a capture, a default, ...).
-    """
-
-    def named(ledger: dict[str, str]) -> dict[str, str]:
-        return {k: v for k, v in ledger.items() if not k.startswith("@")}
-
-    before, after = named(old), named(new)
-    gone = [k for k in before if k not in after]
-    added = [k for k in after if k not in before]
-    phrases: list[str] = []
-    # A helper whose code arrived under another name: moved, not edited.
-    for name in list(gone):
-        if not name.startswith("helper "):
-            continue
-        twin = next((k for k in added if k.startswith("helper ") and after[k] == before[name]), None)
-        if twin is not None:
-            gone.remove(name)
-            added.remove(twin)
-            phrases.append(f"{name} moved to {twin.split(' ', 1)[1]}")
-    for name in after:
-        if name in before and before[name] != after[name]:
-            phrases.append("its own source changed" if name == "source" else f"{name} changed")
-    phrases += [f"it no longer uses {name}" for name in gone]
-    phrases += [f"it now uses {name}" for name in added]
-    if not phrases:
-        links = sorted((k for k in new if k.startswith("@")), key=lambda k: int(k[1:]))
-        for link in links:
-            i = int(link[1:])
-            if old.get(link) != new[link] and i < len(_STATE_STAGES):
-                return f"{_STATE_STAGES[i]} changed"
-        return None
-    shown = phrases[:3]
-    if len(phrases) > 3:
-        shown.append(f"and {len(phrases) - 3} more")
-    return "; ".join(shown)
-
-
-def entry_id_of(cache_key: str) -> str:
-    """The id `cash inspect` and `cash clear --entry` use for *cache_key*."""
-    return hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:12]
-
-
-#: Values whose identity is code plus what it captures. A hasher registered for
-#: one of these types covers every such value in the process, and the obvious
-#: one -- by name -- gives every closure one factory makes the same identity.
-#: `Cash._first_unhashable_arg` found only built-in-typed arguments.
-_NO_SUSPECT = object()
-
-_CODE_VALUE_TYPES = (types.FunctionType, types.MethodType, functools.partial)
-
-#: The fix for an unhashable code value. It must NOT suggest
-#: `register_hasher(function, ...)`: following that advice is how a second
-#: closure got the first one's result.
-_CODE_ARG_FIX = (
-    "pass a module-level function in its place, and give the values it "
-    "captures to the cached function as plain arguments, where they reach the "
-    "key. Do not register a hasher for function: every closure one factory "
-    "makes shares a name, so a hasher keyed on it hands one closure's result "
-    "to another. See known-limitations.md, 'A closure or lambda passed as an "
-    "argument'."
-)
-
-
-def _unhashable_arg_fix(value: Any, type_name: str) -> str:
-    """The fix line for an argument of *type_name* that could not be hashed."""
-    if isinstance(value, _CODE_VALUE_TYPES):
-        return _CODE_ARG_FIX
-    return f"register a hasher with cash.register_hasher({type_name}, ...), or pass the argument by a hashable value."
-
-
-#: Who wrote a value's ``_cash_lineage_hash``, in ``_cash_lineage_src``. Only the
-#: notebook's statement layer keeps the tag current as the value changes, so
-#: only its tag stands in for the value's content (see `_hash_arg_payload`).
-LINEAGE_SRC_STATEMENT = "statement"
-LINEAGE_SRC_DECORATOR = "decorator"
-#: Written for a function decorated ``frozen=True``: the user's promise that the
-#: result is not modified afterwards, trusted like the statement layer's tag and
-#: audited now and then (`_audit_frozen`).
-LINEAGE_SRC_FROZEN = "frozen"
-
-#: A frozen object is re-hashed at its 8th use as an argument and every 64th
-#: after that (every use under CASH_DEBUG), and compared with the first audit.
-_FROZEN_AUDIT_FIRST = 8
-_FROZEN_AUDIT_EVERY = 64
-
-_COW_PANDAS: bool | None = None
-
-#: The costliest argument of the key most recently hashed on this thread:
-#: ``(label, seconds, type name, producer, pandas without copy-on-write)``.
-#: A description, never the value: a reference here would keep a large
-#: argument alive after its caller dropped it.
-_ARG_COST = threading.local()
-
-#: The seconds cash spent inside the body of the cached call in progress, on
-#: its nested cached calls: their keys, lookups, stores. They belong to those
-#: calls, not to this body -- counted in, an outer function's "saved" was 4-9x
-#: what running it uncached costs (round 20). A one-element list, so a nested
-#: call adds to its caller's without resetting anything.
-_NESTED_CASH_SECONDS: contextvars.ContextVar[list | None] = contextvars.ContextVar("_cash_nested_seconds", default=None)
-
-#: Threads inside a cached call right now, and how deep each is. A hit's saving
-#: is the body time it stood in for, and sixteen 0.5 s hits on eight threads
-#: stood in for 1 s of waiting, not 8 s (round 20): the summary divides a
-#: hit's saving by how many threads were running cached calls with it.
-_CALL_DEPTH = threading.local()
-_THREADS_IN_CALLS = [0]
-_THREADS_IN_CALLS_LOCK = threading.Lock()
-
-
-def _enter_cached_call() -> None:
-    depth = getattr(_CALL_DEPTH, "depth", 0)
-    _CALL_DEPTH.depth = depth + 1
-    if depth == 0:
-        with _THREADS_IN_CALLS_LOCK:
-            _THREADS_IN_CALLS[0] += 1
-
-
-def _exit_cached_call() -> None:
-    depth = getattr(_CALL_DEPTH, "depth", 1) - 1
-    _CALL_DEPTH.depth = depth
-    if depth == 0:
-        with _THREADS_IN_CALLS_LOCK:
-            _THREADS_IN_CALLS[0] -= 1
-
-
-def _is_cow_pandas(value: Any) -> bool:
-    """Is *value* a pandas DataFrame/Series under copy-on-write?
-
-    Copy-on-write is the only mode in pandas 3 and opt-in before. Checked
-    without importing pandas: a pandas object means it is already loaded.
-    """
-    global _COW_PANDAS
-    t = type(value)
-    if t.__name__ not in ("DataFrame", "Series") or not (t.__module__ or "").startswith("pandas"):
-        return False
-    if _COW_PANDAS is None:
-        try:
-            import pandas as pd
-
-            major = int(pd.__version__.split(".", 1)[0])
-            _COW_PANDAS = major >= 3 or pd.options.mode.copy_on_write is True
-        except Exception:  # noqa: BLE001 - unknown pandas: no memo, hash every time
-            _COW_PANDAS = False
-    return _COW_PANDAS
-
-
-def _stat_code_file(fn: Any) -> tuple[Any, str, int, int] | None:
-    """``(code, path, size, mtime_ns)`` for *fn*'s source file, or None."""
-    code = getattr(fn, "__code__", None)
-    path = getattr(code, "co_filename", "") or ""
-    if not path or path.startswith("<"):
-        return None
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
-    return (code, path, st.st_size, st.st_mtime_ns)
-
-
-def _warn_source_changed_since_load(fn: Callable) -> None:
-    """Say, once per file, that a helper is keyed by its loaded code."""
-    code = getattr(fn, "__code__", None)
-    path = getattr(code, "co_filename", "") or ""
-    if path in _SOURCE_CHANGED_WARNED:
-        return
-    _SOURCE_CHANGED_WARNED.add(path)
-    name = getattr(fn, "__qualname__", None) or getattr(fn, "__name__", "a function")
-    try:
-        warn_diagnostic(
-            CashCacheIneffectiveWarning,
-            "KEY-SOURCE-CHANGED",
-            f"{path} was edited after this process loaded it, so the code running "
-            f"{name}() is the old version while the file holds a new one. cash "
-            f"keys it by the code actually running, so results stay correct for "
-            f"this process -- but they are not the new code's results, and they "
-            f"will not be reused once the process restarts.",
-            "restart the process to run the new code. If a deploy puts new files "
-            "on disk before the restart, this is the window it opens.",
-        )
-    except Exception:  # noqa: BLE001 - a notice must never break a call
-        logger.debug("Could not emit the source-changed notice", exc_info=True)
-
-
-#: Pydantic v2 compiles these onto every model class. They are derived from the
-#: field declarations and their digest differs in every process, so folding them
-#: made a pydantic spec un-cacheable across runs. `Cash._pydantic_field_parts`
-#: folds the declarations they were standing in for.
-_PYDANTIC_COMPILED = frozenset(
-    {
-        "__pydantic_core_schema__",
-        "__pydantic_serializer__",
-        "__pydantic_validator__",
-    }
-)
 
 
 class Cash:
@@ -1371,7 +325,7 @@ class Cash:
         Reached when something sends a cached function BY VALUE to another
         process, which is what joblib's workers do with a function defined in
         the script being run. Say what works instead of letting the pickler
-        report a lock (see `_expose_script_function`).
+        report a lock (see `expose_script_function`).
         """
         raise TypeError(
             "a Cash instance cannot be pickled, and something tried to send a "
@@ -2127,7 +1081,7 @@ class Cash:
             return
         # Plain data carries no code (`_plain_data.is_plain`); walking two
         # million rows to find that out was 14% of a warm hit.
-        if _depth == 0 and type(value) in PLAIN_SEQS and _plain_census(value) is not None:
+        if _depth == 0 and type(value) in PLAIN_SEQS and plain_census(value) is not None:
             return
         if _seen is None:
             _seen = set()
@@ -2414,7 +1368,7 @@ class Cash:
             memo_owner = fn
         memo_key = id(memo_owner) if memo_owner is not None else None
         if memo_key is not None:
-            entry = _SOURCE_HASH_MEMO.get(memo_key)
+            entry = SOURCE_HASH_MEMO.get(memo_key)
             # ``is``, not ``==``: confirms this is the SAME object and not a
             # recycled id, and sidesteps CodeType's by-value equality.
             if entry is not None and entry[0] is memo_owner:
@@ -2429,23 +1383,23 @@ class Cash:
         if not loaded_code_matches_disk(fn):
             digest = loaded_class_identity(fn) if isinstance(fn, type) else compiled_identity(fn)
             if digest is not None:
-                _warn_source_changed_since_load(fn)
-                if memo_key is not None and len(_SOURCE_HASH_MEMO) < _SOURCE_HASH_MEMO_MAX:
-                    _SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
+                warn_source_changed_since_load(fn)
+                if memo_key is not None and len(SOURCE_HASH_MEMO) < SOURCE_HASH_MEMO_MAX:
+                    SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
                 return digest
 
         # `callable_identity`, in its two halves: only a digest read from the
         # file is recorded against the file's stat.
-        keyed_stat = _stat_code_file(fn)
+        keyed_stat = stat_code_file(fn)
         digest = source_digest(fn)
         if digest is None:
             return compiled_identity(fn)
-        if memo_key is not None and len(_SOURCE_HASH_MEMO) < _SOURCE_HASH_MEMO_MAX:
-            _SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
-        if keyed_stat is not None and len(_CODE_KEYED_STATS) < _SOURCE_HASH_MEMO_MAX:
+        if memo_key is not None and len(SOURCE_HASH_MEMO) < SOURCE_HASH_MEMO_MAX:
+            SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
+        if keyed_stat is not None and len(CODE_KEYED_STATS) < SOURCE_HASH_MEMO_MAX:
             own = digest if memo_owner is not fn else own_source_digest(fn)
             if own is not None:
-                _CODE_KEYED_STATS[id(keyed_stat[0])] = (*keyed_stat, own)
+                CODE_KEYED_STATS[id(keyed_stat[0])] = (*keyed_stat, own)
         return digest
 
     @overload
@@ -2771,7 +1725,7 @@ class Cash:
             if self._own_pins_unverified and key in self._own_pins_unverified:
                 self._own_pins_unverified.discard(key)
                 if not loaded_code_matches_disk(func):
-                    _warn_source_changed_since_load(func)
+                    warn_source_changed_since_load(func)
                     # The file changed before the decorator ran -- after the
                     # module was compiled, while it was still importing -- so
                     # the text the pin was read from is not the code that runs.
@@ -2783,22 +1737,22 @@ class Cash:
                         pin = self._own_pins[key] = live
             return pin
         at_decoration = source_hash is not None
-        keyed_stat = _stat_code_file(func)
+        keyed_stat = stat_code_file(func)
         if source_hash is None:
             if loaded_code_matches_disk(func):
                 source_hash = callable_identity(func)
             else:
                 source_hash = bytecode_identity(func) or callable_identity(func)
-                _warn_source_changed_since_load(func)
+                warn_source_changed_since_load(func)
                 keyed_stat = None  # keyed by what runs, not by the file
         if (
             keyed_stat is not None
-            and id(keyed_stat[0]) not in _CODE_KEYED_STATS
-            and len(_CODE_KEYED_STATS) < _SOURCE_HASH_MEMO_MAX
+            and id(keyed_stat[0]) not in CODE_KEYED_STATS
+            and len(CODE_KEYED_STATS) < SOURCE_HASH_MEMO_MAX
         ):
             disk_digest = own_source_digest(func)
             if disk_digest is not None:
-                _CODE_KEYED_STATS[id(keyed_stat[0])] = (*keyed_stat, disk_digest)
+                CODE_KEYED_STATS[id(keyed_stat[0])] = (*keyed_stat, disk_digest)
         pin = source_hash
         if getattr(func, "__name__", "") == "<lambda>":
             code = getattr(func, "__code__", None)
@@ -2969,13 +1923,13 @@ class Cash:
         """The key for a real call, or the call's result when it has none.
 
         `_build_key`, with a ledger of what the state segment is made of
-        (`STATE_LEDGER`) and this key's `_CAPTURE_WATCH`. Returns
+        (`STATE_LEDGER`) and this key's `CAPTURE_WATCH`. Returns
         ``(resolved, capture_watch)``, where *resolved* is one of:
 
           - ``(cache_key, state_hash, args_hash)`` - the key was built
-          - ``(_CACHE_MISS, result, 'unkeyable')`` - a mocked helper, no code to key
-          - ``(_CACHE_MISS, result, 'unhashable')`` - an argument or default could not be hashed
-          - ``(_CACHE_MISS, result, 'error')`` - building the key raised
+          - ``(CACHE_MISS, result, 'unkeyable')`` - a mocked helper, no code to key
+          - ``(CACHE_MISS, result, 'unhashable')`` - an argument or default could not be hashed
+          - ``(CACHE_MISS, result, 'error')`` - building the key raised
 
         In the last three, *result* is what ``func(*args, **kwargs)`` returned:
         the call already ran, uncached, was warned about once and logged. The
@@ -2990,26 +1944,26 @@ class Cash:
         ledger: dict = {}
         ledger_token = STATE_LEDGER.set(ledger)
         watch: dict = {}
-        watch_token = _CAPTURE_WATCH.set(watch)
+        watch_token = CAPTURE_WATCH.set(watch)
         failure: tuple[str, str] | None = None
         try:
             built = self._build_key(func, func_name, dynamic_depends_on, args, kwargs)
-        except _UnhashableDefault:
+        except UnhashableDefault:
             # `_fold_defaults` has warned: an unhashable default means cash
             # cannot tell whether it changed, so caching at all risks a stale
             # result.
             failure = ("unhashable", "")
-        except _UnhashableArgs:
+        except UnhashableArgs:
             self._warn_unhashable_args(func_name, args, kwargs)
             failure = ("unhashable", "")
-        except _KeyBuildFailed as e:
+        except KeyBuildFailed as e:
             self._warn_once(CashCacheIneffectiveWarning, func_name, e.code, e.message, code=e.code, fix=e.fix)
             failure = ("error", "")
         except Exception as e:  # noqa: BLE001 - any failure building the key means no key
             self._warn_key_build_failed(func_name, args, kwargs, e)
             failure = ("error", "")
         finally:
-            _CAPTURE_WATCH.reset(watch_token)
+            CAPTURE_WATCH.reset(watch_token)
             STATE_LEDGER.reset(ledger_token)
         if failure is not None:
             return self._run_uncached(func, func_name, args, kwargs, call_start, *failure), watch
@@ -3039,7 +1993,7 @@ class Cash:
             cache_key="",
             miss_detail=detail,
         )
-        return (_CACHE_MISS, result, why)
+        return (CACHE_MISS, result, why)
 
     def _build_key(
         self,
@@ -3048,7 +2002,7 @@ class Cash:
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
         args: tuple,
         kwargs: dict,
-    ) -> _BuiltKey:
+    ) -> BuiltKey:
         """The cache key for calling *func* with these arguments.
 
         The ONE key build: a real call (`_resolve_cache_key`) and ``explain()``
@@ -3057,19 +2011,19 @@ class Cash:
         explain() lacked the random-seed epoch and the class members of a
         method's arguments, so it reported ``no_entry`` for calls that hit.
 
-        Raises when there is no key: `_UnhashableDefault`, `_UnhashableArgs`,
-        `_KeyBuildFailed`, or whatever else a step raised. Never keys the call
+        Raises when there is no key: `UnhashableDefault`, `UnhashableArgs`,
+        `KeyBuildFailed`, or whatever else a step raised. Never keys the call
         without a part that failed. Warnings from the steps are silent while
         `_EXPLAINING` is set.
         """
         # One plain-data census per argument, shared across the key
-        # (`_plain_census`).
-        previous = getattr(_PLAIN_CENSUS, "memo", None)
-        _PLAIN_CENSUS.memo = {}
+        # (`plain_census`).
+        previous = getattr(PLAIN_CENSUS, "memo", None)
+        PLAIN_CENSUS.memo = {}
         try:
             # The state after each fold, in `_STATE_STAGES` order: when no
             # named part moved, the first stage whose output did is the one
-            # that changed (`_describe_state_change`).
+            # that changed (`describe_state_change`).
             chain: list[str] = []
             ledger_note("@chain", chain)
             state_hash = self._state_hasher.compute(
@@ -3083,7 +2037,7 @@ class Cash:
             chain.append(state_hash)
             folded_defaults = self._fold_defaults(func, func_name, state_hash)
             if folded_defaults is None:
-                raise _UnhashableDefault
+                raise UnhashableDefault
             state_hash = folded_defaults
             chain.append(state_hash)
             state_hash = self._fold_bound_self(func, func_name, state_hash)
@@ -3112,11 +2066,11 @@ class Cash:
             args_hash = self._serialize_args(func_name, args, kwargs, normalized=normalized_args)
             self._note_arg_cost(func_name)
         finally:
-            _PLAIN_CENSUS.memo = previous
+            PLAIN_CENSUS.memo = previous
         if args_hash is None:
-            raise _UnhashableArgs
+            raise UnhashableArgs
         cache_key = self._compute_cache_key(func_name, state_hash, dynamic_state_hash, args_hash)
-        return _BuiltKey(cache_key, state_hash, args_hash, normalized_args)
+        return BuiltKey(cache_key, state_hash, args_hash, normalized_args)
 
     def _warn_unhashable_args(self, func_name: str, args: tuple, kwargs: dict) -> None:
         """KEY-UNHASHABLE-ARG, naming the argument when one can be singled out."""
@@ -3132,7 +2086,7 @@ class Cash:
             )
         else:
             which = f"an argument of type {arg_type_name} could not be hashed"
-            suggestion = _unhashable_arg_fix(self._first_unhashable_arg(args, kwargs), arg_type_name)
+            suggestion = unhashable_arg_fix(self._first_unhashable_arg(args, kwargs), arg_type_name)
         self._warn_once(
             CashCacheIneffectiveWarning,
             func_name,
@@ -3151,8 +2105,8 @@ class Cash:
                 "the offending type; if the exception does not belong to "
                 "your code, report it as a bug with the traceback."
             )
-        elif isinstance(self._first_unhashable_arg(args, kwargs), _CODE_VALUE_TYPES):
-            hint = _CODE_ARG_FIX
+        elif isinstance(self._first_unhashable_arg(args, kwargs), CODE_VALUE_TYPES):
+            hint = CODE_ARG_FIX
         else:
             hint = (
                 f"register a hasher with "
@@ -3222,7 +2176,7 @@ class Cash:
         token = _EXPLAINING.set(True)
         try:
             built = self._build_key(func, func_name, dynamic_depends_on, args, kwargs)
-        except _UnhashableDefault:
+        except UnhashableDefault:
             return CacheExplanation(
                 would_hit=False,
                 reason=EXPLAIN_KEY_UNCOMPUTABLE,
@@ -3236,7 +2190,7 @@ class Cash:
                     ),
                 },
             )
-        except _UnhashableArgs:
+        except UnhashableArgs:
             arg_type_name = self._first_unhashable_arg_type(args, kwargs)
             return CacheExplanation(
                 would_hit=False,
@@ -3245,13 +2199,13 @@ class Cash:
                 details={
                     "arg_type": arg_type_name,
                     "hint": (
-                        _unhashable_arg_fix(self._first_unhashable_arg(args, kwargs), arg_type_name)
+                        unhashable_arg_fix(self._first_unhashable_arg(args, kwargs), arg_type_name)
                         if arg_type_name != "<unknown>"
                         else "Could not identify the offending argument; likely a nested unpicklable value."
                     ),
                 },
             )
-        except _KeyBuildFailed as e:
+        except KeyBuildFailed as e:
             return CacheExplanation(
                 would_hit=False,
                 reason=EXPLAIN_KEY_UNCOMPUTABLE,
@@ -3353,7 +2307,7 @@ class Cash:
                     reason=EXPLAIN_FILE_CHANGED,
                     func_name=func_name,
                     cache_key=cache_key,
-                    details={"changed_files": stale, "file_deps": _describe_file_deps(metadata.auto_file_deps)},
+                    details={"changed_files": stale, "file_deps": describe_file_deps(metadata.auto_file_deps)},
                 )
 
         timestamp = metadata.timestamp or 0
@@ -3363,7 +2317,7 @@ class Cash:
             "execution_time_saved": metadata.execution_time or 0.0,
         }
         if metadata.auto_file_deps:
-            details["file_deps"] = _describe_file_deps(metadata.auto_file_deps)
+            details["file_deps"] = describe_file_deps(metadata.auto_file_deps)
         if frozen_args:
             details["frozen_args"] = frozen_args
         return CacheExplanation(
@@ -3425,10 +2379,10 @@ class Cash:
         `_first_unhashable_arg` for how the argument is found.
         """
         suspect = self._first_unhashable_arg(args, kwargs)
-        return "<unknown>" if suspect is _NO_SUSPECT else type(suspect).__qualname__
+        return "<unknown>" if suspect is NO_SUSPECT else type(suspect).__qualname__
 
     def _first_unhashable_arg(self, args: tuple, kwargs: dict) -> Any:
-        """The argument that could not be hashed, or ``_NO_SUSPECT``.
+        """The argument that could not be hashed, or ``NO_SUSPECT``.
 
         Each candidate is hashed ALONE and the first that fails is named. It
         used to be simply the first argument of a non-built-in type, so
@@ -3447,7 +2401,7 @@ class Cash:
                 self._hash_arg_payload((candidate,), {})
             except Exception:  # noqa: BLE001 - exactly what we are looking for
                 return candidate
-        return candidates[0] if candidates else _NO_SUSPECT
+        return candidates[0] if candidates else NO_SUSPECT
 
     def _try_get_cached(
         self,
@@ -3459,7 +2413,7 @@ class Cash:
         func_name: str,
         ttl: int | None,
     ) -> Any:
-        """Return cached_data if valid, else _CACHE_MISS sentinel.
+        """Return cached_data if valid, else CACHE_MISS sentinel.
 
         Key-presence is determined by ``metadata is not None`` - the
         backend contract is that absent keys return ``(None, None)``,
@@ -3473,16 +2427,16 @@ class Cash:
         """
         if metadata is None:
             self._note_miss(func_name, cache_key, self._absent_entry_reason(func_name, cache_key))
-            return _CACHE_MISS
+            return CACHE_MISS
         ttl = self._entry_ttl(ttl, metadata)
         try:
             self._validate_ttl(metadata, ttl)
             if not self._auto_file_deps_fresh(metadata):
                 self._note_miss(func_name, cache_key, (MISS_FILE, self._describe_stale_files(metadata)))
-                return _CACHE_MISS
+                return CACHE_MISS
             if not self._chunks_are_intact(cache_key, metadata):
                 self._note_miss(func_name, cache_key, (MISS_INCOMPLETE, "a chunk of the stored result is missing"))
-                return _CACHE_MISS
+                return CACHE_MISS
             # If this hit happens *inside* another cached function's
             # computation, replay the files this entry depends on into the
             # enclosing tracker, so the outer function records them too.
@@ -3517,7 +2471,7 @@ class Cash:
         except (TypeError, KeyError) as e:
             self._warn_metadata_invalid(func_name, e)
             self._note_miss(func_name, cache_key, (MISS_INCOMPLETE, "the stored entry's metadata did not validate"))
-        return _CACHE_MISS
+        return CACHE_MISS
 
     # -- why a call missed ---------------------------------------------------
     #
@@ -3528,7 +2482,7 @@ class Cash:
 
     def _note_miss(self, func_name: str, cache_key: str, reason: tuple[str, str]) -> None:
         """Hold *reason* for the `_log_decorator_call` that reports this miss."""
-        if len(self._pending_miss) > _STORE_OUTCOMES_MAX:
+        if len(self._pending_miss) > STORE_OUTCOMES_MAX:
             # Only a call that raised leaves one behind; never let those pile up.
             self._pending_miss.clear()
         self._pending_miss[cache_key] = reason
@@ -3610,7 +2564,7 @@ class Cash:
                 key: value
                 for kind in ("keys", "ram_only")
                 for key, value in doc[kind].items()
-                if value and isinstance(value[0], (int, float)) and value[0] < _PROCESS_STARTED
+                if value and isinstance(value[0], (int, float)) and value[0] < PROCESS_STARTED
             }
             states = {key.rsplit(":", 3)[1] for key in earlier if key.count(":") >= 3}
             if states and new_parts[1] not in states:
@@ -3654,13 +2608,13 @@ class Cash:
         if not moved:
             return MISS_FIRST, "no entry for this key"
         detail = "; and ".join(detail for _, detail in moved)
-        return moved[0][0], detail + (f"{_WHAT_CHANGED}{what}" if what else "")
+        return moved[0][0], detail + (f"{WHAT_CHANGED}{what}" if what else "")
 
     def _code_changed_detail(self, func_name: str, old_state: str, new_state: str, doc: dict, since: str) -> str:
         """A "code or state changed" detail, naming what changed when known."""
         detail = f"the function's code, a helper it calls, or a value it reads changed {since}"
         what = self._what_changed(func_name, old_state, new_state, doc)
-        return detail + (f"{_WHAT_CHANGED}{what}" if what else "")
+        return detail + (f"{WHAT_CHANGED}{what}" if what else "")
 
     def _keep_state_ledger(self, slot: tuple[str, str], ledger: dict) -> None:
         """Keep the ledger of the first key build that produced this
@@ -3717,7 +2671,7 @@ class Cash:
         new = self._flat_ledger(func_name, new_state, doc)
         if not old or not new:
             return None
-        return _describe_state_change(old, new)
+        return describe_state_change(old, new)
 
     @staticmethod
     def _stale_file_deps(metadata: CacheMetadata) -> dict[str, str]:
@@ -3731,13 +2685,13 @@ class Cash:
         seen: set[str] = set()
         for path, recorded in (metadata.auto_file_deps or {}).items():
             here = dep_path_for_this_process(path, recorded)
-            same = _same_file_key(here)
+            same = same_file_key(here)
             if same in seen:
                 continue
             resolved, is_fresh, why = dep_is_fresh(path, recorded)
             if not is_fresh:
                 seen.add(same)
-                stale[resolved or here] = _STALE_REASON_TEXT.get(why or "", "changed")
+                stale[resolved or here] = STALE_REASON_TEXT.get(why or "", "changed")
         return stale
 
     def _describe_stale_files(self, metadata: CacheMetadata) -> str:
@@ -3920,7 +2874,7 @@ class Cash:
         outcome.setdefault("at", time.time())
         self._store_outcomes[cache_key] = outcome
         self._store_outcomes.move_to_end(cache_key)
-        while len(self._store_outcomes) > _STORE_OUTCOMES_MAX:
+        while len(self._store_outcomes) > STORE_OUTCOMES_MAX:
             self._store_outcomes.popitem(last=False)
 
     #: How deep into a returned container an argument is looked for.
@@ -3996,20 +2950,20 @@ class Cash:
             return False
 
         for name, value in supplied:
-            if not _is_mutable(value):
+            if not is_mutable(value):
                 # Nothing can be written through it, so nothing can differ.
                 continue
             if value is result:
                 return "is the argument", name
-            if contains(result, value, self._SHARED_RESULT_DEPTH) and _is_mutable(value):
+            if contains(result, value, self._SHARED_RESULT_DEPTH) and is_mutable(value):
                 return "holds the argument", name
-            shared = _shares_memory(result, value)
+            shared = shares_memory(result, value)
             if shared:
                 return "shares memory with the argument", name
         globals_ = getattr(func, "__globals__", None)
         if isinstance(globals_, dict):
             for name, value in list(globals_.items()):
-                if value is result and _is_mutable(value):
+                if value is result and is_mutable(value):
                     return "is the module global", name
         return None
 
@@ -4021,7 +2975,7 @@ class Cash:
         rng_new: bool,
         cache_if: Callable[[Any], bool] | None,
         tracker: Any,
-        capture_watch: Any = _NO_WATCH,
+        capture_watch: Any = NO_WATCH,
         observer: Any = None,
     ) -> str | None:
         """Why *res* must not be stored, or ``None`` to store it.
@@ -4046,7 +3000,7 @@ class Cash:
                 refusal = "cache_if raised"
         # After the body ran, before deciding to store: a provisional global
         # this call moved must stop being folded (CAS-270).
-        if capture_watch is not _NO_WATCH:
+        if capture_watch is not NO_WATCH:
             self._learn_mutating_captures(func, func_name, capture_watch)
         if refusal is None and self._refuses_identity_coupled(func_name, res):
             refusal = "the result is tied to the identity of an object in memory"
@@ -4361,13 +3315,13 @@ class Cash:
         except Exception:  # noqa: BLE001 - a replay must never break a hit
             logger.debug("[CORE] could not replay the RNG state of a hit", exc_info=True)
 
-    def _wrap_iterator_hit(self, call: _Call, metadata: CacheMetadata | None, hit: Any) -> Any:
+    def _wrap_iterator_hit(self, call: Call, metadata: CacheMetadata | None, hit: Any) -> Any:
         """Wrap a cache-hit value in the right iterator class.
 
         Iterators (including the single-chunk case) are stored under
         an ``iterator_storage='chunked'`` manifest plus N chunk
         entries; on hit they're returned as a fresh
-        ``_ChunkedCachedIterator``, which recomputes the rest from the
+        ``ChunkedCachedIterator``, which recomputes the rest from the
         function if a chunk is gone. Non-iterator return types live as
         a single blob and are returned as *hit* directly.
 
@@ -4379,7 +3333,7 @@ class Cash:
         """
         if metadata and metadata.iterator_storage == "chunked":
             n_chunks = metadata.n_chunks or 0
-            return _ChunkedCachedIterator(self, call.cache_key, n_chunks, call.recompute)
+            return ChunkedCachedIterator(self, call.cache_key, n_chunks, call.recompute)
         return hit
 
     def _make_wrapper(
@@ -4399,14 +3353,14 @@ class Cash:
         two variants differ only in whether they await the body. The sync and
         async wrappers used to be two ~150-line copies, and they had drifted.
         """
-        spec = _CallSpec(func, func_name, dynamic_depends_on, ttl_decl, cache_if, chunk_max_items, chunk_max_bytes)
+        spec = CallSpec(func, func_name, dynamic_depends_on, ttl_decl, cache_if, chunk_max_items, chunk_max_bytes)
 
         if inspect.iscoroutinefunction(func):
 
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 call = self._lookup(spec, args, kwargs, async_body=True)
-                if call.outcome is not _CACHE_MISS:
+                if call.outcome is not CACHE_MISS:
                     # A result the key path produced by calling `func` itself
                     # (no key) is a coroutine here: await it before handing back.
                     if inspect.iscoroutine(call.outcome):
@@ -4427,7 +3381,7 @@ class Cash:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             call = self._lookup(spec, args, kwargs, async_body=False)
-            if call.outcome is not _CACHE_MISS:
+            if call.outcome is not CACHE_MISS:
                 return call.outcome
 
             def compute() -> Any:
@@ -4441,15 +3395,15 @@ class Cash:
 
         return wrapper
 
-    def _lookup(self, spec: _CallSpec, args: tuple, kwargs: dict, *, async_body: bool) -> _Call:
+    def _lookup(self, spec: CallSpec, args: tuple, kwargs: dict, *, async_body: bool) -> Call:
         """Everything a call does before the body: analysis, key, lookup.
 
         Returns the call's state. ``call.outcome`` is what the wrapper returns
         now -- a hit, or the result of a call that has no key -- or
-        ``_CACHE_MISS`` when the body has to run.
+        ``CACHE_MISS`` when the body has to run.
         """
         func, func_name = spec.func, spec.func_name
-        call = _Call(args, kwargs)
+        call = Call(args, kwargs)
         call.call_start = _perf_counter()
         if func_name not in self._analyzed:
             # Double-checked under a per-function lock: the key is built
@@ -4462,7 +3416,7 @@ class Cash:
         # analysis populates the graph).
         call.ttl = self._effective_ttl(func_name, spec.ttl_decl)
         if async_body:
-            call.recompute = lambda: _run_to_completion(lambda: func(*args, **kwargs))
+            call.recompute = lambda: run_to_completion(lambda: func(*args, **kwargs))
         else:
             call.recompute = lambda: func(*args, **kwargs)
 
@@ -4474,7 +3428,7 @@ class Cash:
         key_result, call.capture_watch = self._resolve_cache_key(
             func, func_name, spec.dynamic_depends_on, args, kwargs, call.call_start
         )
-        if key_result[0] is _CACHE_MISS:
+        if key_result[0] is CACHE_MISS:
             call.outcome = key_result[1]
             return call
         call.cache_key, call.state_hash, call.args_hash = key_result
@@ -4485,7 +3439,7 @@ class Cash:
             call.cache_key, call.metadata, cached_data, call.call_start, call.args_hash, func_name, call.ttl
         )
         call.cash_overhead = _perf_counter() - overhead_t0
-        if hit is not _CACHE_MISS:
+        if hit is not CACHE_MISS:
             self._note_effectiveness(
                 func_name,
                 call.cash_overhead,
@@ -4495,9 +3449,9 @@ class Cash:
             call.outcome = self._wrap_iterator_hit(call, call.metadata, hit)
         return call
 
-    def _reread(self, spec: _CallSpec, call: _Call) -> Any:
+    def _reread(self, spec: CallSpec, call: Call) -> Any:
         """Look the key up again (another caller may have stored it meanwhile):
-        the hit, wrapped like any other, or ``_CACHE_MISS``.
+        the hit, wrapped like any other, or ``CACHE_MISS``.
 
         The SAME validity test as the first lookup, by calling the same
         function -- not a hand-rolled subset of it. The locked re-read used to
@@ -4508,17 +3462,17 @@ class Cash:
         """
         raw_metadata, cached_data = self.backend.get(call.cache_key)
         if raw_metadata is None:
-            return _CACHE_MISS
+            return CACHE_MISS
         metadata = CacheMetadata.from_dict(raw_metadata)
         hit = self._try_get_cached(
             call.cache_key, metadata, cached_data, call.call_start, call.args_hash, spec.func_name, call.ttl
         )
-        if hit is _CACHE_MISS:
-            return _CACHE_MISS
+        if hit is CACHE_MISS:
+            return CACHE_MISS
         return self._wrap_iterator_hit(call, metadata, hit)
 
     @contextlib.contextmanager
-    def _body_scope(self, spec: _CallSpec, call: _Call) -> Iterator[_BodyRun]:
+    def _body_scope(self, spec: CallSpec, call: Call) -> Iterator[BodyRun]:
         """Run the body inside this: file tracking, effect observation, RNG
         watch and timing, shared by the sync and async wrappers.
 
@@ -4531,7 +3485,7 @@ class Cash:
         # file reads (pandas/numpy/joblib/open/...) are recorded as implicit
         # cache dependencies - a later content change forces a recompute.
         func, func_name, args, kwargs = spec.func, spec.func_name, call.args, call.kwargs
-        run = _BodyRun()
+        run = BodyRun()
         run.tracker = FileAccessTracker(getattr(func, "__globals__", None), propagate_to_parent=True, hash_on_read=True)
         # Watch for side effects the STATIC analyzer cannot see, which is
         # anything happening inside an installed library. Only on this
@@ -4544,10 +3498,10 @@ class Cash:
         # input the key cannot see statically.
         run.rng_pre = self._capture_rng_pre_state()
         with run.tracker, run.observer:
-            threads_at_start = _THREADS_IN_CALLS[0]
+            threads_at_start = THREADS_IN_CALLS[0]
             body_t0 = _perf_counter()
             nested = [0.0]
-            nested_token = _NESTED_CASH_SECONDS.set(nested)
+            nested_token = NESTED_CASH_SECONDS.set(nested)
             try:
                 self._track_declared_files(run.tracker, func_name)
                 yield run
@@ -4555,15 +3509,15 @@ class Cash:
                 self._log_raised(func_name, exc, call.call_start)
                 raise
             finally:
-                _NESTED_CASH_SECONDS.reset(nested_token)
+                NESTED_CASH_SECONDS.reset(nested_token)
             # The user's own work, isolated. Everything cash does sits outside
             # this pair, which is the whole point: it is the only number that
             # can answer "did caching pay?".
             run.body_seconds = max(0.0, _perf_counter() - body_t0 - run.tracker.read_hash_seconds - nested[0])
-            run.saves_seconds = run.body_seconds / max(threads_at_start, _THREADS_IN_CALLS[0], 1)
+            run.saves_seconds = run.body_seconds / max(threads_at_start, THREADS_IN_CALLS[0], 1)
             run.rng_new = self._note_rng_draw(func_name, run.rng_pre)
 
-    def _finish_miss(self, spec: _CallSpec, call: _Call, run: _BodyRun) -> Any:
+    def _finish_miss(self, spec: CallSpec, call: Call, run: BodyRun) -> Any:
         """Everything a missed call does after its body: check, store, log."""
         func, func_name, args, kwargs = spec.func, spec.func_name, call.args, call.kwargs
         res = run.res
@@ -4574,7 +3528,7 @@ class Cash:
         # carries the tracker into each production step so lazy file reads are
         # still recorded. An async function returning a SYNC generator streams
         # the same way.
-        if _is_one_shot_iterator(res):
+        if is_one_shot_iterator(res):
             # Logged HERE, not at exhaustion. `stats_wrapper` counts this
             # call's entry the moment the wrapper returns, so an entry written
             # when the caller finishes iterating would never be counted. The
@@ -4588,7 +3542,7 @@ class Cash:
                 args_hash=call.args_hash,
                 cache_key=call.cache_key,
             )
-            return _StreamingCachedIterator(
+            return StreamingCachedIterator(
                 self._stream_and_store(
                     res,
                     cache_key=call.cache_key,
@@ -4655,7 +3609,7 @@ class Cash:
         self._note_effectiveness(func_name, miss_overhead, body_seconds=run.body_seconds, was_hit=False)
         return res
 
-    async def _single_flight(self, spec: _CallSpec, call: _Call, compute: Callable[[], Any]) -> Any:
+    async def _single_flight(self, spec: CallSpec, call: Call, compute: Callable[[], Any]) -> Any:
         """Async single-flight for ``use_locking``: coalesce concurrent awaits
         of the same key in-process, so an expensive idempotent coroutine (a
         paid API call, say) under ``asyncio.gather`` computes once instead of
@@ -4688,7 +3642,7 @@ class Cash:
             except Exception:  # noqa: BLE001 - the leader's failure is its own
                 pass
             hit = self._reread(spec, call)
-            if hit is not _CACHE_MISS:
+            if hit is not CACHE_MISS:
                 return hit
             return await compute()
         try:
@@ -4725,7 +3679,7 @@ class Cash:
 
         Dispatches on whether *func* is a coroutine function so the stats
         update (from the entry `_log_decorator_call` left in this call's
-        `_CALL_ENTRY` slot) happens AFTER the await for async, and
+        `CALL_ENTRY` slot) happens AFTER the await for async, and
         synchronously otherwise.
 
         Attaches the introspection API:
@@ -4774,8 +3728,8 @@ class Cash:
                 _stats["miss_overhead_seconds"] += call.get("cash_seconds") or 0.0
                 kind, detail = call.get("miss_reason") or (MISS_FIRST, "")
                 _stats["miss_reasons"][kind] += 1
-                if kind == MISS_CODE and _WHAT_CHANGED in detail:
-                    _stats["changed"][detail.split(_WHAT_CHANGED, 1)[1]] += 1
+                if kind == MISS_CODE and WHAT_CHANGED in detail:
+                    _stats["changed"][detail.split(WHAT_CHANGED, 1)[1]] += 1
                 if call.get("not_stored"):
                     _stats["not_stored"][call["not_stored"]] += 1
                 elif call.get("not_persisted"):
@@ -4797,13 +3751,13 @@ class Cash:
                     return await _bypass(args, kwargs)
                 token = ACTIVE_CONFIG.set(self.config)
                 slot: list = [None]
-                slot_token = _CALL_ENTRY.set(slot)
-                _enter_cached_call()
+                slot_token = CALL_ENTRY.set(slot)
+                enter_cached_call()
                 try:
                     result = await wrapper(*args, **kwargs)
                 finally:
-                    _exit_cached_call()
-                    _CALL_ENTRY.reset(slot_token)
+                    exit_cached_call()
+                    CALL_ENTRY.reset(slot_token)
                     ACTIVE_CONFIG.reset(token)
                     _count(slot)
                 self._warn_unseeded_estimator_result(func_name, result, allow_random)
@@ -4820,13 +3774,13 @@ class Cash:
                 # (`file_hash_full_max_bytes`); see ACTIVE_CONFIG.
                 token = ACTIVE_CONFIG.set(self.config)
                 slot: list = [None]
-                slot_token = _CALL_ENTRY.set(slot)
-                _enter_cached_call()
+                slot_token = CALL_ENTRY.set(slot)
+                enter_cached_call()
                 try:
                     result = wrapper(*args, **kwargs)
                 finally:
-                    _exit_cached_call()
-                    _CALL_ENTRY.reset(slot_token)
+                    exit_cached_call()
+                    CALL_ENTRY.reset(slot_token)
                     ACTIVE_CONFIG.reset(token)
                     _count(slot)
                 self._warn_unseeded_estimator_result(func_name, result, allow_random)
@@ -4926,7 +3880,7 @@ class Cash:
         # statement ``x = f()`` gets cached with no TTL under %cash_on and
         # freezes the value the decorator promised to refresh.
         stats_wrapper._cash_declared_ttl = ttl
-        _expose_script_function(func, stats_wrapper)
+        expose_script_function(func, stats_wrapper)
         self._wrapped_funcs[func_name] = stats_wrapper
         return stats_wrapper
 
@@ -5069,7 +4023,7 @@ class Cash:
                     if ds is None:
                         continue
                     if not isinstance(ds, DataSource):
-                        raise _KeyBuildFailed(
+                        raise KeyBuildFailed(
                             "KEY-DYNAMIC-DEP-FAILED",
                             f"@cash.cache on {func_name}: a dynamic_depends_on resolver "
                             f"returned a {type(ds).__name__}, which is not a DataSource, "
@@ -5077,10 +4031,10 @@ class Cash:
                             fix,
                         )
                     dynamic_state_parts.append(state_token_of(ds))
-            except _KeyBuildFailed:
+            except KeyBuildFailed:
                 raise
             except Exception as e:  # noqa: BLE001 - any failure here is the resolver's
-                raise _KeyBuildFailed(
+                raise KeyBuildFailed(
                     "KEY-DYNAMIC-DEP-FAILED",
                     f"@cash.cache on {func_name}: dynamic_depends_on resolver raised "
                     f"{type(e).__name__} ({e}), so cash cannot tell whether that "
@@ -5374,7 +4328,7 @@ class Cash:
                 except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
                     continue
                 captures.append((name, h))
-                pending = _CAPTURE_WATCH.get()
+                pending = CAPTURE_WATCH.get()
                 if pending is not None and (provisional is None or name in provisional):
                     pending[name] = (h, "closure", None, func)
         if not captures:
@@ -5484,7 +4438,7 @@ class Cash:
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
                 bad_type = self._first_unhashable_arg_type(pos, kwd)
                 name = getattr(fn, "__qualname__", repr(fn))
-                raise _KeyBuildFailed(
+                raise KeyBuildFailed(
                     "KEY-UNHASHABLE-DEFAULT",
                     f"@cash.cache: a parameter default of type {bad_type} on the helper "
                     f"{name} could not be hashed ({type(e).__name__}), so the call ran "
@@ -5676,7 +4630,7 @@ class Cash:
             "or require it at the call site"
             + (
                 "."
-                if isinstance(self._first_unhashable_arg(pos, kwd), _CODE_VALUE_TYPES)
+                if isinstance(self._first_unhashable_arg(pos, kwd), CODE_VALUE_TYPES)
                 else f" -- or register a hasher with cash.register_hasher({bad_type}, ...)."
             ),
         )
@@ -6513,7 +5467,7 @@ class Cash:
                 # run, so a pydantic spec passed as an argument never hit
                 # across processes. `model_fields` below carries the same
                 # declarations and is stable, so this loses nothing.
-                if name in _PYDANTIC_COMPILED:
+                if name in PYDANTIC_COMPILED:
                     continue
                 if name == "__dataclass_fields__" and isinstance(member, dict):
                     parts.extend(self._dataclass_field_parts(base, member))
@@ -6844,7 +5798,7 @@ class Cash:
                     f"value could not be hashed, so changes to it will NOT "
                     f"invalidate the cache.",
                     code="KEY-UNHASHABLE-GLOBAL",
-                    fix=_UNHASHABLE_GLOBAL_FIX,
+                    fix=UNHASHABLE_GLOBAL_FIX,
                 )
                 continue
             # A pre-built user-class INSTANCE (or a container of them) is only
@@ -6864,7 +5818,7 @@ class Cash:
                     if surface is not None:
                         parts.append((f"{name}#cls:{item.__qualname__}", surface))
         parts.extend(self._module_attr_parts(func, func_name, g, learned=learned_mutating, watch=watch))
-        pending = _CAPTURE_WATCH.get()
+        pending = CAPTURE_WATCH.get()
         if pending is not None:
             pending.update(watch)
         parts.extend(self._local_binding_parts(func))
@@ -7009,11 +5963,11 @@ class Cash:
             and self._is_user_class(type(value), self._own_package(type(value)))
         ):
             payload = value
-        elif callable(value) and not is_mock(value) and _held_partials(value):
+        elif callable(value) and not is_mock(value) and held_partials(value):
             # A LIBRARY wrapper around the user's code keeps its own caches,
             # but the partials it holds are data the user built it with:
             # `np.vectorize(partial(scale, k=K))` ran with the old K (round 20).
-            payload = ("wrapped partials", _held_partials(value))
+            payload = ("wrapped partials", held_partials(value))
         else:
             return None
         try:
@@ -7064,7 +6018,7 @@ class Cash:
                     return None
                 method = getattr(value, "__name__", "")
 
-                if method in REPORTED_METHODS or method in _LOG_METHOD_NAMES:
+                if method in REPORTED_METHODS or method in LOG_METHOD_NAMES:
                     # `record = RESULTS.append`, `log = logger.info`: what the
                     # owner holds is the call's OUTPUT, not an input.
                     return None
@@ -7080,7 +6034,7 @@ class Cash:
                     # `attrgetter`, `methodcaller` -- changing the sort key
                     # served the mis-sorted report (round 20). A reduce that
                     # is just a global name (`np.add`, `len`) carries no data.
-                    reduced = _reduced_state(value)
+                    reduced = reduced_state(value)
                     if reduced is None:
                         return None
                     payload = ("reduce", cls.__module__, cls.__qualname__, reduced)
@@ -7092,7 +6046,7 @@ class Cash:
                     # built it with: `np.vectorize(partial(scale, k=K))` ran
                     # with the old K (round 20). Only the partials: the
                     # wrapper's own caches move when it is called.
-                    held = _held_partials(value)
+                    held = held_partials(value)
                     self._note_carrier_verdict(value, "partials" if held else False)
                     if not held:
                         return None
@@ -7100,7 +6054,7 @@ class Cash:
                 else:
                     self._note_carrier_verdict(value, True)
             elif verdict[1] == "partials":
-                payload = ("wrapped partials", _held_partials(value))
+                payload = ("wrapped partials", held_partials(value))
             stabilized = self._stabilize_for_global_hash(payload, self._data_callable_identity)
             return self._hash_arg_payload((stabilized,), {})
         except Exception:  # noqa: BLE001 - unkeyable before, never break a call over it
@@ -7635,7 +6589,7 @@ class Cash:
                 f"@cash.cache on {func_name}: reads '{label}' whose value could not "
                 f"be hashed, so changes to it will NOT invalidate the cache.",
                 code="KEY-UNHASHABLE-GLOBAL",
-                fix=_UNHASHABLE_GLOBAL_FIX,
+                fix=UNHASHABLE_GLOBAL_FIX,
             )
             return None
 
@@ -7789,8 +6743,8 @@ class Cash:
             return None
         due = (
             (self.debug or os.environ.get("CASH_DEBUG"))
-            or uses == _FROZEN_AUDIT_FIRST
-            or (uses > _FROZEN_AUDIT_FIRST and uses % _FROZEN_AUDIT_EVERY == 0)
+            or uses == FROZEN_AUDIT_FIRST
+            or (uses > FROZEN_AUDIT_FIRST and uses % FROZEN_AUDIT_EVERY == 0)
         )
         if due:
             try:
@@ -7916,8 +6870,8 @@ class Cash:
             return False
         due = (
             (self.debug or os.environ.get("CASH_DEBUG"))
-            or uses == _FROZEN_AUDIT_FIRST
-            or (uses > _FROZEN_AUDIT_FIRST and uses % _FROZEN_AUDIT_EVERY == 0)
+            or uses == FROZEN_AUDIT_FIRST
+            or (uses > FROZEN_AUDIT_FIRST and uses % FROZEN_AUDIT_EVERY == 0)
         )
         if not due:
             return True
@@ -8155,7 +7109,7 @@ class Cash:
                         return content_hash
             # pandas >= 3 copy-on-write: an exact "has this frame changed?"
             # check instead of a trusted tag. See `_frame_memo_lookup`.
-            frame_memo = lineage is None and _is_cow_pandas(arg)
+            frame_memo = lineage is None and is_cow_pandas(arg)
             if frame_memo:
                 content_hash = self._frame_memo_lookup(arg)
                 if content_hash is not None:
@@ -8211,7 +7165,7 @@ class Cash:
                 old_pandas = (
                     type(value).__name__ in ("DataFrame", "Series")
                     and (type(value).__module__ or "").startswith("pandas")
-                    and not _is_cow_pandas(value)
+                    and not is_cow_pandas(value)
                 )
                 costliest = (label, seconds, type(value).__name__, producer, old_pandas)
             return digest
@@ -8236,7 +7190,7 @@ class Cash:
         # One canonical form (`stable_key_repr`): sets and dicts in a stable
         # order, every container tagged with its type.
         payload = stable_key_repr(
-            (tuple(map(_plain_key_part, hashed_args)), {k: _plain_key_part(v) for k, v in hashed_kwargs.items()})
+            (tuple(map(plain_key_part, hashed_args)), {k: plain_key_part(v) for k, v in hashed_kwargs.items()})
         )
         args_bytes = _plain_data.key_dumps(payload)
         if raw:
@@ -8247,7 +7201,7 @@ class Cash:
                 if producer is None and self._frozen_containers and id(value) in self._frozen_containers:
                     producer = self._frozen_containers[id(value)][1]
                 costliest = (label, payload_seconds, type(value).__name__, producer, False)
-        _ARG_COST.last = costliest
+        ARG_COST.last = costliest
         return hashlib.sha256(args_bytes).hexdigest()
 
     def _serialize_args(
@@ -8294,7 +7248,7 @@ class Cash:
         """
         return builtin_hash_family(type_)
 
-    def _compute_with_lock(self, spec: _CallSpec, call: _Call, compute: Callable[[], Any]) -> Any:
+    def _compute_with_lock(self, spec: CallSpec, call: Call, compute: Callable[[], Any]) -> Any:
         """Compute with double-checked locking; falls back to unlocked on error.
 
         Acquiring the lock is best-effort: if *any* backend raises while taking
@@ -8313,7 +7267,7 @@ class Cash:
             return compute()
         try:
             hit = self._reread(spec, call)
-            if hit is not _CACHE_MISS:
+            if hit is not CACHE_MISS:
                 return hit
             return compute()
         finally:
@@ -8403,7 +7357,7 @@ class Cash:
             except (AttributeError, TypeError, ValueError):
                 pass
             return
-        if not frozen and type(result) in _UNTAGGABLE_TYPES:
+        if not frozen and type(result) in UNTAGGABLE_TYPES:
             return
         lineage = self._lineage_hash(cache_key, auto_file_deps)
         try:
@@ -8467,7 +7421,7 @@ class Cash:
                 # Once per type, then never tried again: it logged on every
                 # call returning a dict or an array, and meant nothing to the
                 # user reading CASH_DEBUG (round 20).
-                _UNTAGGABLE_TYPES.add(type(result))
+                UNTAGGABLE_TYPES.add(type(result))
                 logger.debug(
                     "results of type %s cannot carry a lineage tag, so a cached function taking one hashes its content",
                     type_name,
@@ -8496,7 +7450,7 @@ class Cash:
         statement execution to include decorator call metrics in the badge;
         it keeps the last ``_CALL_LOG_MAX`` events, since nothing drains it
         outside a notebook. The entry also goes to the running call's
-        `_CALL_ENTRY` slot, which is what ``cache_info()`` counts.
+        `CALL_ENTRY` slot, which is what ``cache_info()`` counts.
 
         ``execution_time`` is the wall-time of *this* operation - a lookup on a
         hit, the compute on a miss. ``time_saved`` is the compute a hit
@@ -8510,10 +7464,10 @@ class Cash:
         # What cash spent on this call rather than the body: the whole of a
         # hit, and what the miss path measured around a body. Added to the
         # caller's tally when this call is nested in another cached call's
-        # body (`_NESTED_CASH_SECONDS`).
+        # body (`NESTED_CASH_SECONDS`).
         if cash_seconds is None:
             cash_seconds = execution_time if cache_hit else 0.0
-        nested = _NESTED_CASH_SECONDS.get()
+        nested = NESTED_CASH_SECONDS.get()
         if nested is not None:
             nested[0] += cash_seconds
         entry = {
@@ -8549,22 +7503,22 @@ class Cash:
             entry["not_stored"] = outcome.get("not_stored")
         with self._decorator_call_log_lock:
             self._decorator_call_log.append(entry)
-        slot = _CALL_ENTRY.get()
+        slot = CALL_ENTRY.get()
         if slot is not None:
             slot[0] = entry
         if self._per_call_lines():
             if file_deps:
                 # Only for the line: a hit pays nothing for it otherwise.
-                entry["sampled_files"] = tuple(path for path, rec in file_deps.items() if _is_sampled_dep(rec))
-            _calls_logger.info("%s", self._describe_call(entry))
+                entry["sampled_files"] = tuple(path for path, rec in file_deps.items() if is_sampled_dep(rec))
+            calls_logger.info("%s", self._describe_call(entry))
 
     def _per_call_lines(self) -> bool:
         """Is the one-line-per-call log on? Asked for, not merely permitted: an
         application that turned the `cash` logger up to INFO did not ask for a
         line per call."""
-        return bool(
-            self.verbose or self.debug or getattr(self.config, "verbose", False)
-        ) and _calls_logger.isEnabledFor(logging.INFO)
+        return bool(self.verbose or self.debug or getattr(self.config, "verbose", False)) and calls_logger.isEnabledFor(
+            logging.INFO
+        )
 
     @staticmethod
     def _describe_call(entry: dict[str, Any]) -> str:
@@ -8826,7 +7780,7 @@ class Cash:
         moved: list[str] = []
         for fn in self._code_functions(func, func_name):
             code = getattr(fn, "__code__", None)
-            rec = _CODE_KEYED_STATS.get(id(code)) if code is not None else None
+            rec = CODE_KEYED_STATS.get(id(code)) if code is not None else None
             if rec is None or rec[0] is not code:
                 continue
             path = rec[1]
@@ -8842,7 +7796,7 @@ class Cash:
             # None -- the function is gone from the file -- is not the same text.
             same_text = own_source_digest(fn) == rec[4]
             if same_text:
-                _CODE_KEYED_STATS[id(code)] = (code, path, *now, rec[4])
+                CODE_KEYED_STATS[id(code)] = (code, path, *now, rec[4])
             else:
                 moved.append(path)
         if not moved:
@@ -8967,7 +7921,7 @@ class Cash:
         # caller leaves the seed out, and R Monte Carlo replicates came back
         # identical with nothing said (CAS-116). Note which parameters, and
         # check their bound value per call.
-        seed_params = _seed_parameters(src)
+        seed_params = seed_parameters(src)
         if seed_params:
             self._seed_params[func_name] = seed_params
 
@@ -9041,12 +7995,12 @@ class Cash:
                         return
                 if root not in bound.arguments:
                     continue
-                value = _read_seed(bound.arguments[root], path)
+                value = read_seed(bound.arguments[root], path)
                 origin = f"the parameter '{root}'" if not path else f"'{expr}'"
             else:
                 if root not in g:
                     continue
-                value = _read_seed(g[root], path)
+                value = read_seed(g[root], path)
                 origin = f"'{expr}'"
             if value is not None:
                 continue
@@ -9342,7 +8296,7 @@ class Cash:
         # Allowed -- a hasher that returns what the function captures is
         # correct -- but the one people write is keyed on the name, and that
         # hands one closure's cached result to the next.
-        if isinstance(type_, type) and issubclass(type_, _CODE_VALUE_TYPES):
+        if isinstance(type_, type) and issubclass(type_, CODE_VALUE_TYPES):
             warn_diagnostic(
                 CashCacheIneffectiveWarning,
                 "KEY-CALLABLE-HASHER",
@@ -9597,8 +8551,8 @@ class Cash:
         Only its description is kept -- parameter, type, seconds, the cached
         function that produced it -- never the value, which may be large.
         """
-        cost = getattr(_ARG_COST, "last", None)
-        _ARG_COST.last = None
+        cost = getattr(ARG_COST, "last", None)
+        ARG_COST.last = None
         if cost is None:
             return
         label, seconds, type_name, producer, old_pandas = cost
@@ -9769,7 +8723,7 @@ class Cash:
                 f"result ({type(e).__name__}: {e}). Compute succeeded, nothing was "
                 f"stored, and the next call recomputes.",
                 code="STORE-FAILED",
-                fix=_STORE_FAILED_FIX,
+                fix=STORE_FAILED_FIX,
             )
 
     def _warn_cache_if_bypassed(
@@ -10017,7 +8971,7 @@ class Cash:
 
         The value stored at the key is the manifest dict (``n_chunks``,
         ``total_items``). The metadata flags this entry as chunked so
-        the hit path knows to use ``_ChunkedCachedIterator``.
+        the hit path knows to use ``ChunkedCachedIterator``.
         """
         try:
             serializer = get_serializer(manifest_data)
@@ -10046,7 +9000,7 @@ class Cash:
                 f"Compute succeeded, nothing was stored, and the next call "
                 f"recomputes.",
                 code="STORE-FAILED",
-                fix=_STORE_FAILED_FIX,
+                fix=STORE_FAILED_FIX,
             )
 
     def cleanup(self, max_age: int | None = None) -> int:
@@ -10425,7 +9379,7 @@ class Cash:
         # more than the check may, the check is retired before it pays -- a
         # miss on two million rows hashed them three times, once for the key,
         # once here and once after the body (round 19). Read from what
-        # `_note_arg_cost` kept: it has already taken `_ARG_COST.last`.
+        # `_note_arg_cost` kept: it has already taken `ARG_COST.last`.
         cost = self._arg_costs.get(func_name)
         if cost is not None and cost[2] > self._MUTATION_CHECK_BUDGET_S:
             self._mutation_check_too_costly.add(func_name)
@@ -10604,7 +9558,7 @@ class Cash:
             return
         covered: set[str] = set()
         if func_name in self._purity_static_flagged:
-            covered = _static_effect_kinds(self._purity_reports.get(func_name))
+            covered = static_effect_kinds(self._purity_reports.get(func_name))
         effects = [(kind, detail) for kind, detail in observer.effects if kind not in covered]
         if not effects:
             return
@@ -10724,14 +9678,14 @@ class Cash:
             opaque_list = ", ".join(report.opaque_callees[:5])
             if len(report.opaque_callees) > 5:
                 opaque_list += f", ... +{len(report.opaque_callees) - 5} more"
-            issues.append(_make_opaque_issue(func_name, opaque_list))
+            issues.append(make_opaque_issue(func_name, opaque_list))
 
         if not issues:
             return
         if mode == "silent":
             return
 
-        summary = _format_issues_summary(func_name, issues)
+        summary = format_issues_summary(func_name, issues)
 
         # Untrackable-dependency patterns (eval/exec/compile, getattr(obj,name)()
         # dynamic dispatch, importlib.import_module) RAISE by default, even in
@@ -10742,7 +9696,7 @@ class Cash:
         # handled above) to cache anyway.
         untrackable = [i for i in issues if getattr(i, "kind", None) == ISSUE_UNTRACKABLE_DEP]
         if untrackable and mode != "strict":
-            untrackable_summary = _format_issues_summary(func_name, untrackable)
+            untrackable_summary = format_issues_summary(func_name, untrackable)
             raise CashImpureFunctionError(
                 f"@cash.cache on {func_name}: a dependency is resolved from a "
                 f"runtime value, so cash cannot tell when it changes and a cached "
@@ -10776,7 +9730,7 @@ class Cash:
                 f"UUID). That value is not part of the cache key, so the first "
                 f"call's answer is what every later call gets back -- in this "
                 f"process and in every process "
-                f"after it.\n{_format_issues_summary(func_name, ambient)}",
+                f"after it.\n{format_issues_summary(func_name, ambient)}",
                 code="KEY-AMBIENT-READ",
                 fix="pass the value in as an argument -- `f(now=datetime.now())` "
                 "-- so it reaches the cache key and a new value means a new "
@@ -10800,7 +9754,7 @@ class Cash:
                 f"server or a database returned, and that answer is not part "
                 f"of the cache key. The first call's answer is what every later call gets "
                 f"back -- in this process and in every process after it -- "
-                f"until something changes the key.\n{_format_issues_summary(func_name, remote)}",
+                f"until something changes the key.\n{format_issues_summary(func_name, remote)}",
                 code="KEY-NETWORK-READ",
                 fix="bound how old a served answer may be with ttl= -- "
                 "`@cash.cache(ttl=3600)` -- or pass what makes the answer new "
@@ -10811,7 +9765,7 @@ class Cash:
             )
         if not issues:
             return
-        summary = _format_issues_summary(func_name, issues)
+        summary = format_issues_summary(func_name, issues)
 
         self._purity_static_flagged.add(func_name)
 

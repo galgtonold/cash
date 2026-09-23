@@ -22,8 +22,8 @@ A generator is one-shot. The object you'd cache after the first call is already 
 1. **Materialize to a list.** Cheap to retrieve, but the entire result has to fit in RAM both at cache-write time and at every cache-read. A 50 GB log scanner that streams comfortably becomes a 50 GB allocation.
 2. **Materialize to chunks.** Stream into bounded buffers, write each one as a separate cache entry, and replay them lazily. Memory stays bounded by chunk size on both ends. Cash takes this path.
 
-<!-- claim: cash/core.py:_is_one_shot_iterator @1fe45c2a -->
-Detection happens in `_is_one_shot_iterator`, which returns True when `iter(value) is value`. Generators, generator expressions, `map`/`filter`/`zip` results, and any custom class whose `__iter__` returns `self` all qualify. Plain collections (`list`, `dict`, `set`, `tuple`, `range`, `str`) fail that test and are cached as ordinary blobs — they are already reusable.
+<!-- claim: cash/decorator/iterators.py:is_one_shot_iterator @0ce938f7 -->
+Detection happens in `is_one_shot_iterator`, which returns True when `iter(value) is value`. Generators, generator expressions, `map`/`filter`/`zip` results, and any custom class whose `__iter__` returns `self` all qualify. Plain collections (`list`, `dict`, `set`, `tuple`, `range`, `str`) fail that test and are cached as ordinary blobs — they are already reusable.
 
 ## Quick start
 
@@ -117,20 +117,20 @@ What is **not** supported:
 
 ## Replay semantics
 
-<!-- claim: cash/core.py:Cash._wrap_iterator_hit @4cb100db, cash/core.py:_StreamingCachedIterator @6667d0ba broad="the claim is about the whole replay wrapper", cash/core.py:_ChunkedCachedIterator @db978956 broad="the claim is about the whole replay wrapper" -->
-On a cache hit, the dispatch at `Cash._wrap_iterator_hit` reads `metadata['iterator_storage']` and returns a **fresh** `_ChunkedCachedIterator` over the stored chunks — a lazy iterator that fetches one chunk at a time. It is also handed the call's recompute, so a chunk lost between the manifest check and the read reruns the function instead of raising; sync and async hits, the locked re-read and the async follower all pass it. That is *every* iterator hit, single-chunk included: a one-chunk result is still stored as a manifest plus one chunk entry, so it replays through the same path.
+<!-- claim: cash/core.py:Cash._wrap_iterator_hit @0f360cdb, cash/decorator/iterators.py:StreamingCachedIterator @c3985e69 broad="the claim is about the whole replay wrapper", cash/decorator/iterators.py:ChunkedCachedIterator @0c6c821f broad="the claim is about the whole replay wrapper" -->
+On a cache hit, the dispatch at `Cash._wrap_iterator_hit` reads `metadata['iterator_storage']` and returns a **fresh** `ChunkedCachedIterator` over the stored chunks — a lazy iterator that fetches one chunk at a time. It is also handed the call's recompute, so a chunk lost between the manifest check and the read reruns the function instead of raising; sync and async hits, the locked re-read and the async follower all pass it. That is *every* iterator hit, single-chunk included: a one-chunk result is still stored as a manifest plus one chunk entry, so it replays through the same path.
 
-`_StreamingCachedIterator` is the other half, and it belongs to the **first** call rather than to a hit. It wraps `_stream_and_store`, so a miss hands you the producer's own items at the producer's own pace while the chunks fill behind you — there is nothing to read back out of the backend, because the result does not exist yet:
+`StreamingCachedIterator` is the other half, and it belongs to the **first** call rather than to a hit. It wraps `_stream_and_store`, so a miss hands you the producer's own items at the producer's own pace while the chunks fill behind you — there is nothing to read back out of the backend, because the result does not exist yet:
 
 | | first call (miss) | any later call (hit) |
 |---|---|---|
-| stayed within one chunk | `_StreamingCachedIterator` | `_ChunkedCachedIterator` |
-| crossed a threshold | `_StreamingCachedIterator` | `_ChunkedCachedIterator` |
+| stayed within one chunk | `StreamingCachedIterator` | `ChunkedCachedIterator` |
+| crossed a threshold | `StreamingCachedIterator` | `ChunkedCachedIterator` |
 
 Two consequences:
 
 - **Each call gets its own iterator.** Calling `f(x)` twice produces two independent iterators that share the cached chunks but advance independently. Test reference: `test_generator_returns_independent_iterators` in `tests/test_core/test_iterator_caching.py`.
-- **Chunks are loaded lazily.** `_ChunkedCachedIterator.__next__` only calls `self._cash.backend.get(chunk_key)` when iteration crosses into a new chunk. If the caller breaks out early, unreached chunks are never read from disk.
+- **Chunks are loaded lazily.** `ChunkedCachedIterator.__next__` only calls `self._cash.backend.get(chunk_key)` when iteration crosses into a new chunk. If the caller breaks out early, unreached chunks are never read from disk.
 
 A short demonstration of both properties:
 
@@ -163,12 +163,12 @@ The returned object satisfies the iterator protocol — `iter(x) is x`, `__next_
 
 ## Chunk eviction
 
-<!-- claim: cash/core.py:_ChunkedCachedIterator.__next__ @a4480a4a -->
-`_ChunkedCachedIterator` handles mid-iteration chunk loss. If `backend.get(chunk_key)` returns `(None, None)` — e.g. an L1-only backend evicted that chunk under memory pressure, another process cleared the cache, or `cleanup()` ran between iterations — the run is finished by **recomputing** from the function and skipping the items already yielded. Where cash has nothing to recompute from (a hit inside the async wrapper), the loss is raised.
+<!-- claim: cash/decorator/iterators.py:ChunkedCachedIterator.__next__ @a4480a4a -->
+`ChunkedCachedIterator` handles mid-iteration chunk loss. If `backend.get(chunk_key)` returns `(None, None)` — e.g. an L1-only backend evicted that chunk under memory pressure, another process cleared the cache, or `cleanup()` ran between iterations — the run is finished by **recomputing** from the function and skipping the items already yielded. Where cash has nothing to recompute from (a hit inside the async wrapper), the loss is raised.
 
 What it will not do is stop there. Ending the iteration quietly hands the caller a PREFIX of the answer — 100 items of 1000, with no error and no warning, so a sum or a count over the stream is wrong rather than slow (measured while stress-testing the decorator). Test reference: `test_chunked_iterator_missing_chunk_finishes_from_the_function` in `tests/test_core/test_iterator_caching.py`, and `tests/test_core/test_a_cached_iterator_is_never_served_short.py` for the end-to-end shapes.
 
-<!-- claim: cash/core.py:Cash._chunks_are_intact @fd3a5c46, cash/core.py:Cash._compute_with_lock @f2ffea10 -->
+<!-- claim: cash/core.py:Cash._chunks_are_intact @fd3a5c46, cash/core.py:Cash._compute_with_lock @7c213409 -->
 That miss is `Cash._chunks_are_intact`, which `get_metadata`-probes each chunk the manifest claims and treats a manifest with a hole as absent. **Both read paths run it** — `_try_get_cached` on the default path, and the double-checked re-read inside `Cash._compute_with_lock` when `use_locking=True` — so an incomplete manifest recomputes either way.
 
 The locking path skipped that probe until 2026-09-06 and served the broken entry as a *short* iterator instead: measured, the same entry returned 10 items and recomputed with locking off, and 3 items with no recompute with locking on — 0 items when the missing chunk was the first one. See [`STORE-CHUNK-FAILED`](../../warnings.md#store-chunk-failed).
@@ -221,7 +221,7 @@ Tuning notes:
 
 - **Partial consumption on a miss caches nothing.** The miss path produces only what the caller consumes, so stopping after ten of a thousand items leaves no complete result to store and the next call recomputes. Storing the ten under the full result's key would be a wrong answer rather than a slow one. On a *hit* partial consumption is free — only the chunks the caller reaches are loaded. Test reference: `test_chunked_iterator_partial_consumption_caches_nothing` in `tests/test_core/test_iterator_caching.py`.
 - **`cache_if` is bypassed on multi-chunk results.** As described above, the predicate cannot run without re-materializing chunks. The bypass warning is keyed per-function and fires once per process. To keep `cache_if` gating in effect, **raise** the thresholds until the whole result fits one chunk, so the single-chunk path stays in play — lowering them produces *more* chunks and so guarantees the bypass.
-<!-- claim: cash/core.py:Cash._attach_lineage @9f010614 -->
+<!-- claim: cash/core.py:Cash._attach_lineage @ff08ebd6 -->
 - **No lineage tag on iterator returns.** A non-iterator result is tagged with the call that produced it (`Cash._attach_lineage`), which is what lets a [`frozen=True`](../../decorator.md#passing-large-objects-between-cached-functions) result be keyed downstream without hashing it. Iterator wrappers are not tagged, so `frozen=True` does not reach them: passing a cached iterator to another `@cash.cache` function hashes its contents the normal way. Materialize to a list if you want the frozen short-circuit.
 - **Purity analysis treats generator bodies like any function.** A generator that calls `time.time()`, mutates module-level state, or reads `os.environ` inside the loop still triggers `CashImpurityWarning`. Apply `@cash.pure` / `assume_safe` / `strict` exactly as you would for a non-generator function. See [Purity Decorators](purity-decorators.md).
 - **Backend store failures are per-chunk.** If a chunk write raises, the wrapper emits `CashCacheStoreFailedWarning` and continues to the next chunk; the manifest is still written at the end. A later read that hits the missing chunk terminates iteration early (the same path as eviction). To detect this, watch for the warning rather than relying on the iterator length matching `total_items`.
@@ -233,9 +233,9 @@ Tuning notes:
 |---|---|---|
 | `chunk_max_items=N` | `@cash.cache` kwarg | Close current chunk after `N` items. Default `1_000_000`. |
 | `chunk_max_bytes=N` | `@cash.cache` kwarg | Close current chunk after `N` bytes (estimated). Default `1_000_000_000`. |
-| `_StreamingCachedIterator` | Internal | **First-call** wrapper. Passes the producer's items through as they arrive and fills the chunk buffers behind them; commits only on exhaustion; iter-self; supports `close()`, which abandons the entry. |
-| `_ChunkedCachedIterator` | Internal | Lazy replay, and the wrapper for **every** cache hit. Fetches one chunk at a time; iter-self; terminates cleanly on missing chunks; supports `close()`. |
-| `metadata['iterator_storage'] = 'chunked'` | Backend metadata | Flag the hit path reads to choose `_ChunkedCachedIterator` over a single-blob return. |
+| `StreamingCachedIterator` | Internal | **First-call** wrapper. Passes the producer's items through as they arrive and fills the chunk buffers behind them; commits only on exhaustion; iter-self; supports `close()`, which abandons the entry. |
+| `ChunkedCachedIterator` | Internal | Lazy replay, and the wrapper for **every** cache hit. Fetches one chunk at a time; iter-self; terminates cleanly on missing chunks; supports `close()`. |
+| `metadata['iterator_storage'] = 'chunked'` | Backend metadata | Flag the hit path reads to choose `ChunkedCachedIterator` over a single-blob return. |
 | `f"{cache_key}:chunk_{i}"` | Backend key format | Chunk keys are derived from the manifest key by suffix. `cleanup()` reclaims them alongside the manifest. |
 | `CashCacheIneffectiveWarning` | Warning | Fires once on the first multi-chunk transition when `cache_if=` is set; also fires once if an async-generator function is decorated. |
 | `CashCacheStoreFailedWarning` | Warning | Fires when a backend write raises during chunk or manifest storage. |

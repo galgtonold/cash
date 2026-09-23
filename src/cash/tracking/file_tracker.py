@@ -505,9 +505,16 @@ def _record_read(code: Any, abs_path: str, stat: Any) -> None:
         reads[abs_path] = stat  # the LATEST read: a memo refilled is current again
 
 
+#: The decorator's code: `Cash` in core.py and the call steps in decorator/.
+_DECORATOR_FILES = (
+    os.path.normcase(os.path.join(_CASH_PACKAGE_DIR, "core.py")),
+    os.path.normcase(os.path.join(_CASH_PACKAGE_DIR, "decorator")) + os.sep,
+)
+
+
 def _is_cash_wrapper(filename: str) -> bool:
     norm = os.path.normcase(filename)
-    return norm.endswith(os.path.join("cash", "core.py")) and norm.startswith(_CASH_PACKAGE_DIR)
+    return norm == _DECORATOR_FILES[0] or norm.startswith(_DECORATOR_FILES[1])
 
 
 def _credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:

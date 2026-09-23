@@ -71,7 +71,7 @@ Modules, plain callables (already tracked as helpers) and classes are excluded
 from the globals fold. A capture or global that can't be hashed warns once and is
 skipped rather than silently pretending it doesn't exist.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @6349310c -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @7bc7e4ca -->
 The `args` segment resolves each argument through its own ladder, and the order
 is deliberate:
 
@@ -144,7 +144,7 @@ flowchart TD
     STMT --> SP --> WRAP --> DRAIN --> MERGE
 ```
 
-<!-- claim: cash/core.py:Cash._log_decorator_call @7199cb42 -->
+<!-- claim: cash/core.py:Cash._log_decorator_call @1746a43f -->
 Every `@cash.cache` call appends an entry to `Cash._decorator_call_log`, which
 keeps the most recent 10,000 (nothing drains it outside a notebook, so it must
 not keep every call of a long-running process). `cache_info()` counts each call

@@ -16,8 +16,8 @@ import time
 
 import pytest
 
-import cash.core as core
 from cash import Cash, _plain_data, object_hashing
+from cash.decorator import arg_hashing
 
 pytestmark = [pytest.mark.core]
 
@@ -182,7 +182,7 @@ def test_dict_rows_key_by_content_whatever_the_insertion_order(key):
     walked and rebuilt in Python -- ~10x the same data as tuples."""
     rows = [{"id": i, "city": f"c{i % 5}"} for i in range(1000)]
     same = [{"city": f"c{i % 5}", "id": i} for i in range(1000)]
-    assert core._plain_census(rows)[0] == "dict_rows"
+    assert arg_hashing.plain_census(rows)[0] == "dict_rows"
     assert key(rows) == key(same)
     other = [dict(r) for r in rows]
     other[500]["city"] = "elsewhere"

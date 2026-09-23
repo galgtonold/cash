@@ -131,7 +131,7 @@ The flags are documented in full under [Magic Commands](../magics.md).
 
 ## Asking a decorated function directly
 
-<!-- claim: cash/core.py:Cash._explain_call @fb72fb49 -->
+<!-- claim: cash/core.py:Cash._explain_call @2a140859 -->
 For a `@cash.cache`-wrapped function, `explain()` answers "would the next call
 with these arguments hit, and why?" without calling the function, mutating
 stats, or writing anything:
@@ -157,14 +157,14 @@ print(load.explain(1000))
   execution_time_saved: 0.0020235000120010227
 ```
 
-<!-- claim: cash/core.py:EXPLAIN_NO_ENTRY == "no_entry", cash/core.py:EXPLAIN_TTL_EXPIRED == "ttl_expired", cash/core.py:EXPLAIN_FILE_CHANGED == "file_changed", cash/core.py:EXPLAIN_KEY_UNCOMPUTABLE == "key_uncomputable", cash/core.py:EXPLAIN_DISABLED == "disabled" -->
+<!-- claim: cash/decorator/explain.py:EXPLAIN_NO_ENTRY == "no_entry", cash/decorator/explain.py:EXPLAIN_TTL_EXPIRED == "ttl_expired", cash/decorator/explain.py:EXPLAIN_FILE_CHANGED == "file_changed", cash/decorator/explain.py:EXPLAIN_KEY_UNCOMPUTABLE == "key_uncomputable", cash/decorator/explain.py:EXPLAIN_DISABLED == "disabled" -->
 `reason` is a short stable string: `hit`, or one of the ways a call misses —
 `no_entry`, `ttl_expired`, `file_changed`, `key_uncomputable`, or `disabled` when
 caching is switched off — each carrying its own `details` (which files changed,
 which argument type couldn't be hashed). The
 full shape is in the [`CacheExplanation`](../api/cash.md) reference.
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats @d71a74cd, cash/core.py:Cash._wrap_with_stats.cache_info @4765fb6e, cash/core.py:Cash._log_decorator_call @7199cb42 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats @8d5c519b, cash/core.py:Cash._wrap_with_stats.cache_info @4765fb6e, cash/core.py:Cash._log_decorator_call @1746a43f -->
 !!! warning "`cache_info()` is not the surface to trust in a notebook"
     The wrapper also exposes `cache_info()`, but its `hits` / `misses` counters
     live on the **wrapper object** and count only since that wrapper was

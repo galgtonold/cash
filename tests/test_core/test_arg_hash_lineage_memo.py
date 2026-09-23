@@ -84,7 +84,7 @@ def test_no_lineage_still_content_hashes_every_call(monkeypatch):
     # Pins the LINEAGE memo only. pandas copy-on-write adds a memo of its own
     # for untagged frames, validated by an exact change check
     # (test_mutated_cached_result.py); switched off here.
-    monkeypatch.setattr("cash.core._COW_PANDAS", False)
+    monkeypatch.setattr("cash.decorator.arg_hashing._COW_PANDAS", False)
     c = _cash()
     calls = _count_hashes(monkeypatch)
     df = _df(range(100))  # no lineage attribute

@@ -52,7 +52,7 @@ def register_hasher(
 ) -> None: ...
 ```
 
-<!-- claim: cash/core.py:Cash._hash_callable_source @2b508434, cash/core.py:Cash.register_hasher @eed1ca57, cash/source_norm.py:callable_identity @f9ec85f7 -->
+<!-- claim: cash/core.py:Cash._hash_callable_source @57867b7d, cash/core.py:Cash.register_hasher @2ae870d0, cash/source_norm.py:callable_identity @f9ec85f7 -->
 Two things happen on registration — once it is accepted, which for a type Cash
 content-hashes itself means passing `override=True` (see
 [below](#overriding-a-built-in-content-hasher)):
@@ -62,7 +62,7 @@ content-hashes itself means passing `override=True` (see
 
 Registering for `types.FunctionType`, `types.MethodType` or `functools.partial` is accepted but warns ([KEY-CALLABLE-HASHER](../../warnings.md#key-callable-hasher)): the hasher then covers every function passed to any cached function, and one keyed on the name gives every closure a factory makes the same cache entry. Pass what the closure captures as a plain argument instead.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @6349310c, cash/object_hashing.py:builtin_hash @bd4210c7 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @7bc7e4ca, cash/object_hashing.py:builtin_hash @bd4210c7 -->
 When a cached function runs, `_serialize_args` calls `_hash_arg_payload`, which walks each argument in this order — **the order matters, and it is not the one you might expect**:
 
 0. **Hashers registered with `override=True`.** Nothing else is consulted for a type you have explicitly taken over — see [overriding a built-in](#overriding-a-built-in-content-hasher).

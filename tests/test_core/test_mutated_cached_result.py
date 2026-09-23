@@ -23,14 +23,14 @@ import gc
 import pytest
 
 from cash import Cash, object_hashing
-from cash.core import _is_cow_pandas
+from cash.decorator.arg_hashing import is_cow_pandas
 
 pd = pytest.importorskip("pandas")
 np = pytest.importorskip("numpy")
 
 pytestmark = pytest.mark.core
 
-needs_cow = pytest.mark.skipif(not _is_cow_pandas(pd.DataFrame()), reason="pandas copy-on-write is not active")
+needs_cow = pytest.mark.skipif(not is_cow_pandas(pd.DataFrame()), reason="pandas copy-on-write is not active")
 
 
 @pytest.fixture
@@ -196,7 +196,7 @@ def test_a_statement_maintained_tag_is_still_trusted(c, monkeypatch):
         return real(value)
 
     monkeypatch.setattr(object_hashing, "hash_pandas", counting)
-    monkeypatch.setattr("cash.core._COW_PANDAS", False)  # isolate from the CoW memo
+    monkeypatch.setattr("cash.decorator.arg_hashing._COW_PANDAS", False)  # isolate from the CoW memo
 
     @c.cache
     def n(df):
@@ -212,7 +212,7 @@ def test_a_statement_maintained_tag_is_still_trusted(c, monkeypatch):
 
 def test_a_decorator_tag_alone_is_not_trusted(c, monkeypatch):
     """The control for the above: the same tag written by the decorator."""
-    monkeypatch.setattr("cash.core._COW_PANDAS", False)
+    monkeypatch.setattr("cash.decorator.arg_hashing._COW_PANDAS", False)
 
     @c.cache
     def n(df):

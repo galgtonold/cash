@@ -220,7 +220,7 @@ c.register_hasher(MyModel, lambda model: model.get_fingerprint())
 See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full API, including class-hierarchy matching and versioned hashers.
 
 !!! warning "`register_hasher` is a decorator-path feature"
-    <!-- claim: cash/core.py:Cash.register_hasher @eed1ca57, cash/object_hashing.py:compute_hash @a7245478 -->
+    <!-- claim: cash/core.py:Cash.register_hasher @2ae870d0, cash/object_hashing.py:compute_hash @a7245478 -->
     Registered hashers are consulted when hashing `@cash.cache` **call arguments**. The
     notebook path hashes fallback values through `cash.object_hashing.compute_hash`,
     a pure function with no registry, so a registered hasher does **not** change a
@@ -231,7 +231,7 @@ See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full
 
 The two paths answer "what is this object's fingerprint?" differently, and the ordering in each is deliberate.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @6349310c -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @7bc7e4ca -->
 **Decorator — hashing a call argument** (`Cash._hash_arg_payload`):
 
 1. **Hashers registered with `override=True`** — see [overriding a built-in](../tutorials/feature-guides/custom-hashers.md#overriding-a-built-in-content-hasher). Nothing below runs for such a type.
