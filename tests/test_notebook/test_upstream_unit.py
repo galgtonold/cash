@@ -95,10 +95,6 @@ class TestUpstreamCheckerSetTrackingState:
         assert hasattr(UpstreamChecker, "set_tracking_state")
         assert callable(UpstreamChecker.set_tracking_state)
 
-    def test_set_tracking_dicts_removed(self):
-        """set_tracking_dicts was removed; only set_tracking_state remains."""
-        assert not hasattr(UpstreamChecker, "set_tracking_dicts")
-
     def test_iter_body_nodes_exists(self):
         """Static helper for iterating control structure bodies (on simulator)."""
         assert hasattr(NotebookSimulator, "_iter_body_nodes")

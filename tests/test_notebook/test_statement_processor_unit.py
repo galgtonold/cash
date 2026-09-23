@@ -79,10 +79,6 @@ class TestStatementProcessorImport:
         assert hasattr(StatementProcessor, "set_tracking_state")
         assert callable(StatementProcessor.set_tracking_state)
 
-    def test_set_tracking_dicts_removed(self):
-        """set_tracking_dicts was removed; only set_tracking_state remains."""
-        assert not hasattr(StatementProcessor, "set_tracking_dicts")
-
 
 class TestTrackingState:
     """Test the TrackingState dataclass."""

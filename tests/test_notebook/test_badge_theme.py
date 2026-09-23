@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from cash.notebook.badge_renderer import theme
 
 
@@ -39,12 +37,3 @@ def test_status_palette_uses_hex_colors() -> None:
         theme.RAIL_MIXED,
     ):
         assert token.startswith("#") and len(token) in (4, 7)
-
-
-def test_legacy_types_module_is_gone() -> None:
-    """``_types.py`` was retired in slice 7 alongside the rest of the
-    legacy renderer; the TypedDicts it held are replaced by BadgeView nodes."""
-    import importlib
-
-    with pytest.raises(ImportError):
-        importlib.import_module("cash.notebook.badge_renderer._types")
