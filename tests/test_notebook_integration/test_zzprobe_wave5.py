@@ -258,7 +258,7 @@ def test_decorator_disk_hit_survives_restart(nb_runner, tmp_path):
     nb_runner.enable_persist()
     nb_runner.run_all()
     assert "res= 6" in nb_runner.get_output(2)
-    with open(log.replace("/", "\\")) as f:
+    with open(log) as f:
         assert f.read().count("call") == 1
 
     nb_runner.shutdown()
@@ -270,7 +270,7 @@ def test_decorator_disk_hit_survives_restart(nb_runner, tmp_path):
     nb_runner.run_all()
     out = nb_runner.get_output(2)
     assert "res5b= 6" in out, out
-    with open(log.replace("/", "\\")) as f:
+    with open(log) as f:
         n = f.read().count("call")
     assert n == 1, (
         f"decorator did not serve the disk entry after kernel restart: function body ran {n} times total (expected 1)"
