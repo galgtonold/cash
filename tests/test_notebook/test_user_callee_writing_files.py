@@ -3,6 +3,7 @@
 import json
 import shutil
 
+from cash.analysis import namespace_effects
 from cash.analysis.namespace_effects import user_callee_writing_files
 from cash.purity import pure
 
@@ -68,3 +69,54 @@ def test_installed_code_is_not_looked_into():
     assert user_callee_writing_files(json.dump) is None
     assert user_callee_writing_files(shutil.copyfile) is None
     assert user_callee_writing_files(None) is None
+
+
+def deep_writer(path):
+    open(path, "w", encoding="utf-8").write("x")
+
+
+def chain_4(path):
+    deep_writer(path)
+
+
+def chain_3(path):
+    chain_4(path)
+
+
+def chain_2(path):
+    chain_3(path)
+
+
+def chain_1(path):
+    chain_2(path)
+
+
+def chain_top(path):
+    chain_1(path)
+
+
+def ring_a(path):
+    ring_b(path)
+    deep_writer(path)
+
+
+def ring_b(path):
+    ring_a(path)
+
+
+def test_the_verdict_does_not_depend_on_what_was_asked_first():
+    """A function reached near the depth cap cannot see a writer past it; that
+    cut answer must not be what a direct question about it gets later."""
+    namespace_effects._callee_write_cache.clear()
+    assert user_callee_writing_files(chain_top) is None  # the writer is past the cap from here
+    assert user_callee_writing_files(chain_3) == "deep_writer"
+    assert user_callee_writing_files(chain_2) == "deep_writer"
+
+
+def test_a_call_cycle_does_not_hide_a_writer():
+    """``ring_b`` only calls ``ring_a``, which calls ``ring_b`` back and then
+    the writer. Asking about ``ring_a`` first must not leave ``ring_b``
+    answered from the moment ``ring_a`` was still being examined."""
+    namespace_effects._callee_write_cache.clear()
+    assert user_callee_writing_files(ring_a) == "deep_writer"
+    assert user_callee_writing_files(ring_b) == "deep_writer"
